@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 
-import { clearInspectFactsCache, GitTransport, GitTransportError } from './git-transport.ts';
+import { clearInspectFactsCache, defaultGitExec, GitTransport, GitTransportError } from './git-transport.ts';
 import type { GitExecFn, GitExecResult, GitTransportOptions } from './git-transport.ts';
 import { encryptSectionsPayload } from '../snapshot-crypto.ts';
 import { computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS, isEncryptedSections, SyncTransportError } from '../transport.ts';
@@ -117,6 +117,18 @@ function makeOptions(overrides: Partial<GitTransportOptions> = {}): GitTransport
 
 function joinedArgs(calls: CallRecord[], needle: string): string[] {
   return calls.filter((c) => c.args.join(' ').includes(needle)).map((c) => c.args.join(' '));
+}
+
+/**
+ * 拉取命令判定（issue #122）：fetch 与 origin 之间现在会插 `--no-tags`/`--filter=blob:none`，
+ * 所以不能再按 'fetch origin' 子串匹配。
+ */
+function isFetchArgs(args: string[]): boolean {
+  return args.includes('fetch') && args.includes('origin');
+}
+
+function fetchCalls(calls: CallRecord[]): string[] {
+  return calls.filter((c) => isFetchArgs(c.args)).map((c) => c.args.join(' '));
 }
 
 /** 构造加密快照（sections 为 EncryptedSections 密文载荷；含文件分区以覆盖字节往返）。 */
@@ -896,7 +908,7 @@ function pullScriptedExec(calls: CallRecord[], pullResults: GitExecResult[]): Gi
     const joined = args.join(' ');
     if (joined.includes('rev-parse') && joined.includes('--abbrev-ref')) return { stdout: 'main', stderr: '', code: 0 };
     if (joined.includes('rev-parse')) return { stdout: 'sha', stderr: '', code: 0 };
-    if (joined.includes('fetch origin')) {
+    if (isFetchArgs(args)) {
       const r = pullResults[Math.min(i, pullResults.length - 1)]!;
       i += 1;
       return r;
@@ -916,7 +928,7 @@ test('t24：幂等读（list）遇瞬时网络故障 → 指数退避重试后�
     workDir: dir, exec, retry: { attempts: 3, baseDelayMs: 1, sleep: async () => {} },
   }));
   assert.deepEqual(await transport.list(), [], '重试后应成功（空远端）');
-  assert.equal(joinedArgs(calls, 'fetch origin').length, 2, '第一次瞬时失败 → 重试一次即成功');
+  assert.equal(fetchCalls(calls).length, 2, '第一次瞬时失败 → 重试一次即成功');
 });
 
 test('t24：重试耗尽后上抛带分类的错误（network / retryable=true），尝试次数 = attempts', async (t) => {
@@ -933,7 +945,7 @@ test('t24：重试耗尽后上抛带分类的错误（network / retryable=true�
     assert.equal(err.retryable, true);
     return true;
   });
-  assert.equal(joinedArgs(calls, 'fetch origin').length, 3, 'attempts=3 → 恰好 3 次尝试');
+  assert.equal(fetchCalls(calls).length, 3, 'attempts=3 → 恰好 3 次尝试');
 });
 
 test('t24：不可重试错误（仓库不存在 / 鉴权失败）→ 只尝试一次且分类正确', async (t) => {
@@ -954,7 +966,7 @@ test('t24：不可重试错误（仓库不存在 / 鉴权失败）→ 只尝试�
       assert.equal(err.retryable, false, '不可重试: ' + stderr);
       return true;
     });
-    assert.equal(joinedArgs(calls, 'fetch origin').length, 1, '不可重试错误不得重试: ' + stderr);
+    assert.equal(fetchCalls(calls).length, 1, '不可重试错误不得重试: ' + stderr);
   }
 });
 
@@ -968,7 +980,9 @@ test('远端同步命令序列：显式 refspec fetch + merge --ff-only，绝不
   const joined = calls.map((c) => c.args.join(' '));
   assert.ok(!joined.some((j) => /^pull(\s|$)/.test(j)), '不得再执行 git pull: ' + joined.join(' | '));
   // 网络命令前面会挂 credential helper 的 -c 参数，所以按「末尾 3 个参数」判命令本身
-  const fetched = calls.some((c) => c.args.slice(-3).join(' ') === 'fetch origin +refs/heads/main:refs/remotes/origin/main');
+  // issue #122：fetch 与 origin 之间还会插 `--no-tags`（partial clone 时另有 `--filter=blob:none`），
+  // 所以按「含 fetch / 含 origin / 末尾是显式 refspec」判定，而不是钉死参数个数
+  const fetched = calls.some((c) => isFetchArgs(c.args) && c.args.at(-1) === '+refs/heads/main:refs/remotes/origin/main');
   assert.ok(fetched, '必须显式 refspec fetch: ' + joined.join(' | '));
   assert.ok(joined.includes('merge --ff-only origin/main'), '必须显式远端分支快进合并: ' + joined.join(' | '));
 });
@@ -981,7 +995,7 @@ test('远端还没有同名分支（空仓库 / 分支被改名）→ 与「无 
     const joined = args.join(' ');
     if (joined.includes('--abbrev-ref')) return { stdout: 'main', stderr: '', code: 0 };
     if (joined.includes('rev-parse')) return { stdout: 'sha', stderr: '', code: 0 };
-    if (joined.includes('fetch origin')) {
+    if (isFetchArgs(args)) {
       return { stdout: '', stderr: "fatal: couldn't find remote ref refs/heads/main", code: 128 };
     }
     return { stdout: '', stderr: '', code: 0 };
@@ -989,6 +1003,168 @@ test('远端还没有同名分支（空仓库 / 分支被改名）→ 与「无 
   const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
   assert.deepEqual(await transport.list(), [], '远端没有该分支 → 空列表，绝不抛错');
   assert.equal(calls.filter((c) => c.args.includes('merge')).length, 0, '没 fetch 到东西就不该 merge');
+});
+
+/* ---------------- issue #122：远端仓库远大于同步内容时不许卡死 ---------------- */
+
+const SHA_A = 'a'.repeat(40);
+const SHA_B = 'b'.repeat(40);
+
+test('issue #122：远端 sha 与本地跟踪引用一致且已合并 → 整轮零 fetch、零 merge（只花一次 ls-remote）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const exec: GitExecFn = async (_cmd, args) => {
+    calls.push({ cmd: 'git', args });
+    const joined = args.join(' ');
+    if (joined.includes('--abbrev-ref')) return { stdout: 'main', stderr: '', code: 0 };
+    if (joined.includes('ls-remote')) return { stdout: `${SHA_A}\trefs/heads/main\n`, stderr: '', code: 0 };
+    if (joined.includes('rev-parse')) return { stdout: SHA_A, stderr: '', code: 0 };
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
+  assert.deepEqual(await transport.list(), []);
+  const trace = calls.map((c) => c.args.join(' ')).join(' | ');
+  assert.equal(fetchCalls(calls).length, 0, '稳态不得发 fetch: ' + trace);
+  assert.equal(calls.filter((c) => c.args.includes('merge')).length, 0, '稳态不得 merge: ' + trace);
+  assert.equal(joinedArgs(calls, 'ls-remote').length, 1, '稳态只允许一次 ls-remote: ' + trace);
+});
+
+test('issue #122：refs 已是最新但 HEAD 落后（上次 merge 没跑完）→ 跳过 fetch、仍本地 merge', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const exec: GitExecFn = async (_cmd, args) => {
+    calls.push({ cmd: 'git', args });
+    const joined = args.join(' ');
+    if (joined.includes('--abbrev-ref')) return { stdout: 'main', stderr: '', code: 0 };
+    if (joined.includes('ls-remote')) return { stdout: `${SHA_A}\trefs/heads/main\n`, stderr: '', code: 0 };
+    // 远端跟踪引用已指向远端最新，但 HEAD 还停在旧提交
+    if (joined.includes('refs/remotes/origin/main')) return { stdout: SHA_A, stderr: '', code: 0 };
+    if (joined.includes('rev-parse')) return { stdout: SHA_B, stderr: '', code: 0 };
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
+  assert.deepEqual(await transport.list(), []);
+  assert.equal(fetchCalls(calls).length, 0, '没有新对象可拉 → 不 fetch');
+  assert.equal(joinedArgs(calls, 'merge --ff-only origin/main').length, 1, '本地没合并完 → 必须继续 merge');
+});
+
+test('issue #122：远端有新提交 → 正常 fetch + merge，fetch 带 --no-tags（同步仓库不需要 tag）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const exec: GitExecFn = async (_cmd, args) => {
+    calls.push({ cmd: 'git', args });
+    const joined = args.join(' ');
+    if (joined.includes('--abbrev-ref')) return { stdout: 'main', stderr: '', code: 0 };
+    if (joined.includes('ls-remote')) return { stdout: `${SHA_A}\trefs/heads/main\n`, stderr: '', code: 0 };
+    if (joined.includes('refs/remotes/origin/main')) return { stdout: SHA_B, stderr: '', code: 0 };
+    if (joined.includes('rev-parse')) return { stdout: SHA_B, stderr: '', code: 0 };
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
+  assert.deepEqual(await transport.list(), []);
+  const fetches = fetchCalls(calls);
+  assert.equal(fetches.length, 1, '远端有新提交 → 必须 fetch: ' + calls.map((c) => c.args.join(' ')).join(' | '));
+  assert.ok(fetches[0]!.includes('--no-tags'), 'fetch 必须带 --no-tags: ' + fetches[0]!);
+  assert.ok(!fetches[0]!.includes('--filter='), '非 partial clone 不得加 blob 过滤: ' + fetches[0]!);
+  assert.equal(joinedArgs(calls, 'merge --ff-only origin/main').length, 1, 'fetch 之后必须 ff 合并');
+});
+
+test('issue #122：partial clone 的 fetch 保持 --filter=blob:none（不因过滤丢失后续 checkout 需要的 blob）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const exec: GitExecFn = async (_cmd, args) => {
+    calls.push({ cmd: 'git', args });
+    const joined = args.join(' ');
+    if (joined.includes('remote.origin.promisor')) return { stdout: 'true\n', stderr: '', code: 0 };
+    if (joined.includes('--abbrev-ref')) return { stdout: 'main', stderr: '', code: 0 };
+    if (joined.includes('ls-remote')) return { stdout: `${SHA_A}\trefs/heads/main\n`, stderr: '', code: 0 };
+    if (joined.includes('refs/remotes/origin/main')) return { stdout: SHA_B, stderr: '', code: 0 };
+    if (joined.includes('rev-parse')) return { stdout: SHA_B, stderr: '', code: 0 };
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
+  assert.deepEqual(await transport.list(), []);
+  const fetches = fetchCalls(calls);
+  assert.equal(fetches.length, 1);
+  assert.ok(fetches[0]!.includes('--filter=blob:none'), 'partial clone 必须保持 blob 过滤: ' + fetches[0]!);
+});
+
+test('issue #122：网络子命令一律带低速上限，本地子命令不带', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec: pullScriptedExec(calls, [{ stdout: '', stderr: '', code: 0 }]) }));
+  await transport.list();
+  const net = calls.filter((c) => ['clone', 'fetch', 'push', 'ls-remote'].some((sub) => c.args.includes(sub)));
+  assert.ok(net.length > 0, '至少应有 ls-remote/fetch: ' + calls.map((c) => c.args.join(' ')).join(' | '));
+  for (const c of net) {
+    const j = c.args.join(' ');
+    assert.ok(j.includes('http.lowSpeedLimit=1000') && j.includes('http.lowSpeedTime=30'), '网络命令必须带低速上限: ' + j);
+  }
+  const local = calls.filter((c) => c.args.includes('rev-parse'));
+  assert.ok(local.length > 0);
+  for (const c of local) assert.ok(!c.args.join(' ').includes('lowSpeedLimit'), '本地命令不该带 http 配置: ' + c.args.join(' '));
+});
+
+test('issue #122：首次 clone 走 partial clone + sparse-checkout，只 materialize 三个同步目录', async (t) => {
+  const dir = await makeTempDir(t); // 空目录 → 走 clone
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec: mockExec(calls) }));
+  await transport.list();
+  const clone = calls.find((c) => c.args.includes('clone'));
+  assert.ok(clone !== undefined, '应触发 clone: ' + calls.map((c) => c.args.join(' ')).join(' | '));
+  assert.ok(clone.args.includes('--filter=blob:none'), 'clone 必须 partial（只取 commit+tree）: ' + clone.args.join(' '));
+  assert.ok(clone.args.includes('--no-checkout'), 'clone 先不落地文件: ' + clone.args.join(' '));
+  assert.equal(joinedArgs(calls, 'clone').length, 1, '不允许多 clone 一次');
+  const sparse = calls.find((c) => c.args.includes('sparse-checkout'));
+  assert.ok(sparse !== undefined, '必须设置 sparse-checkout');
+  assert.equal(
+    sparse.args.join(' '),
+    'sparse-checkout set --cone snapshots snapshots-encrypted blobs',
+    'sparse 面必须与同步目录同源: ' + sparse.args.join(' '),
+  );
+  assert.equal(calls.filter((c) => c.args.includes('checkout')).length, 1, 'sparse 之后必须 checkout 一次');
+});
+
+test('issue #122：老 git 不认 --filter → 回落全量 clone（绝不因优化失败）', async (t) => {
+  const dir = await makeTempDir(t);
+  const calls: CallRecord[] = [];
+  const exec: GitExecFn = async (_cmd, args) => {
+    calls.push({ cmd: 'git', args });
+    if (args.includes('--filter=blob:none')) {
+      return { stdout: '', stderr: "error: unknown option `filter=blob:none'", code: 129 };
+    }
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
+  await transport.list();
+  const clones = calls.filter((c) => c.args.includes('clone'));
+  assert.equal(clones.length, 2, '必须先试 partial、再回落全量: ' + clones.map((c) => c.args.join(' ')).join(' | '));
+  assert.ok(!clones[1]!.args.includes('--filter=blob:none'), '回落那次不得带 --filter');
+  assert.equal(calls.filter((c) => c.args.includes('sparse-checkout')).length, 0, '回落路径不做 sparse');
+});
+
+test('issue #122：超时 kill 整棵进程树，且有界收尾（孙进程不再继续跑）', async (t) => {
+  const dir = await makeTempDir(t);
+  const marker = path.join(dir, 'grandchild-alive.txt');
+  // 父进程拉起孙进程后常驻；孙进程 1.5 s 后写标记文件 —— 只杀父进程时它会照写
+  await fs.writeFile(path.join(dir, 'grandchild.cjs'), [
+    "setTimeout(() => { require('node:fs').writeFileSync(process.argv[2], 'alive'); }, 1500);",
+    '',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'parent.cjs'), [
+    "const { spawn } = require('node:child_process');",
+    "spawn(process.execPath, [require('node:path').join(__dirname, 'grandchild.cjs'), process.argv[2]], { stdio: 'ignore' });",
+    'setInterval(() => {}, 1000);',
+    '',
+  ].join('\n'));
+  const started = Date.now();
+  const res = await defaultGitExec(process.execPath, [path.join(dir, 'parent.cjs'), marker], { timeoutMs: 200 });
+  const elapsed = Date.now() - started;
+  assert.notEqual(res.code, 0, '超时必须是非零退出');
+  assert.match(res.stderr, /timed out after 200ms/, '超时文案必须让分类器判 timeout（瞬时、可重试）');
+  assert.ok(elapsed < 4000, `超时收尾必须有界（实际 ${String(elapsed)}ms）`);
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  await assert.rejects(fs.stat(marker), '孙进程必须被一起杀掉（否则它会继续写文件/继续下 pack）');
 });
 
 test('并发驱动同一工作副本（两个 transport 实例）→ git 调用被工作副本锁串行化', async (t) => {
@@ -1194,7 +1370,7 @@ test('issue #79：Host key verification failed → 可操作指纹指引（含 h
     calls.push({ cmd: 'git', args });
     const joined = args.join(' ');
     if (joined.includes('remote get-url')) return { stdout: repoUrl, stderr: '', code: 0 };
-    if (joined.includes('fetch origin')) {
+    if (isFetchArgs(args)) {
       return { stdout: '', stderr: 'Host key verification failed.\nfatal: Could not read from remote repository.', code: 128 };
     }
     return { stdout: 'sha', stderr: '', code: 0 };

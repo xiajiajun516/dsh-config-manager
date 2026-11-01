@@ -9,9 +9,14 @@
  * 语义与 ff-only pull 一致：能快进就快进，不能快进就报「历史分叉」。
  */
 
-/** `git fetch` 参数：只更新 origin/<branch> 这个远端跟踪引用，不写 FETCH_HEAD */
-export function fastForwardFetchArgs(branch: string): string[] {
-  return ['fetch', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`];
+/**
+ * `git fetch` 参数：只更新 origin/<branch> 这个远端跟踪引用，不写 FETCH_HEAD。
+ *
+ * `flags` 是给调用方补的拉取姿态（如 `--filter=blob:none`/`--no-tags`），必须排在 `origin` 之前：
+ * git 只认「子命令后、URL 前」的选项，放到 refspec 之后会被当成 refspec 解析。
+ */
+export function fastForwardFetchArgs(branch: string, flags: readonly string[] = []): string[] {
+  return ['fetch', ...flags, 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`];
 }
 
 /** `git merge` 参数：快进到显式远端跟踪分支（不依赖 upstream 配置，也不读 FETCH_HEAD） */

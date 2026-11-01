@@ -418,3 +418,51 @@ detail 请求且不同 repoUrl 不共用 / TTL 过期后重跑）、`tests/home-
 **未做**：合并命令（7 → 4 条，例如一次 `git status --porcelain=v2 --branch` 拿 ahead/branch/dirty）—— 收益
 有限且要重写解析，本次未采纳。
 
+
+## 远端仓库远大于同步内容 → git 通道卡死（issue #122，2026-11 落地）
+
+**规则判据（已回写 `AGENTS.md`）**：git 通道只 materialize 同步目录（partial clone + sparse-checkout，老 git 回落全量）；
+稳态靠 `ls-remote` 单次往返短路（**refs 相同 且 HEAD 已合并**才整段跳过）；网络子命令恒带低速上限；命令超时 kill **整棵进程树**且有界收尾。
+
+**现场（报告者实测，2026-10-31）**：远端仓库 ~1.8 GB，同步内容 ~6 MB。「检查远端变更」跑
+`git fetch origin +refs/heads/main:refs/remotes/origin/main` 必须拉完整对象图；UI 永久停在「正在检查远端变更…」；
+工作副本累积 `tmp_pack_*` **7.3 GB**；每约 120 s 新起一个 fetch（= `DEFAULT_SYNC_TIMEOUT_MS` + 3 次重试），
+旧进程仍在跑 ⇒ 最终 **5 份并发下载同一个 pack**（`--pack_header=2,4633`）。
+
+**根因链（四条叠加，缺一条都不会卡死）**：
+1. `git clone` 无 `--filter` / 无 sparse ⇒ 首次就把整库落地；`fetch` 同理（`src/utils/git-fast-forward.ts` 只拼 refspec）。
+2. 超时实现是 `execFile` 的 `timeout`，**只对 git.exe 发 SIGTERM**。真正在下包的是它的子进程
+   （`git-remote-https` / `git index-pack`）：父进程死了、孙进程继续写 `tmp_pack_*`。
+3. `execFile` 的 promise 以 **stdio 管道关闭**为准；孙进程握着管道 ⇒ 连超时错误都不返回 ⇒ 上层无限等待。
+4. 重试不是 single-flight：工作副本锁（`src/utils/workdir-lock.ts`）已跨进程串行，但孤儿进程不持锁 ——
+   下一轮重试照起新进程 ⇒ 并发下载数 = 重试轮数。
+
+**修复（`src/sync/git/git-transport.ts`）**：
+- `cloneIntoWorkDir()`：`clone --filter=blob:none --no-checkout` → `sparse-checkout set --cone snapshots snapshots-encrypted blobs` → `checkout <branch>`。
+  sparse 面 = `SYNC_ROOT_DIRS`（`[...ADOPT_ROOT_ALLOW]`，**与「远端顶层只许这三个目录」同一份来源**，不许另写一份）。
+  `UNSUPPORTED_GIT_OPTION_RE` 命中 = 老 git（partial clone 需 ≥2.19、cone 需 ≥2.25）⇒ `clearDirContents` 后回落全量 clone，
+  行为与修复前逐字一致；sparse 失败同样回落 `checkout` 全量落地，绝不留空工作树。
+- `fetchOptionFlags()`：**只有 `remote.origin.promisor=true` 才加 `--filter=blob:none`**（对普通全量副本加过滤会让后续 checkout 拿到缺失 blob），恒带 `--no-tags`。
+- `pullFromRemote`：先 `ls-remote --heads origin refs/heads/<b>`（~1 KB）与 `rev-parse refs/remotes/origin/<b>`；
+  **两者相等且 `HEAD` 也等于它** ⇒ 直接返回（零 fetch、零 merge）；只相等但 HEAD 落后 ⇒ **跳过 fetch、仍本地 merge**
+  （否则漏掉「上次 fetch 成功、merge 没跑完」的副本）。
+- `defaultGitExec`（原 `defaultExec`，导出供测试）：`spawn` + POSIX `detached` 独立进程组（超时 `process.kill(-pid,'SIGKILL')`）/ Windows `taskkill /pid <pid> /T /F`；
+  kill 后仍挂 `EXEC_KILL_GRACE_MS=5_000` 宽限强制收尾（**绝不把「管道没关」变成上层无限等待**）；累计输出超 16 MiB 即 kill。
+  超时文案仍是 `git command timed out after <ms>ms: …` —— `classifyNetworkErrorText` 靠它判 timeout（瞬时、可重试）。
+- `runGit`：网络子命令（clone/fetch/push/ls-remote/pull）前置 `-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30`
+  ——git 默认低速门限极宽松，限速/黑洞链路能安静耗满 120 s；30 s 内平均 <1 KB/s 即明确失败。
+
+**为什么不那么做（各方案被否的具体理由，别再试）**：
+- **bare 仓库 + `ls-tree`/`show` 直读**：sparse 之后工作区只有 ~6 MB，收益 <1%，却要重写约 400 行 fs 读写。
+- **raw.githubusercontent / GitHub REST 读文件**：第二套认证、非 GitHub 托管不通用，且**写路径仍然要 git**。
+- **`--filter=tree:0`**：`list` 要遍历每个 tree ⇒ 往返放大，兼容面更窄。
+- **`--depth 1`**：破坏 `merge --ff-only` / adopt / ahead-behind 三项语义（报告者也明确不要）。
+- **强制「专用同步仓库」**：不改用户仓库布局，只在 adopt 侧保留 `ADOPT_ROOT_ALLOW` 的只读提示。
+- **存量副本静默改造成 partial**：已有全量工作副本不动（`isPartialClone()` 只读判定），它靠短路 + `--no-tags` 受益；
+  要瘦身走「重建工作副本」这条显式路径。
+
+**验收**：`src/sync/git/git-transport.test.ts` 8 条（稳态零 fetch/零 merge、refs 最新但 HEAD 落后仍 merge、
+有变化时 fetch 带 `--no-tags` 不带 filter、partial 副本保持 `--filter=blob:none`、网络子命令带低速上限而本地不带、
+首次 clone 走 partial+sparse 且 sparse 面逐字、老 git 回落全量、**真实进程树 kill**：孙进程 1.5 s 后写标记文件、
+超时 200 ms 收尾后标记文件必须不存在）。`src/sync/git/git-probe.test.ts` 的「探针只发一条 ls-remote」按前置 `-c` 剥离后仍逐字断言。
+

@@ -7,8 +7,9 @@
  * - 加密快照（EncryptedSections 密文载荷，无法平铺为明文 JSON 分区）走「密文单文件」布局：
  *   整个快照 JSON 提交到 <workDir>/snapshots-encrypted/<id>.json（远端已存密文；
  *   本地工作副本即远端镜像，不产生额外明文审计副本）。
- * - 命令执行走 node:child_process execFile（promise 封装，数组参数无 shell 注入），
- *   始终使用系统 PATH 中的 git（固定命令 'git'），可注入 exec 便于测试。
+ * - 命令执行走 node:child_process spawn（数组参数无 shell 注入、无 maxBuffer 截断错误），
+ *   超时**整棵进程树**一起 kill（issue #122：只 SIGTERM git.exe 会留下 git-remote-https /
+ *   index-pack 孤儿继续下载）；始终使用系统 PATH 中的 git（固定命令 'git'），可注入 exec 便于测试。
  * - 认证：token 仅从注入的 credentials provider 读取（每次网络操作时 getToken()），
  *   经 git credential helper（store --file=<临时文件>）传给 git —— token 不进入 argv、
  *   不进入 repoUrl、不写入任何同步内容/commit message/日志；临时凭据文件用后即删。
@@ -17,11 +18,11 @@
  * - 契约：同 id 重复 upload = 覆盖（幂等友好：内容无变化时不产生 commit）；download 不存在抛错；
  *   delete 不存在视为成功。
  */
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import { createSnapshotFs, joinFs } from '../fs.ts';
 import type { SnapshotFs } from '../fs.ts';
@@ -48,8 +49,6 @@ import type { MsgFunc } from '../../core/messages.ts';
 import { withWorkdirLock, WorkdirLockError } from '../../utils/workdir-lock.ts';
 import { fastForwardFetchArgs, fastForwardMergeArgs, isMissingRemoteRefError, parseCurrentBranch } from '../../utils/git-fast-forward.ts';
 
-const execFileAsync = promisify(execFile);
-
 /** git 命令执行结果（code ≠ 0 = git 命令失败/退出非零） */
 export interface GitExecResult {
   stdout: string;
@@ -57,7 +56,7 @@ export interface GitExecResult {
   code: number;
 }
 
-/** 可注入的 git 执行器（测试 mock 用）；默认实现 = child_process.execFile promise 封装 */
+/** 可注入的 git 执行器（测试 mock 用）；默认实现 = child_process.spawn promise 封装（超时杀进程树） */
 export type GitExecFn = (
   cmd: string,
   args: string[],
@@ -146,7 +145,7 @@ export interface GitTransportOptions {
   timeoutMs?: number;
   /** 幂等读操作（list/download 的 clone/pull）的网络重试参数；缺省 attempts=3、250ms 起指数退避 */
   retry?: SyncRetryOptions;
-  /** 注入 exec（测试 mock 用）；缺省 = execFile 封装 */
+  /** 注入 exec（测试 mock 用）；缺省 = spawn 封装（超时杀进程树） */
   exec?: GitExecFn;
   /** 提交作者（写入远端历史），默认 DSH Config Sync <sync@dsh.local> */
   author?: GitAuthor;
@@ -184,10 +183,29 @@ const BLOBS_REL = 'blobs';
  * 远端分支的顶层出现别的名字 = 这不是本插件的同步仓库，合并它等于把别人的仓库内容搬进工作副本。
  */
 const ADOPT_ROOT_ALLOW = new Set<string>([SNAPSHOTS_REL, SNAPSHOTS_ENCRYPTED_REL, BLOBS_REL]);
+/**
+ * 同步仓库只在这三个顶层目录里写内容 ⇒ partial clone 的 sparse-checkout 面与它同源（issue #122）。
+ * 远端仓库比同步内容大几个数量级时（报告者现场：1.8 GB 仓库 / 6 MB 内容），全量 clone 与全量 fetch
+ * 都要拉完整对象图，而工作副本真正需要的只有这三个目录。
+ */
+const SYNC_ROOT_DIRS: readonly string[] = [...ADOPT_ROOT_ALLOW];
+/**
+ * 走网络的 git 子命令：一律附加低速上限（issue #122）。
+ *
+ * 为什么必须显式设：git 的默认 http 低速门限极宽松，链路被限速/黑洞时一条 fetch 能安静地耗到
+ * timeoutMs（120 s），再乘上重试次数 = 用户看到的就是「永久停在正在检查远端变更」。
+ * 30 s 内平均速率低于 1 KB/s 即明确失败，交给既有分类器判 timeout（瞬时、可重试）。
+ */
+const NETWORK_SUBCOMMANDS = new Set<string>(['clone', 'fetch', 'push', 'ls-remote', 'pull']);
+const LOW_SPEED_ARGS: readonly string[] = ['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=30'];
 const DEFAULT_AUTHOR: GitAuthor = { name: 'DSH Config Sync', email: 'sync@dsh.local' };
 const DEFAULT_CREDENTIAL_USERNAME = 'oauth2';
 /** 快照 id 安全字符集：字母数字开头，仅 . _ -；防路径穿越与 commit message 注入 */
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/** git 对象 id（sha1 40 位 / sha256 64 位）—— ls-remote 输出与 rev-parse 结果共用同一判定 */
+const SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+/** 老 git 不认新选项（partial clone 需 ≥2.19、cone sparse-checkout 需 ≥2.25）：据此回落全量 clone */
+const UNSUPPORTED_GIT_OPTION_RE = /unknown option|unrecognized argument|unknown switch|is not a git command|unsupported/i;
 
 /**
  * SSH 主机密钥校验失败（issue #79）：git 只回一句 `Host key verification failed`，
@@ -201,35 +219,118 @@ const SSH_HOST_KEY_RE = /host key verification failed|remote host identification
  */
 const DIVERGED_HISTORY_RE = /refusing to merge unrelated histories|unrelated histories|not possible to fast-forward/i;
 
-const defaultExec: GitExecFn = async (cmd, args, opts) => {
-  try {
-    const { stdout, stderr } = await execFileAsync(cmd, args, {
-      cwd: opts.cwd,
-      timeout: opts.timeoutMs,
-      maxBuffer: 16 * 1024 * 1024,
-      windowsHide: true,
-      encoding: 'utf8',
-      // issue #120：credential helper 走 shell 且本机没有可用 shell 时，改用 env 注入认证头重试 ——
-      // 追加在继承的 process.env 上（env 缺省 = 完全继承，不改变既有行为）
-      env: opts.env === undefined ? undefined : { ...process.env, ...opts.env },
-    });
-    return { stdout: String(stdout), stderr: String(stderr), code: 0 };
-  } catch (err) {
-    const e = err as { code?: number | string; killed?: boolean; signal?: string; stdout?: string; stderr?: string };
-    const detail = String(e.stderr ?? '') !== '' ? String(e.stderr) : (err instanceof Error ? err.message : String(err));
-    // 超时（execFile 到点 kill）在 git 的 stderr 里常常是空的：补一句可判定的文字，
-    // 让 transport.ts 的统一分类器把它识别成 timeout（瞬时、可重试），而不是 unknown。
-    const timedOut = e.killed === true || e.signal === 'SIGTERM' || e.code === 'ETIMEDOUT';
-    const stderr = timedOut && !/timed out|timeout/i.test(detail)
-      ? `git command timed out after ${String(opts.timeoutMs ?? 0)}ms: ${detail}`
-      : detail;
-    return {
-      stdout: String(e.stdout ?? ''),
-      stderr,
-      code: typeof e.code === 'number' ? e.code : 1,
+/** 超时 kill 之后等 stdio 关闭的宽限：逃出进程组的孙进程可能一直握着管道（issue #122） */
+const EXEC_KILL_GRACE_MS = 5_000;
+/** 单条命令累计输出上限（与旧 execFile maxBuffer 同口径，超限即 kill） */
+const EXEC_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+
+/**
+ * 默认 git 执行器：spawn + **进程树** kill（issue #122）。
+ *
+ * 为什么不再用 execFile：它的 timeout 只对 git.exe 自己发 SIGTERM，而真正在下包的是 git.exe 的子进程
+ * （git-remote-https / git index-pack）。父进程被杀、孙进程继续写 tmp_pack_*，管道不关闭 ⇒ execFile 的
+ * promise 连超时错误都可能不返回 ⇒ 上层「正在检查远端变更...」永久挂起，下一轮重试再起一份，最终 N 份
+ * 并发下载同一个 pack。
+ * 这里改为：POSIX 上 detached 起独立进程组，超时对**整组**发 SIGKILL；Windows 上 `taskkill /T /F`；
+ * 无论 kill 是否成功，宽限期到点都带着已收集输出收尾 —— 绝不把「管道没关」变成上层无限等待。
+ *
+ * 导出仅供测试直接验证「超时 + 进程树 kill + 有界收尾」（issue #122 的验收面）。
+ */
+export const defaultGitExec: GitExecFn = async (cmd, args, opts) =>
+  await new Promise<GitExecResult>((resolve) => {
+    const isWin = process.platform === 'win32';
+    // issue #120：credential helper 走 shell 且本机没有可用 shell 时，改用 env 注入认证头重试 ——
+    // 追加在继承的 process.env 上（env 缺省 = 完全继承，不改变既有行为）
+    const env = opts.env === undefined ? undefined : { ...process.env, ...opts.env };
+    let stdout = '';
+    let stderr = '';
+    let bytes = 0;
+    let settled = false;
+    let timedOut = false;
+    let overflow = false;
+    let timer: NodeJS.Timeout | null = null;
+    let graceTimer: NodeJS.Timeout | null = null;
+    let child: ChildProcess | null = null;
+
+    const settle = (code: number): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      if (graceTimer !== null) clearTimeout(graceTimer);
+      let text = stderr;
+      if (code !== 0) {
+        if (overflow && !/exceed/i.test(text)) text = `${text}\noutput exceeded ${String(EXEC_MAX_OUTPUT_BYTES)} bytes`;
+        if (text.trim() === '') text = `git ${args[0] ?? ''} exited with code ${String(code)}`;
+        // 超时在 git 的 stderr 里常常是空的：补一句可判定的文字，让 transport.ts 的统一分类器
+        // 把它识别成 timeout（瞬时、可重试），而不是 unknown。
+        if (timedOut && !/timed out|timeout/i.test(text)) {
+          text = `git command timed out after ${String(opts.timeoutMs ?? 0)}ms: ${text}`;
+        }
+      }
+      resolve({ stdout, stderr: text, code });
     };
-  }
-};
+
+    const killTree = (): void => {
+      const pid = child?.pid;
+      if (pid === undefined) return;
+      if (isWin) {
+        // 只 SIGTERM git.exe 会留下 git-remote-https / index-pack 孤儿（issue #122）⇒ 整棵树强杀
+        try {
+          spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+            .on('error', () => { /* 尽力而为：kill 失败也要靠宽限期收尾 */ });
+        } catch { /* 同上 */ }
+        return;
+      }
+      try {
+        process.kill(-pid, 'SIGKILL'); // 负 pid = 整个进程组（detached 起的子进程是组长）
+      } catch {
+        try { child?.kill('SIGKILL'); } catch { /* 已退出 */ }
+      }
+    };
+
+    try {
+      child = spawn(cmd, args, {
+        ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }),
+        ...(env === undefined ? {} : { env }),
+        windowsHide: true,
+        // POSIX：独立进程组，超时才可能连孙进程一起杀；Windows 用 taskkill /T
+        detached: !isWin,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      resolve({ stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 });
+      return;
+    }
+
+    const collect = (sink: 'out' | 'err') => (chunk: Buffer): void => {
+      bytes += chunk.length;
+      if (bytes > EXEC_MAX_OUTPUT_BYTES) {
+        if (!overflow) {
+          overflow = true;
+          killTree();
+        }
+        return;
+      }
+      if (sink === 'out') stdout += chunk.toString('utf8');
+      else stderr += chunk.toString('utf8');
+    };
+    child.stdout?.on('data', collect('out'));
+    child.stderr?.on('data', collect('err'));
+    child.on('error', (err) => {
+      stderr = stderr === '' ? err.message : stderr;
+      settle(1);
+    });
+    child.on('close', (code) => { settle(typeof code === 'number' ? code : 1); });
+
+    if (opts.timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        killTree();
+        // 进程树 kill 之后管道仍可能被握着（逃出进程组的孙进程）⇒ 宽限期到点强制收尾
+        graceTimer = setTimeout(() => { settle(1); }, EXEC_KILL_GRACE_MS);
+      }, Math.max(1, opts.timeoutMs));
+    }
+  });
 
 /** 实现 SyncTransport 的 git 通道。所有操作前 ensureRepo() 保证工作副本就绪，网络命令带凭据。 */
 export class GitTransport implements SyncTransport {
@@ -244,6 +345,8 @@ export class GitTransport implements SyncTransport {
     exec: GitExecFn;
   };
   private repoReady = false;
+  /** 该工作副本是否 partial clone（remote.origin.promisor）；null = 尚未判定（issue #122） */
+  private partialClone: boolean | null = null;
   /**
    * 工作副本锁的可重入深度：list/upload/download/delete 都会经 ensureRepo → reconcileOrigin，
    * rebuildWorkDir → adoptRemoteHistory 也各自嵌套；外层入口持锁，内层直接跑。
@@ -278,7 +381,7 @@ export class GitTransport implements SyncTransport {
       gitBin: 'git',
       timeoutMs: options.timeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS,
       retry: options.retry ?? {},
-      exec: options.exec ?? defaultExec,
+      exec: options.exec ?? defaultGitExec,
       author: options.author ?? DEFAULT_AUTHOR,
       credentialUsername: options.credentialUsername ?? DEFAULT_CREDENTIAL_USERNAME,
     };
@@ -584,12 +687,94 @@ export class GitTransport implements SyncTransport {
     // 每次尝试前重查 .git：上一次尝试其实建出了仓库就视为成功，避免「目录非空」误判。
     await withSyncRetry(async () => {
       if (await fsx.exists(gitDir)) return;
-      await this.runGit(['clone', this.o.repoUrl, '.'], { cwd: this.o.workDir, withCredential: true });
+      await this.cloneIntoWorkDir();
     }, this.o.retry);
     // 仓库级提交身份（写入远端历史，可经 author 选项覆盖；不改全局配置）
     await this.runGit(['config', 'user.name', this.o.author.name]);
     await this.runGit(['config', 'user.email', this.o.author.email]);
     this.repoReady = true;
+  }
+
+  /**
+   * 首次 clone（issue #122）：partial clone + sparse-checkout，只落地同步内容。
+   *
+   * 为什么：同步仓库可能比同步内容大几个数量级（报告者现场 1.8 GB 仓库 / 6 MB 内容）。此前 `git clone`
+   * 全量落地，之后每次 fetch 还要拉完整对象图 ⇒ 一次「检查远端变更」就下几百 MB。
+   * `--filter=blob:none` 只取 commit+tree，`--no-checkout` 先不落地任何文件，
+   * `sparse-checkout set --cone <三个目录>` 之后 checkout 只 materialize 这三个目录的 blob。
+   *
+   * 老 git 不认这些选项（unknown option）时回落全量 clone —— 行为与修复前完全一致，绝不因优化失败。
+   */
+  private async cloneIntoWorkDir(): Promise<void> {
+    const cwd = this.o.workDir;
+    this.partialClone = null; // reclone 后重新判定（配置可能变）
+    const filteredArgs = ['clone', '--filter=blob:none', '--no-checkout', this.o.repoUrl, '.'];
+    const filtered = await this.runGit(filteredArgs, { cwd, withCredential: true, allowNonZero: true });
+    if (filtered.code !== 0) {
+      if (!UNSUPPORTED_GIT_OPTION_RE.test(filtered.stderr + ' ' + filtered.stdout)) {
+        // 真实失败（网络 / 鉴权 / 超时）：沿用既有分类与文案（含 issue #120 的凭据通道判定）
+        this.raiseGitFailure(filteredArgs, filtered, await this.readTokenOnce(), false);
+      }
+      // 老 git：回落全量 clone（全量 clone 自带 checkout）
+      await clearDirContents(cwd);
+      await this.runGit(['clone', this.o.repoUrl, '.'], { cwd, withCredential: true });
+      return;
+    }
+    const branch = await this.currentBranch();
+    const head = await this.runGit(['rev-parse', '--verify', '--quiet', 'HEAD'], { allowNonZero: true });
+    if (head.code !== 0) return; // 空仓库：没有可 checkout 的树，后续 push 会建分支
+    const target = branch === '' ? 'HEAD' : branch;
+    const sparse = await this.runGit(['sparse-checkout', 'set', '--cone', ...SYNC_ROOT_DIRS], { allowNonZero: true });
+    if (sparse.code !== 0) {
+      // 老 git 没有 cone 模式：宁可全量落地（修复前行为），也不留下一个空工作树
+      await this.runGit(['checkout', target], { allowNonZero: true });
+      return;
+    }
+    // checkout 失败必须可见（空工作树会让上层以为「远端没有快照」）
+    await this.runGit(['checkout', target]);
+  }
+
+  /**
+   * 该工作副本是不是 partial clone（`remote.origin.promisor=true`）。
+   *
+   * 只有 partial clone 才能给 fetch 加 `--filter=blob:none`：对普通全量副本加过滤会让后续 checkout
+   * 拿到缺失的 blob。存量副本（1.8 GB 那种）因此只受益于 ls-remote 短路与 `--no-tags`，不会被改坏。
+   */
+  private async isPartialClone(): Promise<boolean> {
+    if (this.partialClone !== null) return this.partialClone;
+    const res = await this.runGit(['config', '--get', 'remote.origin.promisor'], { allowNonZero: true });
+    this.partialClone = res.code === 0 && res.stdout.trim() === 'true';
+    return this.partialClone;
+  }
+
+  /** 拉取姿态：partial clone 保持 blob 过滤；同步仓库不需要 tag（issue #122） */
+  private async fetchOptionFlags(): Promise<string[]> {
+    const flags: string[] = [];
+    if (await this.isPartialClone()) flags.push('--filter=blob:none');
+    flags.push('--no-tags');
+    return flags;
+  }
+
+  /** 远端分支当前的 sha（ls-remote 只取一行 refs）；读不到 → null（短路是优化，失败一律回落正常 fetch） */
+  private async lsRemoteBranchSha(branch: string): Promise<string | null> {
+    const res = await this.runGit(
+      ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`],
+      { withCredential: true, allowNonZero: true },
+    );
+    if (res.code !== 0) return null;
+    for (const line of res.stdout.split('\n')) {
+      const [sha, ref] = line.trim().split('\t');
+      if (ref === `refs/heads/${branch}` && sha !== undefined && SHA_RE.test(sha)) return sha;
+    }
+    return null;
+  }
+
+  /** 解析引用指向的 sha；读不到 / 不是 sha → null */
+  private async revParseSha(ref: string): Promise<string | null> {
+    const res = await this.runGit(['rev-parse', '--verify', '--quiet', ref], { allowNonZero: true });
+    if (res.code !== 0) return null;
+    const sha = res.stdout.trim();
+    return SHA_RE.test(sha) ? sha : null;
   }
 
   /**
@@ -607,6 +792,7 @@ export class GitTransport implements SyncTransport {
       await this.runGit(['remote', 'add', 'origin', this.o.repoUrl]);
     } else if (origin !== '' && origin !== this.o.repoUrl) {
       await this.runGit(['remote', 'set-url', 'origin', this.o.repoUrl]);
+      this.partialClone = null; // 换了远端 ⇒ promisor 判定失效（issue #122）
     }
     const push = await this.runGit(['remote', 'get-url', '--push', 'origin'], { allowNonZero: true });
     const pushUrl = push.code === 0 ? push.stdout.trim() : '';
@@ -811,7 +997,7 @@ export class GitTransport implements SyncTransport {
     }
     // fetch 是网络操作（幂等读）→ 允许有限指数退避重试
     await withSyncRetry(async () => {
-      await this.runGit(['fetch', 'origin'], { withCredential: true });
+      await this.runGit(['fetch', ...(await this.fetchOptionFlags()), 'origin'], { withCredential: true });
     }, this.o.retry);
     const remoteRef = `refs/remotes/origin/${branch}`;
     const refRes = await this.runGit(['rev-parse', '--verify', '--quiet', remoteRef], { allowNonZero: true });
@@ -879,6 +1065,12 @@ export class GitTransport implements SyncTransport {
     const attempt = async (): Promise<void> => {
       const branch = await this.currentBranch();
       if (branch === '') return; // detached HEAD：没有 upstream 概念（与原「no tracking information」同姿态跳过）
+      // issue #122：稳态（远端没变）时**连 fetch 都不发**。一次 ls-remote 只回一行 refs（~1 KB），
+      // 而 fetch 即使没有新内容也要协商 refs、且远端仓库远大于同步内容时要遍历完整对象图
+      // （报告者现场：1.8 GB 仓库 / 6 MB 内容 ⇒ 一次「检查远端变更」卡死）。
+      // 跳过条件必须两个同时成立：远端 sha == 本地远端跟踪引用（没有新对象可拉）**且** HEAD == 该 sha
+      // （本地已合并）。只比 refs 就跳过 merge 会漏掉「上次 fetch 成功、merge 没跑完」的副本 ——
+      // 那种副本没有新对象可拉，但必须继续本地 merge。
       // **不再用 `git pull --ff-only`**：它是「fetch 写 FETCH_HEAD + 读 FETCH_HEAD 合并」的两步动作，
       // 并发驱动同一个工作副本时 FETCH_HEAD 会留下多行 for-merge 记录，随后每个 pull 都以
       // `fatal: Cannot fast-forward to multiple branches.` 失败（本机 5 并发实测全败），
@@ -886,12 +1078,18 @@ export class GitTransport implements SyncTransport {
       // 显式 refspec fetch + 显式远端跟踪分支 merge 完全不读 FETCH_HEAD（同样 5 并发实测全成功），
       // 语义与 ff-only pull 一致：能快进就快进，不能快进就报「历史分叉」。
       // 参数与判定在 utils/git-fast-forward.ts（market 侧共用同一份实现）。
-      const fetched = await this.runGit(fastForwardFetchArgs(branch), { withCredential: true, allowNonZero: true });
-      if (fetched.code !== 0) {
-        const combined = fetched.stderr + ' ' + fetched.stdout;
-        // 远端还没有这个分支（全新空仓库 / 分支被改名）→ 与「无 upstream」一样静默跳过
-        if (isMissingRemoteRefError(combined)) return;
-        await this.throwPullFailure(combined, fetched.stderr);
+      const remoteSha = await this.lsRemoteBranchSha(branch);
+      const localSha = await this.revParseSha(`refs/remotes/origin/${branch}`);
+      if (remoteSha !== null && remoteSha === localSha) {
+        if (await this.revParseSha('HEAD') === remoteSha) return; // 已是最新：零 fetch、零 merge
+      } else {
+        const fetched = await this.runGit(fastForwardFetchArgs(branch, await this.fetchOptionFlags()), { withCredential: true, allowNonZero: true });
+        if (fetched.code !== 0) {
+          const combined = fetched.stderr + ' ' + fetched.stdout;
+          // 远端还没有这个分支（全新空仓库 / 分支被改名）→ 与「无 upstream」一样静默跳过
+          if (isMissingRemoteRefError(combined)) return;
+          await this.throwPullFailure(combined, fetched.stderr);
+        }
       }
       const merged = await this.runGit(fastForwardMergeArgs(branch), { allowNonZero: true });
       if (merged.code === 0) return;
@@ -938,6 +1136,8 @@ export class GitTransport implements SyncTransport {
     opts: { cwd?: string; withCredential?: boolean; allowNonZero?: boolean; requirePushToken?: boolean } = {},
   ): Promise<GitExecResult> {
     const cwd = opts.cwd === undefined ? this.o.workDir : opts.cwd;
+    // 网络子命令一律带低速上限：真卡住在 30 s 内明确失败，而不是耗满 timeoutMs（issue #122）
+    const networkArgs = NETWORK_SUBCOMMANDS.has(args[0] ?? '') ? [...LOW_SPEED_ARGS] : [];
     let extra: string[] = [];
     let token: string | null = null;
     let cleanup: (() => Promise<void>) | null = null;
@@ -956,7 +1156,7 @@ export class GitTransport implements SyncTransport {
     // 而目录里原本就有别的内容时宁可放弃重试，也绝不删用户文件。
     const cloneTargetWasEmpty = args[0] === 'clone' ? await isEmptyDir(cwd) : false;
     try {
-      let result = await this.o.exec(this.o.gitBin, [...extra, ...args], { cwd, timeoutMs: this.o.timeoutMs });
+      let result = await this.o.exec(this.o.gitBin, [...extra, ...networkArgs, ...args], { cwd, timeoutMs: this.o.timeoutMs });
       // issue #120：credential helper 必须经 shell 执行（值里不含空格也一样，git 统一拼成
       // `sh -c 'git <helper> ...'`），而 Android 上 git 二进制的 GIT_SHELL_PATH 指向 App 沙箱里
       // 不存在的 Termux sh；`core.askpass` 又要 exec 权限（Android 10+ 对 targetSdk ≥ 29 禁执行应用
@@ -966,33 +1166,11 @@ export class GitTransport implements SyncTransport {
         const headerEnv = credentialHeaderEnv(this.o.repoUrl, this.o.credentialUsername, token);
         if (Object.keys(headerEnv).length > 0 && (args[0] !== 'clone' || cloneTargetWasEmpty)) {
           if (args[0] === 'clone') await clearDirContents(cwd);
-          result = await this.o.exec(this.o.gitBin, args, { cwd, timeoutMs: this.o.timeoutMs, env: headerEnv });
+          result = await this.o.exec(this.o.gitBin, [...networkArgs, ...args], { cwd, timeoutMs: this.o.timeoutMs, env: headerEnv });
         }
       }
       if (result.code !== 0 && !opts.allowNonZero) {
-        const combined = result.stderr + ' ' + result.stdout;
-        // 统一分类（超时 / 网络 / 鉴权 / 5xx…）：上层可据 kind / retryable 分流，不必解析 message
-        const classified = classifyNetworkErrorText(combined);
-        // issue #79：SSH 主机密钥校验失败 → 换成「怎么信任该主机」的可操作说明（绝不自动信任）
-        if (SSH_HOST_KEY_RE.test(combined)) {
-          throw new GitTransportError(this.hostKeyMessage(), { kind: 'auth', retryable: false });
-        }
-        // 推送 + 鉴权失败：git 原文只说「认证失败」——换成能照做的说明（令牌失效 / 无写权限 / 远端禁用了密码推送）
-        // issue #115：clone 的鉴权失败原文（remote: Write access to repository not granted / 403）读不出「缺哪种权限」，
-        // 换成点名 Contents: Read and write 的说明 —— 否则用户只会以为令牌坏了（细粒度 PAT 常只勾了 Administration）
-        // issue #120：helper 根本没能执行时，「请确认令牌有效」是错误指引（令牌可能是好的）——
-        // 这类失败必须点名平台原因，排在 push/clone 的鉴权文案之前。
-        const credentialBlocked = isCredentialExecFailure(combined);
-        const message = credentialBlocked
-          ? this.msg('sync.git.credentialHelperBlocked', { err: this.mask(result.stderr, token) })
-          : opts.requirePushToken === true && classified.kind === 'auth'
-            ? this.msg('sync.git.pushAuthFailed', { err: this.mask(result.stderr, token) })
-            : args[0] === 'clone' && classified.kind === 'auth'
-              ? this.msg('sync.git.cloneAuthFailed', { err: this.mask(result.stderr, token) })
-              : this.msg('sync.git.cmdFailed', { args: args.join(' '), code: String(result.code), err: this.mask(result.stderr, token) });
-        // 归类同样不能交给原文：`cannot exec ...: No such file or directory` 里的 ENOENT 会被判成
-        // notfound（「仓库不存在」），而真实原因是凭据通道不可用 → 钉成 auth（非瞬时、别重试）。
-        throw new GitTransportError(message, credentialBlocked ? { kind: 'auth', retryable: false } : classified);
+        this.raiseGitFailure(args, result, token, opts.requirePushToken === true);
       }
       return result;
     } catch (err) {
@@ -1006,6 +1184,36 @@ export class GitTransport implements SyncTransport {
     } finally {
       if (cleanup) await cleanup();
     }
+  }
+
+  /**
+   * 把「git 退出非零」归一成可操作错误（runGit 与 clone 回落共用同一套文案与分类）。
+   * token 只用于脱敏，绝不进 message。
+   */
+  private raiseGitFailure(args: string[], result: GitExecResult, token: string | null, requirePushToken: boolean): never {
+    const combined = result.stderr + ' ' + result.stdout;
+    // 统一分类（超时 / 网络 / 鉴权 / 5xx…）：上层可据 kind / retryable 分流，不必解析 message
+    const classified = classifyNetworkErrorText(combined);
+    // issue #79：SSH 主机密钥校验失败 → 换成「怎么信任该主机」的可操作说明（绝不自动信任）
+    if (SSH_HOST_KEY_RE.test(combined)) {
+      throw new GitTransportError(this.hostKeyMessage(), { kind: 'auth', retryable: false });
+    }
+    // 推送 + 鉴权失败：git 原文只说「认证失败」——换成能照做的说明（令牌失效 / 无写权限 / 远端禁用了密码推送）
+    // issue #115：clone 的鉴权失败原文（remote: Write access to repository not granted / 403）读不出「缺哪种权限」，
+    // 换成点名 Contents: Read and write 的说明 —— 否则用户只会以为令牌坏了（细粒度 PAT 常只勾了 Administration）
+    // issue #120：helper 根本没能执行时，「请确认令牌有效」是错误指引（令牌可能是好的）——
+    // 这类失败必须点名平台原因，排在 push/clone 的鉴权文案之前。
+    const credentialBlocked = isCredentialExecFailure(combined);
+    const message = credentialBlocked
+      ? this.msg('sync.git.credentialHelperBlocked', { err: this.mask(result.stderr, token) })
+      : requirePushToken && classified.kind === 'auth'
+        ? this.msg('sync.git.pushAuthFailed', { err: this.mask(result.stderr, token) })
+        : args[0] === 'clone' && classified.kind === 'auth'
+          ? this.msg('sync.git.cloneAuthFailed', { err: this.mask(result.stderr, token) })
+          : this.msg('sync.git.cmdFailed', { args: args.join(' '), code: String(result.code), err: this.mask(result.stderr, token) });
+    // 归类同样不能交给原文：`cannot exec ...: No such file or directory` 里的 ENOENT 会被判成
+    // notfound（「仓库不存在」），而真实原因是凭据通道不可用 → 钉成 auth（非瞬时、别重试）。
+    throw new GitTransportError(message, credentialBlocked ? { kind: 'auth', retryable: false } : classified);
   }
 
   /**

@@ -32,6 +32,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+- **同步仓库比配置大得多时，git 通道不再卡在「正在检查远端变更」**：现在只取同步真正需要的目录、远端没变时一次往返就返回、不再把整个仓库的对象拉下来；下载真卡住会在 30 秒内明确失败，超时连同子进程一起终止，不再留下孤儿进程与越堆越大的临时包文件（issue #122）。
+  **The git channel no longer stalls on "checking remote changes" when the repository is far larger than the synced content**: it now takes only the folders sync actually needs, returns after a single round trip when nothing changed instead of downloading the whole object graph, and gives up within 30 seconds — killing child processes too, so no orphan downloads or growing temp packs are left behind (issue #122).
+
 ## [0.2.3] - 2026-10-31
 
 > **本版主题**：同步页的按钮自己说清作用——改名「从远端合并到本机」「立即保存」「上传配置包」，旁边的说明图标不再复述它们。

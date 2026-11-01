@@ -82,6 +82,8 @@
 - **快照不进机器专属路径**（导出剥 store/cache、写回保留本机）；S3 授权头逐字序列化；祖先副本只落密文。
 - **「本地有改动」与导出载荷必须同一份字节**：`hasLocalChanges` 比 `hashSection(export())` ⇒ 比对里剔掉的易变字段必须同时从载荷剔除，否则每轮轮询都真推一次；身份字节只有 `src/adapters/file-collection.ts` 的 `comparableContent()` 一处。
 - **会话管理五条**：远端保留接 GFS（刚 push 恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；墓碑不删本机数据。
+- **git 通道只碰同步内容**：clone 走 partial+sparse（sparse 面 = `SYNC_ROOT_DIRS`，与 `ADOPT_ROOT_ALLOW` 同源），老 git 回落全量；`--filter` 只给 promisor 副本。
+- **git 网络命令有界**：稳态靠 `ls-remote` 短路（远端 sha 与本地跟踪引用相同**且** HEAD 已合并才跳过）；网络子命令恒带低速上限；超时 kill 整棵进程树、宽限到点强制收尾（证据 → `docs/lessons/sync-channel.md`）。
 
 ### 备份 / 恢复 / 回滚点
 - **恢复崩溃后可续跑，但只在逐项可证时**（`judgeRestoreResume`：同快照 + 盘面只等于 beforeFp/afterFp + 不跨入口 + 不重建 WAL；否则 423）。
