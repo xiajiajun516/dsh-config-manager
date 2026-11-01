@@ -38,6 +38,8 @@ declare module 'lucide-react/dist/esm/icons/lock.mjs' { const i: LucideIconCompo
 declare module 'lucide-react/dist/esm/icons/message-square.mjs' { const i: LucideIconComponent; export default i }
 declare module 'lucide-react/dist/esm/icons/package-check.mjs' { const i: LucideIconComponent; export default i }
 declare module 'lucide-react/dist/esm/icons/pencil.mjs' { const i: LucideIconComponent; export default i }
+// 测试连接（同步页动作行的 28px 图标按钮）
+declare module 'lucide-react/dist/esm/icons/plug.mjs' { const i: LucideIconComponent; export default i }
 declare module 'lucide-react/dist/esm/icons/refresh-cw.mjs' { const i: LucideIconComponent; export default i }
 declare module 'lucide-react/dist/esm/icons/rotate-cw.mjs' { const i: LucideIconComponent; export default i }
 declare module 'lucide-react/dist/esm/icons/search.mjs' { const i: LucideIconComponent; export default i }
