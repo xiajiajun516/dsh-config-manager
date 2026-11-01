@@ -3362,6 +3362,13 @@ body {
   margin-bottom: 0;
 }
 
+/* 「选择」按钮贴右（2026-11-01 用户要求）：整行读成「左描述 / 右按钮」，
+   与设置页其余行（左文案 + 右控件）同构；此前它紧跟在计数后面，行右半是空的。
+   窄到放不下时随 flex-wrap 掉到下一行，仍然靠右。 */
+.sectionPickerRow > .pickerBtn {
+  margin-left: auto;
+}
+
 .syncSubBlock {
   margin-top: 10px;
   padding-top: 10px;

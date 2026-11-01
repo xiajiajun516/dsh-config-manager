@@ -30,7 +30,7 @@ export const zh = {
   'channel.gist': 'GitHub Gist',
   'channel.perChannelHint': '每条通道（Git / WebDAV / 对象存储 / Gist）的自动同步、同步模式、加密与远端快照各自独立配置。',
   // 通道入口卡（弹窗驱动：点按钮 → 弹窗内配置通道）
-  'channel.open': '配置…',
+  'channel.open': '配置',
   'channel.openHint': '远程同步通过「同步通道」进行：Git 私有仓库或 WebDAV 服务器。',
   // 断开通道配置（用户实测要求：配置过就必须能删掉，否则打不通的通道会永久占位）
   'channel.expand': '展开通道详情',
@@ -106,7 +106,7 @@ export const zh = {
   'repoPicker.empty': '没有可用的私有仓库',
   'repoPicker.loadFailed': '仓库列表加载失败，可重试或直接手填地址。',
   'repoPicker.updatedAt': '更新于 {time}',
-  'repoPicker.create': '＋ 新建私有仓库…',
+  'repoPicker.create': '＋ 新建私有仓库',
   'repoPicker.createTitle': '新建私有仓库',
   'repoPicker.name': '仓库名',
   'repoPicker.namePlaceholder': '如 dsh-configs',
@@ -198,7 +198,7 @@ export const zh = {
   'mode.sessionsWorkspaceWarn': '已勾选历史对话，但没有勾选「工作区」分区：目标机上这些对话可能归属不到任何工作区而显示不出来。建议一并勾选「工作区」。',
   'mode.gistSessionsWarn': '当前通道是 GitHub Gist，且勾选了「历史会话」：gist 会一次取回全部文件内容、单文件超限即截断、文件数还有上限，大分区同步可能失败或内容被截断。建议改用 Git / WebDAV / 对象存储通道同步历史会话，或取消勾选该分区。',
   'mode.persistHint': '分区选择已保存到本机：自动同步和手动推送都会使用此配置（重启后仍生效）。',
-  'mode.choose': '选择…',
+  'mode.choose': '选择',
   'mode.pickerTitle': '选择同步分区',
   'mode.pickerHint': '改动即时生效并保存（关闭弹窗即完成）。',
   'mode.pickerBack': '返回分区列表',
@@ -485,7 +485,7 @@ export const en: Record<keyof typeof zh, string> = {
   'channel.gist': 'GitHub Gist',
   'channel.perChannelHint': 'Auto sync, sync mode, encryption and remote snapshots are configured independently for each channel (Git / WebDAV / object storage / Gist).',
   // Channel entry card (dialog-driven: click the button → configure the channel in the dialog)
-  'channel.open': 'Configure…',
+  'channel.open': 'Configure',
   'channel.openHint': 'Remote sync runs through a sync channel: a private Git repository or a WebDAV server.',
   // Disconnect channel config (user report: once configured there was no way out)
   'channel.expand': 'Expand channel details',
@@ -559,7 +559,7 @@ export const en: Record<keyof typeof zh, string> = {
   'repoPicker.empty': 'No private repository available',
   'repoPicker.loadFailed': 'Could not load the repository list — retry, or type the address below.',
   'repoPicker.updatedAt': 'Updated {time}',
-  'repoPicker.create': '+ New private repository…',
+  'repoPicker.create': '+ New private repository',
   'repoPicker.createTitle': 'Create a private repository',
   'repoPicker.name': 'Repository name',
   'repoPicker.namePlaceholder': 'e.g. dsh-configs',
@@ -644,7 +644,7 @@ export const en: Record<keyof typeof zh, string> = {
   'mode.sessionsWorkspaceWarn': 'Conversations are selected but the "Workspaces" section is not: on the target machine they may not be attributed to any workspace and stay invisible. Selecting "Workspaces" too is recommended.',
   'mode.gistSessionsWarn': 'The current channel is GitHub Gist and "Conversations" is selected: a gist returns all file content in one request, truncates any oversized single file, and caps the number of files, so syncing a large section may fail or be truncated. Use a Git / WebDAV / object-storage channel for conversations, or clear that section.',
   'mode.persistHint': 'The section selection is saved locally: both auto sync and manual push use this configuration (persists across restarts).',
-  'mode.choose': 'Choose…',
+  'mode.choose': 'Choose',
   'mode.pickerTitle': 'Choose Sync Sections',
   'mode.pickerHint': 'Changes apply and are saved immediately (closing the dialog finishes the task).',
   'mode.pickerBack': 'Back to sections',

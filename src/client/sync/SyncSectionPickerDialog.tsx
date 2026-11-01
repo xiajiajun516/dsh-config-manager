@@ -193,8 +193,8 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
         {sections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
       </Modal.Body>
       <Modal.Footer>
-        {/* 「改动即时生效并保存」是**这个按钮**的说明：贴在「完成」右边同一行 */}
-        <InfoHint text={t('mode.pickerHint')} label={t('common.infoHint')} />
+        {/* 2026-11-01 用户要求：删掉「改动即时生效并保存（关闭弹窗即完成）」那颗 ⓘ ——
+            它在解释一件用户无从选择的事（勾了就走，没有保存按钮），占位置不改决定。 */}
         <Button variant="primary" onClick={onClose}>{t('mode.pickerDone')}</Button>
       </Modal.Footer>
     </Modal>
