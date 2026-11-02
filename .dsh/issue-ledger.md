@@ -24,6 +24,14 @@
   **根因里的自证盲点一并修掉**：`src/sync/s3/oss4-verify.ts` 之前自己实现了 `if-none-match`，于是「14 个请求零验签失败」证明不了真机 —— 现在验签器照真机拒 `If-*`（回同样的 400 + 0017-00000245）并支持 `x-oss-forbid-overwrite`，另加回归用例（注入 `If-None-Match` 必须被拒、索引不落盘）。
   测试：`s3-conditional-write.test.ts` 新增 4 例（OSS 首推头、ETag 复核顺序、复核发现 ETag 变化 → conflict 零写入、forbid-overwrite 409 → conflict）+ `s3-transport.oss4-server.test.ts` 新增 2 例（首推全程不发 If-*、验签器拒 If-*）。全量 `npm test` 5281 项 pass 5279 / fail 0 / skip 2，`npm run typecheck` 通过。
   未做：发版后回版本号评论（本行 `awaiting-release`）；真桶连通性仍需报告者用 `npm run oss:check` 或正式版复核。
+- `2026-11-02` **#109 第二层复核（提交 `f505837`，仍待发版）**：按官方文档逐条核对后补两处，不改变主修法。
+  ① 阿里云 PutObject 文档确认请求头清单里**没有** `If-Match`/`If-None-Match`，`x-oss-forbid-overwrite`（默认 false、值为 `true` 时禁止覆盖、
+  已存在回 **409 FileAlreadyExists**）与错误码表逐条对上；V4 签名文档确认 `x-oss-*` **自动参与**规范化头（不必进 `AdditionalHeaders`），
+  故该头已被正确签名。② 409 在 OSS 上**有两种**：`FileImmutable`（Bucket 数据被保护）与 `FileAlreadyExists` —— 原先一律报「别的设备改过索引」是假话，
+  改按报文 `Code` 分辨（`S3Transport.conditionalFailure`），`etag` 方言维持原判（各家 409 语义自定，报文不作判据）。
+  另如实登记两条边界：**开启/暂停版本控制的桶上 `x-oss-forbid-overwrite` 无效**（官方文档原文，首推保护降级为无条件写）；OSS 上「索引已存在」只能写前复核（非原子）。
+  测试：新增 2 例（409 FileImmutable 不冒充并发写、OSS 删除路径同样写前复核），全量 `npm test` 5283 项 pass 5281 / fail 0 / skip 2，`npm run typecheck` 通过，
+  `node scripts/oss-live-check.mjs` 本地模式 15 个请求全部验签通过（该脚本用的就是更新后的严格验签器）。
 - `2026-11-01` **发版 v0.3.0（0.2.4 → 0.3.0，MINOR）**：tag `v0.3.0`（提交 `b9d5c0e`，CHANGELOG 收口 `docs(changelog): 0.3.0` 先于打 tag）→ Publish 工作流 `41351472143` success：Tag guard / Doc version guard / CHANGELOG 门禁 / bundle 自包含护栏 / pack 全绿，OIDC 可信发布 `+ dsh-config-manager@0.3.0`（provenance logIndex 3636150594），GitHub Release `v0.3.0` 已建（asset `dsh-config-manager-0.3.0.tgz`，双语亮点在位）。
   核对：`git merge-base --is-ancestor b9d5c0e v0.3.0` = 0；registry `dist-tags.latest` = 0.3.0（发布后约 5 分钟才可解析，前几次本地 `npm view` 仍是 0.2.4 —— 本地缓存 + CDN，实测 `curl registry.npmjs.org/-/package/dsh-config-manager/dist-tags` 才准）。
   仍 `awaiting-release` 的行：0 条（`#117` 仍 `open`：等报告者接受授权范围说明，非本版范围；本版无 issue 修复条目）。
