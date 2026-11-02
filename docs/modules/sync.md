@@ -97,7 +97,7 @@
 
 | 能力 | git | webdav | s3 | gist |
 |---|---|---|---|---|
-| 索引条件写 | push 非快进即拒（`src/sync/git/git-transport.ts:341`、`:400`） | ETag → `If-Match`；无索引 → `If-None-Match: *`；**无 ETag 退化无条件写**（`src/sync/webdav/webdav-transport.ts:90-96`） | `if-match` / `if-none-match: *`（`src/sync/s3/s3-transport.ts:61-66`） | **无**（`src/sync/gist/gist-transport.ts:63-70`：端点对任何条件头回 400，issue #110）→ 改用写后复核 + 有界重做，见 §8 |
+| 索引条件写 | push 非快进即拒（`src/sync/git/git-transport.ts:341`、`:400`） | ETag → `If-Match`；无索引 → `If-None-Match: *`；**无 ETag 退化无条件写**（`src/sync/webdav/webdav-transport.ts:90-96`） | 按方言能力位 `conditionalWrite`（`src/sync/s3/s3-providers.ts`）二选一：`etag`（AWS/MinIO/COS/Kodo）→ `if-match` / `if-none-match: *`；`forbid-overwrite`（**阿里云 OSS，不支持 If-\***，issue #109）→ 首推 `x-oss-forbid-overwrite: true`，索引已存在则改**写前 HEAD 复核 ETag**（`src/sync/s3/s3-transport.ts` 的 `reassertIndexEtag`，非原子） | **无**（`src/sync/gist/gist-transport.ts:63-70`：端点对任何条件头回 400，issue #110）→ 改用写后复核 + 有界重做，见 §8 |
 | blob 外置（sessions） | 有，与索引同一次 commit（`src/sync/git/git-transport.ts:315-336`） | 有，`blobs/` + `blobs-index.json`（`src/sync/webdav/webdav-transport.ts:63-71`） | 有，`blobs/<sha256>`（`src/sync/s3/s3-transport.ts:53-57`） | **无**（`:22-24`：一次 GET 全量、会截断、文件数上限） |
 | 重定向跟随 | git 自身不管 | 自实现，上限 5（`:110`） | 无 | 自实现，上限 3（`:55`） |
 | 失败重试 | 读路径可重试，写路径明确不重试（`src/sync/git/git-transport.ts:727-729`） | 共享 `withSyncRetry` | 同左 | 同左 |

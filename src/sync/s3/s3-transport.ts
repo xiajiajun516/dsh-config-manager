@@ -47,7 +47,7 @@ import { composeMsg, s3Msg } from './messages.ts';
 import {
   blobIndexKey, blobKey, canonicalObjectPath, indexKey, objectUrl, resolveS3Target, snapshotKey,
 } from './s3-providers.ts';
-import type { S3Target } from './s3-providers.ts';
+import type { S3ConditionalWrite, S3Target } from './s3-providers.ts';
 import type { CloudConfigIssueCode, S3CompatProvider } from '../sync-config.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 
@@ -64,16 +64,34 @@ const REDACTED = '[REDACTED]';
 /**
  * 条件写头（cloud-sync 借鉴项 ①）：有 ETag → If-Match（远端必须仍是我读到的那一版）；
  * 索引本来就不存在 → If-None-Match: *（防两设备同时首推）；服务端不给 ETag → 空（无条件写，不改既有行为）。
+ *
+ * **阿里云 OSS 没有 If-\***（issue #109 第二层）：PutObject 收到 If-Match / If-None-Match 一律回
+ * 400 InvalidArgument「A header you provided implies functionality that is not implemented.」
+ * （错误码 0017-00000245，真机报文里的 `Header: If-None-Match` 即此）。它只提供
+ * `x-oss-forbid-overwrite: true`（对象已存在即 409 FileAlreadyExists）。于是按变体的
+ * `conditionalWrite` 能力位映射：
+ *  - 首推（索引本来就不存在）→ 语义完全等价，改用 x-oss-forbid-overwrite；
+ *  - 索引已存在（拿到了 ETag）→ 没有对应头，退回「写前 HEAD 复核 ETag」
+ *    （`assertIndexEtagUnchanged`；非原子，尽力而为）。
  */
-function conditionalHeaders(etag: string | undefined, indexMissing: boolean): Record<string, string> {
-  if (etag !== undefined) return { 'if-match': etag };
-  return indexMissing ? { 'if-none-match': '*' } : {};
+function conditionalHeaders(
+  etag: string | undefined,
+  indexMissing: boolean,
+  mode: S3ConditionalWrite,
+): Record<string, string> {
+  const guarded = mode === 'forbid-overwrite';
+  if (etag !== undefined) return guarded ? {} : { 'if-match': etag };
+  if (!indexMissing) return {};
+  return guarded ? { 'x-oss-forbid-overwrite': 'true' } : { 'if-none-match': '*' };
 }
 
-/** 条件写失败判定：412 恒是；409 仅在**确实带了条件头**时才算（无条件的 409 另有含义，不吞）。 */
-function isConcurrentWrite(status: number, headers: Record<string, string>): boolean {
+/**
+ * 条件写失败判定：412 恒是；409 仅在**确实带了条件写头**时才算
+ * （无条件的 409 另有含义，不吞；条件写头的存在由调用方显式告知）。
+ */
+function isConcurrentWrite(status: number, guarded: boolean): boolean {
   if (status === 412) return true;
-  return status === 409 && Object.keys(headers).length > 0;
+  return status === 409 && guarded;
 }
 
 /** 请求选项：headers / body / 覆盖默认超时（ms；0 = 不超时） */
@@ -308,13 +326,16 @@ export class S3Transport implements SyncTransport {
     const merged = idxBefore.filter((m) => m.id !== snapshot.id);
     merged.push(meta);
     merged.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-    const condHeaders = conditionalHeaders(idxEtag, indexMissing);
+    const condHeaders = conditionalHeaders(idxEtag, indexMissing, this.target.conditionalWrite);
+    await this.reassertIndexEtag(idxEtag, secret);
     const putIdx = await this.send('PUT', indexKey(this.target.prefix), {
       body: JSON.stringify(merged),
       secret,
       headers: condHeaders,
     });
-    if (isConcurrentWrite(putIdx.res.status, condHeaders)) throw this.concurrentWrite(putIdx.url, putIdx.res.status);
+    if (isConcurrentWrite(putIdx.res.status, Object.keys(condHeaders).length > 0)) {
+      throw this.concurrentWrite(putIdx.url, putIdx.res.status);
+    }
     if (!putIdx.res.ok) {
       throw new S3TransportError(await this.failText('PUT', putIdx.url, putIdx.res, secret), classifyHttpStatus(putIdx.res.status));
     }
@@ -361,13 +382,16 @@ export class S3Transport implements SyncTransport {
     if (indexMissing) return;
     const remaining = idx.filter((m) => m.id !== id);
     if (remaining.length === idx.length && del.res.status === 404) return; // 对象与索引都没有 → 静默成功
-    const condHeaders = conditionalHeaders(idxEtag, false);
+    const condHeaders = conditionalHeaders(idxEtag, false, this.target.conditionalWrite);
+    await this.reassertIndexEtag(idxEtag, secret);
     const putIdx = await this.send('PUT', indexKey(this.target.prefix), {
       body: JSON.stringify(remaining),
       secret,
       headers: condHeaders,
     });
-    if (isConcurrentWrite(putIdx.res.status, condHeaders)) throw this.concurrentWrite(putIdx.url, putIdx.res.status);
+    if (isConcurrentWrite(putIdx.res.status, Object.keys(condHeaders).length > 0)) {
+      throw this.concurrentWrite(putIdx.url, putIdx.res.status);
+    }
     if (!putIdx.res.ok) {
       throw new S3TransportError(await this.failText('PUT', putIdx.url, putIdx.res, secret), classifyHttpStatus(putIdx.res.status));
     }
@@ -382,6 +406,34 @@ export class S3Transport implements SyncTransport {
       this.o.msg('sync.s3.concurrentWrite', { status: String(status), url }),
       { kind: 'conflict', retryable: false, status },
     );
+  }
+
+  /**
+   * OSS 方言的「ETag 条件写」替身（issue #109 第二层）：PutObject 既无 If-Match 也无
+   * If-None-Match，`x-oss-forbid-overwrite` 只能表达「别覆盖已存在的对象」，表达不了
+   * 「远端必须还是我读到的那一版」。所以索引进已存在时改成**写前 HEAD 复核 ETag**：
+   * 变了 / 对象没了 → 按并发写中止（零写入）。
+   *
+   * **不是原子的**：复核与 PUT 之间仍有窗口（服务端不支持条件写就没有真正的解），
+   * 比无保护强、比 If-Match 弱 —— 如实登记在 docs/decisions/0003。
+   * 其它方言（etag）与「服务端不给 ETag」两种情况一律直接放行，不改既有行为。
+   */
+  private async reassertIndexEtag(etag: string | undefined, secret: string): Promise<void> {
+    if (this.target.conditionalWrite !== 'forbid-overwrite' || etag === undefined) return;
+    const key = indexKey(this.target.prefix);
+    const url = objectUrl(this.target, key);
+    const head = await this.send('HEAD', key, { secret });
+    if (head.res.status === 404) throw this.concurrentWrite(url, 409);
+    if (!head.res.ok) {
+      throw new S3TransportError(
+        await this.failText('HEAD', head.url, head.res, secret),
+        classifyHttpStatus(head.res.status),
+      );
+    }
+    const current = head.res.headers?.['etag'];
+    if (typeof current === 'string' && current !== '' && current !== etag) {
+      throw this.concurrentWrite(url, 409);
+    }
   }
 
   /**

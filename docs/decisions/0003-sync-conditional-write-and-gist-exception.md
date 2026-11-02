@@ -12,6 +12,12 @@
 四个传输的条件写能力天生不同：git 靠 push 非快进被拒；WebDAV 用 `If-Match`（412）；S3 用 `if-match`/`if-none-match`；
 而 gist 端点对**任何**条件请求头都回 400 —— 这是实测结论，不是设计疏忽。
 
+**S3 这一格不是一个方言（issue #109 第二层）**：AWS S3 / MinIO / 腾讯云 COS / 七牛 Kodo 支持 `if-match` 与 `if-none-match`，
+但**阿里云 OSS 的 PutObject 两个都不支持** —— 收到就回 400 `InvalidArgument`「A header you provided implies
+functionality that is not implemented.」（错误码 0017-00000245），只提供 `x-oss-forbid-overwrite: true`（对象已存在 → 409
+`FileAlreadyExists`）。能力差异由 `S3ProviderVariant.conditionalWrite` 声明（`etag` / `forbid-overwrite`），
+写路径按能力位选头，不再假定「S3 兼容 = 有 If-*」。
+
 ## 决策
 
 1. 索引写入必须**条件写**：远端被改过即中止并报错，绝不静默覆盖别人的条目（git/webdav/s3）。
@@ -28,6 +34,9 @@
 - 好：git/webdav/s3 上「两台机器同时改」是可发现的错误，不是静默数据丢失。
 - 坏：gist 仍有**无法关闭的残余窗口** —— 别人在「我们读取索引」与「我们 PATCH」之间写入的条目会被覆盖（快照载荷本身不丢）。
   这是无条件协议的物理边界：写后复核能发现「我们写完之后不一致」，发现不了「我们写的瞬间别人也在写」。
+- 坏（OSS 专有）：OSS 上「索引已存在」这一路没有原子条件写，退化成**写前 HEAD 复核 ETag**（`S3Transport.reassertIndexEtag`）：
+  复核与 PUT 之间仍有窗口，别人恰好在此刻写入仍会被覆盖。这比无保护强、比 `If-Match` 弱，是服务端能力的物理边界；
+  「首推」那一路靠 `x-oss-forbid-overwrite` 仍是原子且等价的。
 - 选项取舍（已收口）：
   · **单写者承诺**：否 —— 插件无法强制第三方写者（同一个 gist 可能被另一台机器、另一个账号或别人的脚本写），承诺无法执行。
   · **read-merge-write**：已采纳为主体（upload 内先读索引再合并），本次再补**写后复核 + 有界重做**闭环。

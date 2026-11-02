@@ -32,6 +32,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+- **阿里云 OSS 同步不再报「A header you provided implies functionality that is not implemented」**：S3 兼容通道的条件写改成按服务商的实际能力选头 —— OSS 上首次上传用它的「禁止覆盖」，索引已存在时改为写入前先核对一次 ETag；测试连接与本地验签也照真机拒掉 OSS 不支持的条件头，本地全绿不会再掩盖真机 400。
+  **Aliyun OSS sync no longer fails with "A header you provided implies functionality that is not implemented"**: conditional writes on the S3-compatible channel now pick headers by what the provider actually supports — on OSS the first upload uses its forbid-overwrite flag and an existing index is re-checked for its ETag right before writing; the connection test and local signature verifier now reject unsupported conditional headers the way the real service does, so a local green run no longer hides a 400 from the real bucket.
+
 ## [0.3.0] - 2026-11-01
 
 > **本版主题**：四个页面重排到一眼能读完，设置页与同步页去掉多余的层和重复的数字，英文数量也说得对了；导入与同步补上更硬的边界 —— 备份包改不了本机同步指向，可疑的仓库地址在交给 git 之前就被拒，删除记录跟着同步走。

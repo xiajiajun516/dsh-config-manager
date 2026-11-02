@@ -115,3 +115,51 @@ test('OSS 服务端视角验签：Authorization 逐字形状（逗号后无空�
   }
   assert.deepEqual(server.failed, []);
 });
+test('OSS 服务端视角：首推全程不发 If-*（真机会回 400 0017-00000245），改用 x-oss-forbid-overwrite', async () => {
+  const server = makeServer();
+  const seen: { method: string; url: string; headers: Record<string, string> }[] = [];
+  const wrapped: S3RequestFn = async (method, url, opts = {}) => {
+    seen.push({ method, url, headers: { ...(opts.headers ?? {}) } });
+    return await server.request(method, url, opts);
+  };
+  const transport = makeTransport(wrapped);
+
+  await transport.probe();
+  await transport.upload(sampleSnapshot());
+
+  for (const req of seen) {
+    assert.equal(req.headers['if-none-match'], undefined, '绝不发 If-None-Match：' + req.method + ' ' + req.url);
+    assert.equal(req.headers['if-match'], undefined, '绝不发 If-Match：' + req.method + ' ' + req.url);
+  }
+  const indexPut = seen.find((r) => r.method === 'PUT' && r.url.endsWith('/index.json'));
+  assert.ok(indexPut, '必须有一次索引 PUT');
+  assert.equal(indexPut.headers['x-oss-forbid-overwrite'], 'true', 'OSS 只能靠 forbid-overwrite 防并发首推');
+  assert.deepEqual(server.failed, [], '换头之后仍必须逐请求验签通过');
+});
+
+test('OSS 服务端视角：验签器照真机拒 If-*（自证盲点回归）', async () => {
+  // 这条用例保护的**不是**我们的代码，而是测试替身本身：如果验签器又「自己实现了 if-none-match」，
+  // 那 §issue #109 的「14 个请求零失败」就会重演 —— 本地全绿、真机 400。所以这里刻意注入一个
+  // If-None-Match（该头不进 OSS4 签名，故签名依旧有效），断言服务端按真机语义拒绝。
+  const server = makeServer();
+  const wrapped: S3RequestFn = async (method, url, opts = {}) => {
+    if (method === 'PUT' && url.endsWith('/index.json')) {
+      return await server.request(method, url, { ...opts, headers: { ...(opts.headers ?? {}), 'if-none-match': '*' } });
+    }
+    return await server.request(method, url, opts);
+  };
+  const transport = makeTransport(wrapped);
+
+  await assert.rejects(
+    () => transport.upload(sampleSnapshot()),
+    (err: unknown) => {
+      const message = (err as Error).message;
+      assert.match(message, /implies functionality that is not implemented/, '真机报文原文');
+      assert.match(message, /If-None-Match/, 'OSS 会回显被拒的头名');
+      assert.match(message, /0017-00000245/, '错误码同现场反馈');
+      return true;
+    },
+  );
+  assert.deepEqual(server.failed, [], '签名本身仍然有效 —— 拒的是 API 语义，不是签名');
+  assert.ok(!server.objects.has('dsh-config-manager/index.json'), '被拒的索引 PUT 不得落对象');
+});

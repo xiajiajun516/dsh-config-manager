@@ -7,6 +7,10 @@
  * `getResourceV4`、`oss/auth.go` 的 `getSubResource` / `getSignedStrV4`）**独立重写**一遍，
  * 只吃「收到的 HTTP 请求」（method / url / 头 / body），绝不复用客户端的签名中间量。
  *
+ * 也照真服务端实现**条件写能力**：PutObject 收到 If-Match / If-None-Match 一律拒（0017-00000245），
+ * 只接受 `x-oss-forbid-overwrite: true`（已存在 → 409 FileAlreadyExists）—— 这一层不照真服务端写，
+ * 「本地全绿、真机 400」的盲点就会回来（issue #109 第二层）。
+ *
  * 用法：`s3-transport.oss4-server.test.ts`（内存对象存储，逐请求验签）与
  * `scripts/oss-live-check.mjs`（真桶联调）。它证明的是「与本仓库对官方算法的独立复现一致」，
  * 不等于官方服务端盖章 —— 真桶连通性要靠带真实密钥跑一次脚本。
@@ -134,6 +138,11 @@ export function verifyOssV4(
   return { ok: true, reason: '', canonicalRequest, stringToSign, signature, objectKey, bucketLevel };
 }
 
+/** 真 OSS 会拒绝的条件写头（PutObject 不支持；错误码 0017-00000245）。 */
+const IF_CONDITIONAL_HEADERS = ['if-match', 'if-none-match'] as const;
+/** OSS 回显头名时用的原始大小写（真机报文里看到的是 `If-None-Match`）。 */
+const IF_HEADER_ECHO: Record<string, string> = { 'if-match': 'If-Match', 'if-none-match': 'If-None-Match' };
+
 interface StoredObject {
   body: string;
   etag: string;
@@ -174,13 +183,20 @@ export function makeOssVerifyServer(cfg: Oss4VerifyConfig): {
     const h = lower(headers);
     const existing = objects.get(key);
     if (method === 'PUT') {
-      const ifMatch = h['if-match'];
-      const ifNoneMatch = h['if-none-match'];
-      if (ifMatch !== undefined && existing !== undefined && ifMatch.replace(/"/g, '') !== existing.etag) {
-        return respond(412, '<Error><Code>PreconditionFailed</Code></Error>');
+      // 真 OSS 的 PutObject **不支持 If-Match / If-None-Match**：收到就回
+      // 400 InvalidArgument「A header you provided implies functionality that is not implemented.」
+      // （错误码 0017-00000245，issue #109 第二层）。这里必须照真服务端拒掉 —— 之前这个验签器
+      // 自己实现了 if-none-match，等于用自家规则验自家人，于是「14 个请求零失败」漏掉了这一层。
+      const unsupported = IF_CONDITIONAL_HEADERS.find((n) => h[n] !== undefined);
+      if (unsupported !== undefined) {
+        return respond(400, '<Error><Code>InvalidArgument</Code><Message>A header you provided implies '
+          + 'functionality that is not implemented.</Message><Header>' + IF_HEADER_ECHO[unsupported]
+          + '</Header><EC>0017-00000245</EC></Error>');
       }
-      if (ifNoneMatch === '*' && existing !== undefined) {
-        return respond(412, '<Error><Code>PreconditionFailed</Code></Error>');
+      // OSS 唯一支持的「禁止覆盖」：对象已存在即 409 FileAlreadyExists。
+      if ((h['x-oss-forbid-overwrite'] ?? '').trim().toLowerCase() === 'true' && existing !== undefined) {
+        return respond(409, '<Error><Code>FileAlreadyExists</Code><Message>The object you specified already '
+          + 'exists and cannot be overwritten again.</Message></Error>');
       }
       const body = opts.body ?? '';
       const etag = sha256(body).slice(0, 32);

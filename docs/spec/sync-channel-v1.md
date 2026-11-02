@@ -69,7 +69,9 @@
 4. 加密快照**永不外置**（整份 `sections` 是密文，没有可拆的文件分区）。
 
 **并发写入（通道实现必须遵守）**：快照索引（`index.json` / `<prefix>/index.json` / gist 索引文件）是读改写形态，
-通道**必须**用条件写（WebDAV / S3 的 `If-Match`，索引本不存在则 `If-None-Match: *`）保护它：读到的 ETag 与实际写入之间
+通道**必须**用条件写（WebDAV / S3 的 `If-Match`，索引本不存在则 `If-None-Match: *`；服务端不实现 `If-\*` 时见 §7.5——
+阿里云 OSS 的 PutObject 收到 `If-Match`/`If-None-Match` 一律回 400 `InvalidArgument`（错误码 0017-00000245），
+只能用 `x-oss-forbid-overwrite: true`，索引已存在时退化为写前 HEAD 复核 ETag）保护它：读到的 ETag 与实际写入之间
 若远端被其它设备改过（HTTP 412，S3 兼容端点可能是 409），**必须中止本次写入并如实报错**，绝不覆盖别人的索引条目。
 服务端不返回 ETag / 不实现条件写时退化为无条件写（行为与本条引入前一致），但**不得**把「拿不到 ETag」判成本次同步失败。
 
@@ -249,7 +251,7 @@
 
 | 能力 | git | webdav | s3（五家兼容） | gist |
 |---|---|---|---|---|
-| 索引条件写（`If-Match` / `If-None-Match`） | 不适用：git 通道的并发保护来自**快进/非快进语义**（工作副本侧 `pull/fetch` + `push`；`push` 被远端拒绝（`! [rejected] ... (fetch first)`）→ `SyncTransportError(kind='conflict')`），**不是** ETag 条件写 | ✅（服务端支持时） | ✅（412/409 视为冲突） | ❌ **弱 ETag 不做 `If-Match`**：无条件 PATCH + **写后复核重做 ≤3 轮**，仍冲突抛 `index-conflict` |
+| 索引条件写（`If-Match` / `If-None-Match`） | 不适用：git 通道的并发保护来自**快进/非快进语义**（工作副本侧 `pull/fetch` + `push`；`push` 被远端拒绝（`! [rejected] ... (fetch first)`）→ `SyncTransportError(kind='conflict')`），**不是** ETag 条件写 | ✅（服务端支持时） | ⚠️ **分方言**：AWS/MinIO/COS/Kodo ✅（412/409 视为冲突）；**阿里云 OSS ❌ 无 If-\***（400 InvalidArgument 0017-00000245），首推改 `x-oss-forbid-overwrite`（409 FileAlreadyExists，语义等价），索引已存在则写前 HEAD 复核 ETag —— 非原子，残余窗口如实登记在 ADR-0003 | ❌ **弱 ETag 不做 `If-Match`**：无条件 PATCH + **写后复核重做 ≤3 轮**，仍冲突抛 `index-conflict` |
 | 大分区内容寻址外置（§3） | ✅ | ✅ | ✅ | ❌（刻意不做，G-34） |
 | 加密快照 | ✅ | ✅ | ✅ | ✅（但不外置） |
 | 远端推进检测（§7.4） | ✅ | ✅ | ✅ | ✅（依赖 `list` 能读全索引） |

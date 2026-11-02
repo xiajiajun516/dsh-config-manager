@@ -234,6 +234,100 @@ test('条件写①（删除路径）：delete 读 index 拿 ETag → 写回剩�
   );
 });
 
+/* ---------------- ①-b 阿里云 OSS：没有 If-*，只有 x-oss-forbid-overwrite（issue #109 第二层） ---------------- */
+
+const OSS_ENDPOINT = 'https://oss-cn-hangzhou.aliyuncs.com';
+const OSS_INDEX_URL = 'https://' + BUCKET + '.oss-cn-hangzhou.aliyuncs.com/' + PREFIX + '/index.json';
+const OSS_SNAPSHOT_URL = 'https://' + BUCKET + '.oss-cn-hangzhou.aliyuncs.com/' + PREFIX + '/snap-001.json';
+const OSS_BLOBS_INDEX_URL = 'https://' + BUCKET + '.oss-cn-hangzhou.aliyuncs.com/' + PREFIX + '/blobs-index.json';
+
+/** OSS 变体选项：虚拟主机风格（现场配置），region 必填，provider=oss。 */
+function ossOptions(request: S3RequestFn): S3TransportOptions {
+  return makeOptions(request, { provider: 'oss', endpoint: OSS_ENDPOINT, region: 'cn-hangzhou', pathStyle: false });
+}
+
+test('条件写①-b（OSS）：首推发 x-oss-forbid-overwrite，绝不发 if-none-match（真机回 0017-00000245）', async () => {
+  const calls: S3Call[] = [];
+  const t = new S3Transport(ossOptions(record(calls, (m) => {
+    if (m.method === 'GET' && m.url === OSS_INDEX_URL) return res(404, '');
+    if (m.method === 'GET' && m.url === OSS_BLOBS_INDEX_URL) return res(404, '');
+    if (m.method === 'PUT' && m.url === OSS_SNAPSHOT_URL) return res(200, '');
+    if (m.method === 'PUT' && m.url === OSS_INDEX_URL) return res(200, '');
+    return res(500, 'unexpected ' + m.method + ' ' + m.url);
+  })));
+
+  await t.upload(sampleSnapshot());
+
+  const put = calls.filter((c) => c.method === 'PUT' && c.url === OSS_INDEX_URL)[0]!;
+  assert.equal(put.headers['x-oss-forbid-overwrite'], 'true', 'OSS 的「禁止覆盖」只能这么表达');
+  assert.equal(put.headers['if-none-match'], undefined, 'If-None-Match 会被 OSS 判成未实现的功能');
+  assert.equal(put.headers['if-match'], undefined);
+});
+
+test('条件写①-b（OSS）：索引已有 ETag → 不发 if-match，改在写前 HEAD 复核 ETag', async () => {
+  const calls: S3Call[] = [];
+  const t = new S3Transport(ossOptions(record(calls, (m) => {
+    if (m.method === 'GET' && m.url === OSS_INDEX_URL) return res(200, '[]', { etag: '"v1-oss"' });
+    if (m.method === 'PUT' && m.url === OSS_SNAPSHOT_URL) return res(200, '');
+    if (m.method === 'HEAD' && m.url === OSS_INDEX_URL) return res(200, '', { etag: '"v1-oss"' });
+    if (m.method === 'PUT' && m.url === OSS_INDEX_URL) return res(200, '');
+    return res(500, 'unexpected ' + m.method + ' ' + m.url);
+  })));
+
+  await t.upload(sampleSnapshot());
+
+  const headAt = calls.findIndex((c) => c.method === 'HEAD' && c.url === OSS_INDEX_URL);
+  const putAt = calls.findIndex((c) => c.method === 'PUT' && c.url === OSS_INDEX_URL);
+  assert.ok(headAt >= 0, '写前必须复核一次 ETag');
+  assert.ok(headAt < putAt, '复核必须在索引 PUT 之前');
+  const put = calls[putAt]!;
+  assert.equal(put.headers['if-match'], undefined, 'OSS PutObject 不支持 If-Match');
+  assert.equal(put.headers['x-oss-forbid-overwrite'], undefined, '索引已存在时不能用「禁止覆盖」（会被自己挡住）');
+});
+
+test('条件写①-b（OSS）：写前复核发现 ETag 变了 → 判并发写并中止（索引零写入）', async () => {
+  const calls: S3Call[] = [];
+  const t = new S3Transport(ossOptions(record(calls, (m) => {
+    if (m.method === 'GET' && m.url === OSS_INDEX_URL) return res(200, '[]', { etag: '"v1-oss"' });
+    if (m.method === 'PUT' && m.url === OSS_SNAPSHOT_URL) return res(200, '');
+    if (m.method === 'HEAD' && m.url === OSS_INDEX_URL) return res(200, '', { etag: '"v2-oss"' });
+    return res(500, 'unexpected ' + m.method + ' ' + m.url);
+  })));
+
+  await assert.rejects(
+    () => t.upload(sampleSnapshot()),
+    (err: unknown) => {
+      assert.ok(err instanceof S3TransportError);
+      assert.equal(err.kind, 'conflict');
+      assert.equal(err.retryable, false);
+      assert.equal(err.message, s3Msg('sync.s3.concurrentWrite', { status: '409', url: OSS_INDEX_URL }));
+      return true;
+    },
+  );
+  assert.equal(calls.filter((c) => c.method === 'PUT' && c.url === OSS_INDEX_URL).length, 0, '复核不过 ⇒ 索引零写入');
+});
+
+test('条件写①-b（OSS）：索引 PUT 回 409（FileAlreadyExists）→ 仍判并发写冲突', async () => {
+  const calls: S3Call[] = [];
+  const t = new S3Transport(ossOptions(record(calls, (m) => {
+    if (m.method === 'GET' && m.url === OSS_INDEX_URL) return res(404, '');
+    if (m.method === 'GET' && m.url === OSS_BLOBS_INDEX_URL) return res(404, '');
+    if (m.method === 'PUT' && m.url === OSS_SNAPSHOT_URL) return res(200, '');
+    if (m.method === 'PUT' && m.url === OSS_INDEX_URL) return res(409, '<Error><Code>FileAlreadyExists</Code></Error>');
+    return res(500, 'unexpected ' + m.method + ' ' + m.url);
+  })));
+
+  await assert.rejects(
+    () => t.upload(sampleSnapshot()),
+    (err: unknown) => {
+      assert.ok(err instanceof S3TransportError);
+      assert.equal(err.kind, 'conflict');
+      assert.equal(err.status, 409);
+      return true;
+    },
+  );
+});
+
 /* ---------------- ② 探针 ---------------- */
 
 test('② 探针：HEAD 回 301 + x-amz-bucket-region: cn-hangzhou → 抛错且文案含该 region', async () => {

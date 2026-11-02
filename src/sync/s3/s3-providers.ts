@@ -31,6 +31,16 @@ export const S3_INDEX_FILE = 'index.json';
 export const S3_BLOBS_SEG = 'blobs';
 export const S3_BLOBS_INDEX_FILE = 'blobs-index.json';
 
+/**
+ * 条件写能力（决定「防两台设备同时写」怎么落地）：
+ *  - `etag`：AWS 风格 If-Match / If-None-Match（s3 / minio / cos / kodo）；
+ *  - `forbid-overwrite`：阿里云 OSS —— PutObject **不支持 If-\***（真机会回 400
+ *    InvalidArgument「A header you provided implies functionality that is not implemented.」，
+ *    错误码 0017-00000245；issue #109 第二层），只有 `x-oss-forbid-overwrite: true`
+ *    「对象已存在即拒」这一种禁止覆盖语义。
+ */
+export type S3ConditionalWrite = 'etag' | 'forbid-overwrite';
+
 export interface S3ProviderVariant {
   id: S3CompatProvider;
   /** 默认签名方言（可被 \`dialectId\` 覆盖） */
@@ -43,6 +53,8 @@ export interface S3ProviderVariant {
   endpointTemplate?: string;
   /** 默认寻址风格：true = path-style（<endpoint>/<bucket>/<key>），false = virtual-host（<bucket>.<endpoint>/<key>） */
   defaultPathStyle: boolean;
+  /** 条件写能力（见 S3ConditionalWrite；与签名方言解耦，跟着服务商走而不是跟着 dialectId 走） */
+  conditionalWrite: S3ConditionalWrite;
   /**
    * 变体说明的**目录键**（自 t6 起字段是键而不是文案 —— 中文只存在于 `sync/s3/messages.ts` 的本地目录，
    * 经 `s3Msg` / `composeMsg(host, s3Msg)` 解析成当前语言；本字段本身不渲染）。
@@ -58,25 +70,30 @@ export const S3_PROVIDER_VARIANTS: Record<S3CompatProvider, S3ProviderVariant> =
   s3: {
     id: 's3', dialectId: 'aws4', service: 's3', defaultRegion: 'us-east-1',
     endpointTemplate: 'https://s3.{region}.amazonaws.com', defaultPathStyle: false,
+    conditionalWrite: 'etag',
     note: 'sync.s3.providerNoteS3',
   },
   oss: {
     id: 'oss', dialectId: 'oss4', service: 'oss',
     endpointTemplate: 'https://oss-{region}.aliyuncs.com', defaultPathStyle: false,
+    conditionalWrite: 'forbid-overwrite',
     note: 'sync.s3.providerNoteOss',
   },
   cos: {
     id: 'cos', dialectId: 'aws4', service: 's3',
     endpointTemplate: 'https://cos.{region}.myqcloud.com', defaultPathStyle: false,
+    conditionalWrite: 'etag',
     note: 'sync.s3.providerNoteCos',
   },
   minio: {
     id: 'minio', dialectId: 'aws4', service: 's3', defaultRegion: 'us-east-1', defaultPathStyle: true,
+    conditionalWrite: 'etag',
     note: 'sync.s3.providerNoteMinio',
   },
   kodo: {
     id: 'kodo', dialectId: 'aws4', service: 's3',
     endpointTemplate: 'https://s3-{region}.qiniucs.com', defaultPathStyle: false,
+    conditionalWrite: 'etag',
     note: 'sync.s3.providerNoteKodo',
   },
 };
@@ -110,6 +127,8 @@ export interface S3Target {
   prefix: string;
   pathStyle: boolean;
   dialect: SigV4Dialect;
+  /** 条件写能力（来自变体表；dialectId 覆盖不影响它） */
+  conditionalWrite: S3ConditionalWrite;
 }
 
 export interface S3TargetInput {
@@ -176,6 +195,7 @@ export function resolveS3Target(input: S3TargetInput): S3TargetResult {
       prefix,
       pathStyle: input.pathStyle ?? variant.defaultPathStyle,
       dialect: sigV4Dialect(input.dialectId ?? variant.dialectId),
+      conditionalWrite: variant.conditionalWrite,
     },
   };
 }

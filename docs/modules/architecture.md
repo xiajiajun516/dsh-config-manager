@@ -81,7 +81,7 @@ workspaces、credentialsStatus、pluginFiles、pluginData、pluginAssets、self�
 | 备份导出 | `POST /export` | 与只读预览同口径（共用 `FileCollectionAdapter.collect()`）；明文临时 ZIP 在 `finally` 必删；定时备份复用同一 `Exporter`，恒 `includeSecrets:false`、不加密 | `docs/modules/backup-restore.md` |
 | 导入应用 | `/upload` → `/decrypt-archive` → `/analyze` → `/plan` → `/execute` | 唯一会改用户数据的链路：过 mutation gate → 强制先建快照（路由只传 `snapshotBinding`，`createSnapshot` 在 `core/analyzer.ts`）→ `executeImportPlan()` 失败走 `core/rollback.ts` 补偿；`/upload` ≤256 MiB | `docs/modules/backup-restore.md` |
 | 恢复 | `POST /restore` | `dryRun=true` 只 `planRestore()` 零写入；`planFingerprint` 不一致即 409 `plan-changed`；首个写之前落 journal（`core/restore-wal.ts`，删除类用 `ABSENT_FINGERPRINT` 哨兵）；只在逐项可证时续跑（`core/restore-resume.ts` 的 `judgeRestoreResume`），否则 423 `transaction-recovery-required`；三个入口只续自己的 operationType（GUI `restore` / CLI `cli-restore` / model `model-restore`） | `docs/modules/recovery.md`、`docs/modules/backup-restore.md` |
-| 同步 | `SyncEngine` + `Git/WebDav/S3/Gist` 四传输 + `AutoSyncScheduler` | merge 用 `state.ancestorId` 祖先副本 + 分区 hash 双基线，**无祖先不猜**；条件写能力四传输各不相同（git 非快进 / webdav 412 / s3 if-match / gist 明确不做） | `docs/modules/sync.md` |
+| 同步 | `SyncEngine` + `Git/WebDav/S3/Gist` 四传输 + `AutoSyncScheduler` | merge 用 `state.ancestorId` 祖先副本 + 分区 hash 双基线，**无祖先不猜**；条件写能力四传输各不相同（git 非快进 / webdav 412 / s3 分方言：If-\* 或 OSS 的 forbid-overwrite / gist 明确不做） | `docs/modules/sync.md` |
 | 对话回退 | `turn/start` 留点 | 两态（工作区 + 会话）、台账一条一写、载荷内容寻址；回退 = fork + 归档原会话 + 归位 cwd，**不是**就地截断（运行中的 DSH 不重读磁盘） | `docs/modules/recovery.md` |
 
 `/analyze`、`/plan`、`/execute` 三处对未解锁容器一律 400 `encrypted-container`（同一常量、同一文案键）。
