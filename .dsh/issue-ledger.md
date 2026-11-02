@@ -9,7 +9,7 @@
 | 117 | 「使用 GitHub 登录」授权是整个账号，无法收窄到单仓库（真收窄被 #118 判 NOT_PLANNED；v0.1.85 只发了授权范围说明 + 细粒度 PAT 引导，故仍 open 等报告者接受说明） | open | 62049df | v0.1.85 | 2026-10-28 |
 | 116 | 新建空仓库第一次一键同步就报「同步失败：远端无快照」 | done | 62049df | v0.1.85 | 2026-10-27 |
 | 115 | 细粒度 PAT 没勾 Contents，同步只甩 git 原始 403；报告者已确认修复生效，另提「同步页两个按钮分不清该按哪个」 | done | 62049df | v0.2.0 | 2026-10-29 |
-| 109 | 阿里云 OSS 同步：① 规范路径缺 bucket（v0.1.82 已修）② 真推报 400 InvalidArgument 0017-00000245（If-None-Match 被拒，OSS 不支持 If-\*） | awaiting-release | 71a93ca | 待发版 | 2026-11-02 |
+| 109 | 阿里云 OSS 同步：① 规范路径缺 bucket（v0.1.82 已修）② 真推报 400 InvalidArgument 0017-00000245（If-None-Match 被拒，OSS 不支持 If-\*） → 条件写按方言能力位选头 | done | 71a93ca | v0.3.1 | 2026-11-02 |
 | 118 | 用 GitHub App（installation token）把授权收窄到单仓库 | dropped | — | — | 2026-10-27 |
 | 119 | 配置一字未改，远端每分钟多 1~2 个 commit（自动同步每轮误判「本地有改动」而真推快照） | done | 39f1208 | v0.2.1 | 2026-10-29 |
 | 121 | 「一键同步」这个名字让人以为是双向补齐，实际手动同步只下行；自动同步却是真双向 ⇒ 同一个词两种方向（修复：改名为「从远端合并到本机」，运行记录/历史/回滚文案同步；不改「恢复到本机」——三方合并会保留本机单边改动，「快照恢复」已占用该词） | done | 1cf8538 | v0.2.3 | 2026-10-31 |
@@ -32,6 +32,10 @@
   另如实登记两条边界：**开启/暂停版本控制的桶上 `x-oss-forbid-overwrite` 无效**（官方文档原文，首推保护降级为无条件写）；OSS 上「索引已存在」只能写前复核（非原子）。
   测试：新增 2 例（409 FileImmutable 不冒充并发写、OSS 删除路径同样写前复核），全量 `npm test` 5283 项 pass 5281 / fail 0 / skip 2，`npm run typecheck` 通过，
   `node scripts/oss-live-check.mjs` 本地模式 15 个请求全部验签通过（该脚本用的就是更新后的严格验签器）。
+- `2026-11-02` **v0.3.1 已发布并回 #109 版本号**：提交 `19146db`（`chore(release): v0.3.1`）→ tag `v0.3.1` push；
+  `publish` 流水线 `41507561153` 全绿（typecheck → test → build → 五道守卫 → pack → 亮点段门禁 → npm publish(OIDC) → GitHub Release）；
+  registry 侧 `dsh-config-manager@0.3.1` 可查、`dist-tags.latest = 0.3.1`（发布后约 9 分钟才可见，期间 `npm view` 一直 404 —— 延迟属正常，不宜据此判失败）。
+  已回评论 `issuecomment-6586193650`（含升级命令 + 三步自证 + 版本控制桶上 `x-oss-forbid-overwrite` 失效的说明），标签 `bug/confirmed/fixed` 已在位，未关闭 issue（等报告者确认）。
 - `2026-11-01` **发版 v0.3.0（0.2.4 → 0.3.0，MINOR）**：tag `v0.3.0`（提交 `b9d5c0e`，CHANGELOG 收口 `docs(changelog): 0.3.0` 先于打 tag）→ Publish 工作流 `41351472143` success：Tag guard / Doc version guard / CHANGELOG 门禁 / bundle 自包含护栏 / pack 全绿，OIDC 可信发布 `+ dsh-config-manager@0.3.0`（provenance logIndex 3636150594），GitHub Release `v0.3.0` 已建（asset `dsh-config-manager-0.3.0.tgz`，双语亮点在位）。
   核对：`git merge-base --is-ancestor b9d5c0e v0.3.0` = 0；registry `dist-tags.latest` = 0.3.0（发布后约 5 分钟才可解析，前几次本地 `npm view` 仍是 0.2.4 —— 本地缓存 + CDN，实测 `curl registry.npmjs.org/-/package/dsh-config-manager/dist-tags` 才准）。
   仍 `awaiting-release` 的行：0 条（`#117` 仍 `open`：等报告者接受授权范围说明，非本版范围；本版无 issue 修复条目）。
