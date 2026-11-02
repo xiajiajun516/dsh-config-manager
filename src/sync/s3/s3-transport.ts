@@ -333,9 +333,8 @@ export class S3Transport implements SyncTransport {
       secret,
       headers: condHeaders,
     });
-    if (isConcurrentWrite(putIdx.res.status, Object.keys(condHeaders).length > 0)) {
-      throw this.concurrentWrite(putIdx.url, putIdx.res.status);
-    }
+    const idxFailure = await this.conditionalFailure('PUT', putIdx.url, putIdx.res, Object.keys(condHeaders).length > 0, secret);
+    if (idxFailure !== undefined) throw idxFailure;
     if (!putIdx.res.ok) {
       throw new S3TransportError(await this.failText('PUT', putIdx.url, putIdx.res, secret), classifyHttpStatus(putIdx.res.status));
     }
@@ -389,9 +388,8 @@ export class S3Transport implements SyncTransport {
       secret,
       headers: condHeaders,
     });
-    if (isConcurrentWrite(putIdx.res.status, Object.keys(condHeaders).length > 0)) {
-      throw this.concurrentWrite(putIdx.url, putIdx.res.status);
-    }
+    const idxFailure = await this.conditionalFailure('PUT', putIdx.url, putIdx.res, Object.keys(condHeaders).length > 0, secret);
+    if (idxFailure !== undefined) throw idxFailure;
     if (!putIdx.res.ok) {
       throw new S3TransportError(await this.failText('PUT', putIdx.url, putIdx.res, secret), classifyHttpStatus(putIdx.res.status));
     }
@@ -434,6 +432,30 @@ export class S3Transport implements SyncTransport {
     if (typeof current === 'string' && current !== '' && current !== etag) {
       throw this.concurrentWrite(url, 409);
     }
+  }
+
+  /**
+   * 条件写失败分类（issue #109 第二层复核）：`isConcurrentWrite` 只看「状态码像不像」，
+   * 这里再问报文一句确认「对象确实已存在」。OSS 的 **409 不止 FileAlreadyExists** ——
+   * FileImmutable（Bucket 数据处于保护状态，删改都会被拒）同为 409，一律按并发写报
+   * 「别的设备改过索引」就是假话。报文读不出时仍按并发写处理（宁可让用户重跑一次，
+   * 不吞掉真冲突）。412 是 If-Match 语义，恒为并发写。
+   */
+  private async conditionalFailure(
+    method: string,
+    url: string,
+    res: S3Response,
+    guarded: boolean,
+    secret: string,
+  ): Promise<S3TransportError | undefined> {
+    if (!isConcurrentWrite(res.status, guarded)) return undefined;
+    if (res.status !== 409) return this.concurrentWrite(url, res.status);
+    // 只有 forbid-overwrite 方言的 409 有两种含义（FileAlreadyExists / FileImmutable）；
+    // etag 方言的 409 由各家自定语义，报文不可当作判据 —— 沿用「带条件头的 409 = 并发写」。
+    if (this.target.conditionalWrite !== 'forbid-overwrite') return this.concurrentWrite(url, res.status);
+    const body = await this.errorBody(res);
+    if (body === '' || body.includes('FileAlreadyExists')) return this.concurrentWrite(url, res.status);
+    return new S3TransportError(this.failMessage(method, url, res.status, body, secret), classifyHttpStatus(res.status));
   }
 
   /**
@@ -538,20 +560,27 @@ export class S3Transport implements SyncTransport {
     }
   }
 
-  /** 构造 HTTP 非 2xx 失败消息：附上脱敏后的响应体片段（截断） */
-  private async failText(method: string, url: string, res: S3Response, secret: string): Promise<string> {
-    let body = '';
+  /** 读错误响应体（未脱敏原文，截断到 ERR_BODY_MAX；读不出按空串） */
+  private async errorBody(res: S3Response): Promise<string> {
     try {
-      body = (await res.text()).slice(0, ERR_BODY_MAX);
+      return (await res.text()).slice(0, ERR_BODY_MAX);
     } catch {
-      body = '';
+      return '';
     }
+  }
+
+  /** 构造 HTTP 非 2xx 失败消息：附上脱敏后的响应体片段（截断） */
+  private failMessage(method: string, url: string, status: number, body: string, secret: string): string {
     return this.o.msg('sync.s3.requestFailed', {
       method,
       url,
-      status: String(res.status),
+      status: String(status),
       err: this.mask(body, secret),
     });
+  }
+
+  private async failText(method: string, url: string, res: S3Response, secret: string): Promise<string> {
+    return this.failMessage(method, url, res.status, await this.errorBody(res), secret);
   }
 
   /** 识别超时错误（AbortError / TimeoutError） */

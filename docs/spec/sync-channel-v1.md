@@ -251,7 +251,7 @@
 
 | 能力 | git | webdav | s3（五家兼容） | gist |
 |---|---|---|---|---|
-| 索引条件写（`If-Match` / `If-None-Match`） | 不适用：git 通道的并发保护来自**快进/非快进语义**（工作副本侧 `pull/fetch` + `push`；`push` 被远端拒绝（`! [rejected] ... (fetch first)`）→ `SyncTransportError(kind='conflict')`），**不是** ETag 条件写 | ✅（服务端支持时） | ⚠️ **分方言**：AWS/MinIO/COS/Kodo ✅（412/409 视为冲突）；**阿里云 OSS ❌ 无 If-\***（400 InvalidArgument 0017-00000245），首推改 `x-oss-forbid-overwrite`（409 FileAlreadyExists，语义等价），索引已存在则写前 HEAD 复核 ETag —— 非原子，残余窗口如实登记在 ADR-0003 | ❌ **弱 ETag 不做 `If-Match`**：无条件 PATCH + **写后复核重做 ≤3 轮**，仍冲突抛 `index-conflict` |
+| 索引条件写（`If-Match` / `If-None-Match`） | 不适用：git 通道的并发保护来自**快进/非快进语义**（工作副本侧 `pull/fetch` + `push`；`push` 被远端拒绝（`! [rejected] ... (fetch first)`）→ `SyncTransportError(kind='conflict')`），**不是** ETag 条件写 | ✅（服务端支持时） | ⚠️ **分方言**：AWS/MinIO/COS/Kodo ✅（412/409 视为冲突）；**阿里云 OSS ❌ 无 If-\***（400 InvalidArgument 0017-00000245），首推改 `x-oss-forbid-overwrite`（409 FileAlreadyExists，语义等价），索引已存在则写前 HEAD 复核 ETag —— 非原子；且该头在**开启/暂停版本控制**的 Bucket 上无效（首推保护降级为无条件写）—— 残余窗口如实登记在 ADR-0003 | ❌ **弱 ETag 不做 `If-Match`**：无条件 PATCH + **写后复核重做 ≤3 轮**，仍冲突抛 `index-conflict` |
 | 大分区内容寻址外置（§3） | ✅ | ✅ | ✅ | ❌（刻意不做，G-34） |
 | 加密快照 | ✅ | ✅ | ✅ | ✅（但不外置） |
 | 远端推进检测（§7.4） | ✅ | ✅ | ✅ | ✅（依赖 `list` 能读全索引） |

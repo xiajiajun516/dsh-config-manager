@@ -1,8 +1,10 @@
 /**
  * S3 兼容系通道：本轮借鉴项的**针对性**单测（不重复 s3-transport.test.ts 的既有契约）。
- *  - ① 条件写：索引 ETag → if-match；索引缺失且远端无内容 → if-none-match: *；
- *    索引 PUT 412 → conflict；409 **带条件头** → conflict；
- *    409 **不带条件头** → 绝不走并发写冲突那条路径（isConcurrentWrite 只认带条件头的 409）；
+ *  - ① 条件写（etag 方言）：索引 ETag → if-match；索引缺失且远端无内容 → if-none-match: *；
+ *    索引 PUT 412 → conflict；409 **带条件头且报文是 FileAlreadyExists** → conflict；
+ *    409 **不带条件头** → 绝不走并发写冲突那条路径；
+ *  - ①-b 阿里云 OSS（forbid-overwrite 方言）：不发任何 If-*；首推 → x-oss-forbid-overwrite: true；
+ *    索引已有 ETag → 写前 HEAD 复核；409 报文是 FileImmutable → 如实报错，不冒充并发写；
  *  - ② 探针：HEAD 回 301/307/308 + x-amz-bucket-region → 抛错且文案里带可执行的 region；
  *    404 / 403 各自文案；HEAD 200 时读索引回报快照数。
  */
@@ -326,6 +328,60 @@ test('条件写①-b（OSS）：索引 PUT 回 409（FileAlreadyExists）→ 仍
       return true;
     },
   );
+});
+
+test('条件写①-b（OSS）：索引 PUT 回 409 FileImmutable（桶数据被保护）→ 不冒充并发写，如实带报文', async () => {
+  const immutable = '<Error><Code>FileImmutable</Code><Message>The bucket is protected.</Message></Error>';
+  const t = new S3Transport(ossOptions(record([], (m) => {
+    if (m.method === 'GET' && m.url === OSS_INDEX_URL) return res(404, '');
+    if (m.method === 'GET' && m.url === OSS_BLOBS_INDEX_URL) return res(404, '');
+    if (m.method === 'PUT' && m.url === OSS_SNAPSHOT_URL) return res(200, '');
+    if (m.method === 'PUT' && m.url === OSS_INDEX_URL) return res(409, immutable);
+    return res(500, 'unexpected ' + m.method + ' ' + m.url);
+  })));
+
+  await assert.rejects(
+    () => t.upload(sampleSnapshot()),
+    (err: unknown) => {
+      assert.ok(err instanceof S3TransportError);
+      assert.equal(err.status, 409);
+      assert.notEqual(
+        err.message,
+        s3Msg('sync.s3.concurrentWrite', { status: '409', url: OSS_INDEX_URL }),
+        'FileImmutable 与 FileAlreadyExists 同为 409，不能都说成「别的设备改过索引」',
+      );
+      assert.match(err.message, /FileImmutable/, '真实错误码必须原样带出，用户才看得出是桶的保护策略');
+      return true;
+    },
+  );
+});
+
+test('条件写①-b（OSS，删除路径）：索引已有 ETag → 写回前 HEAD 复核，且不发 if-match / forbid-overwrite', async () => {
+  const meta = {
+    id: 'snap-001',
+    createdAt: '2026-10-18T09:00:00.000Z',
+    sections: {},
+    manifest: { schemaVersion: 1, dshVersion: '1', platform: 'win32', sectionIds: [], containsSecrets: false },
+  };
+  const calls: S3Call[] = [];
+  const t = new S3Transport(ossOptions(record(calls, (m) => {
+    if (m.method === 'GET' && m.url === OSS_INDEX_URL) return res(200, JSON.stringify([meta]), { etag: '"v1-oss-del"' });
+    if (m.method === 'DELETE' && m.url === OSS_SNAPSHOT_URL) return res(204, '');
+    if (m.method === 'HEAD' && m.url === OSS_INDEX_URL) return res(200, '', { etag: '"v1-oss-del"' });
+    if (m.method === 'PUT' && m.url === OSS_INDEX_URL) return res(200, '');
+    if (m.method === 'GET' && m.url === OSS_BLOBS_INDEX_URL) return res(404, '');
+    return res(500, 'unexpected ' + m.method + ' ' + m.url);
+  })));
+
+  await t.delete('snap-001');
+
+  const headAt = calls.findIndex((c) => c.method === 'HEAD' && c.url === OSS_INDEX_URL);
+  const putAt = calls.findIndex((c) => c.method === 'PUT' && c.url === OSS_INDEX_URL);
+  assert.ok(headAt >= 0 && headAt < putAt, 'OSS 删除路径同样要在写回前复核 ETag');
+  const put = calls[putAt]!;
+  assert.equal(put.headers['if-match'], undefined, 'OSS PutObject 不支持 If-Match');
+  assert.equal(put.headers['x-oss-forbid-overwrite'], undefined, '索引已存在，「禁止覆盖」会把自己挡在门外');
+  assert.equal(put.body, '[]');
 });
 
 /* ---------------- ② 探针 ---------------- */

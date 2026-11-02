@@ -37,6 +37,12 @@ functionality that is not implemented.」（错误码 0017-00000245），只提�
 - 坏（OSS 专有）：OSS 上「索引已存在」这一路没有原子条件写，退化成**写前 HEAD 复核 ETag**（`S3Transport.reassertIndexEtag`）：
   复核与 PUT 之间仍有窗口，别人恰好在此刻写入仍会被覆盖。这比无保护强、比 `If-Match` 弱，是服务端能力的物理边界；
   「首推」那一路靠 `x-oss-forbid-overwrite` 仍是原子且等价的。
+- 坏（OSS 专有 ②，只影响首推那一路）：`x-oss-forbid-overwrite` 在**已开启或已暂停版本控制**的 Bucket 上**设置无效**
+  （官方 PutObject 文档原文：允许覆盖同名 Object）⇒ 首推的保护静默降级为无条件写。本仓库不为此额外探 `?versioning`
+  （要 `oss:GetBucketVersioning` 权限、还多一次往返），只如实登记这段边界；需要原子保证应关掉版本控制或改用 git/webdav/s3。
+- 如实（OSS 的 409 有两种）：`FileImmutable`（Bucket 数据处于保护状态，删改都会被拒）与 `FileAlreadyExists` 同为 409。
+  写路径按报文 `Code` 分辨（`src/sync/s3/s3-transport.ts` 的 `conditionalFailure`），前者不冒充「别的设备改过索引」；
+  `etag` 方言的 409 由各家自定语义，报文不作判据，仍按「带条件头的 409 = 并发写」。
 - 选项取舍（已收口）：
   · **单写者承诺**：否 —— 插件无法强制第三方写者（同一个 gist 可能被另一台机器、另一个账号或别人的脚本写），承诺无法执行。
   · **read-merge-write**：已采纳为主体（upload 内先读索引再合并），本次再补**写后复核 + 有界重做**闭环。
