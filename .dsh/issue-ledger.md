@@ -9,13 +9,21 @@
 | 117 | 「使用 GitHub 登录」授权是整个账号，无法收窄到单仓库（真收窄被 #118 判 NOT_PLANNED；v0.1.85 只发了授权范围说明 + 细粒度 PAT 引导，故仍 open 等报告者接受说明） | open | 62049df | v0.1.85 | 2026-10-28 |
 | 116 | 新建空仓库第一次一键同步就报「同步失败：远端无快照」 | done | 62049df | v0.1.85 | 2026-10-27 |
 | 115 | 细粒度 PAT 没勾 Contents，同步只甩 git 原始 403；报告者已确认修复生效，另提「同步页两个按钮分不清该按哪个」 | done | 62049df | v0.2.0 | 2026-10-29 |
-| 109 | 阿里云 OSS 同步 SigV4 签名不匹配（规范路径缺 bucket） | done | bf1642f | v0.1.82 | 2026-10-23 |
+| 109 | 阿里云 OSS 同步：① 规范路径缺 bucket（v0.1.82 已修）② 真推报 400 InvalidArgument 0017-00000245（If-None-Match 被拒，OSS 不支持 If-\*） | awaiting-release | 71a93ca | 待发版 | 2026-11-02 |
 | 118 | 用 GitHub App（installation token）把授权收窄到单仓库 | dropped | — | — | 2026-10-27 |
 | 119 | 配置一字未改，远端每分钟多 1~2 个 commit（自动同步每轮误判「本地有改动」而真推快照） | done | 39f1208 | v0.2.1 | 2026-10-29 |
 | 121 | 「一键同步」这个名字让人以为是双向补齐，实际手动同步只下行；自动同步却是真双向 ⇒ 同一个词两种方向（修复：改名为「从远端合并到本机」，运行记录/历史/回滚文案同步；不改「恢复到本机」——三方合并会保留本机单边改动，「快照恢复」已占用该词） | done | 1cf8538 | v0.2.3 | 2026-10-31 |
 | 122 | 远端仓库远大于同步内容时 git 通道卡死：全量 clone/fetch 拉完整对象图（1.8 GB 仓库 / 6 MB 同步内容），超时只杀 git.exe 使 git-remote-https/index-pack 成孤儿继续写 tmp_pack_*（累积 7.3 GB），UI 永久停在「正在检查远端变更…」 | done | aafc93f | v0.2.4 | 2026-11-01 |
 | 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（修复：helper 失败时改用 env 注入 `Authorization: basic` 重试一次，仍失败则点名平台原因） | done | 73b6fe4 | v0.2.2 | 2026-10-30 |
 
+- `2026-11-02` **#109 第二层修复（待发版）**：提交 `71a93ca`。报告者升到 v0.1.82 后「测试连接」通过但真推报 HTTP 400 `InvalidArgument`
+  「A header you provided implies functionality that is not implemented.」（`Header: If-None-Match`，错误码 0017-00000245）——
+  签名早已正确，**是条件写头本身**：阿里云 OSS 的 PutObject 不支持 `If-Match`/`If-None-Match`，而我们首推发 `if-none-match: *`（`src/sync/s3/s3-transport.ts` 的 `conditionalHeaders`），索引已存在时还会发 `if-match`。
+  修法：`S3ProviderVariant.conditionalWrite` 能力位（`src/sync/s3/s3-providers.ts`，s3/minio/cos/kodo=`etag`，oss=`forbid-overwrite`）→ OSS 首推改发 `x-oss-forbid-overwrite: true`（409 FileAlreadyExists 判冲突，语义等价且原子）；
+  索引已存在时 OSS 无原子条件写，退化为写前 `HEAD` 复核 ETag（`S3Transport.reassertIndexEtag`，非原子，残余窗口登记在 ADR-0003）。
+  **根因里的自证盲点一并修掉**：`src/sync/s3/oss4-verify.ts` 之前自己实现了 `if-none-match`，于是「14 个请求零验签失败」证明不了真机 —— 现在验签器照真机拒 `If-*`（回同样的 400 + 0017-00000245）并支持 `x-oss-forbid-overwrite`，另加回归用例（注入 `If-None-Match` 必须被拒、索引不落盘）。
+  测试：`s3-conditional-write.test.ts` 新增 4 例（OSS 首推头、ETag 复核顺序、复核发现 ETag 变化 → conflict 零写入、forbid-overwrite 409 → conflict）+ `s3-transport.oss4-server.test.ts` 新增 2 例（首推全程不发 If-*、验签器拒 If-*）。全量 `npm test` 5281 项 pass 5279 / fail 0 / skip 2，`npm run typecheck` 通过。
+  未做：发版后回版本号评论（本行 `awaiting-release`）；真桶连通性仍需报告者用 `npm run oss:check` 或正式版复核。
 - `2026-11-01` **发版 v0.3.0（0.2.4 → 0.3.0，MINOR）**：tag `v0.3.0`（提交 `b9d5c0e`，CHANGELOG 收口 `docs(changelog): 0.3.0` 先于打 tag）→ Publish 工作流 `41351472143` success：Tag guard / Doc version guard / CHANGELOG 门禁 / bundle 自包含护栏 / pack 全绿，OIDC 可信发布 `+ dsh-config-manager@0.3.0`（provenance logIndex 3636150594），GitHub Release `v0.3.0` 已建（asset `dsh-config-manager-0.3.0.tgz`，双语亮点在位）。
   核对：`git merge-base --is-ancestor b9d5c0e v0.3.0` = 0；registry `dist-tags.latest` = 0.3.0（发布后约 5 分钟才可解析，前几次本地 `npm view` 仍是 0.2.4 —— 本地缓存 + CDN，实测 `curl registry.npmjs.org/-/package/dsh-config-manager/dist-tags` 才准）。
   仍 `awaiting-release` 的行：0 条（`#117` 仍 `open`：等报告者接受授权范围说明，非本版范围；本版无 issue 修复条目）。
