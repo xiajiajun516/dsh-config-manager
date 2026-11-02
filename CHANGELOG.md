@@ -26,15 +26,15 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > 体例细节、分组表、发版两道门禁与写后自检命令见项目 skill `.dsh/skills/changelog-writing/SKILL.md`（DSH 会自动发现并加载）。
 
-## [Unreleased]
+## [0.3.1] - 2026-11-02
 
-> **{{本版主题}}**：{{一句话中文主题}}
+> **本版主题**：只修一件事 —— 阿里云 OSS 同步不再因为一个服务商根本不支持的条件请求头而失败：条件写改成按各家实际能力选头，测试连接与本地验签也照真机口径判定。
 >
-> **Theme**: {{one-line English theme}}
+> **Theme**: one fix only — Aliyun OSS sync no longer fails on a conditional request header the service does not support: conditional writes now pick headers by what each provider actually offers, and the connection test plus local signature check judge by the same rules as the real service.
 
 ### 🐛 修复 · Fixed
 
-- **阿里云 OSS 同步不再报「A header you provided implies functionality that is not implemented」**：S3 兼容通道的条件写改成按服务商的实际能力选头 —— OSS 上首次上传用它的「禁止覆盖」，索引已存在时改为写入前先核对一次 ETag；测试连接与本地验签也照真机拒掉 OSS 不支持的条件头，本地全绿不会再掩盖真机 400。
+- **阿里云 OSS 同步不再报「A header you provided implies functionality that is not implemented」**：S3 兼容通道的条件写改成按服务商的实际能力选头 —— OSS 上首次上传用它的「禁止覆盖」，索引已存在时改为写入前先核对一次 ETag；测试连接与本地验签也照真机拒掉 OSS 不支持的条件头，本地全绿不会再掩盖真机 400（issue #109）。
   **Aliyun OSS sync no longer fails with "A header you provided implies functionality that is not implemented"**: conditional writes on the S3-compatible channel now pick headers by what the provider actually supports — on OSS the first upload uses its forbid-overwrite flag and an existing index is re-checked for its ETag right before writing; the connection test and local signature verifier now reject unsupported conditional headers the way the real service does, so a local green run no longer hides a 400 from the real bucket.
 
 ## [0.3.0] - 2026-11-01
