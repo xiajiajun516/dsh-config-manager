@@ -63,8 +63,10 @@ async function makeFixture(workDir: string): Promise<Fixture> {
   for (const [rel, body] of Object.entries(CURRENT)) {
     await fs.writeFile(path.join(homeDir, rel), body, 'utf8');
   }
-  // 关键夹具：这一层本该是目录，实际是普通文件 ⇒ 目标 'blocked/x.yaml' 的执行期写入必然失败。
-  await fs.writeFile(path.join(homeDir, 'blocked'), 'not-a-directory', 'utf8');
+  // 计划期必须是干净的：这一层先建成**真目录**，`blocked/x.yaml` 只是「快照里有、本机没有」。
+  // 计划期目标安全闸只解析「最近存在祖先」的真实落点，普通文件当中间段在 POSIX 上会被它直接判越界
+  // （Linux 实测：assertPlanTargetsSafe 抛「路径越界: blocked/x.yaml」），那样就测不到执行期失败。
+  await fs.mkdir(path.join(homeDir, 'blocked'), { recursive: true });
   const snapshot: Snapshot = {
     id: SNAP_ID,
     createdAt: '2026-10-22T00:00:00.000Z',
@@ -140,6 +142,11 @@ test('core-F1 单步失败：report.failed 可见、该步 WAL=attention、后�
     ['hostFileRestore', 'hostFileRestore', 'hostFileRestore'],
     '夹具里三个动盘动作都应是整文件还原（含那个必然失败的）',
   );
+
+  // 计划已过闸，此刻再把 `<home>/blocked` 换成普通文件 ⇒ 执行期 mkdir(dirname) 必然撞上「目录位置被文件占住」
+  // （POSIX 抛 ENOTDIR/EEXIST，Windows 亦然），而计划期安全闸不会再介入 —— 这正是「执行期失败」的场景。
+  await fs.rm(path.join(f.homeDir, 'blocked'), { recursive: true, force: true });
+  await fs.writeFile(path.join(f.homeDir, 'blocked'), 'not-a-directory', 'utf8');
 
   const report = await restore({
     snapshotDir: f.snapshotDir,
