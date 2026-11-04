@@ -26,7 +26,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > 体例细节、分组表、发版两道门禁与写后自检命令见项目 skill `.dsh/skills/changelog-writing/SKILL.md`（DSH 会自动发现并加载）。
 
-## [Unreleased]
+## [0.4.0] - 2026-11-04
+
+> **本版主题**：把界面从「能用」推到「手感对」，同时让长时间使用不再越用越脏 —— 按钮按下会回弹、勾是画出来的、骨架屏不再抢一句「加载中…」；迁移历史会自己按设定的上限清理，首页只读最近 100 条记录，退出 DSH 也不再留下挡住写操作的残留锁。
+>
+> **Theme**: the UI moves from "works" to "feels right" — buttons spring back on press, the check mark is drawn, skeletons stop shouting "Loading…"; and long-running use stops degrading: migration history prunes itself to a cap you set, the home page reads only the newest 100 records, and quitting DSH no longer leaves a stale lock that blocks writes.
 
 ### 🆕 新增 · Added
 
