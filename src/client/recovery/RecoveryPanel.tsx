@@ -990,75 +990,6 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                     </div>
                   )}
 
-                  {/* ③ 需要处理的会话列表：两行式行卡 + 限高内滚（DESIGN §8 硬性规则） */}
-                  {rows.length === 0
-                    ? <div className={css.hint}>{t('sessions.section.attentionNone')}</div>
-                    : (
-                      <div className={`${css.snapshotList} ${css.reportScroll} ${css.shScroll}`}>
-                        {rows.map((row) => {
-                          /** 问题 chip：最多 2 条进屏、其余折叠（条数如实给出，全文进 title） */
-                          const issueChips = sessionIssueChips(row.issueCodes)
-                          const facts = [
-                            row.versionText,
-                            row.sizeText,
-                            row.mtimeMs !== null ? formatRecoveryTime(String(row.mtimeMs)) : null,
-                          ].filter((value): value is string => value !== null).join(' · ')
-                          return (
-                            <div key={row.unitId} className={css.shRow} data-severity={row.severity}>
-                              <div className={css.shRowTop}>
-                                {/* 徽章只放短标签（「阻断启动」），完整句（「会让 DSH 起不来」）进 title */}
-                                <Badge kind={row.badgeKind} title={t(row.severityKey)}>{t(row.severityShortKey)}</Badge>
-                                {row.subagent && <Badge kind="info">{t('sessions.subagent')}</Badge>}
-                                {/* 行首最宽的位置给**对话标题**：用户要认的是「哪条是我的对话」，不是 uuid。
-                                    宿主没给标题时回落目录名（绝不编造）；全文进 title，脱敏已在 ui 展示模型里做过。 */}
-                                <span className={css.shRowId} title={row.title ?? row.unitId}>
-                                  {row.title ?? (row.blank ? t('sessions.blank') : row.sessionId)}
-                                </span>
-                                <div className={css.shRowActions}>
-                                  {/* 可应用内修复的类别（与体检的 repairable 同源判定）；点开先 dry-run，绝不直接写 */}
-                                  {row.repairable && (
-                                    <Button
-                                      size="sm"
-                                      loading={busy === row.unitId}
-                                      disabled={busy !== null && busy !== row.unitId}
-                                      onClick={() => { startRepair(row.unitId) }}
-                                    >
-                                      {t('sessions.repair.action')}
-                                    </Button>
-                                  )}
-                                  {/* F-2：下载该会话的原始日志 ZIP（**只读**；由 DSH 自己打包，含子会话与附件）。
-                                      不可用时**禁用并给出原因**（不静默消失）—— 三态判定在 session-export-view.ts。 */}
-                                  <IconButton
-                                    icon={zipBusy === row.sessionId ? <Spinner /> : <Icon name="download" />}
-                                    label={t('sessions.zip.action')}
-                                    title={zipHint ?? t('sessions.zip.hint')}
-                                    disabled={!zipState.enabled || zipBusy !== null}
-                                    onClick={() => { downloadZip(row.sessionId) }}
-                                  />
-                                </div>
-                              </div>
-                              <div className={css.shRowMeta}>
-                                {/* 目录名常驻可见（等宽）：它是修复 / 下载要核对的主键，也是「没有标题」时的唯一标识 */}
-                                <span className={css.mono} title={row.unitId}>{row.sessionId}</span>
-                                {issueChips.codes.map((code) => (
-                                  <span key={code} className={css.shIssue} title={row.issueDetailText ?? undefined}>
-                                    {t(sessionIssueKey(code))}
-                                  </span>
-                                ))}
-                                {issueChips.hidden > 0 && (
-                                  <span className={css.shIssue} title={sessionIssuesText(row.issueCodes, t)}>
-                                    {t('sessions.issues.more', { count: String(issueChips.hidden) })}
-                                  </span>
-                                )}
-                                {facts !== '' && <span className={css.shRowFacts}>{facts}</span>}
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  {truncated > 0 && <div className={css.hint}>{t('sessions.truncated', { count: String(truncated) })}</div>}
-
                   {/* 修复计划（dry-run 结果）。ok=false 时显示**真实拒绝原因**，不给假成功 */}
                   {plan !== null && (
                     <div className={css.shPanel}>
@@ -1126,6 +1057,75 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                       </div>
                     </div>
                   )}
+
+                  {/* ③ 需要处理的会话列表：两行式行卡 + 限高内滚（DESIGN §8 硬性规则） */}
+                  {rows.length === 0
+                    ? <div className={css.statusLine} role="status"><StatusDot kind="ok" /><span>{t('sessions.section.attentionNone')}</span></div>
+                    : (
+                      <div className={`${css.snapshotList} ${css.reportScroll} ${css.shScroll}`}>
+                        {rows.map((row) => {
+                          /** 问题 chip：最多 2 条进屏、其余折叠（条数如实给出，全文进 title） */
+                          const issueChips = sessionIssueChips(row.issueCodes)
+                          const facts = [
+                            row.versionText,
+                            row.sizeText,
+                            row.mtimeMs !== null ? formatRecoveryTime(String(row.mtimeMs)) : null,
+                          ].filter((value): value is string => value !== null).join(' · ')
+                          return (
+                            <div key={row.unitId} className={css.shRow} data-severity={row.severity}>
+                              <div className={css.shRowTop}>
+                                {/* 徽章只放短标签（「阻断启动」），完整句（「会让 DSH 起不来」）进 title */}
+                                <Badge kind={row.badgeKind} title={t(row.severityKey)}>{t(row.severityShortKey)}</Badge>
+                                {row.subagent && <Badge kind="info">{t('sessions.subagent')}</Badge>}
+                                {/* 行首最宽的位置给**对话标题**：用户要认的是「哪条是我的对话」，不是 uuid。
+                                    宿主没给标题时回落目录名（绝不编造）；全文进 title，脱敏已在 ui 展示模型里做过。 */}
+                                <span className={css.shRowId} title={row.title ?? row.unitId}>
+                                  {row.title ?? (row.blank ? t('sessions.blank') : row.sessionId)}
+                                </span>
+                                <div className={css.shRowActions}>
+                                  {/* 可应用内修复的类别（与体检的 repairable 同源判定）；点开先 dry-run，绝不直接写 */}
+                                  {row.repairable && (
+                                    <Button
+                                      size="sm"
+                                      loading={busy === row.unitId}
+                                      disabled={busy !== null && busy !== row.unitId}
+                                      onClick={() => { startRepair(row.unitId) }}
+                                    >
+                                      {t('sessions.repair.action')}
+                                    </Button>
+                                  )}
+                                  {/* F-2：下载该会话的原始日志 ZIP（**只读**；由 DSH 自己打包，含子会话与附件）。
+                                      不可用时**禁用并给出原因**（不静默消失）—— 三态判定在 session-export-view.ts。 */}
+                                  <IconButton
+                                    icon={zipBusy === row.sessionId ? <Spinner /> : <Icon name="download" />}
+                                    label={t('sessions.zip.action')}
+                                    title={zipHint ?? t('sessions.zip.hint')}
+                                    disabled={!zipState.enabled || zipBusy !== null}
+                                    onClick={() => { downloadZip(row.sessionId) }}
+                                  />
+                                </div>
+                              </div>
+                              <div className={css.shRowMeta}>
+                                {/* 目录名常驻可见（等宽）：它是修复 / 下载要核对的主键，也是「没有标题」时的唯一标识 */}
+                                <span className={css.mono} title={row.unitId}>{row.sessionId}</span>
+                                {issueChips.codes.map((code) => (
+                                  <span key={code} className={css.shIssue} title={row.issueDetailText ?? undefined}>
+                                    {t(sessionIssueKey(code))}
+                                  </span>
+                                ))}
+                                {issueChips.hidden > 0 && (
+                                  <span className={css.shIssue} title={sessionIssuesText(row.issueCodes, t)}>
+                                    {t('sessions.issues.more', { count: String(issueChips.hidden) })}
+                                  </span>
+                                )}
+                                {facts !== '' && <span className={css.shRowFacts}>{facts}</span>}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  {truncated > 0 && <div className={css.hint}>{t('sessions.truncated', { count: String(truncated) })}</div>}
 
                   {/* 应用内不动的问题类别：离线出路（命令逐条可复制） */}
                   <div className={css.shSectionHead}>

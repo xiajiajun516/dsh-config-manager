@@ -6524,11 +6524,14 @@ button.profileRowMain:hover {
 }
 
 /* 数据口径块（未深度校验 / 被隐藏的正常会话 / 超上限 / 读不出条目 / 截断）：
-   与上面的数字用一条分隔线分开 —— 它们是「这次统计覆盖了多少」，不是待办。 */
+   与上面的数字用一条分隔线分开 —— 它们是「这次统计覆盖了多少」，不是待办。
+   2026-11-04：四条口径原先**竖排**（≈92px），把列表头挤出 620px 弹窗首屏；
+   改成横向 wrap 后同样四条事实只占 1~2 行。 */
 .shNotes {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
   padding-top: 8px;
   border-top: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 60%, transparent);
 }
@@ -6559,6 +6562,9 @@ button.profileRowMain:hover {
 .snapshotList.shScroll {
   padding: 8px;
   background: var(--dsw-alias-bg-base);
+  /* 弹窗只有 620px 高：列表再高就要靠整页外滚动去找「修复计划 / 结果」，
+     限到 300px 让列表自己内滚、面板留在首屏内。 */
+  max-height: 300px;
 }
 
 .shRow {
