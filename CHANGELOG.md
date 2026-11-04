@@ -37,6 +37,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   The four data-scope notes in session health now wrap horizontally instead of stacking vertically.
 - 回滚卡把回滚点、会话数与台账占用并成同一组数字，「为什么现在点不了」按警告语气呈现。
   The rollback card groups its counters into one cluster and shows blocked reasons with warning emphasis.
+- 会话布局归位区空态收成一行状态，「执行布局归位」只在计划真有动作时出现，按钮与上下文字之间补了间距。
+  The session layout repair section shows a single-line empty state, only offers "Run layout repair" when the plan has actions, and gives buttons breathing room.
 
 ## [0.3.1] - 2026-11-02
 

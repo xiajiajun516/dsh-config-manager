@@ -57,6 +57,7 @@ import {
   sessionLayoutCandidates,
   sessionLayoutKeepState,
   sessionLayoutOverallReasonKey,
+  sessionLayoutPlanActionableRows,
   sessionLayoutPlanDisplayRows,
   sessionLayoutPlanSkippedCount,
   sessionLayoutPlanSubmittable,
@@ -393,10 +394,8 @@ interface SessionHealthDialogProps {
  * 与字节级修复（/repair）的分工：那条改日志**字节**，这条改**位置** —— 把会话目录搬回首帧 cwd
  * 对应的 projectKey 段，并把重复 id 的其它副本移进隔离目录（可人工找回）。
  *
- * 安全口径（键 `sessions.layout.runtimeNote`，必须让用户看见）：本入口在 **DSH 运行时**执行，
- * 与离线 CLI `dcm sessions repair --fix` 的「须先停 DSH」不同 —— 靠门前置（SAFE MODE / mutation lock /
- * 逐目标无 session.lock + 不在静止期）+ 索引刷新必须成功 + 失败逐条回滚兜底；宿主没给索引刷新端口时
- * **一条也不执行**（`reindex-unavailable`，绝不显示成成功）。
+ * 安全口径（键 `sessions.layout.runtimeNote`）：本入口在 **DSH 运行时**执行，与离线 CLI 的「须先停 DSH」
+ * 不同 —— 靠门前置 + 索引刷新必须成功 + 失败逐条回滚；宿主没给索引刷新端口时**一条也不执行**。
  *
  * 硬约束：**本组件不做任何业务判断** —— 候选筛选 / keep 完整性 / 可否提交 / 逐条状态与计数全在
  * `ui/session-layout-view.ts`（含「未执行 / 已回滚不得算成功」的判定），组件只装配与渲染。
@@ -422,6 +421,7 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
   const keepState = sessionLayoutKeepState(plan, keep)
   const submittable = sessionLayoutPlanSubmittable(plan, keepState)
   const planRows = sessionLayoutPlanDisplayRows(plan)
+  const actionableRows = sessionLayoutPlanActionableRows(plan)
   const skippedCount = sessionLayoutPlanSkippedCount(plan)
   const planReasonKey = sessionLayoutOverallReasonKey(plan?.reason)
   const appliedReasonKey = sessionLayoutOverallReasonKey(applied?.reason)
@@ -479,14 +479,8 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
   const sectionState = sessionLayoutSectionState({ response, plan, applied })
   if (sectionState === 'hidden') return null
 
-  /**
-   * 本档是否**真的有可执行的动作**。
-   *
-   * 空档（empty）时三段机制散文（desc / runtimeNote / quarantineNote）整段不渲染 ——
-   * 旧实现把它们无条件铺满：本机没有这一档的用户要先读 6 行灰字，才能读到「没有候选」这一句。
-   * 机制说明（怎么归位 / 为什么会不一致）改走 ⓘ；安全口径（运行时写入门 / 隔离目录不删会话）
-   * **只在真有动作要执行时**常驻 —— DESIGN.md §7「说明性文案分层」。
-   */
+  // 本档是否真的有可执行的动作：空档时机制散文与运行时告警整段不渲染（DESIGN.md §7 文案分层），
+  // 说明走 ⓘ；安全口径（运行时写入门 / 隔离目录不删会话）只在真会写盘时常驻。
   const actionable = sectionState !== 'empty'
 
   return (
@@ -497,7 +491,10 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
       </div>
       {/* 与离线 CLI 的差异（它要求先停 DSH）：真会写盘时才占据屏幕（安全告警类，必须可见） */}
       {actionable && <Banner kind="warn">{t('sessions.layout.runtimeNote')}</Banner>}
-      {sectionState === 'empty' && <Empty>{t('sessions.layout.noCandidates')}</Empty>}
+      {/* 已知为空只给一行状态，不用虚线空框（空框读作「本该有内容却没加载出来」） */}
+      {sectionState === 'empty' && (
+        <div className={css.statusLine} role="status"><StatusDot kind="ok" /><span>{t('sessions.layout.noCandidates')}</span></div>
+      )}
       {candidates.length > 0 && (
         <div className={`${css.snapshotList} ${css.reportScroll} ${css.shScroll}`}>
           {candidates.map((candidate) => (
@@ -514,7 +511,8 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
           ))}
         </div>
       )}
-      <div className={css.actionRow}>
+      {/* 上方恒有状态行/横幅 ⇒ actionRowTop 自带 10px 上边距（2026-11-04 反馈按钮上下边距） */}
+      <div className={css.actionRowTop}>
         <Button variant={actionable ? 'primary' : 'ghost'} loading={busy === 'preview'} disabled={busy !== null} onClick={preview}>
           {busy === 'preview' ? t('sessions.layout.previewing') : t('sessions.layout.preview')}
         </Button>
@@ -577,12 +575,14 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
               {!keepState.complete && <div className={css.statRow}><Badge kind="warn">{t('sessions.layout.keepMissing', { count: String(keepState.missing.length) })}</Badge></div>}
             </>
           )}
-          <div className={css.actionRow}>
-            {/* 未选定 keep / 计划不可用 ⇒ 不可提交（判定在 ui 纯函数层） */}
-            <Button variant="primary" loading={busy === 'apply'} disabled={busy !== null || !submittable} onClick={apply}>
-              {busy === 'apply' ? t('sessions.layout.applying') : t('sessions.layout.apply')}
-            </Button>
-          </div>
+          {/* 真的没有动作时不画「执行」（点下去只跑空计划）；不可提交时禁用（判定在纯函数层） */}
+          {(actionableRows.length > 0 || plan.needsKeep.length > 0) && (
+            <div className={css.actionRow}>
+              <Button variant="primary" loading={busy === 'apply'} disabled={busy !== null || !submittable} onClick={apply}>
+                {busy === 'apply' ? t('sessions.layout.applying') : t('sessions.layout.apply')}
+              </Button>
+            </div>
+          )}
         </div>
       )}
       {applied !== null && (

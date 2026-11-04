@@ -6676,6 +6676,13 @@ button.profileRowMain:hover {
   margin-bottom: 6px;
 }
 
+/* 面板内的动作行（2026-11-04 反馈「按钮上下边距」）：旧 .actionRow 是 0 / 10px ——
+   按钮上边贴着上一行字、下边叠上面板自身 padding 变成 20px，上下不对称。
+   面板内改成上 8、下 0（底部留白交给 .shPanel 的 padding）。 */
+.shPanel > .actionRow {
+  margin: 8px 0 0;
+}
+
 .shPanelTitle {
   flex: 1 1 auto;
   min-width: 0;
