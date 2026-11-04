@@ -143,10 +143,13 @@ test('core-F1 单步失败：report.failed 可见、该步 WAL=attention、后�
     '夹具里三个动盘动作都应是整文件还原（含那个必然失败的）',
   );
 
-  // 计划已过闸，此刻再把 `<home>/blocked` 换成普通文件 ⇒ 执行期 mkdir(dirname) 必然撞上「目录位置被文件占住」
-  // （POSIX 抛 ENOTDIR/EEXIST，Windows 亦然），而计划期安全闸不会再介入 —— 这正是「执行期失败」的场景。
-  await fs.rm(path.join(f.homeDir, 'blocked'), { recursive: true, force: true });
-  await fs.writeFile(path.join(f.homeDir, 'blocked'), 'not-a-directory', 'utf8');
+  // 计划已过闸，此刻把该动作的**源 blob** 换成目录：目标侧路径依旧合法（计划期与执行期的目标安全闸都不受
+  // 影响），但执行期 atomicCopyFile 的 copyFile(源=目录, 临时文件) 必然抛错（POSIX EISDIR / Windows EPERM）。
+  // 早先的写法是「目标父路径换成普通文件」，在 POSIX 上会被计划期目标安全闸先判越界（lstat 目标抛 ENOTDIR ⇒
+  // target-unreadable），于是测到的是计划期拒绝而不是执行期失败 —— 那是平台相关的假失败。
+  const brokenBlob = path.join(f.snapshotDir, 'blobs', 'host', 'x');
+  await fs.rm(brokenBlob, { force: true });
+  await fs.mkdir(brokenBlob, { recursive: true });
 
   const report = await restore({
     snapshotDir: f.snapshotDir,
@@ -164,8 +167,9 @@ test('core-F1 单步失败：report.failed 可见、该步 WAL=attention、后�
   assert.deepEqual(report.restored.slice().sort(), ['a-settings.yaml', 'z-extra.yaml']);
   assert.equal(await fs.readFile(path.join(f.homeDir, 'a-settings.yaml'), 'utf8'), 'SNAP-a');
   assert.equal(await fs.readFile(path.join(f.homeDir, 'z-extra.yaml'), 'utf8'), 'SNAP-z');
-  // 失败目标下的 none 什么都没写（父路径仍是那份普通文件，内容未被改动）
-  assert.equal(await fs.readFile(path.join(f.homeDir, 'blocked'), 'utf8'), 'not-a-directory');
+  // 失败目标一个字节都没写（父目录仍在、仍是空目录，未被清掉或替换）
+  assert.ok((await fs.stat(path.join(f.homeDir, 'blocked'))).isDirectory(), '父目录不该被替换');
+  assert.deepEqual(await fs.readdir(path.join(f.homeDir, 'blocked')), [], '失败目标不应留下任何产物');
   await assert.rejects(fs.access(failAbs), '失败目标不应被创建');
 
   // ② journal 逐动作终态：attention 而不是 done（否则 reconcile 会把半成品判成完成）
