@@ -16,6 +16,10 @@
 | 122 | 远端仓库远大于同步内容时 git 通道卡死：全量 clone/fetch 拉完整对象图（1.8 GB 仓库 / 6 MB 同步内容），超时只杀 git.exe 使 git-remote-https/index-pack 成孤儿继续写 tmp_pack_*（累积 7.3 GB），UI 永久停在「正在检查远端变更…」 | done | aafc93f | v0.2.4 | 2026-11-01 |
 | 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（修复：helper 失败时改用 env 注入 `Authorization: basic` 重试一次，仍失败则点名平台原因） | done | 73b6fe4 | v0.2.2 | 2026-10-30 |
 
+- `2026-11-04` **发版 v0.4.1（0.4.0 → 0.4.1，PATCH：自动同步自愈 + 「待裁决」语义）**：提交 `cac4272` → tag `v0.4.1` push；
+  `main` 同步推到 `origin/main`（`3b69baa..cac4272`）。`publish` 流水线 `41920564745` success（typecheck → typecheck:tests → test 5322 项 pass 5320 / fail 0 / skip 2 → build → bundle 自包含 → AGENTS 预算 → 文档路径 → 文档版本 → Tag guard → pack → 亮点段门禁 → npm publish(OIDC) → GitHub Release），`main` 上的 CI `41920557295` success；
+  Release `v0.4.1` 已建（双语亮点在位）；registry 侧 `dsh-config-manager@0.4.1` 可查、`dist-tags.latest = 0.4.1`（发布后约 3 分钟可见）。
+  **本版无需回 issue 版本号**：清单里 `awaiting-release` 行 0 条（`#117` 仍 `open` 等报告者接受授权范围说明；`#118` dropped）。
 - `2026-11-04` **发版 v0.4.0（0.3.1 → 0.4.0，MINOR：新增「迁移历史上限/自动清理」+ 一批界面与体验修补）**：提交 `0f15702`（`chore(release): v0.4.0`）→ tag `v0.4.0` push；
   `main` 同步推到 `origin/main`（此前 8 个未推提交随本版一次性公开）。`publish` 流水线 `41908109199` 全绿（typecheck → typecheck:tests → test 5316 项 pass 5314 / fail 0 / skip 2 → build → bundle 自包含 → AGENTS 预算 → 文档路径 → 文档版本 → Tag guard → pack → 亮点段门禁 → npm publish(OIDC) → GitHub Release），`main` 上的 CI `41908102715` success；
   Release `v0.4.0` 已建（asset `dsh-config-manager-0.4.0.tgz`，双语亮点在位）；registry 侧 `dsh-config-manager@0.4.0` 可查、`dist-tags.latest = 0.4.0`（发布后约 5 分钟才可见，期间 `npm view` 404 属正常）。
