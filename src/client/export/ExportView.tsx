@@ -429,14 +429,14 @@ export function ExportView({ api, t }: ExportViewProps) {
       {/* 4. 命名行：文件名 + 备注（双列）。两个 field 自带可见 label，
           分组标题「文件名与备注（可选）」只是把字段名再念一遍，已删除。 */}
       <div className={css.secretFields}>
-        <label className={css.field}>
+        <div className={css.field}>
           <span className={css.fieldLabel}>
             {t('export.fileName')}
             {/* 输入规则属 MOVE 类（规则行收进字段标签旁的 ⓘ）：非法时下面的 css.formError
                 仍常驻重申字符规则（校验错误属 KEEP ①），规则不会因此不可见。 */}
             <InfoHint text={t('export.fileNameHint')} label={t('common.infoHint')} />
           </span>
-          <input
+          <input aria-label={t('export.fileName')}
             type="text"
             className={css.input}
             value={fileName}
@@ -450,21 +450,21 @@ export function ExportView({ api, t }: ExportViewProps) {
           {/* KEEP ①：校验错误仍常驻（export.fileNameInvalid 本身就重申了允许的字符集），
               渲染与改前逐字一致；规则说明已收进字段标签旁的 ⓘ。 */}
           {fileNameInvalid && <span className={css.formError}>{t('export.fileNameInvalid')}</span>}
-        </label>
-        <label className={css.field}>
+        </div>
+        <div className={css.field}>
           <span className={css.fieldLabel}>
             {t('export.note')}
             {/* 备注说明属 MOVE 类（补充背景）：收进字段标签旁的 ⓘ，不再常驻占一行 */}
             <InfoHint text={t('export.noteHint')} label={t('common.infoHint')} />
           </span>
-          <input
+          <input aria-label={t('export.note')}
             type="text"
             className={css.input}
             value={note}
             placeholder={t('export.notePlaceholder')}
             onChange={(e: ChangeEvent<HTMLInputElement>) => { setNote(e.target.value) }}
           />
-        </label>
+        </div>
       </div>
 
       {/* Phase 1：内容选择弹窗（分区 → 最小可拆单元；选择即生效，合计实时更新） */}

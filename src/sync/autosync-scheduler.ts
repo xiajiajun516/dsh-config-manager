@@ -577,6 +577,9 @@ export class AutoSyncScheduler {
     let releaseLock: (() => Promise<void>) | null = null;
     if (this.mutationLock !== undefined) {
       try {
+        // 本轮开始前先自愈：上一轮异常退出留下的**可证** stale 残留锁只会让每轮静默 skip，
+        // 用户不重启就永远不同步。只删可证的（owner 确证死亡 / PID 复用），其余保持下面既有的 warn 路径。
+        try { await this.mutationLock.reclaimProvableStaleLock?.() } catch { /* 预检失败不改变既有路径 */ }
         const lk = await withMutationLock(this.mutationLock, { op: 'autosync', target: channel, isBlocked: this.isBlocked });
         if (lk.context === null) {
           this.running = false;

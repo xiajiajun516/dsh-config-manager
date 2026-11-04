@@ -92,7 +92,11 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           同口径：不给未启用的能力配满配置项。开启后这些控件立刻出现，没有隐藏的能力。 */}
       {settings.autosyncEnabled && (
         <>
-      <label className={css.field}>
+      {/* 外壳用 <div> 而不是 <label>（2026-11-04 用户反馈：悬停选择框会连带点亮 ⓘ）：
+          <label> 会把「指针在标签区域 / 点击标签」转发给它包裹的控件，而 ⓘ 是按钮 ——
+          两者被绑成一件事后，悬停下拉会顺手触发 ⓘ 的悬停观感、点 ⓘ 会顺手改掉设置。
+          控件的无障碍名不靠这层标签：下面的 Select 自带 ariaLabel。 */}
+      <div className={css.field}>
         <span className={css.fieldLabel}>{t('autosync.interval')} <InfoHint text={t('autosync.intervalHint')} label={t('common.infoHint')} /></span>
         <Select
           value={settings.autosyncInterval}
@@ -101,7 +105,7 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           onChange={(next) => { onUpdateInterval(next as AutosyncInterval) }}
           options={AUTOSYNC_INTERVAL_OPTIONS.map((iv) => ({ value: iv, label: intervalLabel(iv, t) }))}
         />
-      </label>
+      </div>
       <div className={css.toggleRow}>
         <label className={css.toggleLabel} htmlFor={realtimeId}>{t('autosync.realtime')}</label>
         <InfoHint text={t('autosync.realtimeHint')} label={t('common.infoHint')} />
@@ -115,7 +119,8 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           onChange={(e: ChangeEvent<HTMLInputElement>) => { onUpdateOptions({ realtime: e.target.checked }) }}
         />
       </div>
-      <label className={css.field}>
+      {/* div 而非 label：同第一个字段（ⓘ 是按钮，不能被 label 转发悬停/点击） */}
+      <div className={css.field}>
         <span className={css.fieldLabel}>{t('autosync.autoApplyTier')} <InfoHint text={t('autosync.autoApplyTierHint')} label={t('common.infoHint')} /></span>
         <Select
           value={autoApplyTier}
@@ -127,8 +132,9 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
             { value: 'medium', label: t('autosync.tierMedium') },
           ]}
         />
-      </label>
-      <label className={css.field}>
+      </div>
+      {/* div 而非 label：同第一个字段 */}
+      <div className={css.field}>
         <span className={css.fieldLabel}>{t('autosync.conflictPolicy')} <InfoHint text={t('autosync.conflictPolicyHint')} label={t('common.infoHint')} /></span>
         <Select
           value={conflictPolicy}
@@ -140,7 +146,7 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
             { value: 'ask', label: t('autosync.conflictAsk') },
           ]}
         />
-      </label>
+      </div>
       <div className={css.statRow}>
         <Badge kind={settings.autosync?.lastRunStatus === 'failed' ? 'error' : settings.autosync?.lastRunStatus === 'skipped' ? 'warn' : 'info'}>
           {autosyncText}

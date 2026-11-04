@@ -9,6 +9,9 @@
  *  - 跨进程用例（#3 / #16 / #17）用子进程 `node child.mjs` 动态 import 真实 env-lock.ts 验证，
  *    父进程与子进程共享同一 locks 目录（真实文件级互斥）。
  *
+ * 另含 §11.7（未发布）：自动回收只承认结构性可证 stale（owner 确证死亡 / PID 复用），
+ * corrupt 残留与心跳长过期启发式一律拒绝；退出兜底释放与孤儿心跳清理同样只动「可证」对象。
+ *
  * 只测试，不修改实现。若某用例暴露实现 bug，以诊断注释记录 interleaving，供 Lead 修复。
  */
 import test from 'node:test';
@@ -1307,4 +1310,108 @@ test('§11.5-p6 linux `/proc/<pid>/stat` 解析：comm 含空格/括号时也要
   assert.equal(parseLinuxProcessStarttime('garbage'), null, '没有 (comm) 括号 → null');
   assert.equal(parseLinuxProcessStarttime('4796 (node) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 x'), null, '字段 22 非数字 → null');
 });
+
+/* ------------------------------------------------- §11.7 自动回收边界（P1–P4） */
+
+/*
+ * 这一组锁定「自动路径」的**边界**而不是能力：可证的才删，不可证的必须一动不动。
+ * 背景（真机）：正常关窗时后台同步正在跑 → 各入口 finally 等不到 → ownership + heartbeat 留盘；
+ * 下次启动分类是 NORMAL（无未决 journal），于是锁一直在、写操作全 423、自动同步每轮静默 skip。
+ * 修法必须同时满足两条：自动路径能把**可证**的摘掉，且绝不因为「看起来像残留」就删。
+ */
+
+test('§11.7-a 自动回收：owner pid 确证死亡 → 删 ownership + 该 owner 的 sidecar；removedOwner 带 op/pid', async (t) => {
+  const locksDir = tmp(t);
+  const clk = makeClock();
+  const p = makeProbe();
+  p.respond(() => ({ alive: false, osProcessStartIdentity: null }));
+  await seedOwnership(locksDir, { instanceId: 'dead1', pid: 999_001, op: 'autosync' });
+  await seedHeartbeat(locksDir, 'dead1', clk.clock() - 60_000);
+  const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
+  const r = await m.reclaimProvableStaleLock();
+  assert.notEqual(r, null, '确证死亡属结构性可证 → 必须回收');
+  assert.equal(r?.ok, true);
+  assert.deepEqual(r?.removedOwner, { op: 'autosync', pid: 999_001 }, '日志需要知道回收了谁的锁');
+  assert.deepEqual(fssync.readdirSync(locksDir), [], 'ownership 与该 owner 的 heartbeat 都必须清掉');
+});
+
+test('§11.7-b 自动回收：心跳**长过期**启发式（pid 存活、身份不可验证）→ 拒绝，文件保留；显式回收仍可做', async (t) => {
+  const locksDir = tmp(t);
+  const clk = makeClock();
+  const p = makeProbe();
+  p.respond(() => ({ alive: true, osProcessStartIdentity: null }));
+  await seedOwnership(locksDir, { instanceId: 'heur1', pid: 999_002 });
+  await seedHeartbeat(locksDir, 'heur1', clk.clock() - 120_000);
+  const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000, longExpiredAfterMs: 5_000 });
+  assert.equal((await m.inspectLockState()).state, 'STALE_LOCK_DETECTED', '前提：显式判据（长过期）确实判 stale');
+  assert.equal(await m.reclaimProvableStaleLock(), null, '长过期只是「像残留」，自动路径不得据此删锁');
+  assert.ok(fssync.existsSync(path.join(locksDir, OWNERSHIP_FILE)), '拒绝后必须原样保留现场');
+  const explicit = await m.recoverStaleLock();
+  assert.equal(explicit.ok, true, '显式回收（--recover-stale-lock）口径不变，仍可回收');
+});
+
+test('§11.7-c 自动回收：corrupt/空 ownership（崩溃残留）→ 返回 null，不删、不 rename', async (t) => {
+  const locksDir = tmp(t);
+  await fs.writeFile(path.join(locksDir, OWNERSHIP_FILE), '');
+  const m = lockManager(t, { locksDir });
+  assert.equal(await m.reclaimProvableStaleLock(), null, '无有效 owner 的残留不归自动路径判断');
+  assert.deepEqual(fssync.readdirSync(locksDir), [OWNERSHIP_FILE], '现场必须保留，交给显式回收');
+});
+
+test('§11.7-d 自动回收：心跳新鲜（有人在干活）→ 不探测进程、直接返回 null', async (t) => {
+  const locksDir = tmp(t);
+  const a = lockManager(t, { locksDir });
+  const acq = await a.acquire({ op: 'holder' });
+  assert.equal(acq.state, 'ACQUIRED');
+  await waitHeartbeat(a); // 首写是异步的：判 fresh 前必须已落盘
+  const p = makeProbe();
+  p.respond(() => ({ alive: true, osProcessStartIdentity: null }));
+  const b = lockManager(t, { locksDir, probe: p.probe });
+  assert.equal(await b.reclaimProvableStaleLock(), null, '活锁不得进入回收流程');
+  assert.equal(p.calls, 0, '新鲜心跳就是「有人在干活」的证据，连进程探测都不该付（Windows 上要 spawn PowerShell）');
+  await a.release(acq.token!);
+});
+
+test('§11.7-e 自动回收：pid 存活但 OS identity 与 recorded 不同（PID 复用）→ 回收', async (t) => {
+  const locksDir = tmp(t);
+  const clk = makeClock();
+  const p = makeProbe();
+  p.respond(() => ({ alive: true, osProcessStartIdentity: 'identity-B' }));
+  await seedOwnership(locksDir, { instanceId: 'reused1', pid: 999_003, osIdentity: 'identity-A' });
+  await seedHeartbeat(locksDir, 'reused1', clk.clock() - 60_000);
+  const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
+  const r = await m.reclaimProvableStaleLock();
+  assert.equal(r?.ok, true, '原 owner 已死（同一 pid 已被别的进程占用）= 结构性可证');
+  assert.deepEqual(fssync.readdirSync(locksDir), []);
+});
+
+test('§11.7-f 退出兜底释放：只删自己 instanceId 的 ownership/sidecar；未持锁时是 no-op', async (t) => {
+  const locksDir = tmp(t);
+  const a = lockManager(t, { locksDir });
+  const acq = await a.acquire({ op: 'inflight' });
+  assert.equal(acq.state, 'ACQUIRED');
+  await waitHeartbeat(a);
+  a.releaseOnExitSync();
+  assert.deepEqual(fssync.readdirSync(locksDir), [], '自己持有的锁与心跳都必须被同步清掉（exit 里不能 await）');
+  // 没持锁（或持的是别人的锁）→ 绝不删
+  await seedOwnership(locksDir, { instanceId: 'foreign1', pid: 999_004 });
+  const b = lockManager(t, { locksDir });
+  b.releaseOnExitSync();
+  assert.deepEqual(fssync.readdirSync(locksDir), [OWNERSHIP_FILE], 'foreign ownership 一根汗毛都不许动');
+});
+
+test('§11.7-g 孤儿心跳清理：只删「非持有者且心跳过期」的 sidecar；持有者/新鲜/读不出的都保留', async (t) => {
+  const locksDir = tmp(t);
+  const clk = makeClock();
+  await seedOwnership(locksDir, { instanceId: 'hold1', pid: 999_005 });
+  await seedHeartbeat(locksDir, 'hold1', clk.clock() - 500); // 当前持有者，心跳仍新鲜
+  await seedHeartbeat(locksDir, 'gone1', clk.clock() - 60_000); // 崩溃残留
+  await fs.writeFile(path.join(locksDir, heartbeatFile('bad1')), 'not json'); // 读不出 → 无判据
+  const m = lockManager(t, { locksDir, now: clk.clock, staleAfterMs: 1000 });
+  assert.equal(await m.cleanupOrphanHeartbeats(), 1, '只有 gone1 满足「非持有者 + 心跳过期」');
+  const left = fssync.readdirSync(locksDir).sort();
+  assert.deepEqual(left, [OWNERSHIP_FILE, heartbeatFile('bad1'), heartbeatFile('hold1')].sort());
+  assert.ok(fssync.existsSync(path.join(locksDir, heartbeatFile('hold1'))), '持有者的 heartbeat 是活锁判据，不许删');
+});
+
 

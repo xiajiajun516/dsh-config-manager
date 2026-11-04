@@ -22,9 +22,9 @@ export function DecryptPasswordCard({ t, settings, onPatchSettings, onPersistDec
 }) {
   return (
     <Card>
-      <label className={css.field}>
+      <div className={css.field}>
         <span className={css.fieldLabel}>{t('mode.decryptPassword')} <InfoHint text={t('mode.decryptPasswordHint')} label={t('common.infoHint')} /></span>
-        <input
+        <input aria-label={t('mode.decryptPassword')}
           type="password"
           className={css.input}
           value={settings.decryptPassword}
@@ -33,7 +33,7 @@ export function DecryptPasswordCard({ t, settings, onPatchSettings, onPersistDec
           onChange={(e: ChangeEvent<HTMLInputElement>) => { onPatchSettings({ decryptPassword: e.target.value }) }}
           onBlur={onPersistDecryptPassword}
         />
-      </label>
+      </div>
       {settings.decryptPasswordSaved && (
         <div className={css.actionRow}>
           <Badge kind="ok">{t('mode.decryptPasswordSaved')}</Badge>

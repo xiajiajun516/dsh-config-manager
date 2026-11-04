@@ -172,9 +172,18 @@ export function MyConfigsWizard({
             <Badge kind="ok">{t('myconfigs.upload.validateOk')}</Badge>
           </div>
         )}
-        <Field label={t('myconfigs.upload.form.name')}>
-          <InfoHint text={t('myconfigs.upload.form.nameHint')} label={t('common.infoHint')} />
-          <input className={css.input} value={wizard.form.name} onChange={(e) => { onFormField('name', e.target.value) }} />
+        {/* ⓘ 走 info 属性（它是标签的一部分），不再当 children 塞进字段体内：塞进去就等于
+            把它放进了 <label>，悬停/点击标签会连带作用到 ⓘ 上（Field 现在按 info 有无降级外壳）。 */}
+        <Field
+          label={t('myconfigs.upload.form.name')}
+          info={<InfoHint text={t('myconfigs.upload.form.nameHint')} label={t('common.infoHint')} />}
+        >
+          <input
+            className={css.input}
+            aria-label={t('myconfigs.upload.form.name')}
+            value={wizard.form.name}
+            onChange={(e) => { onFormField('name', e.target.value) }}
+          />
           {wizard.formErrors.name !== null && <span className={css.formError}>{redact(wizard.formErrors.name)}</span>}
         </Field>
         <Field label={t('myconfigs.upload.form.description')}>

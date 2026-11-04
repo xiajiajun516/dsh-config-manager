@@ -59,6 +59,38 @@ test('ui-prefs：会话格式处置（T1）字段往返 + 非法值忽略（绝�
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test('ui-prefs：历史保留上限往返 + 0 = 不限制 + 非法值丢弃（auto-cleanup）', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-ui-prefs-retention-'));
+  try {
+    // 合法值往返（0 是「不限制」，必须能存下去，不能当成「没配置」被省略）
+    await writeUiPrefs(dir, { schemaVersion: 1, historyRetentionMaxEntries: 0 });
+    assert.equal((await readUiPrefs(dir)).historyRetentionMaxEntries, 0);
+    assert.equal(JSON.parse(await fs.readFile(path.join(dir, UI_PREFS_FILE), 'utf8')).historyRetentionMaxEntries, 0);
+
+    await writeUiPrefs(dir, { schemaVersion: 1, historyRetentionMaxEntries: 5000 });
+    assert.equal((await readUiPrefs(dir)).historyRetentionMaxEntries, 5000);
+
+    // updateUiPrefs 局部更新不丢其它字段
+    await updateUiPrefs(dir, { historyRetentionMaxEntries: 200 });
+    const afterPatch = await readUiPrefs(dir);
+    assert.equal(afterPatch.historyRetentionMaxEntries, 200);
+
+    // 未配置 → 不落字段、读回 undefined（由调用方回落 DEFAULT_MIGRATION_RETENTION）
+    await writeUiPrefs(dir, defaultUiPrefs());
+    assert.equal((await readUiPrefs(dir)).historyRetentionMaxEntries, undefined);
+
+    // 手改文件写非法值 → 忽略（负数 / 小数 / 超上限 / 字符串）
+    for (const bad of [-1, 1.5, 100_001, '1000']) {
+      await fs.writeFile(
+        path.join(dir, UI_PREFS_FILE),
+        JSON.stringify({ schemaVersion: 1, historyRetentionMaxEntries: bad }),
+        'utf8',
+      );
+      assert.equal((await readUiPrefs(dir)).historyRetentionMaxEntries, undefined, String(bad));
+    }
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('readUiPrefs：文件不存在 → 缺省（无通道）', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-ui-prefs-default-'));
   try {

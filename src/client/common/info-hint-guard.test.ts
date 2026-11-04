@@ -914,3 +914,199 @@ test('t11-4（issue #70，CRLF 检出）：扫描器与锚点必须与换行风�
   const crlfNoGate = crlf.replace('      if (!(from instanceof Node) || !dialog.contains(from)) return\r\n', '');
   assert.ok(findFocusGateViolations(crlfNoGate).length >= 1, 'CRLF 下删掉 early return 必须报红');
 });
+
+/* ==================================================================== *
+ * t12（2026-11-04 用户反馈 ④）：「ⓘ 必须脱离 <label>」的源码级守卫
+ *
+ * 用户原话：鼠标悬浮**选择框**时会一并触发 ⓘ 的 hover 效果。排查结论（写在
+ * common/ui.tsx 的 Field 注释里）：<label> 只把「点击」转发给被包裹控件、**不转发 hover**，
+ * 所以真正的耦合是——ⓘ 被塞在 label 里，点它等于点了控件（勾选框被顺手切掉 / 下拉被打开），
+ * 而它的悬停观感又与控件区域视觉上连成一片。修法两条腿：结构上带 ⓘ 的字段壳不再是 label
+ * （t12-1），交互上 ⓘ 的 onClick 先 preventDefault 掐掉 label 激活（t12-2）。
+ *
+ * 还有一条**必须同时守住**的副作用：脱离 label 后控件就失去了「点标签文字聚焦控件」的免费
+ * 关联，无障碍名必须由调用点显式给（aria-label / Select 的 ariaLabel）⇒ t12-3。
+ *
+ * 已知边界（不修，靠 preventDefault 兜）：ContentPicker / SyncSectionPickerDialog 把
+ * <InfoHint> 当 **Checkbox 的 label prop** 传进去，而 Checkbox 内部才是 <label>。本守卫只扫
+ * 本文件内的字面 <label>，看不到 Checkbox 内部 —— 这不是漏检，是那两处的结构代价：
+ * 改 Checkbox 要动公共 API + 破坏 .checkboxRow + .actionRow 相邻选择器。
+ * ==================================================================== */
+
+/** JSX 标签的结束 `>`（跳过 {} 表达式与引号里的 >；属性里有箭头函数 => 时必备）。 */
+function jsxTagEnd(text: string, at: number): number {
+  let depth = 0;
+  let quote = '';
+  for (let i = at; i < text.length; i++) {
+    const ch = text[i] ?? '';
+    if (quote !== '') {
+      if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    else if (ch === '>' && depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * 标签配对区间（`<div …>` 与 `</div>`）。
+ * 只用于「找字段壳」这类结构判断：别的元素（span/label）不参与，闭合同名元素才配对。
+ */
+function fieldDivBlocks(code: string): Array<{ start: number; end: number }> {
+  const re = /<div\b|<\/div>/g;
+  const stack: number[] = [];
+  const blocks: Array<{ start: number; end: number }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    if (m[0] === '<div') {
+      stack.push(m.index);
+      continue;
+    }
+    const start = stack.pop();
+    if (start !== undefined) blocks.push({ start, end: m.index });
+  }
+  return blocks;
+}
+
+/**
+ * t12-1 扫描：`<InfoHint>` 落在字面 `<label>` 内部的位置（返回 文件:行 的「行」）。
+ * 栈式配对，嵌套 label 也算（历史上有 div.field > label.field 的写法）。
+ */
+function findHintInsideLabelViolations(code: string): number[] {
+  const re = /<label\b|<\/label>|<InfoHint\b/g;
+  const lines: number[] = [];
+  let depth = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    if (m[0] === '<label') depth++;
+    else if (m[0] === '</label>') depth = Math.max(0, depth - 1);
+    else if (depth > 0) lines.push(lineOf(code, m.index));
+  }
+  return lines;
+}
+
+test('t12-1 ⓘ 不得再被 <label> 包住（点 ⓘ 会顺手激活它包裹的控件）', () => {
+  const violations = readClientSources().flatMap((file) =>
+    findHintInsideLabelViolations(file.code).map((line) => file.rel + ':' + String(line)),
+  );
+  assert.deepEqual(
+    violations,
+    [],
+    '带 ⓘ 的字段壳必须是 <div className={css.field}>（label 会把点击转发给控件）：\n' + violations.join('\n'),
+  );
+  // 合成片段负向自检：不依赖真实文件，规则本身必须能红
+  const nested = "<label className={css.field}><InfoHint text={t('a.b')} /><input /></label>\n";
+  assert.equal(findHintInsideLabelViolations(nested).length, 1, 'label 包住 ⓘ 必须报红');
+  const deepNested = "<div className={css.field}><label className={css.field}>\n  <InfoHint text={t('a.b')} />\n</label></div>\n";
+  assert.equal(findHintInsideLabelViolations(deepNested).length, 1, '嵌套 label 里的 ⓘ 同样必须报红');
+  const fixed = "<div className={css.field}><InfoHint text={t('a.b')} /><input aria-label={t('a.b')} /></div>\n";
+  assert.deepEqual(findHintInsideLabelViolations(fixed), [], '改后的形态不得报红');
+});
+
+/**
+ * t12-2 扫描：`onClick` 必须收事件参数、并**第一件事就** `event.preventDefault()`。
+ * 为什么是第一件事：label 激活发生在点击的默认行为里，任何提前 return（例如未固定时直接开）
+ * 都拦不住它 —— 顺序写反等于没写。
+ */
+function findLabelActivationViolations(code: string): string[] {
+  const violations: string[] = [];
+  const head = /const onClick = \(event: ReactMouseEvent<HTMLButtonElement>\): void => \{\n/.exec(code);
+  if (head === null) {
+    violations.push('onClick 必须接收 event: ReactMouseEvent<HTMLButtonElement>（否则无从 preventDefault 掉 label 激活）');
+    return violations;
+  }
+  const bodyStart = head.index + head[0].length;
+  if (!/^\s*event\.preventDefault\(\)/m.test(code.slice(bodyStart, bodyStart + 120))) {
+    violations.push('onClick 的第一条语句必须是 event.preventDefault()');
+  }
+  const body = code.slice(bodyStart, bodyStart + 600);
+  const preventAt = body.indexOf('event.preventDefault()');
+  const pinAt = body.indexOf('setPinned(');
+  if (preventAt === -1) violations.push('onClick 里找不到 event.preventDefault()');
+  else if (pinAt !== -1 && pinAt < preventAt) violations.push('preventDefault 必须在 setPinned 之前（否则状态先变、默认行为照样发生）');
+  if (!code.includes('type MouseEvent as ReactMouseEvent')) {
+    violations.push('必须 import type { MouseEvent as ReactMouseEvent }（事件参数的类型来源）');
+  }
+  return violations;
+}
+
+test('t12-2 ⓘ 的点击必须先 preventDefault（掐掉 label 的激活转发）', () => {
+  const hint = readClientSources().find((f) => f.rel === INFO_HINT_FILE);
+  assert.ok(hint !== undefined, INFO_HINT_FILE + ' 必须存在');
+  const violations = findLabelActivationViolations(hint.code);
+  assert.deepEqual(violations, [], 'label 激活转发必须被掐断：\n' + violations.join('\n'));
+  const noPrevent = mutate(hint.code, '    event.preventDefault()\n', '');
+  assert.ok(findLabelActivationViolations(noPrevent).length >= 1, '删掉 preventDefault（点 ⓘ 会顺手切勾选框）必须报红');
+  const noParam = mutate(hint.code, '(event: ReactMouseEvent<HTMLButtonElement>)', '()');
+  assert.ok(findLabelActivationViolations(noParam).length >= 1, '收不到事件参数必须报红');
+});
+
+/** `<label>` 的成对区间（用于「控件是否已被某个 label 关联」的判断）。 */
+function labelSpanRanges(code: string): Array<{ start: number; end: number }> {
+  const re = /<label\b|<\/label>/g;
+  const stack: number[] = [];
+  const spans: Array<{ start: number; end: number }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    if (m[0] === '<label') {
+      stack.push(m.index);
+      continue;
+    }
+    const start = stack.pop();
+    if (start !== undefined) spans.push({ start, end: m.index });
+  }
+  return spans;
+}
+
+/**
+ * t12-3 扫描：`<div className={css.field}>` 里既有 ⓘ 又有控件时，控件必须自带可访问名。
+ * 这正是「脱离 label」的代价：label 包着控件时读屏靠 label 关联，换 div 后只能靠 aria-label。
+ *
+ * 例外：控件自己仍被**内层** `<label>` 包着（SyncRepositoryPicker 的「新建仓库」就是
+ * div.field > groupLabel(带ⓘ) + label.field > input）—— 那种控件有名字，不该报红。
+ */
+function findFieldControlNameViolations(code: string): string[] {
+  const violations: string[] = [];
+  const labelSpans = labelSpanRanges(code);
+  for (const block of fieldDivBlocks(code)) {
+    const openEnd = jsxTagEnd(code, block.start);
+    if (openEnd === -1) continue;
+    if (code.slice(block.start, openEnd + 1) !== '<div className={css.field}>') continue;
+    const body = code.slice(block.start, block.end);
+    if (!body.includes('<InfoHint')) continue;
+    const ctl = /<(input|textarea|Select)\b/.exec(body);
+    if (ctl === null) continue; // 纯说明字段（无控件）不适用
+    const at = block.start + ctl.index;
+    if (labelSpans.some((span) => span.start < at && at < span.end)) continue; // 控件仍由内层 label 关联
+    const end = jsxTagEnd(code, at);
+    if (end === -1) continue;
+    const tag = code.slice(at, end + 1);
+    if (!/aria-label=|ariaLabel=/.test(tag)) {
+      violations.push(
+        code.slice(0, at).split('\n').length + ': 控件没有 aria-label/ariaLabel（脱离 label 后读屏拿不到名字）：' + tag.replace(/\s+/g, ' ').slice(0, 80),
+      );
+    }
+  }
+  return violations;
+}
+
+test('t12-3 带 ⓘ 的字段壳里，控件必须自带可访问名（label 关联已让位给 aria-label）', () => {
+  const violations = readClientSources().flatMap((file) =>
+    findFieldControlNameViolations(file.code).map((v) => file.rel + ':' + v),
+  );
+  assert.deepEqual(
+    violations,
+    [],
+    '字段壳改成 div 后，控件必须显式给 aria-label（Select 用 ariaLabel）：\n' + violations.join('\n'),
+  );
+  const unnamed = "<div className={css.field}>\n  <InfoHint text={t('a.b')} />\n  <input value={v} />\n</div>\n";
+  assert.equal(findFieldControlNameViolations(unnamed).length, 1, '无名的控件必须报红');
+  const named = "<div className={css.field}>\n  <InfoHint text={t('a.b')} />\n  <input aria-label={t('a.b')} />\n</div>\n";
+  assert.deepEqual(findFieldControlNameViolations(named), [], '有 aria-label 不得报红');
+});

@@ -21,6 +21,8 @@ import {
   MigrationStore, sanitizeEntry, queryHistory, renderExport,
   parseHistoryQuery, isValidMigrationKind, redactHistoryText,
   makeHistoryFilename, isHistoryBasename,
+  isValidHistoryRetention, resolveHistoryRetention,
+  HISTORY_RETENTION_MIN, HISTORY_RETENTION_MAX, DEFAULT_MIGRATION_RETENTION,
   type StoredMigrationHistoryEntry, type MigrationIo,
 } from './migration-history.ts';
 
@@ -165,6 +167,82 @@ test('APPEND-ONLY：retention 不足 limit 时不做任何删除（幂等）', a
   const removed = await store.retention(100);
   assert.equal(removed.length, 0);
   assert.equal((await store.read()).entries.length, 1);
+});
+
+test('APPEND-ONLY：retention(0) = 不限制，绝不清空目录', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  await store.append(makeRaw({ kind: 'import', at: '2026-08-30T12:00:00.000Z' }));
+  await store.append(makeRaw({ kind: 'restore', at: '2026-08-30T12:01:00.000Z' }));
+  // 0 是「不限制」而不是「保留 0 条」—— 把 0 当上限会把历史清空，属不可逆数据损失
+  assert.deepEqual(await store.retention(0), []);
+  assert.equal((await store.read()).entries.length, 2);
+  // 负数/NaN 同口径（防御非法策略值，绝不批量删）
+  assert.deepEqual(await store.retention(-1), []);
+  assert.deepEqual(await store.retention(Number.NaN), []);
+  assert.equal((await store.read()).entries.length, 2);
+});
+
+test('TAIL：read({ limit }) 只读最近 N 条，total 仍报目录全量', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  for (let i = 0; i < 6; i++) {
+    await store.append(makeRaw({ at: `2026-08-30T12:0${i}:00.000Z`, summary: `第 ${i} 条` }));
+  }
+  const tail = await store.read({ limit: 2 });
+  // 尾部窗口 = 最新 2 条（文件名按时间戳排序，12:04 / 12:05）
+  assert.equal(tail.entries.length, 2);
+  assert.equal(tail.entries[0]!.summary, '第 4 条');
+  assert.equal(tail.entries[1]!.summary, '第 5 条');
+  // total 是「目录里有多少」（首页窗口之外的旧条目仍要能报出规模）
+  assert.equal(tail.total, 6);
+  // limit 大于总数 / 未传 / 0 → 全量
+  assert.equal((await store.read({ limit: 99 })).entries.length, 6);
+  assert.equal((await store.read()).entries.length, 6);
+  assert.equal((await store.read({ limit: 0 })).entries.length, 6);
+});
+
+test('TAIL：read({ limit }) 不改统计口径——窗口内损坏条目照旧进 corrupted', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  await store.append(makeRaw({ at: '2026-08-30T12:00:00.000Z' }));
+  await store.append(makeRaw({ at: '2026-08-30T12:01:00.000Z' }));
+  const hist = path.join(dir, 'migration-history');
+  // 最新一条写坏（篡改内容 → contentHash 不匹配）
+  const newest = (fssync.readdirSync(hist).sort() as string[]).at(-1)!;
+  await fs.writeFile(path.join(hist, newest), '{ broken');
+  const res = await store.read({ limit: 1 });
+  assert.equal(res.entries.length, 0);
+  assert.equal(res.corrupted.length, 1);
+  assert.equal(res.total, 2);
+});
+
+test('COUNT：count() 只数合法历史文件，不读内容、不数脏文件', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const hist = path.join(dir, 'migration-history');
+  await fs.mkdir(hist, { recursive: true });
+  await store.append(makeRaw());
+  await fs.writeFile(path.join(hist, 'leftover.txt'), 'junk');
+  await fs.writeFile(path.join(hist, '.dshcm.abc.tmp'), 'junk');
+  assert.equal(await store.count(), 1);
+  // 不存在的目录 → 0（首启还没写过历史）
+  assert.equal(await new MigrationStore({ dir: path.join(dir, 'nope') }).count(), 0);
+});
+
+test('RETENTION-POLICY：isValid/resolve 只收区间内整数，非法回落缺省 1000', () => {
+  assert.equal(isValidHistoryRetention(0), true);
+  assert.equal(isValidHistoryRetention(1000), true);
+  assert.equal(isValidHistoryRetention(HISTORY_RETENTION_MAX), true);
+  for (const bad of [-1, 1.5, HISTORY_RETENTION_MAX + 1, Number.NaN, '1000', null, undefined, {}]) {
+    assert.equal(isValidHistoryRetention(bad), false, String(bad));
+  }
+  assert.equal(resolveHistoryRetention(500), 500);
+  assert.equal(resolveHistoryRetention(0), 0);
+  assert.equal(resolveHistoryRetention(undefined), DEFAULT_MIGRATION_RETENTION);
+  assert.equal(resolveHistoryRetention(-5), DEFAULT_MIGRATION_RETENTION);
+  assert.equal(resolveHistoryRetention('oops'), DEFAULT_MIGRATION_RETENTION);
+  assert.equal(HISTORY_RETENTION_MIN, 0);
 });
 
 test('APPEND-ONLY：无 update/delete API（导出不暴露改删符号）', () => {

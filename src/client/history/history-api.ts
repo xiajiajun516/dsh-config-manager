@@ -3,10 +3,15 @@
  *
  * 端点契约（Host 半 src/index.ts makeRoutes 按此实现）：
  * ```
- * GET /api/dsh-config-manager/history?kind=…&result=…&from=…&to=…&sections=…
- *     → { ok:true, entries: StoredMigrationHistoryEntry[], stats, corrupted }
+ * GET /api/dsh-config-manager/history?kind=…&result=…&from=…&to=…&sections=…&limit=N
+ *     → { ok:true, entries: StoredMigrationHistoryEntry[], stats, corrupted, total, scanned, limit }
+ *     limit = 只读最近 N 条（尾部窗口；缺省全量）。total = 目录内合法文件总数。
  * GET /api/dsh-config-manager/history/export?format=markdown|json&…（同过滤）
  *     → markdown：下载附件；json：{ ok, generatedAt, text }
+ * GET  /api/dsh-config-manager/history/retention
+ *     → { ok, maxEntries, total, defaultMaxEntries, allowedMin, allowedMax }
+ * POST /api/dsh-config-manager/history/retention { maxEntries }
+ *     → { ok, maxEntries, removed, total }（改策略并立即清理一次；0 = 不限制）
  * ```
  *
  * 安全约束：
@@ -16,7 +21,7 @@
  */
 import type { StoredMigrationHistoryEntry, MigrationKind, MigrationResult } from '../../core/migration-history.ts';
 import type { MigrationHistoryStats } from '../../core/migration-history.ts';
-import { getJson, openStream, readJson, type RequestOptions } from '../common/http.ts';
+import { getJson, openStream, postJson, readJson, type RequestOptions } from '../common/http.ts';
 import type { UiT } from '../../ui/i18n.ts';
 import { HISTORY_API } from '../common/routes.ts';
 
@@ -34,6 +39,34 @@ export interface HistoryListResult {
   entries: StoredMigrationHistoryEntry[];
   stats: MigrationHistoryStats;
   corrupted: string[];
+  /** 目录内合法历史文件总数（含被 limit 窗口挡在外的旧条目；老宿主可能不返回）。 */
+  total?: number;
+  /** 本次实际读取条数（= 窗口大小；用于「仅显示最近 N 条」提示）。 */
+  scanned?: number;
+  /** 本次生效的 limit（0 = 全量）。 */
+  limit?: number;
+}
+
+/** 自动清理策略现状（GET /history/retention）。 */
+export interface HistoryRetentionState {
+  ok: boolean;
+  /** 当前保留上限；0 = 不限制。 */
+  maxEntries: number;
+  /** 目录内当前条数。 */
+  total: number;
+  /** 缺省上限（UI「恢复默认」用）。 */
+  defaultMaxEntries: number;
+  allowedMin: number;
+  allowedMax: number;
+}
+
+/** 保存策略后的结果（POST /history/retention）。 */
+export interface HistoryRetentionResult {
+  ok: boolean;
+  maxEntries: number;
+  /** 本次立即清理删除的条数。 */
+  removed: number;
+  total: number;
 }
 
 /** 导出 JSON 返回体（markdown 走附件下载，不返回 JSON body）。 */
@@ -67,6 +100,8 @@ export class HistoryApi {
     from?: number;
     to?: number;
     sections?: string[];
+    /** 只读最近 N 条（缺省/0 = 全量；首页只取几十条避免全量读+回传）。 */
+    limit?: number;
   } = {}): Promise<HistoryListResult> {
     const query: Record<string, string | undefined> = {};
     if (params.kind !== undefined) query['kind'] = Array.isArray(params.kind) ? params.kind.join(',') : params.kind;
@@ -74,7 +109,18 @@ export class HistoryApi {
     if (params.from !== undefined) query['from'] = String(params.from);
     if (params.to !== undefined) query['to'] = String(params.to);
     if (params.sections !== undefined && params.sections.length > 0) query['sections'] = params.sections.join(',');
+    if (params.limit !== undefined && params.limit > 0) query['limit'] = String(params.limit);
     return getJson<HistoryListResult>(this.buildListUrl(query), this.t, HISTORY_OPTS);
+  }
+
+  /** GET /history/retention：当前自动清理策略 + 目录现状。 */
+  async getRetention(): Promise<HistoryRetentionState> {
+    return getJson<HistoryRetentionState>(HISTORY_API.retention, this.t, HISTORY_OPTS);
+  }
+
+  /** POST /history/retention：改保留上限并立即清理一次（0 = 不限制）。 */
+  async setRetention(maxEntries: number): Promise<HistoryRetentionResult> {
+    return postJson<HistoryRetentionResult>(HISTORY_API.retention, { maxEntries }, this.t, HISTORY_OPTS);
   }
 
   /**

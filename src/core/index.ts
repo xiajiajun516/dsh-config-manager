@@ -52,6 +52,8 @@ export {
   parseHistoryQuery, isValidMigrationKind, redactHistoryText,
   makeHistoryFilename, isHistoryBasename, MIGRATION_HISTORY_DIR,
   DEFAULT_MIGRATION_RETENTION, MIGRATION_HISTORY_SCHEMA_VERSION,
+  HISTORY_RETENTION_MIN, HISTORY_RETENTION_MAX,
+  isValidHistoryRetention, resolveHistoryRetention,
   type MigrationKind, type MigrationResult, type MigrationHistoryEntry,
   type StoredMigrationHistoryEntry, type MigrationQuery, type MigrationHistoryStats,
   type ExportFormat, type ReadMigrationResult, type AppendResult, type MigrationIo,

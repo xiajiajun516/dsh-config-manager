@@ -14,7 +14,7 @@
 | `sessions-repair-diagnostics.md` | v0 打包行 / 检测口径 G-24 / 复核门与 catalog / 外部来源合成行 / 面板侧写路径 / 两侧诚实 / codec 锚点链 / 格式版本「按目标机写」 | 会话 / 导入导出 / 外部来源 |
 | `security-and-credentials.md` | 凭据计划项「值的有无」/ 加密载荷 / 批量按钮 / 磁盘清理候选集 / DCA1 形态判定 / SAFE MODE / 值形状 G-36 / Secret 默认不导出 / sessionStorage 白名单 | 安全不变量（不得破坏）、备份 / 恢复 / 回滚点 |
 | `sync-channel.md` | 同步分区逐分区放行 / 会话管理五条语义 / 只读端点无界挂起与首页骨架（2026-10 真机） | 同步（`src/sync/`）、安全不变量；对外契约见 `docs/spec/sync-channel-v1.md` |
-| `recovery-console.md` | CLI 与救急台同门 / 灾备下线 / 救援模式与 reconcileBundles / 离线救急台 token 边界 / 聊天流用户消息的接管与换代适配 | 备份 / 恢复 / 回滚点、UI |
+| `recovery-console.md` | CLI 与救急台同门 / 灾备下线 / 救援模式与 reconcileBundles / 离线救急台 token 边界 / 聊天流用户消息的接管与换代适配 / 环境锁残留的四层自动回收与「只认可证」边界 | 备份 / 恢复 / 回滚点、UI |
 | `packaging-and-bundle.md` | bundle 是 cjs / 自包含护栏 / issue #57–#60 四条的真机成因 / MemFs | Profile / 插件数据 / 打包、架构与路由 |
 | `plugin-data-migration.md` | 第三方插件数据目录的位置取证与收录口径 / 区域相对排除 / 声明缓存按 home 键 / 目录形态判定 / 离线 CLI 为何不收集 | Profile / 插件数据 / 打包 |
 | `ui-design-system.md` | **原生设计资源取证方法**（asar 最小解析器 / 411 个 `--dsw-*` 定义集与引用集做差）/ 坑：`--dsw-alias-state-info-primary` 不存在导致 `--cm-info` 静默失效 / 刻意保留的偏离（12.5px 正文等）/ 无真机时的视觉核验方法 | UI（样式权威仍是 `DESIGN.md`） |

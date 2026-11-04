@@ -134,6 +134,43 @@ export interface SkeletonRowsProps {
   label?: string
 }
 
+export interface SkeletonActivityRowsProps {
+  /** 行数（默认 5，与首页一次展示的条数一致） */
+  count?: number
+  /** 加载文案（已翻译）。**只做无障碍名**，可见文案由调用方渲染在表头 —— 见下方注释。 */
+  label?: string
+}
+
+/**
+ * 「最近活动」表骨架：**逐列照抄真实表的几何**（2026-11-04 用户要求「占位条宽高与真实内容
+ * 一致、原位替换、布局不跳」）。
+ *
+ * 为什么不复用 `SkeletonRows`：那个形态是「20px 图标 + 两行文字 + 动作位」的 52px 行，而
+ * 最近活动真实态是 4 列日志表（时间 72px / 事件 96px / 弹性详情列 / 结果列，行高 38.5px，
+ * 上面还有一行静态列头）。两套几何并存 ⇒ 数据到达时高度、列位、滚动条槽一起跳。
+ *
+ * 两点刻意偏离 `SkeletonRoot`：
+ * ① 外框不带 `.skeletonRoot`（flex column + gap 8 + margin-top 8）—— 骨架行必须与真实行
+ *    同处一个滚动容器、行与行之间没有额外间距，否则几何又对不上；
+ * ② 可见文案不由本组件渲染：骨架下方的那条 caption 会在数据到达时消失（旧的抖动来源之一），
+ *    改由调用方把它放进表头（首页的 `.activityLoadingNote`）。加载语义仍由
+ *    `role="status"` + `aria-busy` + `aria-label` 承担，读屏不丢信息。
+ */
+export function SkeletonActivityRows({ count = 5, label }: SkeletonActivityRowsProps) {
+  return (
+    <div role="status" aria-busy="true" aria-label={label}>
+      {indices(count).map((key) => (
+        <div key={key} className={css.activitySkeletonRow} aria-hidden="true">
+          <span className={css.skeletonBar + ' ' + css.activitySkeletonTime} />
+          <span className={css.skeletonBar + ' ' + css.activitySkeletonKind} />
+          <span className={css.skeletonBar + ' ' + css.activitySkeletonSummary} />
+          <span className={css.skeletonBar + ' ' + css.activitySkeletonResult} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /**
  * 紧凑行骨架：行高与 `.artifactRowHead` 对齐（52px = 20px 图标位 + 标题/说明两行 + 8/10 内边距），
  * 右侧留一个动作位 —— 用于「产物库」「最近活动」这类**一行一条、有分割线**的列表。

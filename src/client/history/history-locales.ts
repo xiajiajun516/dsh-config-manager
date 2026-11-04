@@ -31,6 +31,16 @@ type CommonKey =
   | 'history.exportError'
   | 'history.refresh'
   | 'history.refreshError'
+  | 'history.retention.label'
+  | 'history.retention.hint'
+  | 'history.retention.unlimited'
+  | 'history.retention.units'
+  | 'history.retention.current'
+  | 'history.retention.runNow'
+  | 'history.retention.running'
+  | 'history.retention.cleaned'
+  | 'history.retention.noop'
+  | 'history.retention.saveError'
   /** ⓘ 说明按钮的可访问名（与主字典 / market / sync / recovery 同口径，见 info-hint-guard t6-4） */
   | 'common.infoHint';
 
@@ -61,6 +71,16 @@ export const zh = {
   'history.exportError': '导出失败',
   'history.refresh': '刷新',
   'history.refreshError': '刷新失败',
+  'history.retention.label': '自动清理',
+  'history.retention.hint': '历史条目超过上限时自动删除最旧的；0 = 不限制。清理本身不写历史条目，避免「清理把自己写进历史」的死循环。',
+  'history.retention.unlimited': '不限制',
+  'history.retention.units': '{count} 条',
+  'history.retention.current': '磁盘上 {count} 条',
+  'history.retention.runNow': '立即清理',
+  'history.retention.running': '清理中…',
+  'history.retention.cleaned': '已清理 {count} 条',
+  'history.retention.noop': '无需清理',
+  'history.retention.saveError': '保存自动清理策略失败',
   'history.kind.import': '导入',
   'history.kind.restore': '快照恢复',
   'history.kind.rollback': '回滚',
@@ -108,6 +128,16 @@ export const en = {
   'history.exportError': 'Export failed',
   'history.refresh': 'Refresh',
   'history.refreshError': 'Refresh failed',
+  'history.retention.label': 'Auto-cleanup',
+  'history.retention.hint': 'Delete the oldest entries once the limit is exceeded; 0 = unlimited. Cleanup writes no history entry, so it can never feed itself.',
+  'history.retention.unlimited': 'Unlimited',
+  'history.retention.units': '{count} entries',
+  'history.retention.current': '{count} on disk',
+  'history.retention.runNow': 'Clean up now',
+  'history.retention.running': 'Cleaning…',
+  'history.retention.cleaned': 'Removed {count}',
+  'history.retention.noop': 'Nothing to remove',
+  'history.retention.saveError': 'Failed to save auto-cleanup policy',
   'history.kind.import': 'Import',
   'history.kind.restore': 'Snapshot restore',
   'history.kind.rollback': 'Rollback',

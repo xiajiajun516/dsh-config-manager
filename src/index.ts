@@ -76,6 +76,7 @@ import { JournalStore } from './core/journal.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
 import { msgOf, zhMsg } from './core/messages.ts'
+import { createExitLockReleaser, reclaimStaleLockAtStartup } from './core/env-lock-lifecycle.ts'
 import { engineMsg, getEngineLocale, setEngineLanguageSource, setEngineLocale } from './core/engine-locale.ts'
 import { RollbackAutoTracker, RollbackPointEngine, ROLLBACK_POINTS_DIR_NAME, rollbackSessionBindingOf, rollbackTrackedEventOf } from './core/rollback-point.ts'
 import { ROLLBACK_ATTRIBUTION_FILE_NAME, RollbackWriteAttribution } from './core/rollback-attribution.ts'
@@ -124,7 +125,7 @@ import { SyncSessionStore } from './sync/sync-session.ts'
 import { AutoSyncScheduler } from './sync/autosync-scheduler.ts'
 import { BackupScheduler } from './sync/backup-scheduler.ts'
 import { readBackupSchedule } from './sync/backup-schedule-config.ts'
-import { readRollbackEnabledSync } from './sync/ui-prefs.ts'
+import { readRollbackEnabledSync, readUiPrefs } from './sync/ui-prefs.ts'
 import { AUTO_BACKUP_PREFIX, isValidExportFileName, resolveNonCollidingExportName, writeBackupNote } from './sync/backup-files.ts'
 import { DEFAULT_RETENTION_POLICY, selectPruneCandidatesByPolicy } from './sync/retention-policy.ts'
 import type { RetentionPolicy } from './sync/retention-policy.ts'
@@ -132,6 +133,7 @@ import type { PruneSelector } from './core/backup.ts'
 import { selectPruneCandidates } from './core/backup.ts'
 import { appendAutosyncEntry } from './sync/sync-history.ts'
 import { MigrationStore, type MigrationKind, type MigrationResult, MIGRATION_HISTORY_DIR } from './core/migration-history.ts'
+import { createHistoryPruner } from './core/history-prune.ts'
 import { validateRepoUrl, validateWebDavUrl, isWebDavConfig, isS3Config, isGistConfig, channelOf, parseSyncChannel, SYNC_CHANNELS, GIST_PROVIDER, isS3CompatProvider, validateCloudChannelInput, cloudSecretRef } from './sync/sync-config.ts'
 import {
   resolveSessionFormatDisposition,
@@ -246,7 +248,7 @@ export interface Config {
 /**
  * 本文件保留的 7 条路由的路径（被源码级守卫按文件窗口钉住，见下方 routesList 注释）。
  *
- * 其余 76 条路由的路径**声明在各自的组文件里**（src/routes/*.ts 的 endpoint({ path, methods })）——
+ * 其余 77 条路由的路径**声明在各自的组文件里**（src/routes/*.ts 的 endpoint({ path, methods })）——
  * 新增一条 API 只需那一条声明，不再有「常量表 + 路由对象」两处要同步。
  */
 export const API = {
@@ -2545,6 +2547,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   const dispositionAbort = (plan: ImportPlan, disposition: SessionFormatDisposition): SessionFormatAbortBody | null =>
     sessionFormatAbortResponse(plan, disposition, msg)
 
+  // 迁移历史自动清理（语义/节流/为何不写审计条目 → src/core/history-prune.ts 头注释）：启动清一次 + 写入后节流触发。
+  const pruneHistory = createHistoryPruner({ history, log: host.log, readRetentionLimit: async () => (await readUiPrefs(syncDir)).historyRetentionMaxEntries })
+  void pruneHistory('startup')
+
   /**
    * Phase 6：迁移历史 best-effort 追加（写失败不阻断操作，但记录/降级，不静默丢）。
    * 所有 destructive/migration 结果确定后调用。历史写盘 ms 级，失败仅日志 + 可选告警字段。
@@ -2558,6 +2564,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         host.log.warn('迁移历史写入失败', { kind: raw.kind, error: res.error })
         return res.error
       }
+      // 写入成功后异步清理（不 await：历史写盘不应被保留策略拖慢）
+      void pruneHistory('append')
       return undefined
     } catch (error) {
       host.log.warn('迁移历史写入异常', { kind: raw.kind, error: error instanceof Error ? error.message : String(error) })
@@ -3341,7 +3349,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   /**
    * 路由表：本文件只保留被源码级守卫按**文件窗口**钉住的 7 条（host-entry 审计 F-04 记录的
    * tests/host/**、src/core/model-tools.test.ts、src/core/phase1-wiring.test.ts 的窗口断言）。
-   * 其余 76 条已按域拆到 src/routes/*.ts，由 buildRoutes 组装。
+   * 其余 77 条已按域拆到 src/routes/*.ts，由 buildRoutes 组装。
    * 注册顺序不影响匹配：命名路由必须互不相同（webServer 契约）。
    */
   const routeEnv: RouteEnvInferred = makeRouteEnv()
@@ -3891,7 +3899,8 @@ export function apply(ctx: Context, config?: Config): void {
   const envLockManager = host.mutationLock as EnvironmentLockManager
   // Phase 3：启动 reconcile（只读）+ SAFE MODE。宿主 apply() 为同步 →
   // ① 先同步探测 durable SAFE MODE 标记（scheduler.start() 前即被阻断），
-  // ② 再异步跑完整只读 reconcile，刷新标志与 durable 标记。不自动 recover stale lock（Rev 3 P1-NEW-2）。
+  // ② 再异步跑完整只读 reconcile，刷新标志与 durable 标记。
+  // 残留锁：只对**结构性可证** stale 自动回收（判定与理由见 core/env-lock-lifecycle.ts）。
   // Phase 4 F21/F11：注入真实 snapshotExists 正向校验——journal 引用的 snapshot 存在 + READY +
   // verified（manifest/blob hash）+ op/env/owner binding 匹配 journal，才视为可回滚的有效 recovery 证据。
   const phase3Recovery = new Phase3Recovery({
@@ -3945,12 +3954,14 @@ export function apply(ctx: Context, config?: Config): void {
       })
       const { state } = await startupState.classify()
       startupStateResolved = true
+      // 残留锁自愈（可证 stale 回收 + 孤儿心跳清理），判定与理由见 core/env-lock-lifecycle.ts。
+      const effectiveLockState = await reclaimStaleLockAtStartup({ kind: state.kind, inspected: lockInsp.state, lock: envLockManager, log: host.log })
       // issue #87：分类结论才是本轮权威。NORMAL 且没有活锁者 ⇒ 上一轮留下的 durable SAFE MODE 是**陈旧标记**
       // （没有任何未决 journal 能解释它），必须连内存标志一起复位：只复位内存会让本会话写操作继续被 423 挡着
       // （界面却说「无待处理事项」），只复位标记又会在下一次 probe 时重新置起（标记跨重启生效）。
       const safeModeVerdict = resolveStartupSafeMode({
         kind: state.kind,
-        lockState: mapLockStateForStartup(lockInsp.state),
+        lockState: effectiveLockState,
         currentlyBlocked: phase3Recovery.safeModeActive,
       })
       phase3Recovery.safeModeActive = safeModeVerdict.blocked
@@ -4133,6 +4144,14 @@ export function apply(ctx: Context, config?: Config): void {
   // 自动同步调度器随插件生命周期停止：插件重载/卸载时清理定时器，
   // 避免旧调度器残留导致重复后台同步。
   ctx.effect(() => () => scheduler.stop(), 'config-manager: autosync scheduler')
+  // 退出兜底释放环境锁：关窗时若后台同步正在跑，各入口的 finally 等不到 ⇒ 锁留盘（见 core/env-lock-lifecycle.ts）。
+  // 强杀 / 崩溃 / 断电仍靠下次启动的自动回收兜底。
+  const releaseLockOnExit = createExitLockReleaser(envLockManager)
+  process.once('exit', releaseLockOnExit)
+  ctx.effect(() => () => {
+    process.removeListener('exit', releaseLockOnExit)
+    releaseLockOnExit()
+  }, 'config-manager: environment lock exit release')
   // m-profiles：实例心跳（自报 + 定期刷新）；dispose 时撤回自己的心跳文件，别让别人把死实例当成活的。
   ctx.effect(() => {
     const stopHeartbeat = profileRuntime.startHeartbeat()

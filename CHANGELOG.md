@@ -28,7 +28,18 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🆕 新增 · Added
+
+- **迁移历史会自己清理了**：迁移历史页可以给历史条数设上限（缺省保留最近 1000 条，选「不限制」则永不自动删除），改完立即清一次，之后每写一条新记录都会顺手删掉最旧的。
+  **Migration history now cleans itself up**: the history page lets you cap how many records to keep (default: the newest 1000; "unlimited" never auto-deletes), applies the cap right away, and prunes the oldest records as new ones are written.
+
 ### 🔧 变更 · Changed
+- **按钮按下有回弹了**：所有按钮（含链接形态的按钮）按下时缩到 96%，松手用弹簧动画先微微放大过原尺寸再落回 100%。
+  **Buttons now spring back on press**: every button (link-styled ones included) dips to 96% while held, then overshoots slightly and settles at 100% with a spring.
+- **勾选框的勾是画出来的**：勾选时勾形沿从左下到右上的方向描出来，而不是整枚瞬间出现。
+  **The check mark is now drawn**: ticking a box strokes the check from bottom-left to top-right instead of popping in whole.
+- 首页的最近活动不再等全量历史：首屏只读最近 100 条记录，历史攒到几千条首页也立刻出内容（历史页与导出仍覆盖全量）。
+  **The home page no longer waits for the full history**: the first screen reads only the newest 100 records, so a history of thousands no longer holds the page back (the history page and exports still cover everything).
 - 环境页的磁盘占用与档案行改成两行式清单：名称与体积同一条线、动作收成图标按钮，不再挤成四列表格。
   Disk usage and profile rows became two-line scan rows: name and size share a line, actions are icon buttons instead of a four-column table.
 - 会话体检弹窗把「修复计划 / 应用结果」放在列表上方，列表自己限高内滚 —— 点一行修复后不用再往外滚才看得见结果。
@@ -39,6 +50,15 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   The rollback card groups its counters into one cluster and shows blocked reasons with warning emphasis.
 - 会话布局归位区空态收成一行状态，「执行布局归位」只在计划真有动作时出现，按钮与上下文字之间补了间距。
   The session layout repair section shows a single-line empty state, only offers "Run layout repair" when the plan has actions, and gives buttons breathing room.
+
+### 🐛 修复 · Fixed
+
+- **首页加载时不再跳一下**：最近活动的骨架占位与真实行同宽同高，数据到达后就在原位替换，列表高度与滚动条不再变化。
+  **The home page no longer jumps while loading**: activity placeholders match the real rows in width and height, so data swaps in place and the list height and scrollbar stay put.
+- **点说明图标不再连带切换旁边的控件**：字段说明的 ⓘ 与同一行的勾选框 / 下拉 / 输入框彻底解耦，点它只开关提示本身，不会顺手勾掉或展开别的东西。
+  **Clicking an info icon no longer toggles its neighbour**: the "i" next to a field is decoupled from the checkbox, select or input on the same row, so it only opens its own tooltip.
+- **退出 DSH 不再留下残留锁**：正常关窗时即使后台同步正在跑也会释放锁；下次启动时，持有者**确证已消失**的残留锁会被自动回收，写操作不再被挡、自动同步不再无声停摆；证明不出持有者已死的残留锁（残留损坏文件、心跳只是久未更新）仍然只走显式回收。
+  **Closing DSH no longer leaves a stale lock behind**: quitting while a background sync is running now releases the lock, and on the next start a lock whose owner is provably gone is reclaimed automatically — writes stop being blocked and auto-sync stops silently skipping. Locks whose owner cannot be proven gone (corrupt leftovers, merely overdue heartbeats) still require explicit recovery.
 
 ## [0.3.1] - 2026-11-02
 

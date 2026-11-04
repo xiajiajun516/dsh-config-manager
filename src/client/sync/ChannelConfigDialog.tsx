@@ -120,9 +120,9 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
             busy={busy}
             onPick={(cloneUrl) => { onFormChange({ repoUrl: cloneUrl }) }}
           />
-          <label className={css.field}>
+          <div className={css.field}>
             <span className={css.fieldLabel}>{t('config.repoUrl')} <InfoHint text={t('config.repoUrlHint')} label={t('common.infoHint')} /></span>
-            <input
+            <input aria-label={t('config.repoUrl')}
               type="text"
               className={css.input}
               value={repoUrl}
@@ -132,15 +132,15 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
                 onFormChange({ repoUrl: e.target.value }) // 改动自动保存（防抖；关闭设置页不丢输入）
               }}
             />
-          </label>
-          <label className={css.field}>
+          </div>
+          <div className={css.field}>
             <span className={css.fieldLabel}>
               {t('config.token')}
               {' '}
               {statusInfo?.credentialConfigured === true && <Badge kind="ok">{t('config.tokenSaved')}</Badge>}
               <InfoHint text={t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })} label={t('common.infoHint')} />
             </span>
-            <input
+            <input aria-label={t('config.token')}
               type="password"
               className={css.input}
               value={token}
@@ -151,7 +151,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
                 onFormChange({ token: e.target.value })
               }}
             />
-          </label>
+          </div>
 
           {/* GitHub OAuth 登录（device flow）：弹窗内仅 git 通道显示；已登录（token 有效）时整块隐藏 */}
           {githubSignedIn === false && (
@@ -217,9 +217,9 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
             />
             <InfoHint text={t('webdav.presetHint')} label={t('common.infoHint')} />
           </div>
-          <label className={css.field}>
+          <div className={css.field}>
             <span className={css.fieldLabel}>{t('webdav.url')} <InfoHint text={t('webdav.urlHint')} label={t('common.infoHint')} /></span>
-            <input
+            <input aria-label={t('webdav.url')}
               type="text"
               className={css.input}
               value={webdavUrl}
@@ -229,8 +229,8 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
                 onFormChange({ webdavUrl: e.target.value })
               }}
             />
-          </label>
-          <label className={css.field}>
+          </div>
+          <div className={css.field}>
             <span className={css.fieldLabel}>
               {t('webdav.username')}
               {' '}
@@ -238,7 +238,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               {' '}
               <InfoHint text={t('webdav.usernameHint')} label={t('common.infoHint')} />
             </span>
-            <input
+            <input aria-label={t('webdav.username')}
               type="text"
               className={css.input}
               value={webdavUsername}
@@ -249,15 +249,15 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
                 onFormChange({ webdavUsername: e.target.value })
               }}
             />
-          </label>
-          <label className={css.field}>
+          </div>
+          <div className={css.field}>
             <span className={css.fieldLabel}>
               {t('webdav.password')}
               {' '}
               {statusInfo?.webdav?.passwordConfigured === true && <Badge kind="ok">{t('webdav.passwordSaved')}</Badge>}
               <InfoHint text={t('webdav.passwordHint', { ref: SYNC_WEBDAV_CREDENTIAL_REF })} label={t('common.infoHint')} />
             </span>
-            <input
+            <input aria-label={t('webdav.password')}
               type="password"
               className={css.input}
               value={webdavPassword}
@@ -268,7 +268,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
                 onFormChange({ webdavPassword: e.target.value })
               }}
             />
-          </label>
+          </div>
         </>
       )}
 
@@ -287,9 +287,9 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
             />
             <InfoHint text={t('cloud.providerHint')} label={t('common.infoHint')} />
           </div>
-          <label className={css.field}>
+          <div className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.endpoint')} <InfoHint text={t('cloud.endpointHint')} label={t('common.infoHint')} /></span>
-            <input
+            <input aria-label={t('cloud.endpoint')}
               type="text"
               className={css.input}
               value={s3Endpoint}
@@ -297,10 +297,10 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ s3Endpoint: e.target.value }) }}
             />
-          </label>
-          <label className={css.field}>
+          </div>
+          <div className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.region')} <InfoHint text={t('cloud.regionHint')} label={t('common.infoHint')} /></span>
-            <input
+            <input aria-label={t('cloud.region')}
               type="text"
               className={css.input}
               value={s3Region}
@@ -308,10 +308,10 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ s3Region: e.target.value }) }}
             />
-          </label>
-          <label className={css.field}>
+          </div>
+          <div className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.bucket')} <InfoHint text={t('cloud.bucketHint')} label={t('common.infoHint')} /></span>
-            <input
+            <input aria-label={t('cloud.bucket')}
               type="text"
               className={css.input}
               value={s3Bucket}
@@ -319,10 +319,10 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ s3Bucket: e.target.value }) }}
             />
-          </label>
-          <label className={css.field}>
+          </div>
+          <div className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.prefix')} <InfoHint text={t('cloud.prefixHint')} label={t('common.infoHint')} /></span>
-            <input
+            <input aria-label={t('cloud.prefix')}
               type="text"
               className={css.input}
               value={s3Prefix}
@@ -330,10 +330,10 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ s3Prefix: e.target.value }) }}
             />
-          </label>
-          <label className={css.field}>
+          </div>
+          <div className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.accessKeyId')} <InfoHint text={t('cloud.accessKeyIdHint')} label={t('common.infoHint')} /></span>
-            <input
+            <input aria-label={t('cloud.accessKeyId')}
               type="text"
               className={css.input}
               value={s3AccessKeyId}
@@ -342,7 +342,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ s3AccessKeyId: e.target.value }) }}
             />
-          </label>
+          </div>
           <div className={css.controlRow}>
             <Checkbox
               checked={s3PathStyle}
@@ -352,14 +352,14 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
             />
             <InfoHint text={t('cloud.pathStyleHint')} label={t('common.infoHint')} />
           </div>
-          <label className={css.field}>
+          <div className={css.field}>
             <span className={css.fieldLabel}>
               {t('cloud.secret')}
               {' '}
               {statusInfo?.s3?.secretStored === true && <Badge kind="ok">{t('cloud.secretSaved')}</Badge>}
               <InfoHint text={t('cloud.secretHint', { ref: cloudSecretRef })} label={t('common.infoHint')} />
             </span>
-            <input
+            <input aria-label={t('cloud.secret')}
               type="password"
               className={css.input}
               value={s3Secret}
@@ -368,7 +368,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ s3Secret: e.target.value }) }}
             />
-          </label>
+          </div>
         </>
       )}
 
@@ -378,9 +378,9 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
           {/* G-34：gist 刻意不外置 blob（一次 GET 全量 / 单文件超限截断 / 文件数上限）⇒ 大分区不适合走 gist；
               该说明属机制类，收进标题 ⓘ（2026-10-12 用户要求） */}
           <span className={css.groupLabel}>{t('cloud.gistTitle')} <InfoHint text={t(GIST_LARGE_SECTION_HINT_KEY)} label={t('common.infoHint')} /></span>
-          <label className={css.field}>
+          <div className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.gistId')} <InfoHint text={t('cloud.gistIdHint')} label={t('common.infoHint')} /></span>
-            <input
+            <input aria-label={t('cloud.gistId')}
               type="text"
               className={css.input}
               value={gistId}
@@ -389,10 +389,10 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ gistId: e.target.value }) }}
             />
-          </label>
-          <label className={css.field}>
+          </div>
+          <div className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.apiBaseUrl')} <InfoHint text={t('cloud.apiBaseUrlHint')} label={t('common.infoHint')} /></span>
-            <input
+            <input aria-label={t('cloud.apiBaseUrl')}
               type="text"
               className={css.input}
               value={gistApiBaseUrl}
@@ -400,10 +400,10 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ gistApiBaseUrl: e.target.value }) }}
             />
-          </label>
-          <label className={css.field}>
+          </div>
+          <div className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.filePrefix')} <InfoHint text={t('cloud.filePrefixHint')} label={t('common.infoHint')} /></span>
-            <input
+            <input aria-label={t('cloud.filePrefix')}
               type="text"
               className={css.input}
               value={gistFilePrefix}
@@ -411,15 +411,15 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ gistFilePrefix: e.target.value }) }}
             />
-          </label>
-          <label className={css.field}>
+          </div>
+          <div className={css.field}>
             <span className={css.fieldLabel}>
               {t('cloud.token')}
               {' '}
               {statusInfo?.gist?.secretStored === true && <Badge kind="ok">{t('cloud.tokenSaved')}</Badge>}
               <InfoHint text={t('cloud.tokenHint', { ref: cloudSecretRef })} label={t('common.infoHint')} />
             </span>
-            <input
+            <input aria-label={t('cloud.token')}
               type="password"
               className={css.input}
               value={gistToken}
@@ -428,7 +428,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ gistToken: e.target.value }) }}
             />
-          </label>
+          </div>
         </>
       )}
 

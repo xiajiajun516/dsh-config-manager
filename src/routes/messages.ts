@@ -23,6 +23,8 @@ export const zh = {
   'route.importNoSections': '无分区',
   'route.importHistorySummary': '导入完成：{sections}（执行 {count} 项）',
   'route.importIncomplete': '导入未完全成功',
+  // ---------- 迁移历史自动清理 ----------
+  'route.historyRetentionInvalid': '保留上限必须是 {min}–{max} 之间的整数（0 = 不限制）',
   // ---------- 档案 ----------
   'route.profileLaunchSummary': '启动档案 {name}（独立实例 :{port}）',
   'route.profileCreateSummary': '新建档案 {name}（模板 {template}）',
@@ -67,6 +69,7 @@ export const en: Record<keyof typeof zh, string> = {
   'route.importNoSections': 'no sections',
   'route.importHistorySummary': 'Import finished: {sections} ({count} item(s) executed)',
   'route.importIncomplete': 'Import did not fully succeed',
+  'route.historyRetentionInvalid': 'Retention limit must be an integer between {min} and {max} (0 = unlimited)',
   'route.profileLaunchSummary': 'Launched profile {name} (separate instance :{port})',
   'route.profileCreateSummary': 'Created profile {name} (template {template})',
   'route.profileCopySummary': 'Copied profile {from} → {to}{suffix}',

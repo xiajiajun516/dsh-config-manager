@@ -48,7 +48,7 @@ import {
   type OverviewMetricKey,
 } from '../../ui/overview-view.ts'
 import { Badge, Banner, Button, Card, StatusDot, Stepper } from '../common/ui.tsx'
-import { SkeletonRows } from '../common/Skeleton.tsx'
+import { SkeletonActivityRows } from '../common/Skeleton.tsx'
 import { BackupIcon, ExportIcon, ImportIcon } from '../common/Icon.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
 import { Modal } from '../common/Modal.tsx'
@@ -57,6 +57,9 @@ import css from '../config-manager.module.css'
 
 /** 首页同步状态请求超时（ms）：它只填一个指标段，超时走默认 30 秒文案档（时长与文案一致）。 */
 const HOME_SYNC_TIMEOUT_MS = 30_000
+/** 首页活动表所需的最近条数（表里只显示 30 条，多取一段留作「同秒多条」时的余量）。
+ *  服务端按文件名尾部只读最近 N 个文件 —— 不再把 2360 条历史全量读出来返给首屏。 */
+const HOME_ACTIVITY_LIMIT = 100
 
 /** issue #43：立即备份跳过原因 → 文案键（文案统一走 locale 字典；未知 token 走 other）。 */
 const BACKUP_SKIP_KEY: Record<BackupSkipReason, ConfigManagerKey> = {
@@ -147,11 +150,14 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const store = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const [data, setData] = useState<OverviewData>(initialData)
-  /** 首屏 4 个毫秒级只读接口是否仍在飞（决定状态条/活动表的骨架）。 */
+  /** 首屏 3 个毫秒级只读接口（backups/snapshots/schedule）是否仍在飞（决定状态条骨架）。 */
   const [loading, setLoading] = useState(true)
+  /** 最近活动的独立加载态：/history 是**目录全量扫描**（真机冷 9.7s / 2360 条），
+   *  绝不能再参与首屏骨架 —— 它没到之前活动卡自己铺骨架，其余页面照常可用。 */
+  const [historyState, setHistoryState] = useState<'loading' | 'ready' | 'failed'>('loading')
   /** 同步状态的独立加载态：'failed' 时指标段显示「读取超时」（绝不冒充「未配置」）。 */
   const [syncState, setSyncState] = useState<'loading' | 'ready' | 'failed'>('loading')
-  /** 首屏 5 个只读请求的失败情况（null = 全部成功 / 还没跑过）。
+  /** 首屏 5 个只读请求（3 个快请求 + 同步状态 + 最近活动）的失败情况（null = 全部成功 / 还没跑过）。
    *  为什么必须有它：此前 allSettled 把失败一律吞成 null，而健康判定对 null 不降级 ——
    *  宿主接口整体不可达时，用户看到的是绿色「配置健康」+「暂无操作记录」，
    *  读起来像「一切正常只是没操作过」，真实原因与重试入口都不可见。 */
@@ -160,7 +166,7 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
   /** 卸载后不再 setState（异步回调竞态防护） */
   const aliveRef = useRef(true)
   useEffect(() => () => { aliveRef.current = false }, [])
-  /** 本轮首屏的失败集合（4 个快请求 + 独立同步状态共享）：横幅的计数与首条原因都出自这里。 */
+  /** 本轮首屏的失败集合（3 个快请求 + 同步状态 + 最近活动共享）：横幅的计数与首条原因都出自这里。 */
   const failuresRef = useRef<unknown[]>([])
   const publishFailures = useCallback((): void => {
     if (!aliveRef.current) return
@@ -172,11 +178,11 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
     })
   }, [])
 
-  /** 首屏 4 个毫秒级只读接口（backups/snapshots/schedule/history）：**逐个 settle 逐个渲染**，
-   *  凑齐才撤骨架；「首屏好了没」只看它们 —— 同步状态另走一条独立通道（见下方注释）。 */
+  /** 首屏 3 个毫秒级只读接口（backups/snapshots/schedule）：**逐个 settle 逐个渲染**，
+   *  凑齐才撤骨架；「首屏好了没」只看它们 —— 同步状态与最近活动各走一条独立通道（见下方注释）。 */
   const loadFast = useCallback(async (): Promise<void> => {
     failuresRef.current = []
-    let remaining = 4
+    let remaining = 3
     /** 单个快请求：成功就写自己那块数据，失败只记账（不牵连其它块，也不延长骨架）。 */
     const runFast = <T,>(promise: Promise<T>, apply: (value: T) => void): void => {
       void promise.then(
@@ -192,7 +198,23 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
     runFast(api.listBackupFiles(), (value) => { setData((prev) => ({ ...prev, backups: value })) })
     runFast(api.snapshots(), (value) => { setData((prev) => ({ ...prev, snapshots: value })) })
     runFast(api.backupSchedule(), (value) => { setData((prev) => ({ ...prev, schedule: value })) })
-    runFast(historyApi.list({}), (value) => { setData((prev) => ({ ...prev, history: value })) })
+    // 最近活动**独立通道**：/history 要按文件名扫历史目录，条目多时是秒级（真机冷 9.7s / 2360 条）。
+    // 同桶时它把整页按在骨架上 —— 首页只会用到最近 30 条，所以按 limit 只读尾部，且绝不参与首屏骨架。
+    setHistoryState('loading')
+    void historyApi.list({ limit: HOME_ACTIVITY_LIMIT }).then(
+      (value) => {
+        if (!aliveRef.current) return
+        setData((prev) => ({ ...prev, history: value }))
+        setHistoryState('ready')
+        publishFailures()
+      },
+      (reason) => {
+        failuresRef.current.push(reason)
+        if (!aliveRef.current) return
+        setHistoryState('failed')
+        publishFailures()
+      },
+    )
     // 同步状态**独立加载、绝不参与首屏骨架**：/sync/status 会碰 DSH credentials 服务与 git 工作副本
     // 自检，真机出现过 300 秒不返回。此前它与其余 4 个请求同桶 allSettled，一个挂住就把整页按在骨架上。
     // 超时取 30 秒档（客户端超时文案按时长插值，读作「30 秒」，与实测一致）。
@@ -454,23 +476,35 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
           <Card className={css.activityCard}>
             <div className={css.activityHeader}>
               <span className={css.activityTitle}>{t('overview.activity.title')}</span>
+              {/* 加载说明放列头右侧（2026-11-04）：旧骨架把「加载中…」渲在占位块**下面**，
+                  数据到达时那行说明消失 ⇒ 整块再跳一次。放这里与真实态的空白位同一行同一处。 */}
+              {historyState === 'loading' && <span className={css.activityLoadingNote}>{t('common.loading')}</span>}
             </div>
-            {/* 首屏未完成时**不写空态**：以前这里直接渲染「暂无操作记录」，
-                数据没到就说「没有」，与真实情况相反。改为按行列表形状铺骨架。 */}
-            {loading
-              ? <SkeletonRows count={5} label={t('common.loading')} />
-              : activity.length === 0
-                ? <div className={css.activityEmpty}>{data.history === null ? t('overview.activity.unavailable') : t('overview.activity.empty')}</div>
-                : (
-                <>
-                {/* 列头：14 行记录只有「时间 / 类型·摘要 / 结果」三列，没有名字时
-                    用户不知道右边那一列的绿点是什么（app-screens §7.2：有表头才读得懂列）。 */}
-                <div className={css.activityHead}>
-                  <span>{t('overview.activity.colTime')}</span>
-                  <span>{t('overview.activity.colEvent')}</span>
-                  <span>{t('overview.activity.colDetail')}</span>
-                  <span>{t('overview.activity.colResult')}</span>
+            {/* 列头提到三元之外（2026-11-04）：加载态与完成态共用同一行表头 ⇒ 列位、行高、
+                滚动条槽全部一致；数据到达时是「占位条原位换成文字」，不是整块重排。
+                空态/失败态不渲染表头（没有列可对，留着只会多一条空行）。 */}
+            {(historyState === 'loading' || activity.length > 0) && (
+              <div className={css.activityHead}>
+                <span>{t('overview.activity.colTime')}</span>
+                <span>{t('overview.activity.colEvent')}</span>
+                <span>{t('overview.activity.colDetail')}</span>
+                <span>{t('overview.activity.colResult')}</span>
+              </div>
+            )}
+            {/* 首屏未完成时**不写空态**：以前这里直接渲染「暂无操作记录」，数据没到就说
+                「没有」，与真实情况相反。加载态铺的是与真实表同几何的骨架行。 */}
+            {historyState === 'loading'
+              ? (
+                <div className={css.activityRows}>
+                  {/* 骨架行与真实行同一 grid / 行高 / 分隔线，装在同一个滚动容器里 */}
+                  <SkeletonActivityRows count={5} label={t('common.loading')} />
                 </div>
+              )
+              : activity.length === 0
+                ? <div className={css.activityEmpty}>{historyState === 'failed' || data.history === null ? t('overview.activity.unavailable') : t('overview.activity.empty')}</div>
+                : (
+                /* 列头（含「时间 / 事件 / 详情 / 结果」四列，app-screens §7.2：有表头才读得懂列）
+                   已在三元之外渲染，这里只剩数据行。 */
                 <div className={css.activityRows}>
                   {activity.map((item, i) => {
                     const atMs = Date.parse(item.at) || 0
@@ -498,7 +532,6 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
                     )
                   })}
                 </div>
-                </>
               )}
           </Card>
         </>

@@ -242,8 +242,10 @@ export const ROLLBACK_POINT_ROUTES = {
   delete: { path: `${RECOVERY_API.rollbackPoints}/<id>/delete`, method: 'removeRollbackPoint' },
 } as const;
 
-/** 迁移历史审计路由族（只读列表 + 导出）。 */
+/** 迁移历史审计路由族（只读列表 + 导出 + 自动清理策略）。 */
 export const HISTORY_API = {
   list: `${API_BASE}/history`,
   export: `${API_BASE}/history/export`,
+  /** 自动清理策略：GET 读当前上限 + 现状，POST 改上限并立即清理一次。 */
+  retention: `${API_BASE}/history/retention`,
 } as const;

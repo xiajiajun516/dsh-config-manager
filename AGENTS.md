@@ -39,7 +39,7 @@
 ### 架构与路由
 - **双面插件**：host `src/index.ts`（Cordis `name='config-manager'`，前缀 `/api/dsh-config-manager/*`）；web `src/client/`（React，settings.section），经 api 调 host。
 - **宿主路由只经 kit 的 `endpoint()` + `registerRoutes()`**（围栏与方法白名单在注册点统一包装；未经 kit 的路由注册直接抛错）。
-- 路由源 = `src/index.ts`（窗口守卫**钉住的 7 条**）+ `src/routes/*.ts` 其余 76 条（合计 83 条）；源码级守卫必须扫**全部**路由源。
+- 路由源 = `src/index.ts`（窗口守卫**钉住的 7 条**）+ `src/routes/*.ts` 其余 77 条（合计 84 条）；源码级守卫必须扫**全部**路由源。
 - **真实认证边界 = kit 围栏，不是 DSH cookie**：cookie 拒绝只挂 `kind:'prefix'`/`path:'/api'` 的 RPC 路由，派发 exact 表先命中。
 - 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**；经代理/隧道暴露必须在注册点加认证（远程/LAN/CSRF 已由围栏挡住）。
 - **新增一条 API** = 组文件里加 `endpoint({ path, methods }, handler)`；组文件不得 import `../index.ts`，共享工具进 `src/routes/route-support.ts`。
@@ -88,6 +88,7 @@
 ### 备份 / 恢复 / 回滚点
 - **恢复崩溃后可续跑，但只在逐项可证时**（`judgeRestoreResume`：同快照 + 盘面只等于 beforeFp/afterFp + 不跨入口 + 不重建 WAL；否则 423）。
 - **CLI 与救急台同一道写入门**（SAFE MODE → 环境锁 → DSH 未运行）；`sessions doctor --json` 的 `ok` 必须 `blocking === 0`；`sessions repair` 读不到会话根 exit 1。
+- **残留锁自动回收只认结构性可证**：只走 `reclaimProvableStaleLock()` → `recoverStaleLock({ require: 'provable' })`（owner 确证死亡 / PID 复用）；corrupt 残留、心跳长过期启发式与 `UNKNOWN_STATE`/`RECOVERY_REQUIRED` 仍只走显式回收（成因与判据 → `docs/lessons/recovery-console.md`）。
 - **离线救急台（`dcm web`）**：一次性 token → HttpOnly cookie，其余 403；读路径只读、写路径过 CLI 同源门；判定不许重写。
 - **不自建第二条恢复通道**（灾备快照线已下线）；`BOOT_CRITICAL_RELS`/`profileCriticalRels` 在 `core/boot-paths.ts`，不得连带删 `boot-safety.ts`。
 - **救援模式与 `reconcileBundles` 冲突**：`enterRescueMode` 必须同时 `stripDependencies`（退出逐字节还原）；救援激活期 `reconcileBundles` 停手；崩溃残留只放行可自证形状（仅 `backup-schedule`）。

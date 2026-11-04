@@ -261,6 +261,9 @@ export class BackupScheduler {
     }
 
     try {
+      // 本轮开始前先自愈：可证的 stale 残留锁会让每轮备份直接 skipped，用户不重启就永远不备份。
+      // 只删可证的（owner 确证死亡 / PID 复用）；不可证的仍走下面 runWithMutationLock 的 skipped 分支。
+      try { await this.mutationLock?.reclaimProvableStaleLock?.() } catch { /* 预检失败不改变既有路径 */ }
       // Phase 2 锁：定时备份写入 exports 属 GLOBAL mutation（与 Sync push / 手动备份互斥）。
       // 无锁环境（测试）→ 不锁定直接执行；锁被占用 → 返回 failed（destructive 不执行）。
       const result: BackupRunResult = await runWithMutationLock(this.mutationLock, { op: 'backup-schedule', target: 'exports', isBlocked: this.isBlocked }, async (lockCtx) => {

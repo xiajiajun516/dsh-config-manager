@@ -981,3 +981,33 @@ X-10/T10-2/T11-1..2/X-12a..c，全部按**最终文件内容/字节**断言）�
 到未解析字符串时，等于把「解析不了」静默降级成「必然不等」；③ 单 OS 的 CI 抓不到这类差异，
 矩阵里 windows/macos 的 Test 步骤不是凑数。
 
+## 退出 DSH 留下残余锁的真机成因：锁包住了整轮同步，关窗时 finally 等不到（2026-11-04 用户反馈）
+
+**现象**（用户原话）：「大部分时候退出 dsh 都会留下自动同步的残余锁」—— 下次启动后写操作被挡，自动同步每轮只 warn 一句就返回。
+
+**不是「没释放」那么简单**，三件事叠在一起：
+
+1. **持锁时间远大于心跳窗口**：autosync 用 `withMutationLock` 把**整轮** git 往返（`listSnapshots` → `merge` → `applyMergePlan` → `push`）包在锁里，真机单轮实测持锁 25 s+；而 ownership 心跳的 stale 窗口只有 10 s。
+2. **关窗时后台同步正在跑**：进程被关掉的那一刻若正处在那段窗口里，各入口的 `finally` 永远等不到 ⇒ `environment.lock` 与 `environment.lock.heartbeat-<instanceId>` 一起留盘（心跳停在过去，ownership 仍写着当时那个 pid）。
+3. **启动分类不会碰它**：`recoveryRequired` 只在「锁 stale **且** 有未决 journal」时成立 ⇒ 有残留锁但**没有事故**时判 `NORMAL`，调度器照常启动，可锁文件还在 ⇒ 每次写操作 423、autosync 每轮 warn 一句 `stale` 就 return，用户不重启就永远不同步。这才是用户感知到的「残余锁」。
+
+**四层自动化修法（无开关）**：
+
+| 层 | 入口 | 动作 |
+| --- | --- | --- |
+| P1 启动自愈 | `src/index.ts` 启动块（`classify` 之后、`resolveStartupSafeMode` 之前） | `state.kind === 'NORMAL'` 且锁 stale 时 `reclaimProvableStaleLock()`；回收成功才把交给 `resolveStartupSafeMode` 的 `lockState` 改成 `FREE` |
+| P2 运行期自愈 | `src/sync/autosync-scheduler.ts`、`src/sync/backup-scheduler.ts` 每轮预检 | 进 `withMutationLock` 之前先 `reclaimProvableStaleLock?.()`（端口成员可选，未实现即跳过） |
+| P3 退出同步释放 | `process.once('exit')` + `ctx.effect` 卸载 | `releaseOnExitSync()` 只删**自己**的 ownership 与心跳，全程 try/catch 不抛 |
+| P4 孤儿心跳清理 | 启动块 `state.kind === 'NORMAL'` | `cleanupOrphanHeartbeats()` 只删过期心跳文件，绝不碰 `environment.lock` 与 `environment.recovering.*` |
+
+**边界（这条才是关键，别放宽）**：自动路径只承认**结构性可证** stale —— ① owner pid 经进程探测**确证不存在**；② 或 pid 存活但 `osProcessStartIdentity` 不同（PID 复用）。以下一律不动、留给显式回收（GUI 事故恢复 / `recover-stale-lock`）：
+
+- corrupt / 空 ownership 残留（`isCorruptReclaim` 那条分支只属于显式回收）；
+- issue #36 的**心跳长过期启发式**（`longExpiredReason`）——它是给「人看着现场点回收」放宽的，自动路径借用它等于在拿不到 OS identity 的机器上误删活锁；
+- `UNKNOWN_STATE` / `RECOVERY_REQUIRED` / `NEEDS_ATTENTION`。
+
+实现上由两道闸守着：`recoverStaleLock({ require: 'provable' })` 的闸门**必须在 rename / quarantine 之前**（rename 之后才判「不可证」= 现场已被自己破坏），且 `isProvablyStale()` 内不得出现 `longExpired`、不得自带回收副作用。
+
+**复核锚点**：`src/utils/env-lock.test.ts` §11.7-a…g（确证死亡 / 长过期启发式被拒 / corrupt 被拒 / 新鲜心跳连进程探测都不做 / PID 复用 / 退出释放只删自己 / 孤儿心跳按新鲜度筛）；源码级守卫 `tests/route/lock-stale-message.test.ts` L5（acquire 侧仍绝不摘锁）+ L6（自动入口必须带 `require: 'provable'`、判据不得借用启发式、判定先于 rename）。
+
+

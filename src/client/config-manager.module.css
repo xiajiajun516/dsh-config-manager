@@ -173,6 +173,11 @@ body {
   --cm-motion-slow: 300ms;
   --cm-motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --cm-motion-ease-in-out: cubic-bezier(0.4, 0, 0.6, 1);
+  /* 按压回弹的弹簧曲线（2026-11-04）：**只有按压回弹用它**，别扩散到其它过渡。
+     linear() 允许进度超过 1 —— 这是 CSS 里唯一能表达「过冲到目标之外再回来」的缓动形态
+     （三次贝塞尔的过冲量只有行程的 ~10%，在 28px 按钮上不到 0.2px，肉眼无感）。
+     峰值 1.58 = 落回时先到 102% 再回 100%。见 §3「按压回弹」。 */
+  --cm-press-spring: linear(0, 0.26 22%, 0.62 42%, 0.88 58%, 1.12 70%, 1.58 82%, 1.24 90%, 1.06 96%, 1 100%);
 }
 
 /* 交互过渡统一参数（hover/focus 颜色过渡；仅颜色属性，克制） */
@@ -180,6 +185,28 @@ body {
   transition-property: background-color, border-color, color;
   transition-duration: var(--cm-motion-fast);
   transition-timing-function: ease;
+}
+
+/* —— 按压回弹（2026-11-04 用户要求：按下缩到 96%，松手过冲一点再落回 100%）——
+   为什么用 transition 的**逐属性列表**而不是再写一条 transition 简写：简写会整体顶掉上面那条
+   三色过渡的 property/duration/timing（同一元素上后写的简写覆盖整个列表），hover 变色就没了。
+   这里只把 transform 那一条换成更长的弹簧曲线，三色仍是 120ms ease；按下态再把本条的
+   timing 换回 ease-out（跟手、不飘）—— 时长仍是 --cm-motion-fast，松手时自动回到弹簧那条。
+   弹簧曲线用 linear()：它允许进度**超过 1**，过冲量才读得出来；三次贝塞尔 curve 的过冲只有
+   行程的 ~10%（4% 行程 ⇒ 0.4% 尺寸，28px 按钮上不到 0.2px，等于看不见）。峰值 1.58 ⇒ 落回
+   102% 左右，正是「略超过原尺寸」。
+   触发面 = 原生 <button> + 带 data-pressable 的外链按钮（common/ui.tsx 的 Button href 分支）：
+   正文里的行内 <a> 不参与 —— 否则聊天/报告里点个链接整行都会抖一下。
+   prefers-reduced-motion 下整条关掉（见 §15）。 */
+.section :is(button, [data-pressable]) {
+  transition-property: background-color, border-color, color, transform;
+  transition-duration: var(--cm-motion-fast), var(--cm-motion-fast), var(--cm-motion-fast), var(--cm-motion-base);
+  transition-timing-function: ease, ease, ease, var(--cm-press-spring);
+}
+
+.section :is(button, [data-pressable]):not(:disabled):active {
+  transform: scale(0.96);
+  transition-timing-function: ease, ease, ease, ease-out;
 }
 
 /* 键盘焦点环：仅键盘导航（:focus-visible）触发 */
@@ -1380,6 +1407,76 @@ body {
 .radioLabel input:focus-visible {
   outline: var(--cm-focus-width) solid var(--cm-focus-color);
   outline-offset: 2px;
+}
+
+/* —— 勾选框自绘 + 勾形描边（2026-11-04 用户要求）——
+   为什么要自绘：原生 checkbox 的勾选过程由 UA 决定（Chrome/Edge 只有一次淡入），
+   ::before/::after 也画不进去 —— 「勾从左下角一路画到右上角」在原生控件里落不了地。
+
+   柱子怎么搭：appearance:none 接管盒子 → 勾形是一张 SVG 笔画的 **mask**（stroke 圆头），
+   再对 ::after 做 clip-path 从左往右揭开。视觉上笔尖正好从勾最左下的起笔点开始，
+   扫到最右上的收笔点，与真实手写的方向一致。
+
+   · 16×16 + **显式 border-box**：本仓库没有全局 `*{box-sizing}` 复位（见黑块溢出那条注释），
+     漏写就吃 UA 的 content-box ⇒ 18×18，行高被顶起来。
+   · 居中用 `inset: 2px` 而不是 `margin: auto`：scale 守卫只放行
+     padding/margin/gap ∈ {0,1,2,4,6,8,10,12,14,16,24}，`auto` 会被拦（css-scale-guard scale-05）。
+   · 不用 `opacity` 表达「未勾选」：clip-path 收到 0 宽即可，这样勾形始终在树里，
+     动画每次都从同一个基点起跑（勾选 → 取消 → 再勾选，动画能重放）。
+   · 单选（radio）保持原生：圆点的「描边」与打勾不是同一件事，硬套会像图钉。 */
+.section input[type='checkbox'] {
+  appearance: none;
+  box-sizing: border-box;
+  position: relative;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  vertical-align: middle;
+  border: 1px solid var(--cm-line-2);
+  border-radius: var(--cm-r-1);
+  background-color: var(--cm-input-bg);
+  cursor: pointer;
+  transition: background-color var(--cm-motion-fast) ease, border-color var(--cm-motion-fast) ease;
+}
+
+.section input[type='checkbox']:hover:not(:disabled) {
+  border-color: var(--cm-brand);
+}
+
+.section input[type='checkbox']:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.section input[type='checkbox']:checked {
+  border-color: var(--cm-brand);
+  background-color: var(--cm-brand);
+}
+
+.section input[type='checkbox']::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  background-color: var(--cm-text-on-accent);
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 13.2 9.4 18.6 20 6.4'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: 100% 100%;
+  clip-path: inset(0 100% 0 0);
+}
+
+.section input[type='checkbox']:checked::after {
+  animation: checkStroke var(--cm-motion-base) var(--cm-motion-ease-out) forwards;
+}
+
+@keyframes checkStroke {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
 }
 
 /* 「左标题 · 右开关」行（2026-11-01）。设置类开关的标题就是这一行的名字，
@@ -3329,6 +3426,15 @@ body {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 加载说明放列头右侧，而不是骨架下方（2026-11-04）：旧骨架把「加载中…」渲在占位块下面，
+   数据到达时那行说明消失 ⇒ 整块再跳一次。放列头后它与真实态的空白位同一行同一处，
+   出现/消失都不改变任何高度。 */
+.activityLoadingNote {
+  flex: none;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .activityRows {
   /* v3 曾让卡片吃掉首页剩余高度（.fillCard）并让列表伸展。2026-11-01 改为限高内滚：
      撑满那一刻，8 行记录下方会空出约 150px 纯背景，读起来是「还在加载」，而不是
@@ -3436,6 +3542,59 @@ body {
   font-size: var(--cm-fs-meta);
   color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
+}
+
+/* —— 最近活动骨架：与真实表同一几何（2026-11-04 用户要求「占位条宽高与真实内容一致、
+   原位替换、布局不跳」）——
+   旧骨架是通用「图标 + 两行 + 动作位」行（52px），真实态却是一张 4 列日志表（行高 38.5px、
+   带静态列头）⇒ 数据一到整块的高度、列位、滚动条都会跳一下。这里把真实行的
+   grid / gap / padding / 行高 / 分隔线整套照抄，只把 4 列内容换成占位条：
+     · 时间列 44px（真实 mono 时间 "20:31:04" 的宽度档，右对齐与 .activityTime 一致）
+     · 事件列 72px（≤ 定宽 96px 列，留出 ellipsis 的余量）
+     · 详情列 62%（弹性列按比例给，右边空出来正好是 CopyButton 的落点）
+     · 结果列 44px（徽章宽度档，右对齐）
+   骨架行装在 .activityRows 里（同一个滚动容器 ⇒ 滚动条槽占位也一致），
+   配色与 shimmer 复用 .skeletonBar（§15 已覆盖 reduced-motion 下的静默）。 */
+.activitySkeletonRow {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 72px 96px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px;
+  /* 真实行 = 上下 10px + 一行 18px（12px × 1.5）+ 0.5px 分隔线 = 38.5px。
+     占位条只有 12px 高，行高必须钉死，否则骨架行会比真实行矮 6px。 */
+  height: 38.5px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.activitySkeletonRow:last-child {
+  border-bottom: none;
+}
+
+.activitySkeletonTime,
+.activitySkeletonKind,
+.activitySkeletonSummary,
+.activitySkeletonResult {
+  height: 12px;
+}
+
+.activitySkeletonTime {
+  justify-self: end;
+  width: 44px;
+}
+
+.activitySkeletonKind {
+  width: 72px;
+}
+
+.activitySkeletonSummary {
+  width: 62%;
+}
+
+.activitySkeletonResult {
+  justify-self: end;
+  width: 44px;
 }
 
 /* —— 备份位置卡：四列事实网格（标签上、值下，tabular-nums 对齐） —— */
@@ -5522,6 +5681,16 @@ button.profileRowMain:hover {
   .skeletonBar {
     animation: none;
     background-image: none;
+  }
+  /* 按压回弹：缩小 + 过冲都是纯装饰，关掉后点击仍有瞬时背景反馈（§3 的弹簧曲线不动其它过渡） */
+  .section :is(button, [data-pressable]):not(:disabled):active {
+    transform: none;
+  }
+  /* 勾形描边：关掉动画，但**必须**把揭开的终态一起写上 ——
+     基础态是 clip-path: inset(0 100% 0 0)（等于完全裁掉），只关 animation 会让勾形永远看不见。 */
+  .section input[type='checkbox']:checked::after {
+    animation: none;
+    clip-path: inset(0 0 0 0);
   }
 }
 /* ================================================================ §16 Page: Foreign agent import

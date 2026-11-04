@@ -26,6 +26,7 @@ import path from 'node:path';
 
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
+import { isValidHistoryRetention } from '../core/migration-history.ts';
 import { parseSyncChannel } from './sync-config.ts';
 import type { SyncTransportType } from './sync-config.ts';
 import type { SessionFormatDisposition } from '../core/types.ts';
@@ -73,6 +74,14 @@ export interface UiPrefs {
    * 台账 / 回退路由本身仍可用：已有回滚点仍能查看、回退、删除、清理 —— 关的是「自动留点」。
    */
   rollbackEnabled?: boolean;
+  /**
+   * 迁移历史自动清理的保留上限（条）。
+   *
+   * 语义：缺省 = 1000（core 的 DEFAULT_MIGRATION_RETENTION）；0 = 不限制（只增不减，老行为）；
+   * 非法值一律回落缺省。宿主每次写入历史后按本值节流清理最旧条目，
+   * 用户可在「迁移历史」面板改（GET/POST /history/retention）。
+   */
+  historyRetentionMaxEntries?: number;
 }
 
 /** 缺省配置（首次无文件 / 损坏 / 不支持 schema 时回退） */
@@ -135,6 +144,10 @@ export async function readUiPrefs(dir: string): Promise<UiPrefs> {
   if (obj['rollbackEnabled'] === true) {
     prefs.rollbackEnabled = true;
   }
+  // 保留上限只认 0..100000 的整数（与路由校验同一口径）；字符串/小数/越界一律丢，回落缺省
+  if (isValidHistoryRetention(obj['historyRetentionMaxEntries'])) {
+    prefs.historyRetentionMaxEntries = obj['historyRetentionMaxEntries'];
+  }
   return prefs;
 }
 
@@ -172,6 +185,9 @@ export async function writeUiPrefs(dir: string, prefs: UiPrefs): Promise<void> {
     ...(prefs.releaseNotesDismissed === true ? { releaseNotesDismissed: true } : {}),
     ...(prefs.sessionFormatDisposition !== undefined ? { sessionFormatDisposition: prefs.sessionFormatDisposition } : {}),
     ...(prefs.rollbackEnabled === true ? { rollbackEnabled: true } : {}),
+    ...(isValidHistoryRetention(prefs.historyRetentionMaxEntries)
+      ? { historyRetentionMaxEntries: prefs.historyRetentionMaxEntries }
+      : {}),
   };
   const target = path.join(dir, UI_PREFS_FILE);
   const data = stringifyJsonSafe(payload, { space: 2 });

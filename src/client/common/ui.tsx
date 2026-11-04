@@ -70,6 +70,9 @@ export function Button({ variant = 'ghost', size, disabled, loading = false, onC
         onClick={onClick}
         // 按钮类无 text-decoration 规则，<a> 默认下划线破坏按钮外观
         style={{ textDecoration: 'none' }}
+        // 按压回弹的选择器是 `button, [data-pressable]`：外链按钮渲染成 <a>，靠这个属性进同一套
+        // :active 缩放（正文里的行内 <a> 不加，否则报告/聊天里的链接点一下整行都抖）。
+        data-pressable=""
         {...sizeProps}
       >
         {content}
@@ -304,15 +307,25 @@ export interface FieldProps {
   children: ReactNode
 }
 
-/** 表单字段（标签 + 控件 + 说明 / ⓘ） */
+/**
+ * 表单字段（标签 + 控件 + 说明 / ⓘ）。
+ *
+ * **带 ⓘ 时外壳不是 `<label>`**（2026-11-04 用户反馈：悬停选择框会连带点亮 ⓘ）。
+ * 为什么：`<label>` 会把「指针在标签区域」、「点击」两件事都转发给它的控件 ——
+ * ⓘ 是个按钮，塞进 label 后它的悬停/点击与控件成了一件事（在这之前连「点 ⓘ 会顺手
+ * 切掉设置」都得靠调用点自己躲）。控件自己的无障碍名不靠这层标签：本仓库的控件一律
+ * 由调用点给 `aria-label` / `ariaLabel`（Select 的必填 prop、input 的 aria-label）。
+ * 不带 ⓘ 时仍是 `<label>`（点标签文字聚焦控件是免费的可用性），行为一字未改。
+ */
 export function Field({ label, hint, info, children }: FieldProps) {
-  return (
-    <label className={css.field}>
+  const body = (
+    <>
       <span className={css.fieldLabel}>{label}{info !== undefined ? <> {info}</> : null}</span>
       {children}
       {hint !== undefined && <span className={css.hint}>{hint}</span>}
-    </label>
+    </>
   )
+  return info === undefined ? <label className={css.field}>{body}</label> : <div className={css.field}>{body}</div>
 }
 
 /* ---------------- SectionTitle ---------------- */

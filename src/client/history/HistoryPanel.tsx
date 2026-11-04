@@ -11,7 +11,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { redact } from '../../security/redaction.ts'
-import { HistoryApi, type HistoryListResult, type HistoryExportFormat } from './history-api.ts'
+import { HistoryApi, type HistoryExportFormat, type HistoryListResult, type HistoryRetentionState } from './history-api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Empty } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
@@ -48,6 +48,10 @@ interface PanelState {
    * 首次加载仍走 status='loading' 的骨架分支。
    */
   refreshing: boolean
+  /** 自动清理策略（上限 + 目录现状）；读取失败为 null → 该行整行不渲染（不假装有策略）。 */
+  retention: HistoryRetentionState | null
+  /** 保存策略 / 立即清理进行中（同一颗按钮的 loading）。 */
+  retentionBusy: boolean
 }
 
 export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
@@ -58,6 +62,8 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
     filter: { query: '' },
     exporting: null,
     refreshing: false,
+    retention: null,
+    retentionBusy: false,
   })
   const mounted = useRef(true)
   useEffect(() => {
@@ -88,7 +94,47 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
       }
     }
   }
-  useEffect(() => { void load() }, [historyApi]) // eslint-disable-line react-hooks/exhaustive-deps
+  /**
+   * 读自动清理策略。失败**不阻塞**历史列表：策略只是附加操作面，
+   * 读不到就整行不显示（渲染一个「上限未知」的下拉比没有更糟）。
+   */
+  const loadRetention = async (): Promise<void> => {
+    try {
+      const next = await historyApi.getRetention()
+      if (mounted.current) setState((s) => ({ ...s, retention: next }))
+    } catch { /* 策略读取失败 → 该行隐藏；历史列表照常可用 */ }
+  }
+
+  /**
+   * 保存保留上限并立即清理一次（把上限调小时用户期望「现在就收敛」，不是等下一次写入）。
+   * 清理只删旧文件、不写历史条目（宿主口径），所以结果反馈走 Toast，不改统计徽章语义。
+   */
+  const applyRetention = async (maxEntries: number): Promise<void> => {
+    setState((s) => ({ ...s, retentionBusy: true }))
+    try {
+      const saved = await historyApi.setRetention(maxEntries)
+      if (mounted.current) {
+        setState((s) => ({
+          ...s,
+          retentionBusy: false,
+          retention: s.retention === null ? s.retention : { ...s.retention, maxEntries: saved.maxEntries, total: saved.total },
+        }))
+        toast.ok(saved.removed > 0
+          ? t('history.retention.cleaned', { count: String(saved.removed) })
+          : t('history.retention.noop'))
+      }
+      // 真的删了旧条目才重载列表（quiet：不闪骨架；没删就什么都不用做）
+      if (saved.removed > 0) await load(true)
+    } catch (error) {
+      if (mounted.current) setState((s) => ({ ...s, retentionBusy: false }))
+      toast.error(t('history.retention.saveError') + ': ' + redact(error instanceof Error ? error.message : String(error)))
+    }
+  }
+
+  useEffect(() => {
+    void load()
+    void loadRetention()
+  }, [historyApi]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const setFilter = (patch: Partial<HistoryFilter>): void => {
     setState((s) => ({ ...s, filter: { ...s.filter, ...patch } }))
@@ -142,6 +188,17 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
   // 并强制并入当前选中值 —— 否则会出现「选中了却在下拉里找不到该项」的怪状态。
   const kindOptions = collectHistoryKinds(entries, state.filter.kind)
   const resultOptions = collectHistoryResults(entries, state.filter.result)
+  // 自动清理上限下拉：预设档 + 当前值（有人在 ui-prefs.json 里手写过非预设值，
+  // 下拉也必须能显示真实策略，否则控件显示的上限与宿主实际执行的上限不是同一件事）。
+  const retention = state.retention
+  const retentionPresets = [0, 500, 1000, 5000, 10000]
+  const retentionValues = retention === null || retentionPresets.includes(retention.maxEntries)
+    ? retentionPresets
+    : [...retentionPresets, retention.maxEntries].sort((a, b) => a - b)
+  const retentionOptions = retentionValues.map((v) => ({
+    value: String(v),
+    label: v === 0 ? t('history.retention.unlimited') : t('history.retention.units', { count: String(v) }),
+  }))
 
   return (
     <div className={css.viewBody}>
@@ -162,6 +219,34 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
             <Badge kind="warn">{t('history.corruptedCount', { count: String(corrupted.length) })}</Badge>
           </div>
         </Banner>
+      )}
+
+      {/* 自动清理：上限是**持久策略**（宿主在每次写历史后节流执行），与下面「过滤 / 导出」这类一次性操作
+          分隔成独立卡。磁盘现状用徽章（状态），不写成第二句灰字；超限徽章转 warn —— 停在超限说明
+          清理还没跑到（节流 60s 或本轮刚写过），不是「已收敛」。 */}
+      {retention !== null && (
+        <Card>
+          <div className={css.actionRow}>
+            <span className={css.fieldLabel}>
+              {t('history.retention.label')} <InfoHint text={t('history.retention.hint')} label={t('common.infoHint')} />
+            </span>
+            <Select
+              value={String(retention.maxEntries)}
+              onChange={(next) => void applyRetention(Number(next))}
+              options={retentionOptions}
+            />
+            <Badge kind={retention.maxEntries > 0 && retention.total > retention.maxEntries ? 'warn' : 'info'}>
+              {t('history.retention.current', { count: String(retention.total) })}
+            </Badge>
+            <Button
+              onClick={() => void applyRetention(retention.maxEntries)}
+              loading={state.retentionBusy}
+              disabled={state.retentionBusy}
+            >
+              {state.retentionBusy ? t('history.retention.running') : t('history.retention.runNow')}
+            </Button>
+          </div>
+        </Card>
       )}
 
       {/* 过滤 + 导出：控件各自带维度标签（「操作类型: 全部」…），不再另起一行区块标题。 */}

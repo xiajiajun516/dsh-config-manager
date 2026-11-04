@@ -11,7 +11,11 @@
  *  - `environment.lock` 是 **immutable ownership record**：创建后直到 release 不被 rename/replace。
  *  - heartbeat 走 **独立 sidecar** `environment.heartbeat.<instanceId>`，可安全用 Phase 1 `atomicWriteFile` 更新。
  *  - **operation-scoped** `MutationLockToken`：禁止 process-level reentrant（instanceId/handle/reenterCount 判嵌套）。
- *  - stale 检测只分类（LOCKED / STALE_LOCK_DETECTED / UNKNOWN_STATE），**绝不自动 unlink/takeover**。
+ *  - stale 检测只分类（LOCKED / STALE_LOCK_DETECTED / UNKNOWN_STATE）；**acquire 侧绝不自动 unlink/takeover**。
+ *  - 唯一允许的**自动**回收 = `reclaimProvableStaleLock()` → `recoverStaleLock({ require: 'provable' })`：
+ *    只删「owner 确证死亡 / PID 复用」两类**结构性可证** stale；corrupt 残留与 issue #36 的心跳长过期启发式
+ *    **刻意排除**（那两类只是「像残留」，不能当误删许可）。
+
  *  - PID 复用判据**优先**用 OS process creation identity（linux `/proc`、win32 `Get-Process` StartTime、
  *    macOS `ps`）；拿不到才退回「心跳长过期」启发式（issue #36）。
  *  - recover 是独立显式动作（CLI `--recover-stale-lock`），用原子 rename 捕获 + 二次验证，二次验证失败不覆盖 successor。
@@ -196,6 +200,16 @@ export interface MutationLockPort {
 
   /** release（release 前校验 instanceId；mismatch 抛 EnvironmentLockOwnedByAnotherError） */
   release(token: MutationLockToken): Promise<void>
+
+  /**
+   * 可选：只回收**结构性可证** stale 残留锁（owner 确证死亡 / PID 复用），其余一律不动。
+   * 端口实现缺这个方法（mock / 远端代理）时调用方必须当作「不支持」跳过，不得自行 inspect+release。
+   * @returns null = 无需/无权回收；否则为该次 recover 的结果
+   */
+  reclaimProvableStaleLock?(): Promise<RecoverResult | null>
+
+  /** 可选：同步兜底释放本实例持有的锁（进程 exit/dispose 用；永不抛错）。 */
+  releaseOnExitSync?(): void
 }
 
 /**
@@ -293,6 +307,17 @@ export interface RecoverResult {
   state: LockState
   /** 诊断 */
   detail?: string
+  /** 实际被回收的 owner（供自动路径记日志；corrupt 回收时为 undefined） */
+  removedOwner?: { op: string; pid: number }
+}
+
+/**
+ * recover 的调用约束。
+ *  - `'any'`（缺省）= 显式动作：沿用全部既有判据（含 corrupt 残留与心跳长过期启发式）。
+ *  - `'provable'` = 自动路径：只承认 owner 确证死亡 / PID 复用，其余一律拒绝并保留现场。
+ */
+export interface RecoverOptions {
+  require?: 'any' | 'provable'
 }
 
 /**
@@ -348,6 +373,7 @@ function defaultIo(): EnvLockIo {
     async stat(p) { try { return await fs.stat(p) } catch (e) { if (isENOENT(e)) return null; throw e } },
     async readFileText(p) { return (await fs.readFile(p, 'utf8')).toString() },
     async lstat(p) { try { return await fs.lstat(p) } catch (e) { if (isENOENT(e)) return null; throw e } },
+    async listLocksDir(d) { try { return await fs.readdir(d) } catch (e) { if (isENOENT(e)) return []; throw e } },
   }
 }
 
@@ -1053,7 +1079,7 @@ export class EnvironmentLockManager {
    * **不自动触发**；仅当检测为 STALE_LOCK_DETECTED 才允许 capture。
    * 二次验证失败 → quarantine（保留 recovering 文件，不 rename 回环境锁，不覆盖 successor）。
    */
-  async recoverStaleLock(): Promise<RecoverResult> {
+  async recoverStaleLock(options: RecoverOptions = {}): Promise<RecoverResult> {
     // 1. inspect：必须 definitely stale 或 corrupt（崩溃残留无有效 owner）
     const insp = await this.inspectLockState()
     const st = await this.readOwnershipState()
@@ -1061,6 +1087,17 @@ export class EnvironmentLockManager {
     // 判据必须是**结构性的**（inspectLockState 的 corruptOwnership / readOwnershipState 的 kind）——
     // **不得**再依赖 detail 文案子串：detail 自 t5 起按界面语言本地化，按子串判定在英文界面下会失效。
     const isCorruptReclaim = insp.state === 'UNKNOWN_STATE' && st.kind === 'corrupt'
+    if (options.require === 'provable') {
+      // 自动路径：只承认结构性可证 stale。corrupt 残留不是 stale（交给显式回收，不替用户判断损坏文件），
+      // 长过期启发式也不是（issue #36 的放宽只是「像残留」）。判定必须发生在 rename **之前**：
+      // rename 之后才发现不可证，quarantine 已经产生、ownership 已不在原位，等于把现场搞脏。
+      if (insp.state !== 'STALE_LOCK_DETECTED' || st.kind !== 'ok') {
+        return { ok: false, removed: false, state: insp.state, detail: insp.detail ?? utilsMsg('utils.envLock.notStaleRefuseRecovery') }
+      }
+      if (!(await this.isProvablyStale(st.rec))) {
+        return { ok: false, removed: false, state: insp.state, detail: utilsMsg('utils.envLock.reclaimNotProvable') }
+      }
+    }
     if (insp.state !== 'STALE_LOCK_DETECTED' && !isCorruptReclaim) {
       return { ok: false, removed: false, state: insp.state, detail: insp.detail ?? utilsMsg('utils.envLock.notStaleRefuseRecovery') }
     }
@@ -1122,10 +1159,42 @@ export class EnvironmentLockManager {
     }
     return {
       ok: true, removed: true, state: 'STALE_LOCK_DETECTED',
+      removedOwner: rec !== null ? { op: (rec as LockOwnershipRecord).op, pid: (rec as LockOwnershipRecord).owner.pid } : undefined,
       detail: rec !== null
         ? utilsMsg('utils.envLock.removedStaleOwnership', { op: (rec as LockOwnershipRecord).op, pid: (rec as LockOwnershipRecord).owner.pid })
         : utilsMsg('utils.envLock.removedCorruptOwnership'),
     }
+  }
+
+  /**
+   * 自动回收入口（宿主启动 / 调度器本轮预检共用）：只删**可证** stale，其余返回 null（一动不动）。
+   *
+   * 为什么不直接让调用方 inspect + recoverStaleLock：判据分散在 inspect（长过期放宽）、recover（corrupt 分支）
+   * 和调用方文案三处必然漂移。这里把「自动」的边界收在一处，并且先做两次廉价读（ownership + sidecar）：
+   *  - 无 ownership / corrupt → null（corrupt 留给显式回收）；
+   *  - heartbeat 仍新鲜（≤ staleAfterMs）→ null：**死进程写不出新鲜心跳**，新鲜就是「有人在干活」的证据，
+   *    连进程探测都省掉（Windows 上探测活 pid 要 spawn 一次 PowerShell，不能每轮同步都付这个钱）。
+   * 通过这两道之后再走结构性判定（kill(pid,0) 的 ESRCH 是快路径）。
+   */
+  async reclaimProvableStaleLock(): Promise<RecoverResult | null> {
+    const st = await this.readOwnershipState()
+    if (st.kind !== 'ok') return null
+    const heartbeat = await this.readHeartbeat(st.rec.owner.instanceId).catch(() => null)
+    if (heartbeat !== null && (this.now() - heartbeat.heartbeatAt) <= this.staleAfterMs) return null
+    if (!(await this.isProvablyStale(st.rec))) return null
+    return this.recoverStaleLock({ require: 'provable' })
+  }
+
+  /** 结构性可证 stale：owner pid 确证死亡，或 pid 存活但 OS identity 与 recorded 不同（PID 复用）。
+   *  与 inspectLockState / reProveStale 的「长过期」放宽**刻意不同**：自动回收不承认启发式。
+   *  探测失败/不确定 → false（保守，绝不构成误删许可）。 */
+  private async isProvablyStale(rec: LockOwnershipRecord): Promise<boolean> {
+    let ident: ProcessIdentity
+    try { ident = await this.probe.probe(rec.owner.pid) } catch { return false }
+    if (!ident.alive) return true
+    if (!this.probe.canGetOsIdentity()) return false
+    if (rec.owner.osProcessStartIdentity === null || ident.osProcessStartIdentity === null) return false
+    return rec.owner.osProcessStartIdentity !== ident.osProcessStartIdentity
   }
 
   /** recovery 二次验证：重新探测 recorded pid 是否确证死亡（保守——任何不确定性 → 失败）。
@@ -1157,6 +1226,59 @@ export class EnvironmentLockManager {
     const age = now - heartbeat.heartbeatAt
     if (!(age >= this.longExpiredAfterMs)) return null // NaN / 负值（时钟回拨）→ 保守
     return utilsMsg('utils.envLock.longExpired', { age: formatDuration(age), threshold: formatDuration(this.longExpiredAfterMs) })
+  }
+
+  /* ------------------------------------------------------------ shutdown / orphan cleanup */
+
+  /**
+   * 进程退出（exit 事件 / 插件 dispose）时的**同步**兜底释放：只删自己 instanceId 名下的 ownership + sidecar。
+   *
+   * 为什么必须同步：Node 的 'exit' 事件里不能 await，异步 fs 写不进去。为什么必须核对 instanceId：
+   * 退出路径同样不许删别人的锁（与 release() 同一不变量）。语义 = best-effort：永不抛错、永不留半删态。
+   * 覆盖的场景 = **正常关窗但后台同步正在跑**（此时 release() 永远不会被调用），这也是残留锁的主要来源。
+   */
+  releaseOnExitSync(): void {
+    const token = this.activeToken
+    if (token === null || token.instanceId !== this.activeInstanceId) return
+    this.activeToken = null
+    this.stopHeartbeat()
+    try { fssync.unlinkSync(path.join(this.locksDir, `${HEARTBEAT_PREFIX}${this.activeInstanceId}`)) } catch { /* 尽力 */ }
+    try {
+      const rec = readLockJsonSafe(fssync.readFileSync(this.ownershipPath, 'utf8')) as LockOwnershipRecord | null
+      if (rec !== null && typeof rec === 'object' && rec.owner?.instanceId === this.activeInstanceId) {
+        fssync.unlinkSync(this.ownershipPath)
+      }
+    } catch { /* 缺失/不可读/被占用 → 不动（下次启动的自动回收会处理） */ }
+  }
+
+  /**
+   * 清理孤儿 heartbeat sidecar（P4）：只删「已不是当前持有者、且心跳早已停更」的 sidecar。
+   *
+   * 判据不需要 pid（sidecar 里本来就没有 pid）：sidecar 的生命周期被三处保证——acquire 时创建、
+   * release 时删、recover 时删被回收者的那份。于是「instanceId 既不是当前 ownership 的持有者、
+   * 心跳又超过 stale 窗口」只可能是崩溃/强杀留下的孤儿。心跳仍新鲜的跳过：那是接管竞态窗口。
+   * 不碰 environment.lock 与 environment.recovering.*（那属于判定，不归清理）。
+   * @returns 实际删除数量
+   */
+  async cleanupOrphanHeartbeats(): Promise<number> {
+    let names: string[]
+    try { names = await (this.io.listLocksDir ? this.io.listLocksDir(this.locksDir) : Promise.resolve([])) } catch { return 0 }
+    const st = await this.readOwnershipState()
+    const holderId = st.kind === 'ok' ? st.rec.owner.instanceId : null
+    let removed = 0
+    for (const name of names) {
+      if (!name.startsWith(HEARTBEAT_PREFIX)) continue
+      const instanceId = name.slice(HEARTBEAT_PREFIX.length)
+      if (instanceId === this.activeInstanceId || instanceId === holderId) continue
+      const rec = await this.readHeartbeat(instanceId).catch(() => null)
+      if (rec === null) continue // 读不出/形状不符 → 没有判据，保留
+      if ((this.now() - rec.heartbeatAt) <= this.staleAfterMs) continue
+      try {
+        await this.io.unlink(path.join(this.locksDir, name))
+        removed += 1
+      } catch { /* 尽力；下轮再试 */ }
+    }
+    return removed
   }
 
   /* ------------------------------------------------------------ diag */

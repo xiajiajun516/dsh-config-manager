@@ -247,8 +247,23 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   **列表/条目入场**（`.snapshotList > *`、`.dataTable tbody tr`、`.pickerUnit`、`.restorePlan`、
   `.banner`、`.empty`，前 4 项各递进 24ms）、**骨架 shimmer 1.3s**（`.skeletonBar`）。
   图标形变仅限 `ExpandChevron`（折叠展开/收起；临界阻尼、无过冲，见 §6 第三方原语）。
+- **按压回弹（2026-11-04 用户要求）**：全部按钮与链接按钮按下时缩到 **96%**，松手用弹簧动画
+  先放大到**略超原尺寸**再回 100%。实现 = `--cm-press-spring`（`linear(0, 0.26 22%, 0.62 42%, 0.88 58%,
+  1.12 70%, 1.58 82%, 1.24 90%, 1.06 96%, 1 100%)`：中段过冲到 >1 再落回 1，所以回弹有「弹一下」的观感）
+  + `.section :is(button, [data-pressable])` 上的 transform 过渡；`:active` 用 `ease-out` 压到
+  `transform: scale(0.96)`（按下要跟手，不用弹簧）。**`transition-property` 必须写显式列表**
+  （`background-color, color, transform`），**不得退回 `transition` 简写** —— 简写会整体顶掉列表，
+  把 hover 变色一起冲掉。正文里的行内 `<a>`（报告/聊天的链接）**不加** `data-pressable`：
+  点一次链接整段文字都跟着抖；`Button` 的 href 分支例外（按钮形态的 `<a>` 靠 `data-pressable=""`
+  拿到同一份反馈）。守卫：`src/client/css-motion-guard.test.ts` 的 t13。
+- **勾选框的勾形描边（同上）**：`input[type='checkbox']` 走 `appearance: none` 自绘，勾形由 `::after`
+  的 `mask-image`（内联 SVG，path `M4 13.2 9.4 18.6 20 6.4`：起笔左下、收笔右上）承载；勾选时
+  `@keyframes checkStroke` 把 `clip-path` 从 `inset(0 100% 0 0)` 收到 `inset(0 0 0 0)` ——
+  观感就是「从左下角画到右上角」。**`box-sizing: border-box` 必须显式写**（仓库没有全局 `*` 复位）。
   **`prefers-reduced-motion: reduce` 下关掉装饰性动效**（页面/弹窗/面板/通知入场、状态点脉冲、
-  骨架 shimmer —— 骨架退化为静态占位块，信息不丢）——
+  骨架 shimmer —— 骨架退化为静态占位块，信息不丢；**按压回弹退化成无缩放**：`:active` 的
+  `transform: none`；**勾形描边退化成直接显示**：`animation: none` **且必须补终态**
+  `clip-path: inset(0 0 0 0)` —— 只关动画会把勾形永远裁在 0 宽度里）——
   旋转与不定态进度**刻意保留**：它们承载「正在进行」这个状态本身，关掉会让用户以为界面卡死。
   形变侧由 morphicons 的 `reducedMotion="user"` 承担（CSS 选择器管不到 SVG 内的属性插值）。
   两条实现约束：页面/弹窗入场**不写 `forwards`**（动画结束回到基础样式，不留残影）；
@@ -1489,6 +1504,14 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
   `.controlRow`（控件 + ⓘ 同一行，控件按自身宽度）；⑤ **页级 / 分区级副标题**用 `SectionTitle.info`、
   **表单字段说明**用 `Field.info`（两者都接受一个 `<InfoHint>` 节点，渲在标题 / 字段标签同一行右侧；
   标题行的行容器 = `.sectionTitleRow`，标题可换行、ⓘ 不收缩）。新增调用点按此摆放，下次迁移不再另起一套。
+- **带 ⓘ 的字段壳不用 `<label>`（2026-11-04 用户第 4 条，守卫 t12）**：`Field` 在传了 `info` 时
+  渲染 `<div className={css.field}>`，其余字段仍是 `<label>`。原因不是样式，而是 `<label>` 的**点击激活转发**：
+  点它包裹的控件以外的东西（含 ⓘ）会顺手切勾选框 / 打开下拉 / 聚焦输入框。ⓘ 自己的 `onClick` 首句
+  `event.preventDefault()` 掐掉这条默认行为（固定态、点外部取消照常）；裸写字段时**同样别把 ⓘ 塞进
+  `<label>`**。代价：脱离 `<label>` 后控件失去隐式可访问名 ⇒ 同一容器里的控件必须有 `aria-label`
+  （`ariaLabel` prop 亦可），或仍被内层 `<label>` 包裹（`SyncRepositoryPicker` 的
+  `div.field > span.groupLabel + label.field` 就是这样）。`Checkbox` 内部包 `<span>{label}</span>` 的既有形态
+  是已知例外（点击转发已被 preventDefault 兜住），守卫只扫本文件内的字面 `<label>`。
 - 触发按钮 18px、颜色取 `--dsw-alias-label-tertiary`，hover 必须给出可见 affordance
   （`--dsw-alias-interactive-bg-hover` 底 + `label-primary` 前景）；固定态用主色 tint；
 - 样式只进 `config-manager.module.css`（`.infoHint / .infoHintBtn / .infoHintBubble`），

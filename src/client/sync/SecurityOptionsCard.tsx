@@ -47,13 +47,13 @@ export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncl
       )}
       {settings.encrypt && (
         <div className={css.secretFields}>
-          <label className={css.field}>
+          <div className={css.field}>
             <span className={css.fieldLabel}>
               {t('mode.password')}
               {' '}
               {settings.encryptPasswordSaved && <InfoHint text={t('mode.passwordSavedHint')} label={t('common.infoHint')} />}
             </span>
-            <input
+            <input aria-label={t('mode.password')}
               type="password"
               className={css.input}
               value={settings.encryptPassword}
@@ -63,7 +63,7 @@ export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncl
               // 失焦即落库（两个框一致才写）——用户不必手动保存，下次留空即沿用
               onBlur={onPersistEncryptPassword}
             />
-          </label>
+          </div>
           <label className={css.field}>
             <span className={css.fieldLabel}>{t('mode.passwordConfirm')}</span>
             <input

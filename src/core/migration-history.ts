@@ -39,6 +39,29 @@ export const MIGRATION_HISTORY_DIR = 'migration-history';
 /** 默认保留上限（retention 删最旧）。 */
 export const DEFAULT_MIGRATION_RETENTION = 1000;
 
+/** 用户可配置的保留上限区间（0 = 不限制；上限防「一次填 10 亿」把 UI 输入当系统限制用）。 */
+export const HISTORY_RETENTION_MIN = 0;
+export const HISTORY_RETENTION_MAX = 100_000;
+
+/**
+ * 保留上限字面量校验（路由/偏好共用的唯一口径）：只接受区间内的整数。
+ * 非法（字符串 / 小数 / 负数 / 越界）一律 false —— 调用方不得自行 Math.trunc 后放行。
+ */
+export function isValidHistoryRetention(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= HISTORY_RETENTION_MIN
+    && value <= HISTORY_RETENTION_MAX;
+}
+
+/**
+ * 有效保留上限：用户配置值合法则用它，否则回落默认（1000）。
+ * 0 = 不限制（由 retention 自己短路），缺省/损坏 → 默认档。
+ */
+export function resolveHistoryRetention(configured: unknown): number {
+  return isValidHistoryRetention(configured) ? configured : DEFAULT_MIGRATION_RETENTION;
+}
+
 /** 文件名正则：`<stamp>-<hex12>.<kind>.json`，只认合法历史文件。 */
 const HISTORY_BASENAME_RE = /^[0-9A-Za-z:.+-]{8,}-[0-9a-f]{12}\.[a-z-]+\.json$/i;
 const TMP_PREFIX = '.dshcm.';
@@ -120,6 +143,8 @@ export interface ReadMigrationResult {
   entries: StoredMigrationHistoryEntry[];
   /** 被跳过/损坏的文件名（读取时识别，UI 可选警示；不静默接受）。 */
   corrupted: string[];
+  /** 目录内**合法历史文件**总数（含被 limit 窗口挡在外的旧条目；未统计时为 undefined）。 */
+  total?: number;
 }
 
 /** 追加写入结果（best-effort 调用方据此判断降级）。 */
@@ -348,13 +373,22 @@ export class MigrationStore {
     }
   }
 
-  /** 读取全部合法历史条目（旧→新；损坏/非史文件跳过并计数）。 */
-  async read(): Promise<ReadMigrationResult> {
+  /**
+   * 读取合法历史条目（旧→新；损坏/非史文件跳过并计数）。
+   *
+   * limit>0 时只读**最近 limit 条**（按文件名排序的尾部窗口）——首屏只要最近几十条活动，
+   * 整目录 readFile+parse 是历史目录唯一的慢点（真机 2360 条 ≈ 650 ms 纯 IO/解析，
+   * 叠上全量 JSON 回传即首页骨架 ~9.7 s 冷启动）。total 恒为目录内合法文件总数，
+   * 调用方据此区分「共 N 条，本页只含最近 M 条」。
+   */
+  async read(opts: { limit?: number } = {}): Promise<ReadMigrationResult> {
     const names = await this.io.readdirNames(this.dir).catch(() => []);
     const entries: StoredMigrationHistoryEntry[] = [];
     const corrupted: string[] = [];
     const sorted = names.filter(isHistoryBasename).sort();
-    for (const name of sorted) {
+    const limit = opts.limit !== undefined && Number.isInteger(opts.limit) ? opts.limit : 0;
+    const window = limit > 0 && sorted.length > limit ? sorted.slice(sorted.length - limit) : sorted;
+    for (const name of window) {
       const p = path.join(this.dir, name);
       let text: string;
       try {
@@ -368,7 +402,13 @@ export class MigrationStore {
       if (parsed === null) { corrupted.push(name); continue; }
       entries.push(parsed);
     }
-    return { entries, corrupted };
+    return { entries, corrupted, total: sorted.length };
+  }
+
+  /** 目录内合法历史文件总数（只 readdir，不读文件内容；供「自动清理」行展示）。 */
+  async count(): Promise<number> {
+    const names = await this.io.readdirNames(this.dir).catch(() => []);
+    return names.filter(isHistoryBasename).length;
   }
 
   /**
@@ -378,6 +418,8 @@ export class MigrationStore {
   async retention(limit = DEFAULT_MIGRATION_RETENTION): Promise<string[]> {
     const names = (await this.io.readdirNames(this.dir).catch(() => [])).filter(isHistoryBasename).sort();
     const removed: string[] = [];
+    // 0（或负数）= 不限制：调用方显式关闭自动清理时按「保留全部」处理，绝不当作「删光」。
+    if (!Number.isFinite(limit) || limit <= 0) return removed;
     if (names.length <= limit) return removed;
     const toRemove = names.slice(0, names.length - limit);
     for (const name of toRemove) {

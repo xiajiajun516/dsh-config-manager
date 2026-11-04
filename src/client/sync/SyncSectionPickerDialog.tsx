@@ -157,9 +157,9 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
                           Checkbox 内部是 label 元素，把输入控件放进去会让点输入框也切换勾选。 */}
                       {s.id === 'sessions' && sections.includes('sessions') && (
                         <div className={css.field}>
-                          <label className={css.field}>
+                          <div className={css.field}>
                             <span className={css.fieldLabel}>{t('mode.sessionsLimit')} <InfoHint text={t('mode.sessionsLimitHint')} label={t('common.infoHint')} /></span>
-                            <input
+                            <input aria-label={t('mode.sessionsLimit')}
                               type="number"
                               min={0}
                               max={10000}
@@ -169,7 +169,7 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
                                 onSessionsLimit(e.target.value === '' ? DEFAULT_SYNC_SESSIONS_LIMIT : Number(e.target.value))
                               }}
                             />
-                          </label>
+                          </div>
                           <div className={css.actionRowTop}>
                             <Button size="sm" onClick={() => { setView('sessions') }}>{t('mode.sessionsPick')}</Button>
                             {sessionsInclude.length > 0 && (

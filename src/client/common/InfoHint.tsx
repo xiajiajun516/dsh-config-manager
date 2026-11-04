@@ -41,7 +41,7 @@
  * 传入 `t` 时随当前语言，缺省回落源语言字典值）；说明文本用 `aria-describedby` 关联，
  * 同一组件多实例的 id 由 `useId` 保证唯一。图标复用既有 `InfoIcon`（不新增图标、不新增依赖）。
  */
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FocusEvent as ReactFocusEvent } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { TranslateNS } from '../client-types.ts'
 import { zh } from '../locales.ts'
@@ -230,8 +230,17 @@ export function InfoHint({ text, t, label }: InfoHintProps) {
     focusRef.current = false
     if (!pinned && !hoverRef.current) setOpen(false)
   }
-  /** 点击 = 固定 / 取消固定；取消固定后仍悬停或仍聚焦则保持可见（悬停/聚焦通道本身仍成立）。 */
-  const onClick = (): void => {
+  /**
+   * 点击 = 固定 / 取消固定；取消固定后仍悬停或仍聚焦则保持可见（悬停/聚焦通道本身仍成立）。
+   *
+   * **必须先 `preventDefault()`**（2026-11-04 用户反馈：悬停/点击选择框会连带作用到 ⓘ）：
+   * ⓘ 常被放在 `<label>`（或 Checkbox 的 label 区）里，而「点击 label 区域 → 激活它包裹的表单
+   * 控件」是**点击事件的默认行为**。不掐断它，点一下 ⓘ 就会顺手切掉一个勾选框 / 打开一个下拉。
+   * `preventDefault()` 只取消这条默认行为，不影响本组件自己的固定态逻辑，也不影响捕获阶段的
+   * 外部按下关闭（那是 mousedown，与此处无关）。
+   */
+  const onClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
+    event.preventDefault()
     if (pinned) {
       setPinned(false)
       setOpen(hoverRef.current || focusRef.current)
