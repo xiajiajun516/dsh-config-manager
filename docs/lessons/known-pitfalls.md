@@ -615,3 +615,20 @@
    · 实测（收尾）：全量 `exit 0 / files=424 hits=0 allowlisted=128`、守卫 17/17、`npm test` 4057 用例 / 4055 pass / 0 fail / 2 skipped；`files=` 随新增源文件与在途探针浮动，**不变量是 `hits=0` / `allowlisted=128`**。
 
 **验证口径（未做即如实）**：结论来自静态守卫 + `npm test`（4052 用例 4050 pass / 0 fail / 2 skipped）+ `typecheck` / `typecheck:tests` / `build`；**真机逐页签 DOM 抽查未做**（验证会话无浏览器通道），不当作已通过。
+
+## 迁移历史只增不减 + 首页首屏被 `/history` 拖死（2026-11-04；用户报「迁移历史不会自动清理」「首页加载慢」）
+
+**真机实测（本机 ~/.dsh/dsh-config-manager）**：`migration-history/` 有 **2360 个 per-file 条目 / 0.67 MB**；`GET /api/dsh-config-manager/history` **首测 9686 ms / 586189 B**，第二次热 994 ms；同机 `/snapshots` 15 ms、`/backup-files` 35 ms、`/backup-schedule` 3 ms ⇒ 首页骨架 `加载中…` 的唯一慢点就是 history 全量读 + 全量回传。裸 node 做同一件事：`readdir` 6 ms，全量 `readFile + parse + sha256` **648 ms**（剩下的 9 s 是序列化 + 传输 + 首屏并发抢占）。
+
+**根因两条**：① `MigrationStore.retention()` 生产代码**零调用**（`DEFAULT_MIGRATION_RETENTION = 1000` 只是既有意图，从未接线）⇒ 目录只增不减；② `HomePanel` 把 `/history` 和另外 3 个快请求放在同一个 `Promise.all` 首屏骨架里，最慢的一个决定整页。
+
+**修法（语义 + 取舍）**：保留上限存 `ui-prefs.json` 的 `historyRetentionMaxEntries`（缺省 1000；**0 = 不限制，绝不批量删**；非法值回落 1000）；`src/core/history-prune.ts` 的 `createHistoryPruner()` 负责「启动清一次 + 每次写入后触发、60 s 节流、单飞防重入、失败只进日志」；`GET /history?limit=N` 走文件名尾部窗口（只读最近 N 个），首页传 100，历史页与导出不带 limit 仍是老口径全量。
+
+- **清理绝不写审计条目**：一旦 `kind='history-prune'` 入历史，`append → 清理 → 再写审计` 会让总数恒为 `limit+1`，「保留最近 N 条」永远不成立，且每次写入都再 churn 一次。代价：清理只进宿主日志（`log.info('迁移历史自动清理', { maxEntries, removed })`），MIGRATION_KINDS 无需新增第 18 类、`overview-view.ts` 的 `KNOWN_KINDS` 与两套 kind 字典都不用动。
+- **`core` 不得 import `../sync/*`**：`createHistoryPruner` 第一版直接 `readUiPrefs(syncDir)`，`tests/architecture-boundaries.test.ts` 立刻红（core 只允许 node 内置 / core 内部 / schema / utils / security / migrations / js-yaml）⇒ 改为宿主注入 `readRetentionLimit: () => Promise<unknown>`，归一化仍留在 core（`resolveHistoryRetention`）。
+
+**路由坑（第二次踩到前身）**：同一 path 注册**两条** `endpoint({ path, methods })` 会让 `buildRoutes()` 产出的 `routes.length` 与唯一 `paths.size` 不等（77 !== 78），而真机 `webServer` 对重复 `(kind, path)` **直接抛错**（插件启动失败），只在运行期测试里才暴露。约定是**一条 exact 路由 + handler 内按 `req.method` 分发**（先例：`src/routes/sync.ts` 的 `/sync/autosync`、`src/routes/prefs.ts` 的 star-prompt、`src/index.ts` 保留的 rescue）。因此 `history/retention` = 一条 `methods: ['GET', 'POST']`，写分支再套 `withMutationGate('history-retention', …, { journaled: false })`；**路由总数因此是 84 = `src/index.ts` 保留 7 + `buildRoutes()` 77**（快照里记作 `['exact', 'GET+POST', path]`，与 parity 的计数散文守卫同源）。
+
+**收尾实证**：`npm test` 5314 用例 / 5312 pass / **0 fail** / 2 skipped（含新增 `src/core/history-prune.test.ts` 6 例、`tests/route/history-retention-route.test.ts` 4 例）；`npm run typecheck` 0 错误；`npm run build` 绿；`src/client/bundle-selfcontained.test.ts` 1/1。`src/index.ts` 因接线涨到 **4389 行**，棘轮上限同步 4379 → 4389 并在 `docs/maintenance/tech-debt.md` #23 登记拆解计划（纯调度闭包下沉 → `src/core/host-schedulers.ts`）。
+
+**未做（如实）**：清理与首屏限流都是重启 DSH 后才生效，本轮**没有**在真机上复测 `GET /history?limit=100` 的耗时与清理后目录条数（会中断当前会话）；真机验证需重启后看 `migration-history/` 是否回落到 1000 条 + 首页活动卡是否秒出。

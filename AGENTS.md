@@ -43,6 +43,7 @@
 - **真实认证边界 = kit 围栏，不是 DSH cookie**：cookie 拒绝只挂 `kind:'prefix'`/`path:'/api'` 的 RPC 路由，派发 exact 表先命中。
 - 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**；经代理/隧道暴露必须在注册点加认证（远程/LAN/CSRF 已由围栏挡住）。
 - **新增一条 API** = 组文件里加 `endpoint({ path, methods }, handler)`；组文件不得 import `../index.ts`，共享工具进 `src/routes/route-support.ts`。
+- **同一 path 只许一条 exact 路由**：一个方法一个 handler 不在注册点表达，靠 handler 内按 `req.method` 分发（真机 webServer 对重复 `(kind, path)` 直接抛错 ⇒ 插件启动失败，只在 `buildRoutes()` 的 `paths.size === routes.length` 断言里才暴露）；判据 → `docs/lessons/known-pitfalls.md`（迁移历史清理一节）。
 - 业务逻辑放 `src/ui/`，React 壳只装配；新功能优先 `src/core/`，适配器与 UI 做薄壳。
 - `src/client/**` 不得 import node 模块；跨端共享只能进零依赖模块；`src/profiles/dsh-profile-io.ts` 绝不能被浏览器半 import。
 - **DI 走 Cordis fiber**：client 经 `ctx.slots.inject('settings.section')`；host 可选服务一律 `ctx.get()`，禁 `ctx.<svc>`。
