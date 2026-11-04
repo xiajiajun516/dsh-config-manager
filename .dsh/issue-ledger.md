@@ -16,6 +16,14 @@
 | 122 | 远端仓库远大于同步内容时 git 通道卡死：全量 clone/fetch 拉完整对象图（1.8 GB 仓库 / 6 MB 同步内容），超时只杀 git.exe 使 git-remote-https/index-pack 成孤儿继续写 tmp_pack_*（累积 7.3 GB），UI 永久停在「正在检查远端变更…」 | done | aafc93f | v0.2.4 | 2026-11-01 |
 | 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（修复：helper 失败时改用 env 注入 `Authorization: basic` 重试一次，仍失败则点名平台原因） | done | 73b6fe4 | v0.2.2 | 2026-10-30 |
 
+- `2026-11-05` **发版 v0.4.2（0.4.1 → 0.4.2，PATCH：两条用户可见修复）**：发版提交 `07015f2`（`chore(release): v0.4.2`，含 §9 七项判断）→ tag `v0.4.2`；
+  `main` 推到 `origin/main`（`8a7fafb..074a8d3f` 区间内的 `07015f2` → `4418f14` → `74a8d3f`）。`publish` 流水线 `41932247409` success（typecheck → typecheck:tests → test 5404 pass / fail 0 / skip 2 → build → bundle 自包含 → AGENTS 预算 → 文档路径 → 文档版本 → Tag guard → pack → 亮点段门禁 → npm publish(OIDC) → GitHub Release），`main` 上的 CI `41932243014` success（含 windows-latest）。
+  Release `v0.4.2` 已建（双语亮点在位）；registry 侧 `dsh-config-manager@0.4.2` 可查、`dist-tags.latest = 0.4.2`（发布后约 7 分钟可见）。
+  **本版无需回 issue 版本号**：清单里 `awaiting-release` 行 0 条（`#117` 仍 `open` 等报告者接受授权范围说明；`#118` dropped）。
+  发版中途两次 publish 红在**新写的 core-F1 回归测试**（不是产品代码）：① `41930090187` 用「目标父路径是普通文件」注入执行期失败，POSIX 上计划期目标安全闸先判 `路径越界: blocked/x.yaml`；② `41931060395` 改成「计划后破坏父路径」仍红 —— `restore()` 进来会内部重新 `planRestore`，注入点落在内部规划之前，又被同一道闸拦下。
+  最终修法 `74a8d3f`：不动目标侧，改把该动作的**源 blob** 换成目录（目标路径全程合法，两端安全闸都不介入；执行期 `copyFile(源=目录)` 在 POSIX 抛 EISDIR、Windows 抛 EPERM）。因 v0.4.2 从未出现在 registry 也没有 Release（versioning §8.1「未完成发布」），按「当轮补完」处理：删 tag（本地 + 远端）→ 在新提交上重建附注 tag → 重推。
+
+
 - `2026-11-04` **发版 v0.4.1（0.4.0 → 0.4.1，PATCH：自动同步自愈 + 「待裁决」语义）**：提交 `cac4272` → tag `v0.4.1` push；
   `main` 同步推到 `origin/main`（`3b69baa..cac4272`）。`publish` 流水线 `41920564745` success（typecheck → typecheck:tests → test 5322 项 pass 5320 / fail 0 / skip 2 → build → bundle 自包含 → AGENTS 预算 → 文档路径 → 文档版本 → Tag guard → pack → 亮点段门禁 → npm publish(OIDC) → GitHub Release），`main` 上的 CI `41920557295` success；
   Release `v0.4.1` 已建（双语亮点在位）；registry 侧 `dsh-config-manager@0.4.1` 可查、`dist-tags.latest = 0.4.1`（发布后约 3 分钟可见）。
