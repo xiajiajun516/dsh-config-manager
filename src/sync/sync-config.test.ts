@@ -449,30 +449,41 @@ test('t32 源码守卫：地面代码里通道数组只有一处声明（其余�
  *    同一实验里 t32 的旧守卫（原文 includes）会误报 —— 正是本守卫存在的原因；
  *  - 把诱饵换成真实代码 → 本守卫变红并报出行号（当时为 5868 / 5869）。
  */
-test('t33/B7 源码守卫：src/index.ts 不再手写通道数组/裸通道三元，全部消费单一来源', async () => {
-  const indexSrc = await fs.readFile(fileURLToPath(new URL('../index.ts', import.meta.url)), 'utf8')
-  const tplMode = stripJsComments(indexSrc, true, false)
-  const opaqueMode = stripJsComments(indexSrc, false, true)
+test('t33/B7 源码守卫：宿主侧两处源码不再手写通道数组/裸通道三元，全部消费单一来源', async () => {
+  // parseSyncBody 家族已下沉到 src/routes/route-support.ts（tech-debt #23）——宿主侧消费点因此分两处：
+  // 组合根源码与共享路由工具都必须在单一来源上取值，故一起扫、一起断言。
+  const sources: Array<[string, string]> = [
+    ['src/index.ts', await fs.readFile(fileURLToPath(new URL('../index.ts', import.meta.url)), 'utf8')],
+    ['src/routes/route-support.ts', await fs.readFile(fileURLToPath(new URL('../routes/route-support.ts', import.meta.url)), 'utf8')],
+  ]
+  const tplModes: string[] = []
+  const bad: string[] = []
+  for (const [sourceLabel, sourceText] of sources) {
+  const tplMode = stripJsComments(sourceText, true, false)
+  const opaqueMode = stripJsComments(sourceText, false, true)
+  tplModes.push(tplMode)
   const tplLines = tplMode.split(String.fromCharCode(10))
   const opaqueLines = opaqueMode.split(String.fromCharCode(10))
-  const bad: string[] = []
   tplLines.forEach((line, i) => {
     const t = line.trim()
     // 只有两趟都认为这里是「真实代码」时才判定（注释在其中一趟必被清空）
     if (t === '' || (opaqueLines[i] ?? '').trim() === '') return
-    if (t.includes("['git', 'webdav']") || t.includes("['git','webdav']")) bad.push(String(i + 1) + ': 通道数组字面量 ' + t)
-    if (t.includes("? 'webdav' : 'git'") || t.includes("?'webdav':'git'")) bad.push(String(i + 1) + ': 裸通道三元判定 ' + t)
+    if (t.includes("['git', 'webdav']") || t.includes("['git','webdav']")) bad.push(sourceLabel + ':' + String(i + 1) + ': 通道数组字面量 ' + t)
+    if (t.includes("? 'webdav' : 'git'") || t.includes("?'webdav':'git'")) bad.push(sourceLabel + ':' + String(i + 1) + ': 裸通道三元判定 ' + t)
   })
-  assert.deepEqual(bad, [], 'src/index.ts 不得再手写通道判定/枚举（应消费 channelOf / parseSyncChannel / SYNC_CHANNELS）:' + String.fromCharCode(10) + bad.join(String.fromCharCode(10)))
+  }
+  const allTpl = tplModes.join(String.fromCharCode(10))
+  assert.deepEqual(bad, [], '宿主侧两处源码都不得再手写通道判定/枚举（应消费 channelOf / parseSyncChannel / SYNC_CHANNELS）:' + String.fromCharCode(10) + bad.join(String.fromCharCode(10)))
   // 正向断言：确实接上了单一来源（否则上面可能因「什么都没写」而假绿）
   assert.ok(
-    tplMode.includes('channelOf, parseSyncChannel, SYNC_CHANNELS')
-    || (tplMode.includes('parseSyncChannel') && tplMode.includes('channelOf')),
-    'src/index.ts 必须从 ./sync/sync-config.ts 导入单一来源 API',
+    allTpl.includes('channelOf')
+    && allTpl.includes('parseSyncChannel')
+    && allTpl.includes('SYNC_CHANNELS'),
+    '宿主侧必须从 ./sync/sync-config.ts 导入单一来源 API（channelOf / parseSyncChannel / SYNC_CHANNELS）',
   )
   assert.ok(
-    tplMode.includes('for (const channel of SYNC_CHANNELS)') || tplMode.includes('SYNC_CHANNELS.map('),
-    'src/index.ts 的通道集合必须由 SYNC_CHANNELS 派生（不得穷举字面量）',
+    allTpl.includes('for (const channel of SYNC_CHANNELS)') || allTpl.includes('SYNC_CHANNELS.map('),
+    '宿主侧的通道集合必须由 SYNC_CHANNELS 派生（不得穷举字面量）',
   )
 })
 

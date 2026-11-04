@@ -8,6 +8,7 @@
  * 依赖方向：只从 `src/profiles/dsh-profile-shared.ts`（零依赖）取类型与纯函数——
  * 绝不 import 用 node fs 的引擎（否则 client bundle 会带上 node 内置模块依赖而整插件不加载）。
  */
+import { formatMinuteStamp, parseDateInput } from '../utils/time.ts'
 import {
   checkProfileName, isLaunchableShape, isManagedProfileName,
   type DshProfileCopyWarning, type DshProfileIssue, type DshProfileLaunchResult, type DshProfileLaunchWarning,
@@ -361,11 +362,8 @@ export function issueLabelKey(issue: DshProfileIssue): 'profiles.issue.manifestI
 
 /** 时间戳（毫秒）→ 本地 `YYYY-MM-DD HH:mm`；null / 非法 = 空串。 */
 export function formatProfileTime(ms: number | null): string {
-  if (ms === null) return ''
-  const d = new Date(ms)
-  if (Number.isNaN(d.getTime())) return ''
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  const d = parseDateInput(ms)
+  return d === null ? '' : formatMinuteStamp(d)
 }
 
 /** 字节数 → 人类可读（B / KB / MB，保留一位小数）。 */

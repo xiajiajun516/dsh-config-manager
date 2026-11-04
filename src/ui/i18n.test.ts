@@ -19,7 +19,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 import { makeUiT, uiEn, uiZh, zhUiT } from './i18n.ts';
 import {
@@ -183,8 +183,13 @@ test('i18n-08 英文字典不留 (s)/(ies) 括号式复数（今日起由 plural
     }
   };
   collect(uiEn, 'uiEn');
-  // 客户端四本字典同查：改的是源码文本，不 import（client 侧不保证可被 node 直接加载）
-  for (const rel of ['../client/locales.ts', '../client/sync/sync-locales.ts', '../client/market/market-locales.ts', '../client/recovery/recovery-locales.ts']) {
+  // 客户端字典同查：改的是源码文本，不 import（client 侧不保证可被 node 直接加载）
+  // tech-debt #22：主字典按域拆成 src/client/locales/*.ts（聚合器只剩展开语句）⇒ 逐个分域文件扫，覆盖率不降
+  const splitDicts = readdirSync(new URL('../client/locales/', import.meta.url))
+    .filter((name) => name.endsWith('.ts'))
+    .sort()
+    .map((name) => '../client/locales/' + name);
+  for (const rel of [...splitDicts, '../client/sync/sync-locales.ts', '../client/market/market-locales.ts', '../client/recovery/recovery-locales.ts']) {
     const text = readFileSync(new URL(rel, import.meta.url), 'utf8');
     for (const line of text.split('\n')) {
       if (/\((s|ies)\)/.test(line) && !/http\(s\)/.test(line) && /:\s*'/.test(line)) offenders.push(rel + ' :: ' + line.trim());

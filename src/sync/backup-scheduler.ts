@@ -40,6 +40,7 @@ import { shouldTriggerStartupRun } from './autosync-scheduler.ts';
 import { AUTO_BACKUP_PREFIX, pruneAutoBackupsByPolicy } from './backup-files.ts';
 import { DEFAULT_RETENTION_POLICY } from './retention-policy.ts';
 import type { RetentionPolicy } from './retention-policy.ts';
+import { formatDateStamp } from '../utils/time.ts';
 
 export interface BackupRunResult {
   status: BackupRunStatus;
@@ -280,7 +281,7 @@ export class BackupScheduler {
         });
         // 显式落 exportsDir（与 host 路由同构；Exporter 缺省 outPath 是相对文件名，不落目录）
         // auto 前缀 = 定时备份产物标识：列表来源 Badge + cache-cleaner 豁免 + 保留策略清理依据
-        const outPath = join(this.exportsDir, `${AUTO_BACKUP_PREFIX}${dateStamp(this.now())}-${randomBytes(3).toString('hex')}.zip`);
+        const outPath = join(this.exportsDir, `${AUTO_BACKUP_PREFIX}${formatDateStamp(this.now())}-${randomBytes(3).toString('hex')}.zip`);
         const { report } = await exporter.export({
           includeSecrets: false, // 恒不含 secret（与自动同步同语义）
           outPath,
@@ -404,8 +405,4 @@ export class BackupScheduler {
   }
 }
 
-/** 导出文件时间戳（YYYYMMDD-HHmmss），与 host 路由 dateStamp 同构。 */
-function dateStamp(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-}
+

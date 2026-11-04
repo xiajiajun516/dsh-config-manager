@@ -19,7 +19,8 @@ import type { TranslateNS } from '../client-types.ts'
 import { toRestorePlanView, withLoadedStatus, type RestorePlanRow } from '../../ui/restore-plan-view.ts'
 import { DiffTable } from '../common/DiffTable.tsx'
 import { formatBytes } from '../../ui/report.ts'
-import { Badge, Banner } from '../common/ui.tsx'
+import { Badge, Banner, Chip } from '../common/ui.tsx'
+import type { BadgeKind } from '../../ui/badge-tone.ts'
 import { SkeletonTable } from '../common/Skeleton.tsx'
 import { ExpandChevron } from '../common/Icon.tsx'
 import { Collapse } from '../common/Motion.tsx'
@@ -53,15 +54,26 @@ function statusLabel(t: TranslateNS<'config-manager'>, status: RestorePlanRow['s
   }
 }
 
-/** 状态语义色彩（复用既有 kindTag 四态）。 */
-function statusTagClass(status: RestorePlanRow['status']): string {
+/** 状态标签：有语义的走四态 Badge，纯分类（skip / 无动作）走中性 Chip。 */
+function StatusTag({ status, label }: { status: RestorePlanRow['status']; label: string }) {
+  const kind = statusBadgeKind(status)
+  return kind === null ? <Chip>{label}</Chip> : <Badge kind={kind}>{label}</Badge>
+}
+
+/**
+ * 状态 → 四态语义（tech-debt #10）。
+ *
+ * 返回 `null` 表示「这条只是分类、不是状态」（skip/无动作）：渲染成中性 Chip，
+ * 而不是硬塞进四态表里凑第五档。四态本身仍由 src/ui/badge-tone.ts 唯一定义。
+ */
+function statusBadgeKind(status: RestorePlanRow['status']): BadgeKind | null {
   switch (status) {
-    case 'modified': return `${css.kindTag} ${css.kindTagInfo}`
-    case 'added': return `${css.kindTag} ${css.kindTagOk}`
-    case 'deleted': return `${css.kindTag} ${css.kindTagError}`
+    case 'modified': return 'info'
+    case 'added': return 'ok'
+    case 'deleted': return 'error'
     case 'plugin':
-    case 'hint': return `${css.kindTag} ${css.kindTagWarn}`
-    default: return css.kindTag ?? ''
+    case 'hint': return 'warn'
+    default: return null
   }
 }
 
@@ -224,7 +236,7 @@ export function RestorePlanView({ api, t, snapshotId, plan, changeSummary }: Res
                   /** 行头（可展开行是 button，纯信息行是 div —— 不让屏幕阅读器把内容吞进 disabled 按钮） */
                   const head = (
                     <>
-                      <span className={statusTagClass(row.status)}>{statusLabel(t, row.status)}</span>
+                      <StatusTag status={row.status} label={statusLabel(t, row.status)} />
                       <span className={css.restorePlanPath} title={safeTarget ?? ''}>
                         {safeTarget ?? safeDescription}
                       </span>

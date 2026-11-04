@@ -41,7 +41,7 @@ import type {
   SessionRepairResult,
   SessionRepairRollbackResult,
 } from '../../ui/session-inventory-view.ts';
-import type { SessionLayoutResponse } from '../../ui/session-layout-view.ts'
+import type { SessionLayoutPort, SessionLayoutResponse } from '../../ui/session-layout-view.ts'
 import type {
   RollbackDetailResult,
   RollbackFileDiffResult,
@@ -64,6 +64,15 @@ export { RECOVERY_API };
 
 /** recovery 请求选项（长操作 5 分钟；超时文案沿用 `error.recoveryTimeout`，分钟插值）。 */
 const RECOVERY_OPTS: RequestOptions = { timeoutMs: LONG_REQUEST_TIMEOUT_MS, timeoutKey: 'error.recoveryTimeout' };
+
+/**
+ * 恢复面板用的端口组合 = `RecoveryPort` 的**可选**扩展（tech-debt #7 拆分后三个子组件与主面板共用）。
+ *
+ * 为什么是 Partial（E2 口径不变）：`src/ui/types.ts` 的 RecoveryPort 契约不含布局归位与回滚点，
+ * 而注入的实现（本文件下方的 `RecoveryApi`）才带它们。可选形态让所有既有调用点（按 RecoveryPort 传值）
+ * 原样可编译；运行时若真缺失，面板走 `sessions.layout.apiMissing` 如实提示并且**一条也不执行**。
+ */
+export type LayoutRecoveryApi = RecoveryPort & Partial<SessionLayoutPort> & Partial<RollbackPointPort>
 
 /* 请求封装（readJson / getJson / postJson：统一超时 + 取消 + 错误映射）见 common/http.ts。 */
 

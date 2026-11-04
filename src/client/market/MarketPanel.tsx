@@ -522,7 +522,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
           </Banner>
           <div className={css.warnList}>
             {detailView.warnings.map((w, i) => (
-              <li key={i} style={{ color: w.kind === 'warn' ? 'var(--dsw-alias-state-warn-primary)' : undefined }}>
+              <li key={i} className={w.kind === 'warn' ? css.warnText : undefined}>
                 {w.text}
               </li>
             ))}

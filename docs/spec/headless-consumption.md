@@ -256,8 +256,8 @@ node --test src/client/bundle-selfcontained.test.ts
 
 ### 谁在跑这条护栏
 
-- `.github/workflows/ci.yml` — Build 之后单独跑一次。
-- `.github/workflows/publish.yml` — 发版前的最后一道闸。
+- `.github/actions/verify/action.yml` — 共享门禁（composite action）：Build 之后单独跑一次（`npm run build` 与 `node --test src/client/bundle-selfcontained.test.ts` 是同一个 action 里的两步）。
+- 调用方两份：`.github/workflows/ci.yml`（PR/主干门禁）与 `.github/workflows/publish.yml`（发版闸）都 `uses:` 同一个 action —— 阶梯只有一份定义。
 
 > 为什么不能只靠 `npm test`：`npm test` 在 Build **之前**运行，此时 `lib/client.js`
 > 还不存在，该测试会跳过并打印诊断。CI 因此在 Build 之后补跑一次。
@@ -309,5 +309,5 @@ node --check node_modules/dsh-config-manager/lib/client.js   # exit 0
 | `src/utils/bundle-scan.ts` | 产物扫描内核（剥注释 + 多趟并集） |
 | `src/utils/bundle-scan.test.ts` | 扫描内核单测 |
 | `src/client/bundle-selfcontained.test.ts` | 自包含护栏 |
-| `.github/workflows/ci.yml` | PR/主干门禁（Build 后跑护栏） |
-| `.github/workflows/publish.yml` | 发版门禁（发版前跑护栏） |
+| `.github/actions/verify/action.yml` | 共享门禁本体（Build 后跑护栏；每个 run 步骤显式 `shell: bash`） |
+| `.github/workflows/ci.yml` / `publish.yml` | 两个调用方（PR/主干门禁、发版闸），各自 `uses:` 上面这个 action |

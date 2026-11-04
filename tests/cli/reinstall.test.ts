@@ -10,8 +10,7 @@
  *    命令构建器与 buildReinstallPlan 接受可选 platform 参数（缺省 process.platform），
  *    故可在任意宿主上一次性断言 Windows / Unix 两套输出。
  *  - src/cli/index.ts 的 reinstall 接入与交互纯函数（parseCli reinstall / runCli
- *    dry-run / --list / parseSelectionInput / parseConfirmInput）——R-CLI 块，
- *    动态导入 + 能力探测，t3 未完成时自动跳过；当前 t3 已完成，本块激活。
+ *    dry-run / --list / parseSelectionInput / parseConfirmInput）——R-CLI 块，静态导入直调。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,6 +35,7 @@ import {
   writeReinstallRecoveryPoint,
   type ReinstallItemId,
 } from '../../src/core/reinstall.ts';
+import { parseCli, parseConfirmInput, parseSelectionInput, runCli } from '../../src/cli/index.ts';
 
 /* ------------------------------------------------------------ core 纯函数 */
 
@@ -205,29 +205,13 @@ test('R-12 REINSTALL_ITEMS：类别定义齐全（defaultOn/destructive 语义�
 });
 
 /* ------------------------------------------------------------------ */
-/* R-CLI 块：依赖 t3（src/cli/index.ts 接入 reinstall + 交互纯函数导出）。 */
-/* 动态导入 + 能力探测：t3 未完成时自动跳过，不因缺导出而全红；t3 完成后      */
-/* 本块自动激活。                                                        */
+/* R-CLI 块：src/cli/index.ts 的 reinstall 接入与交互纯函数。             */
+/* 直接静态导入（parseCli :308 / parseSelectionInput :458 /             */
+/* parseConfirmInput :472 / runCli :924）：此前「可能未导出」的 typeof     */
+/* 探测兜底永不触发，已随 tech-debt #19 删除。                             */
 /* ------------------------------------------------------------------ */
 
-type ParseResultLike = {
-  ok: boolean;
-  options?: { version?: string; yes?: boolean; list?: boolean; wipeConfig?: boolean };
-  error?: string;
-};
-
-test('R-CLI reinstall 参数解析（parseCli）', async (t) => {
-  const mod = await import('../../src/cli/index.ts') as unknown as Record<string, unknown>;
-  const parseCli = mod.parseCli as ((argv: readonly string[]) => ParseResultLike) | undefined;
-  if (typeof parseCli !== 'function') {
-    t.skip('src/cli/index.ts 未导出 parseCli（待 t3）');
-    return;
-  }
-  if (!parseCli(['reinstall']).ok) {
-    t.skip(`reinstall 未接入 CLI（待 t3）：${parseCli(['reinstall']).error}`);
-    return;
-  }
-
+test('R-CLI reinstall 参数解析（parseCli）', () => {
   assert.equal(parseCli(['reinstall']).ok, true);
 
   const v = parseCli(['reinstall', '--version', '0.1.0-rc.6']);
@@ -254,55 +238,35 @@ test('R-CLI reinstall 参数解析（parseCli）', async (t) => {
   assert.equal(parseCli(['reinstall', '--version', '--yes']).ok, false, '--version 值不能是另一标志');
 });
 
-test('R-CLI 交互纯函数（parseSelectionInput / parseConfirmInput）', async (t) => {
-  const mod = await import('../../src/cli/index.ts') as unknown as Record<string, unknown>;
-  const parseSel = mod.parseSelectionInput as ((input: string) => Set<string> | null) | undefined;
-  const parseConf = mod.parseConfirmInput as ((input: string) => boolean) | undefined;
-  if (typeof parseSel !== 'function' || typeof parseConf !== 'function') {
-    t.skip('交互纯函数未导出（待 t3）');
-    return;
-  }
-
+test('R-CLI 交互纯函数（parseSelectionInput / parseConfirmInput）', () => {
   // —— 多选解析：1-based 编号 → REINSTALL_ITEMS 的 id 集合 ——
-  const set13 = parseSel('1,3');
+  const set13 = parseSelectionInput('1,3');
   assert.ok(set13 !== null);
   assert.ok(set13!.has('program'), '编号 1 → program');
   assert.ok(set13!.has('settings'), '编号 3 → settings');
-  assert.ok(parseSel('1,3')!.has('cache') === false, '未选编号不出现');
+  assert.ok(parseSelectionInput('1,3')!.has('cache') === false, '未选编号不出现');
 
   // 空串/仅空白 → null（用默认）；非法编号 → null
-  assert.equal(parseSel(''), null);
-  assert.equal(parseSel('   '), null);
-  assert.equal(parseSel('0'), null, '0 不在 1~5 → null');
-  assert.equal(parseSel('9'), null, '超界 → null');
-  assert.equal(parseSel('abc'), null, '非数字 → null');
+  assert.equal(parseSelectionInput(''), null);
+  assert.equal(parseSelectionInput('   '), null);
+  assert.equal(parseSelectionInput('0'), null, '0 不在 1~5 → null');
+  assert.equal(parseSelectionInput('9'), null, '超界 → null');
+  assert.equal(parseSelectionInput('abc'), null, '非数字 → null');
   // 中文逗号 / 空格分隔均可
-  assert.ok(parseSel('2，4')!.has('cache'), '中文逗号分隔');
-  assert.ok(parseSel('1 4')!.has('data') === false);
+  assert.ok(parseSelectionInput('2，4')!.has('cache'), '中文逗号分隔');
+  assert.ok(parseSelectionInput('1 4')!.has('data') === false);
 
   // —— 二次确认：仅 YES / Y（忽略大小写与空白）为真 ——
-  assert.equal(parseConf('YES'), true);
-  assert.equal(parseConf('yes'), true);
-  assert.equal(parseConf('Y'), true);
-  assert.equal(parseConf(' y '), true, '忽略空白');
-  assert.equal(parseConf('no'), false);
-  assert.equal(parseConf(''), false);
-  assert.equal(parseConf('YESS'), false, '必须精确匹配');
+  assert.equal(parseConfirmInput('YES'), true);
+  assert.equal(parseConfirmInput('yes'), true);
+  assert.equal(parseConfirmInput('Y'), true);
+  assert.equal(parseConfirmInput(' y '), true, '忽略空白');
+  assert.equal(parseConfirmInput('no'), false);
+  assert.equal(parseConfirmInput(''), false);
+  assert.equal(parseConfirmInput('YESS'), false, '必须精确匹配');
 });
 
-test('R-CLI runCli reinstall --dry-run：只做计划，不执行步骤命令', async (t) => {
-  const mod = await import('../../src/cli/index.ts') as unknown as Record<string, unknown>;
-  const runCli = mod.runCli as (
-    argv: readonly string[],
-    io?: { log: (s: string) => void; error: (s: string) => void },
-    env?: Record<string, string | undefined>,
-    deps?: { exec?: (cmd: string) => Promise<string>; ask?: (p: string) => Promise<string>; platform?: string },
-  ) => Promise<number> | undefined;
-  if (typeof runCli !== 'function') {
-    t.skip('runCli 未导出（待 t3）');
-    return;
-  }
-
+test('R-CLI runCli reinstall --dry-run：只做计划，不执行步骤命令', async () => {
   const calls: string[] = [];
   const fakeExec = async (cmd: string): Promise<string> => {
     calls.push(cmd);
@@ -319,19 +283,7 @@ test('R-CLI runCli reinstall --dry-run：只做计划，不执行步骤命令', 
   assert.deepEqual(stepCmds, [], `dry-run 除路径解析外不应执行任何步骤命令，got: ${JSON.stringify(stepCmds)}`);
 });
 
-test('R-CLI runCli reinstall --list：仅列清单，不执行任何命令、不询问', async (t) => {
-  const mod = await import('../../src/cli/index.ts') as unknown as Record<string, unknown>;
-  const runCli = mod.runCli as (
-    argv: readonly string[],
-    io?: { log: (s: string) => void; error: (s: string) => void },
-    env?: Record<string, string | undefined>,
-    deps?: { exec?: (cmd: string) => Promise<string>; ask?: (p: string) => Promise<string>; platform?: string },
-  ) => Promise<number> | undefined;
-  if (typeof runCli !== 'function') {
-    t.skip('runCli 未导出（待 t3）');
-    return;
-  }
-
+test('R-CLI runCli reinstall --list：仅列清单，不执行任何命令、不询问', async () => {
   let asked = 0;
   let executed = 0;
   const out: string[] = [];

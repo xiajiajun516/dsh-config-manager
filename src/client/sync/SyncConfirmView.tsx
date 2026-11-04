@@ -2,7 +2,7 @@
  * 一键同步差异确认视图（方案 A §5 差异确认数据流）。
  *
  * 消费 POST /sync/sync 返回的 items[]，渲染逐项确认列表：
- * - 每项：kindTag + description + severity + 「采用远端」复选框（默认勾选，可取消）；
+ * - 每项：Chip 适配器标签 + description + severity + 「采用远端」复选框（默认勾选，可取消）；
  * - Conflict 项：内联弹窗（用本地 / 用远端 / 跳过）；
  * - 底部：「确认导入」（apply-items）+「取消」（cancel）。
  *
@@ -228,7 +228,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
 
   if (items.length === 0) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div className={css.blockStack}>
         <Banner kind="ok">{t('syncflow.empty')}</Banner>
         <div className={css.actionRow}>
           <Button disabled={busy} onClick={() => { void runCancel() }}>
@@ -240,7 +240,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+    <div className={css.blockStack}>
       {/* 状态与计数一律徽章，不再先来一条整句 Banner：此前 Banner 与下面的徽章把「共 N 项差异」
           在同一屏里说了两遍。映射用 src/ui 的纯函数（等级 + 语义色），文案走 sync 字典 —— 不在这里另写分级规则。 */}
       <div className={css.statRow}>
@@ -343,7 +343,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       {(phase === 'done' || phase === 'failed') && applyResult !== null && (
         <>
           <ApplyResultCard result={applyResult} busy={busy} t={t} onRollback={runRollback} />
-          <div className={css.actionRow} style={{ marginTop: '12px' }}>
+          <div className={css.actionRow + ' ' + css.actionRowSpaced}>
             <Button variant="primary" disabled={busy} onClick={() => { onCancel() }}>
               {t('common.close')}
             </Button>
@@ -377,7 +377,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
           {/* R-04：回滚成功的 ok Banner 已改为 Toast（见 runRollback）。此处仅保留收尾「关闭」按钮；
              一并消除了原实现在 runApply 抛错（phase=failed 且 applyResult 仍为 null）时
               误显示「已回滚到应用前」的问题 —— 那种情况下方 error Banner 才是唯一事实。 */}
-          <div className={css.actionRow} style={{ marginTop: '12px' }}>
+          <div className={css.actionRow + ' ' + css.actionRowSpaced}>
             <Button variant="primary" disabled={busy} onClick={() => { onCancel() }}>
               {t('common.close')}
             </Button>

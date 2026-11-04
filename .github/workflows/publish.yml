@@ -1,3 +1,10 @@
+# 发版流水线：tag `v*` push（或 workflow_dispatch）→ 共享校验阶梯 → Tag guard →
+# Release notes guard（CHANGELOG 亮点段 + 描述模板 dry-run，必须在 npm publish 之前）→
+# npm publish(OIDC) → GitHub Release。
+#
+# 校验阶梯（install / typecheck / typecheck:tests / test / build / bundle 护栏 / 三项守卫 / pack）
+# 与 ci.yml 是同一份 composite action `.github/actions/verify/action.yml`（tech-debt #17）：
+# 检查集只在一处维护，避免「PR 有门禁、发版没有」的漂移。本文件只留发版专属步骤。
 name: Publish to npm
 
 on:
@@ -26,41 +33,13 @@ jobs:
         # npm trusted publishing (OIDC) needs npm >= 11.5.1; runners may ship an older npm.
         run: npm install -g npm@latest
 
-      - name: Install dependencies
-        # Some DSH core packages live only in peerDependencies and are not on
-        # the public registry; --legacy-peer-deps skips peer resolution.
-        run: npm ci --legacy-peer-deps
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Typecheck (tests)
-        # 与 ci.yml 对齐：tests/** 不在根 tsconfig 的 include 内，必须单独跑一遍；
-        # 发版流水线缺这一步时，测试代码的类型错误在整个发布路径上都是盲区。
-        run: npm run typecheck:tests
-
-      - name: Test
-        run: npm test
-
-      - name: Build
-        run: npm run build
-
-      - name: Bundle self-contained guard
-        # 发版前的最后一道闸：lib/client.js 必须自包含（只 require react/react-dom 白名单）。
-        # 任何被外置的 require 都会让用户端插件加载崩溃，绝不能带病发布。
-        # `npm test` 在 Build 之前运行，此时产物还不存在（该测试会跳过），故此处必须重跑。
-        run: node --test src/client/bundle-selfcontained.test.ts
-
-      - name: AGENTS.md budget guard
-        # 与 ci.yml 同构：只在 PR 阶段拦，发版路径仍可能带病发布。
-        run: node scripts/check-agents-budget.mjs
-
-      - name: Doc path guard
-        run: node scripts/check-doc-paths.mjs
-
-      - name: Doc version guard
-        # 发版前最容易踩的正是版本漂移：三处版本 + 文档声明必须一致。
-        run: node scripts/check-doc-versions.mjs
+      # 校验阶梯本体（install → typecheck → typecheck:tests → test → build → bundle 护栏 →
+      # AGENTS 预算守卫 → 文档路径守卫 → 文档版本守卫 → pack）在共享 composite action 里，
+      # 与 ci.yml 是同一份（tech-debt #17）：新增检查只改 .github/actions/verify/action.yml。
+      # 顺序提示：Pack 随本 action 提前到 Tag guard 之前；产物 dist/*.tgz 留在工作区，
+      # 后面的 "Create GitHub Release" 仍按 dist/dsh-config-manager-*.tgz 取附件。
+      - name: Install / verify（共享 composite action）
+        uses: ./.github/actions/verify
 
       - name: Tag guard (形态 + tag↔版本)
         # 为什么必须在 npm publish 之前：npm 上同一版本号不可重发，
@@ -79,10 +58,8 @@ jobs:
             exit 1
           fi
 
-      - name: Package tarball
-        # The installable tgz is attached to the GitHub Release as an asset.
-        # npm pack --pack-destination fails if the dir does not exist (fresh checkout).
-        run: mkdir -p dist && npm pack --pack-destination ./dist
+      # Package tarball 已在共享 action 里跑过（同一命令），dist/*.tgz 由下面的 GitHub Release
+      # 步骤作为附件带走；此处不再重复打包（tech-debt #17：同一检查只留一处定义）。
 
       - name: "Release notes guard: CHANGELOG 格式/亮点 + 描述模板 (before publish)"
         # 为什么门禁必须放在 npm publish 之前：npm 上同一版本号不可重发，

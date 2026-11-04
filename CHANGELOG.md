@@ -26,6 +26,15 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > 体例细节、分组表、发版两道门禁与写后自检命令见项目 skill `.dsh/skills/changelog-writing/SKILL.md`（DSH 会自动发现并加载）。
 
+## [Unreleased]
+
+### 🐛 修复 · Fixed
+
+- **复制档案失败后不再留下半截目录**：复制中途出错时若清理也失败，此前只会在日志里留一条注释，磁盘上留着一棵不完整的档案树、既不能启动也不会自己消失；现在这棵树会被标记成「未完成的复制」，档案页里直接列出并提供一次删除，重启后仍然认得。
+  **A failed profile copy no longer leaves half a tree behind**: if cleanup also failed, the incomplete copy used to survive as an unstartable leftover that only a log line mentioned; it is now marked as an unfinished copy, listed on the profiles page with a one-click delete, and still recognised after a restart.
+- **恢复进行中切页回来仍能看到「还在写」**：恢复面板里的写操作此前只在面板自己的状态里，切到别的页再回来，界面就像卡住了；现在这类写盘状态由全局运行状态持有，切页、刷新视图都不会丢，做完自动收尾。
+  **Leaving the recovery page no longer hides an in-flight write**: write actions used to live only in the panel's own state, so switching pages and coming back looked like a hang; the state is now held globally and survives navigating away, clearing itself when the write finishes.
+
 ## [0.4.1] - 2026-11-04
 
 > **本版主题**：自动同步不再被「自己的快照」锁死，首页也不再把自己的待办说成失败。
@@ -3215,3 +3224,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - ⚙️ **Sync config save route (`sync/config`)**: the UI autosaves / the "Save config" button persists channel config; credentials go to DSH credential slots; empty WebDAV `username` is backfilled from persisted config after mount/refresh
 - ⏱️ **WebDAV channel timeout**: per-request timeout widened to 120s (for slow WebDAV like Jianguoyun uploading large snapshots / index I/O); error messages carry the actual milliseconds
 - 🐛 **Fix import "unlock encrypted backup" step rendering**: the decrypt-archive stage now correctly shows the password input instead of staying on the file-selection page (import-decrypt-archive-render regression)
+
+## 历史缺口 / History gap
+
+- 更早的 `v0.1.1`–`v0.1.32` 未逐版记录在此文件（逐版条目自 `v0.1.33` 起）；那段时间的变更请查 git tag 与提交历史。
+- Versions `v0.1.1`–`v0.1.32` were not recorded per release in this file (per-version entries start at `v0.1.33`); see the git tags and commit history for that period.

@@ -24,6 +24,8 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { invalidateEngineLocale } from '../core/engine-locale.ts'
+import { TransactionRecoveryRequiredError } from '../core/phase3-host.ts'
+import { EnvironmentLockUnavailableError } from '../utils/env-lock.ts'
 import { engineMsg } from './messages.ts'
 
 /* --------------------------------------------------------------- 路由形状 */
@@ -114,6 +116,41 @@ export function writeRouteError(res: ServerResponse, error: unknown): void {
     return
   }
   writeJsonError(res, 500, errorMessage(error))
+}
+
+/* -------------------------------------------------- 423（mutation gate 家族） */
+
+/** 写一条诊断日志所需的最小宿主形状（只取 host.log，避免 kit 依赖整个 RoutesEnv）。 */
+export interface MutationLogSink {
+  log: { warn(message: string): void }
+}
+
+/**
+ * mutation gate 的 423 家族**唯一映射点**（tech-debt #9）。
+ *
+ * 为什么收在这里：改造前这段「两行日志 + 两行 423 写回」被抄了 12 处
+ * （组合根 withMutationGate 自己的 catch、snapshots /restore 的自拼包壳、prefs、sync、
+ * recovery 的 8 个写路由），新增 gate 行为时必然漏改一处 —— 与 kit 头注释里 F-02/F-03 同因。
+ *
+ * 命中 → 写 `423 {error, code}`（字段顺序与旧 writeJson 逐字一致）并返回 true；
+ * 未命中 → 返回 false，**调用方按自己路由既有的兜底口径写**（sync 走 SyncRouteError、
+ * snapshots 的 /restore 兜 400、组合根 gate 必须 rethrow 给 endpoint 的 errorRenderer …）。
+ * 用返回布尔而不是「内置兜底」正是为了不改这些既有语义。
+ *
+ * 内部诊断（op/reason/detail）只进日志；用户看到的是 error.message（友好文案，无技术细节）。
+ */
+export function writeMutationError(res: ServerResponse, host: MutationLogSink, error: unknown): boolean {
+  if (error instanceof EnvironmentLockUnavailableError) {
+    host.log.warn(`mutation lock blocked: op=${error.op} reason=${error.reason}${error.detail !== undefined ? ` detail=${error.detail}` : ''}`)
+    writeJsonError(res, 423, error.message, 'mutation-locked')
+    return true
+  }
+  if (error instanceof TransactionRecoveryRequiredError) {
+    host.log.warn(`transaction recovery required: ${error.message}`)
+    writeJsonError(res, 423, error.message, 'transaction-recovery-required')
+    return true
+  }
+  return false
 }
 
 /** Cap on raw JSON bodies (4 MiB) —— 文件上传走 MAX_UPLOAD_BYTES 的另一条路径。 */

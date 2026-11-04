@@ -58,58 +58,39 @@ function renderInlineMarkdown(text: string) {
 function MarkdownBlockView({ block }: { block: MarkdownBlock }) {
   switch (block.type) {
     case 'heading': {
-      const headingStyle = {
-        fontWeight: 600,
-        color: 'var(--dsw-alias-label-primary)',
-        marginTop: block.level === 1 ? '12px' : '8px',
-        marginBottom: '4px',
-        fontSize: block.level === 1 ? '15px' : block.level === 2 ? '14px' : '13px',
-      }
-      return <div style={headingStyle}>{block.text}</div>
+      /**
+       * 只有字号还留在内联：15/14/13px 三级要靠同一规则表达，而 DESIGN.md §4 的字号 scale
+       * 只有 4 档（11/12/12.5/13）—— 把 15/14 写进 CSS 会让 scale-01 直接变红。
+       * 这是 css-token-guard 豁免表里唯一一条 release 相关例外（见 TSX_STYLE_WHITELIST）。
+       */
+      return (
+        <div
+          className={css.releaseHeading}
+          data-level={String(block.level)}
+          style={{ fontSize: block.level === 1 ? '15px' : block.level === 2 ? '14px' : '13px' }}
+        >
+          {block.text}
+        </div>
+      )
     }
     case 'list-item': {
       return (
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start', paddingLeft: '4px' }}>
-          <span style={{ color: 'var(--dsw-alias-label-tertiary)', userSelect: 'none' }}>
+        <div className={css.releaseListItem}>
+          <span className={css.releaseBullet}>
             {block.ordered ? (block.index ?? 1) + '.' : '•'}
           </span>
-          <div style={{ flex: 1 }}>{renderInlineMarkdown(block.text)}</div>
+          <div className={css.releaseItemBody}>{renderInlineMarkdown(block.text)}</div>
         </div>
       )
     }
     case 'quote': {
-      return (
-        <div
-          style={{
-            borderLeft: '3px solid var(--dsw-alias-border-l1)',
-            paddingLeft: '8px',
-            color: 'var(--dsw-alias-label-secondary)',
-            fontStyle: 'italic',
-          }}
-        >
-          {renderInlineMarkdown(block.text)}
-        </div>
-      )
+      return <div className={css.releaseQuote}>{renderInlineMarkdown(block.text)}</div>
     }
     case 'code-block': {
-      return (
-        <pre
-          className={css.cliCommand}
-          style={{ margin: '4px 0', padding: '8px', fontSize: '12px' }}
-        >
-          {block.code}
-        </pre>
-      )
+      return <pre className={css.cliCommand + ' ' + css.releaseCode}>{block.code}</pre>
     }
     case 'hr': {
-      return (
-        <div
-          style={{
-            borderBottom: '1px solid var(--dsw-alias-border-l2)',
-            margin: '8px 0',
-          }}
-        />
-      )
+      return <div className={css.releaseRule} />
     }
     case 'paragraph':
     default: {
@@ -122,22 +103,11 @@ function MarkdownBlockView({ block }: { block: MarkdownBlock }) {
 export function ReleaseBody({ body, t }: { body: string; t: TranslateNS<'config-manager'> }) {
   const blocks = parseMarkdownBlocks(body)
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '6px',
-        fontSize: '13px',
-        lineHeight: '1.6',
-        color: 'var(--dsw-alias-label-primary)',
-      }}
-    >
+    <div className={css.releaseBody}>
       {blocks.length > 0 ? (
         blocks.map((block, idx) => <MarkdownBlockView key={idx} block={block} />)
       ) : (
-        <div style={{ color: 'var(--dsw-alias-label-tertiary)', fontStyle: 'italic' }}>
-          {t('about.releaseNotes.noBody')}
-        </div>
+        <div className={css.releaseEmpty}>{t('about.releaseNotes.noBody')}</div>
       )}
     </div>
   )

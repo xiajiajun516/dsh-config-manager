@@ -8,8 +8,8 @@
  */
 
 import type { ServerResponse } from 'node:http'
-import { endpoint, requireJsonObject, writeJson } from './kit.ts'
-import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
+import { endpoint, requireJsonObject, writeJson, writeMutationError } from './kit.ts'
+import { runWithMutationLock } from '../utils/env-lock.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import { readUiPrefs, updateUiPrefs } from '../sync/ui-prefs.ts'
@@ -41,11 +41,11 @@ export function prefsRoutes(env: RoutesEnv): WebRoute[] {
         async () => await updateUiPrefs(syncDir, patch),
       )
     } catch (error) {
-      if (error instanceof EnvironmentLockUnavailableError) {
-        writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-        return null
+      // 423 家族（SAFE MODE / 环境锁）的唯一映射在 kit；其余错误仍是本文件既有的 500 兜底（零写入）。
+      if (!writeMutationError(res, host, error)) {
+        writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
       }
-      throw error
+      return null
     }
   }
   // 版本更新检查器：每进程一个（进程内缓存 10 分钟；用户点「重新检查」走 ?force=1）。

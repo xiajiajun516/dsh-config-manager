@@ -13,10 +13,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
-const PANEL = path.join(ROOT, 'src/client/recovery/RecoveryPanel.tsx');
+const DIR = path.join(ROOT, 'src/client/recovery');
+const DIALOG = path.join(DIR, 'SessionHealthDialog.tsx');
+/**
+ * 拆分后（tech-debt #7）面板的源码分布在 4 个文件里：入口卡 / 弹窗 / 布局归位 / 主面板。
+ * 「整块 UI 是否还在」按**目录并集**断言，判据逐条不变 —— 只会因为组件真的消失才红灯。
+ */
+const SPLIT_FILES = ['RecoveryPanel.tsx', 'SessionHealthCard.tsx', 'SessionHealthDialog.tsx', 'SessionLayoutSection.tsx'];
+const panelSources = (): string => SPLIT_FILES.map((f) => fs.readFileSync(path.join(DIR, f), 'utf8')).join('\n');
 
 test('T13：会话体检弹窗只在 open 时挂载（关闭即卸载）', () => {
-  const source = fs.readFileSync(PANEL, 'utf8');
+  const source = panelSources();
   const at = source.indexOf('<SessionHealthDialog');
   assert.ok(at > 0, '找不到 SessionHealthDialog 的挂载点');
   // 挂载点上方 400 字符内必须出现条件渲染（{open && …）
@@ -26,16 +33,16 @@ test('T13：会话体检弹窗只在 open 时挂载（关闭即卸载）', () =>
 });
 
 test('T13：长列表必须限高内滚（DESIGN §8 硬性规则）', () => {
-  const source = fs.readFileSync(PANEL, 'utf8');
+  const source = panelSources();
   assert.match(source, /snapshotList\} \$\{css\.reportScroll\}/, '会诊列表必须带限高内滚类');
 });
 
 test('T14：SessionHealthDialog 的 state 声明必须在被使用之前（TDZ 会把整个面板打白）', () => {
-  const source = fs.readFileSync(PANEL, 'utf8');
+  const source = fs.readFileSync(DIALOG, 'utf8');
   const start = source.indexOf('function SessionHealthDialog(');
-  const end = source.indexOf('function RecoveryPanel(', start);
-  assert.ok(start > 0 && end > start, '找不到 SessionHealthDialog 源码窗口');
-  const body = source.slice(start, end);
+  assert.ok(start > 0, '找不到 SessionHealthDialog 源码窗口');
+  // 弹窗组件独占一个文件（拆分后不再与 RecoveryPanel 同文件），窗口 = 该函数到文件末尾
+  const body = source.slice(start);
   // 声明位置必须早于首个使用位置（真机：后置声明 → ReferenceError → slot entry crashed → 面板空白）
   const declAt = body.indexOf("const [repairedUnits, setRepairedUnits] = useState");
   const useAt = body.indexOf('!repairedUnits.has(');
@@ -71,7 +78,7 @@ test('T15：会话体检的卡片与容器必须留白（真机反馈「挤在�
  * 故与 T13 同规格用源码守卫钉住（改回字墙即红灯）。
  */
 test('T16：会话体检弹窗 = 数字摘要 + 区块头 + 两行式行卡（禁止退回字墙）', () => {
-  const src = fs.readFileSync(PANEL, 'utf8');
+  const src = panelSources();
   for (const cls of [
     'shSummary', 'shMetric', 'shSeverity', 'shSectionHead',
     'shRow', 'shRowTop', 'shRowMeta', 'shRowActions', 'shPanel', 'shCommands',
@@ -100,7 +107,7 @@ test('T16：会话体检弹窗 = 数字摘要 + 区块头 + 两行式行卡（�
  * 同屏十几条里认不出哪条是自己的对话）。宿主没给标题时回落目录名，绝不编造。
  */
 test('T17：会话行首 = 对话标题（缺省回落目录名），目录名退到 meta 行仍可见', () => {
-  const src = fs.readFileSync(PANEL, 'utf8');
+  const src = panelSources();
   assert.ok(
     src.includes("row.title ?? (row.blank ? t('sessions.blank') : row.sessionId)"),
     '行首主文本必须是标题（缺省：空白会话显示「新会话」，其余回落 sessionId）',

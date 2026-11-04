@@ -12,7 +12,7 @@
 
 | 面 | 入口 | 运行环境 | 职责 |
 |---|---|---|---|
-| host（插件宿主侧） | `src/index.ts` | Node / Cordis | 注册插件、装配依赖、声明 82 条 HTTP 路由、跑引擎 |
+| host（插件宿主侧） | `src/index.ts` | Node / Cordis | 注册插件、装配依赖、声明 HTTP 路由（清单与计数唯一事实源：`tests/route/route-parity.test.ts`）、跑引擎 |
 | web（浏览器侧） | `src/client/index.ts` | 浏览器沙箱 | 注册 locale 字典与 `settings.section` 面板，经 HTTP 调 host |
 
 - host 侧 Cordis 插件名 `config-manager`（`src/index.ts:177` 的 `export const name`），`inject` 声明为 `['settings','credentials']`；可选服务一律 `ctx.get()` 惰取。
@@ -39,11 +39,11 @@ schema/ ──► 无运行时依赖（纯类型 + 常量）
 `client/` 对 `ui/`、`core/` 的值 import **没有**自动拦截，靠评审守住「业务逻辑在 `src/ui/`」这条线。
 改分层前先跑它；想放宽分层必须先改这条测试**并且**在 `docs/decisions/` 留一条 ADR。
 
-## 3. 路由层：82 条、一个入口、三道统一护栏
+## 3. 路由层：一个入口、三道统一护栏
 
-- 路由源分两处：`src/index.ts` 保留 **7** 条（被窗口/生命周期守卫钉住），`src/routes/*.ts` 拆出 **75** 条；合计 **82**。
+- 路由源分两处：`src/index.ts` 保留 **7** 条（被窗口/生命周期守卫钉住），`src/routes/*.ts` 拆出 **77** 条；合计 **84**。
   计数由 `tests/route/route-fence.test.ts` 与 `tests/route/route-parity.test.ts` 双向钉住（后者逐条比对快照，少一条/改方法都会红）。
-- 装配：`src/routes/index.ts` 的 `buildRoutes(env)` 聚合 13 个路由组文件；依赖经 `makeRouteEnv()` 显式传入（类型从实现推断，见 `src/routes/context.ts`）。
+- 装配：`src/routes/index.ts` 的 `buildRoutes(env)` 聚合各域组文件（一个域一个文件；组文件清单即 `src/routes/` 下声明 `endpoint()` 的模块）；依赖经 `makeRouteEnv()` 显式传入（类型从实现推断，见 `src/routes/context.ts`）。
 - **唯一声明入口 `src/routes/kit.ts`**：`endpoint({path,methods}, handler)` 在注册点统一包装 ① loopback 围栏（非本机/跨站 → 403）
   ② 方法白名单（→ 405）③ 顶层 try/catch（→ 统一 JSON 错误，`writeRouteError`）。`registerRoutes()` 对未经 kit 的裸路由直接抛错。
 - **认证边界就是这道围栏**，不是 DSH 的 cookie：DSH 的 cookie 拒绝只挂在 `kind:'prefix', path:'/api'` 的 RPC 承载路由上，而 exact 表先命中

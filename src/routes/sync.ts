@@ -5,8 +5,8 @@
  * path/methods 就是唯一声明处；围栏、方法判定与顶层异常处理由 src/routes/kit.ts 在注册点统一提供。
  */
 
-import { endpoint, queryParam, requireJsonObject, readJsonBody, writeJson } from './kit.ts'
-import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
+import { endpoint, queryParam, requireJsonObject, readJsonBody, writeJson, writeMutationError } from './kit.ts'
+import { runWithMutationLock } from '../utils/env-lock.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import { FileSnapshotStore } from '../core/index.ts'
@@ -426,11 +426,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         )
         writeJson(res, 200, { ok: true, lastSyncChannel: channel })
       } catch (error) {
-        if (error instanceof EnvironmentLockUnavailableError) {
-          writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-          return
-        }
-        writeSyncRouteError(res, error)
+        // 423 家族（SAFE MODE / 环境锁）的唯一映射在 kit；其余沿用本组既有 SyncRouteError 口径。
+        if (!writeMutationError(res, host, error)) writeSyncRouteError(res, error)
       }
     }),
     // ------------------------------------------------------ sync/push

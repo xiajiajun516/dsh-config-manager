@@ -54,6 +54,7 @@ import { stringifyJsonSafe } from '../utils/json.ts';
 import { buildManifest, CHECKSUMS_FILE, MANIFEST_FILE } from '../schema/manifest.ts';
 import { writeZip } from '../utils/zip.ts';
 import type { Manifest, SectionId } from '../schema/types.ts';
+import { formatDateStamp } from '../utils/time.ts';
 
 /* ------------------------------------------------------------ 参数解析（纯函数） */
 
@@ -1354,9 +1355,7 @@ async function runBackup(
     }
   } else {
     // 注意：此处刻意不 mkdir —— dry-run 必须零写入，目录在真正落盘前才创建
-    const now = new Date();
-    const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
-      + `-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+    const stamp = formatDateStamp();
     try {
       const rand = await randomHex4();
       outPath = await resolveNonCollidingName(exportsDir, `dsh-config-cli-${stamp}-${rand}.zip`);

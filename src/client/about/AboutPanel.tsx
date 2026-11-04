@@ -133,7 +133,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
         {/* issue #28 诊断位：插件清单实际读的目录 / profile / 识别到的插件数。
             用于自查「装了插件却没被备份识别到」——此前用户完全无从查看。 */}
         {state.rows?.diagnostics != null && (
-          <div className={css.statRow} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+          <div className={css.statRow + ' ' + css.statRowStack}>
             <span className={css.groupLabel}>{t('about.diag.label')} <InfoHint text={t('about.diag.hint')} label={t('common.infoHint')} /></span>
             <span>{t('about.diag.profileDir', { path: state.rows.diagnostics.profileDir })}</span>
             <span>{t('about.diag.profile', { profile: state.rows.diagnostics.profile })}</span>

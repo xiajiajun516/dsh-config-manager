@@ -8,6 +8,7 @@
 import type { AutosyncHistoryEntry, SyncHistoryEntry } from './sync-api.ts'
 // 跳过原因码 → 字典键的映射键类型（**type-only**：不把 zh/en 目录按值带进本条 import）
 import type { SyncKey } from './sync-locales.ts'
+import { formatMinuteStamp, parseDateInput } from '../../utils/time.ts'
 import type { TranslateNS } from '../client-types.ts'
 
 /** 同步命名空间翻译器（本文件的标签一律走它 —— 硬编码中文在英文界面下会原样透出）。 */
@@ -37,13 +38,11 @@ function byCreatedAtDesc(a: { createdAt: string }, b: { createdAt: string }): nu
   return a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0;
 }
 
-/** ISO 时间 → 本地可读字符串（短格式） */
+/** ISO 时间 → 本地可读字符串（短格式）；空串显示占位符、非法输入原样回显。 */
 export function formatDateTime(iso: string): string {
   if (!iso) return '—';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const d = parseDateInput(iso);
+  return d === null ? iso : formatMinuteStamp(d);
 }
 
 /**

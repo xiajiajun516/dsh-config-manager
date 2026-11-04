@@ -29,6 +29,7 @@ import { foreignSourceContext } from '../routes/foreign-context.ts';
 import type { ForeignSourceContext, ForeignSourceDetection } from '../foreign/registry.ts';
 import type { ForeignImportResult } from '../foreign/types.ts';
 import type { Platform } from '../schema/types.ts';
+import { formatDateStamp } from '../utils/time.ts';
 
 /** CLI 侧只依赖这个最小 IO 形状（与 src/cli/index.ts 的 CliIo 结构等价，避免循环 import） */
 export interface ImportIo {
@@ -110,19 +111,13 @@ function printImportSummary(
 async function resolveOutPath(options: ImportSourceOptions, sourceId: string): Promise<string> {
   const desired = options.out !== undefined && options.out !== ''
     ? path.resolve(options.out)
-    : path.join(options.exportsDir, 'foreign-' + sourceId + '-' + stamp() + '-' + randomHex4() + '.zip');
+    : path.join(options.exportsDir, 'foreign-' + sourceId + '-' + formatDateStamp() + '-' + randomHex4() + '.zip');
   if (!(await pathExists(desired))) return desired;
   const base = desired.endsWith('.zip') ? desired.slice(0, -4) : desired;
   for (let i = 1; ; i += 1) {
     const candidate = base + '-' + String(i) + '.zip';
     if (!(await pathExists(candidate))) return candidate;
   }
-}
-
-function stamp(): string {
-  const now = new Date();
-  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
-    + `-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
 }
 
 function randomHex4(): string {

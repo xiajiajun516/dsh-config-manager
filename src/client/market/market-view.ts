@@ -29,6 +29,7 @@ import type { ImportAnalysis, ImportPlan, PlanItemKind } from '../../core/types.
 import type { SectionId } from '../../schema/types.ts';
 import type { UiT } from '../../ui/i18n.ts';
 import { isOfficialMarket } from '../../market/builtin.ts';
+import { formatMinuteStamp, parseDateInput } from '../../utils/time.ts';
 
 /* ---------------------------------------------------------------- 客户端专属：来源徽章 */
 
@@ -171,11 +172,8 @@ export function collectCachedSections(items: readonly MarketListItem[]): Section
 
 /** ISO-8601 → 本地可读时间（YYYY-MM-DD HH:mm；非法/空输入原样返回）。 */
 export function formatMarketTime(iso: string): string {
-  if (iso === '') return iso;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const d = parseDateInput(iso);
+  return d === null ? iso : formatMinuteStamp(d);
 }
 
 /* ---------------------------------------------------------------- 客户端专属：供应链警示着色行 */

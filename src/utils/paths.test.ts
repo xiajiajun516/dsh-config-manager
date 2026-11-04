@@ -7,7 +7,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPrefixMappings } from './paths.ts';
+import path from 'node:path';
+import { applyPrefixMappings, isPathInside, isSameOrChild } from './paths.ts';
 import type { PathMapping } from '../core/types.ts';
 
 /** 测试用映射（appliesTo 与语义无关，任选一个合法分区） */
@@ -60,4 +61,38 @@ test('core-F4：POSIX 路径**不得**折叠大小写（不同目录不许误匹
   assert.equal(pathOf(applyPrefixMappings({ workspace: { path: '/home/Alice/project/x' } }, mappings)), '/home/Alice/project/x');
   // 空映射 = 恒等
   assert.equal(pathOf(applyPrefixMappings({ workspace: { path: '/home/Alice/proj/x' } }, [])), '/home/Alice/proj/x');
+});
+
+/**
+ * #8 越界判定收敛：四份同义守卫（paths / restore 的 isWithinHome / restore 的 isRealInside /
+ * verify-recovery 的副本）合并为 isPathInside。三份旧实现用 `rel.startsWith('..')` 判越界，
+ * 会把名字真叫 `..foo` 的兄弟目录误判成逃逸（path.relative('/a/b', '/a/b/..foo') === '..foo'）。
+ */
+test('core-E1：越界判定只有一份实现，且 `..foo` 这种合法兄弟目录不得被误判成逃逸', () => {
+  const parent = path.resolve('sandbox', 'home');
+  const inside = (...segs: string[]): string => path.resolve(parent, ...segs);
+  const outside = path.resolve('sandbox', 'other');
+
+  // ① 名字真叫 ..foo 的兄弟目录在 parent 之内 —— 旧实现（rel.startsWith('..')）在此误杀
+  assert.equal(isPathInside(inside('..foo'), parent), true, '..foo 是子目录，不是 ..');
+  assert.equal(isPathInside(inside('..foo', 'settings.yaml'), parent), true);
+
+  // ② 等于父目录 / .. 折叠后仍在父目录内
+  assert.equal(isPathInside(parent, parent), true);
+  assert.equal(isPathInside(inside('a', '..', 'b'), parent), true);
+
+  // ③ 真越界：.. 段本身、以 .. + 分隔符开头、完全在外
+  assert.equal(isPathInside(inside('..'), parent), false);
+  assert.equal(isPathInside(inside('..', 'other'), parent), false);
+  assert.equal(isPathInside(outside, parent), false);
+
+  // ④ 别名与正典同口径（既有调用点不必改语义）
+  assert.equal(isSameOrChild(inside('..foo'), parent), true);
+  assert.equal(isSameOrChild(inside('..', 'x'), parent), false);
+
+  // ⑤ 大小写：缺省按平台（Windows 折叠、POSIX 不折叠），显式开关可覆盖
+  assert.equal(isPathInside(parent.toUpperCase(), parent), process.platform === 'win32');
+  assert.equal(isPathInside('/a/B', '/a/b', { foldCase: true }), true);
+  // foldCase:false 只在 POSIX 生效：win32 的 path.relative 自己就折大小写（故此处结果仍 true）
+  assert.equal(isPathInside('/a/B', '/a/b', { foldCase: false }), process.platform === 'win32');
 });

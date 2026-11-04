@@ -15,13 +15,28 @@ import { readFileSync } from 'node:fs';
 
 const SOURCE_PATH = 'src/client/recovery/RecoveryPanel.tsx';
 
-/** 截出某个顶层函数的函数体（到下一个顶层 `function ` 为止）。 */
+/**
+ * 组件 → 所在文件（tech-debt #7 拆分后一个组件一个文件）。
+ *
+ * 守卫口径不变（仍然逐组件断言容器类），只是「源码窗口」的边界从「同一文件的下一个 function」
+ * 变成「该组件自己的文件」—— 拆分不改判据，改的是去哪儿读它。
+ */
+const COMPONENT_FILES: Record<string, string> = {
+  RecoveryPanel: 'RecoveryPanel.tsx',
+  SessionHealthCard: 'SessionHealthCard.tsx',
+  SessionHealthDialog: 'SessionHealthDialog.tsx',
+  SessionLayoutSection: 'SessionLayoutSection.tsx',
+};
+
+/** 截出某个组件的函数体（到同文件下一个顶层 `function` / `export function` 为止）。 */
 function functionBody(name: string): string {
-  const src = readFileSync(SOURCE_PATH, 'utf8');
+  const file = COMPONENT_FILES[name];
+  const path = SOURCE_PATH.replace(/[^/]+$/, file ?? '');
+  const src = readFileSync(file === undefined ? SOURCE_PATH : path, 'utf8');
   const at = src.indexOf('function ' + name + '(');
-  assert.ok(at >= 0, SOURCE_PATH + ' 里找不到函数 ' + name);
-  const end = src.indexOf('\nfunction ', at + 1);
-  return src.slice(at, end < 0 ? undefined : end);
+  assert.ok(at >= 0, (file ?? SOURCE_PATH) + ' 里找不到函数 ' + name);
+  const next = src.slice(at + 1).search(/\n(export )?function /);
+  return next < 0 ? src.slice(at) : src.slice(at, at + 1 + next);
 }
 
 test('布局守卫：小节用卡片容器 + groupLabel 标题 + snapshotList/reportScroll 列表', () => {

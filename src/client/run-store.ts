@@ -371,7 +371,26 @@ export interface RecoveryStoreSlice {
   /** 已 redact 的错误文本 */
   error: string | null
   actionError: string | null
+  /**
+   * 进行中的**短写盘**动作（会话修复 apply / 批量修复 / 布局归位 / SAFE MODE 解除 / 锁回收 / 救援开关）。
+   *
+   * 这些动作没有宿主 run（`RunKind` 里只有 `'recovery'` 这类长任务），此前「进行中」只活在组件的
+   * useState 里 —— 切一下 tab 就没了，用户既看不到还在写，回来还能再点一次。登记到这里后，进行中态
+   * 跟着模块级单例走：切页保留、重挂即读回。
+   *
+   * **内存瞬态**：`toPersistedState()` 的白名单**不含**本字段（与 `running` 同一条理由 —— 浏览器存储
+   * 绝不作 destructive 动作的状态源）；刷新后一律回 null，不会把「正在写」从上一会话带到新会话。
+   */
+  write: { key: string; startedAt: number } | null
 }
+
+/**
+ * recovery 切片的**落盘形状** = `RecoveryStoreSlice` 去掉 `write`（内存瞬态）。
+ *
+ * 单独起类型而不是在 `toPersistedState()` 里补 `write: null`：类型本身就是证据 ——
+ * 「这个字段不该进 sessionStorage」写在形状里，将来谁往白名单里加都会先撞上它。
+ */
+export type PersistedRecoveryState = Omit<RecoveryStoreSlice, 'write'>
 
 /* ------------------------------------------------- 持久化（非敏感）状态形状 */
 
@@ -451,7 +470,7 @@ export interface PersistedState {
   market: MarketStoreSlice
   snapshots: SnapshotsStoreSlice
   profiles: ProfilesStoreSlice
-  recovery: RecoveryStoreSlice
+  recovery: PersistedRecoveryState
   library: LibraryStoreSlice
 }
 
@@ -720,6 +739,7 @@ function defaultRecoveryState(): RecoveryStoreSlice {
     running: false,
     error: null,
     actionError: null,
+    write: null,
   }
 }
 
@@ -863,6 +883,7 @@ export function toRecoveryStoreSlice(s: RecoveryStoreSlice): RecoveryStoreSlice 
     running: s.running,
     error: s.error,
     actionError: s.actionError,
+    write: s.write,
   }
 }
 
@@ -1160,6 +1181,8 @@ export function toPersistedState(state: StoreState): PersistedState {
       running: false,
       error: state.recovery.error,
       actionError: state.recovery.actionError,
+      // write（进行中的短写盘动作）**刻意不在这里**：内存瞬态，刷新后由默认值回 null。
+      // 落盘它会让「上一会话正在写」在新会话里变成一条永远不结束的进行中态。
     },
     // 产物库：界面偏好落盘；pendingZip 是「一键导入」的一次性瞬态 → 不落盘
     library: {
@@ -1255,7 +1278,13 @@ export function parsePersistedState(raw: string): PersistedState | null {
     // 旧值 'profiles' → 'list'；维护视图仍按持久化值恢复（命令面板直达时由 needMaintenance 强制）
     subView: needMaintenance || profilesRaw.subView === 'maintenance' ? 'maintenance' : 'list',
   }
-  const recovery = isRecord(p['recovery']) ? p['recovery'] as unknown as RecoveryStoreSlice : defaultRecoveryState()
+  // recovery.write 是内存瞬态（`toPersistedState` 不写它）：新旧载荷都不带，这里显式补 null 而不是
+  // 依赖 `undefined` —— 组件读的是 `write?.key`，但默认值归位后切片形状才是完整的。
+  const recovery: RecoveryStoreSlice = {
+    ...defaultRecoveryState(),
+    ...(isRecord(p['recovery']) ? p['recovery'] as Partial<PersistedRecoveryState> : {}),
+    write: null,
+  }
   const libraryRaw = isRecord(p['library']) ? p['library'] as unknown as LibraryStoreSlice : defaultLibraryState()
   // 旧 `snapshots.importBackup`（一键导入请求）→ library.pendingZip；该字段从不落盘，仅防御性迁移。
   // 旧 `panel:'market'` → 产物库并预置「市场产物」筛选（与上面 switch 的分派一致）。
@@ -1950,6 +1979,32 @@ export class RunStore {
       )
     }
     this.scheduleWatch(kind, tick, interval)
+  }
+
+  /* -------------------------------------------- recovery 短写盘动作（内存瞬态） */
+
+  /**
+   * 登记一个进行中的恢复面板写盘动作（tech-debt #7）。
+   *
+   * 为什么不是宿主 run：这些动作（会话修复 apply / 布局归位 / SAFE MODE 解除 / 锁回收 / 救援开关）
+   * 都是一次同步写盘 + 一个响应，没有 `RunKind` 槽位（`src/core/run-registry.ts` 是固定联合，
+   * 加 kind 要同时改宿主路由），也没有进度可轮询。它们要的只是「切页回来还知道自己在写」。
+   *
+   * 同一时刻只留一个动作：面板上的这些按钮本就互斥（都在同一个恢复面板里），
+   * 单槽让「当前在写什么」永远只有唯一答案，而不是一堆可能互相矛盾的布尔。
+   */
+  beginRecoveryWrite(key: string): void {
+    this.patch({ recovery: { write: { key, startedAt: Date.now() } } })
+  }
+
+  /**
+   * 清除进行中的写盘动作。**只在 key 匹配时清**：动作的 `finally` 可能晚于下一个动作的
+   * `begin` 到达（例如用户在前一个请求的响应到达前又点了另一个按钮），无条件清空会把
+   * 「正在写」的显示抹掉，让用户以为写完了。
+   */
+  endRecoveryWrite(key: string): void {
+    if (this.state.recovery.write?.key !== key) return
+    this.patch({ recovery: { write: null } })
   }
 
   /** 停止某 kind 的「发现进行中 run」轮询（视图请求结束后调用；/progress 轮询自行结束）。 */

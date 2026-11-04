@@ -175,7 +175,7 @@ function CompatibilityStep(props: {
             <span className={css.groupLabel}>{t('import.source.title')}</span>
             <span className={css.statusSpacer} />
           </div>
-          <div className={css.statRow} style={{ flexWrap: 'wrap', gap: '8px' }}>
+          <div className={css.statRow + ' ' + css.statRowWrap}>
             {analysis.source !== undefined && (
               <Badge kind="info">
                 {t('import.source.dsh', {

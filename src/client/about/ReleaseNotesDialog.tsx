@@ -48,37 +48,11 @@ function ReleaseCardView({
   t: TranslateNS<'config-manager'>
 }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '8px',
-        padding: '12px',
-        background: 'var(--dsw-alias-bg-base)',
-        border: '1px solid var(--dsw-alias-border-l1)',
-        borderRadius: '8px',
-      }}
-    >
+    <div className={css.releaseCard}>
       {/* 头部：版本号 + 标题 + 徽章 + 日期 + 外链 */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: '8px',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <span
-            style={{
-              fontSize: '14px',
-              fontWeight: 600,
-              color: 'var(--dsw-alias-label-primary)',
-            }}
-          >
-            {release.title}
-          </span>
+      <div className={css.releaseCardHead}>
+        <div className={css.releaseTitleRow}>
+          <span className={css.releaseTitle}>{release.title}</span>
           {isFirst && !release.isPrerelease && (
             <Badge kind="ok">{t('about.releaseNotes.latest')}</Badge>
           )}
@@ -86,14 +60,7 @@ function ReleaseCardView({
             <Badge kind="warn">{t('about.releaseNotes.prerelease')}</Badge>
           )}
           {release.publishedDateStr && (
-            <span
-              style={{
-                fontSize: '12px',
-                color: 'var(--dsw-alias-label-tertiary)',
-              }}
-            >
-              {release.publishedDateStr}
-            </span>
+            <span className={css.releaseDate}>{release.publishedDateStr}</span>
           )}
         </div>
 
@@ -235,7 +202,10 @@ export function ReleaseNotesDialog({
         scroll
         innerRef={bodyRef}
         onScroll={handleScroll}
-        style={{ maxHeight: '65vh', gap: '12px' }}
+        /* maxHeight 走内联：Modal.Body 只暴露 style（common/Modal.tsx 不在本次改动范围），
+           而 65vh 是「让无限滚动有界」的布局值，不属 DESIGN.md 的节奏 scale。
+           原 gap: '12px' 一并去掉 —— .dialogBody 不是 flex/grid 容器，gap 从来没有生效过。 */
+        style={{ maxHeight: '65vh' }}
       >
         {loading && (
           <div>
@@ -248,7 +218,7 @@ export function ReleaseNotesDialog({
           <div>
             {/* G-04：release notes 的错误文本来自 GitHub 状态/网络响应 —— 展示前统一过 redact */}
             <Banner kind="error">{redact(error)}</Banner>
-            <div className={css.actionRow} style={{ marginTop: '8px' }}>
+            <div className={css.actionRow + ' ' + css.actionRowSpaced}>
               <Button onClick={() => { void loadFirstPage() }}>
                 {t('about.releaseNotes.retry')}
               </Button>
@@ -260,9 +230,7 @@ export function ReleaseNotesDialog({
         )}
 
         {!loading && error === null && releases.length === 0 && (
-          <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--dsw-alias-label-secondary)' }}>
-            {t('about.releaseNotes.empty')}
-          </div>
+          <div className={css.releaseNotesEmpty}>{t('about.releaseNotes.empty')}</div>
         )}
 
         {!loading &&
@@ -276,42 +244,20 @@ export function ReleaseNotesDialog({
           ))}
 
         {loadingMore && (
-          <div style={{ padding: '12px 0', display: 'flex', justifyContent: 'center' }}>
+          <div className={css.releaseNotesLoadingMore}>
             <Spinner label={t('about.releaseNotes.loadingMore')} />
           </div>
         )}
 
         {!loading && !loadingMore && !hasMore && releases.length > 0 && (
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '8px 0',
-              fontSize: '12px',
-              color: 'var(--dsw-alias-label-tertiary)',
-            }}
-          >
-            {t('about.releaseNotes.allLoaded')}
-          </div>
+          <div className={css.releaseNotesAllLoaded}>{t('about.releaseNotes.allLoaded')}</div>
         )}
       </Modal.Body>
 
       {/* 底部按钮区 */}
-      <div
-        className={css.actionRow}
-        style={{
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          borderTop: '1px solid var(--dsw-alias-border-l1)',
-          paddingTop: '10px',
-          paddingBottom: '14px',
-          paddingLeft: '16px',
-          paddingRight: '16px',
-          flexWrap: 'wrap',
-          gap: '8px',
-        }}
-      >
+      <div className={css.actionRow + ' ' + css.releaseNotesFoot}>
         <Button href={releasesPageUrl}>{t('about.releaseNotes.viewOnGithub')}</Button>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <div className={css.releaseNotesFootActions}>
           <Button onClick={handleNeverShow}>
             {t('about.releaseNotes.neverShow')}
           </Button>

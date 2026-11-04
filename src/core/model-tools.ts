@@ -40,6 +40,7 @@ import { parseSyncChannel, readFullSyncConfig, readSyncConfigFor, SYNC_CHANNELS 
 import type { SyncConfig, SyncConfigIssue, SyncTransportType } from '../sync/sync-config.ts'
 import type { ConfigAdapter, HostContext, SecretScanner } from './types.ts'
 import { runWithMutationLock } from '../utils/env-lock.ts'
+import { formatDateStamp } from '../utils/time.ts'
 
 /* ------------------------------------------------------------ 依赖与类型 */
 
@@ -79,12 +80,6 @@ function assertValidSnapshotId(snapshotId: string): void {
 async function snapshotDirExists(deps: ModelToolsDeps, snapshotId: string): Promise<boolean> {
   const metas = await listSnapshots(deps.snapshotsDir)
   return metas.some((m) => m.id === snapshotId)
-}
-
-/** 导出文件时间戳（YYYYMMDD-HHmmss），与 host 路由 dateStamp 同构。 */
-function dateStamp(d: Date = new Date()): string {
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 
 /** SECTION_IDS 白名单过滤（未知/非法分区 id 丢弃，与 host 路由语义一致）。 */
@@ -137,7 +132,7 @@ export function createModelTools(deps: ModelToolsDeps) {
       // P2-C（Phase 8）：config_backup 接入 GLOBAL mutation lock，与导入/恢复/同步/定时备份等
       // destructive 操作互斥（写 exports 产物期间确保 live config 不被并发改动，产物一致）。
       // 无锁环境（测试/mock）→ 不锁定直接执行；锁被占用 → 抛 EnvironmentLockUnavailableError。
-      const outPath = join(deps.exportsDir, `dsh-config-${dateStamp()}-${randomBytes(3).toString('hex')}.zip`)
+      const outPath = join(deps.exportsDir, `dsh-config-${formatDateStamp()}-${randomBytes(3).toString('hex')}.zip`)
       return runWithMutationLock(
         deps.host.mutationLock,
         { op: 'model-backup', target: 'exports', isBlocked: () => deps.host.safeModeIsBlocked?.() ?? false },

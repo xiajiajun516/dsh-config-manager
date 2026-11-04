@@ -1,0 +1,87 @@
+# 共享校验阶梯（composite action）：ci.yml（PR / 主干门禁）与 publish.yml（发版）逐字共用同一份。
+#
+# 为什么存在（tech-debt #17）：两条流水线此前各自维护同一套 10 个 run 步骤
+# （install → typecheck → typecheck tests → test → build → bundle 护栏 → AGENTS 预算守卫 →
+# 文档路径守卫 → 文档版本守卫 → pack）。新增一条检查要改两处，漏一处就出现
+# 「PR 有门禁、发版没有」或反向的不对称。现在检查集只有这一处。
+#
+# 留在调用方的步骤（不进本 action，因为带调用方语义）：
+#   - Checkout / Setup Node.js：ci.yml 的 setup-node 需要 cache: npm 与三平台 matrix 表达式；
+#     publish.yml 是单平台、不缓存。两者的 action SHA 仍由「两条流水线固定同一批 SHA」约束。
+#   - Update npm to latest（仅发版需要：npm trusted publishing 要 npm >= 11.5.1）——
+#     它必须在本 action 的 install 之前执行，因此留在 publish.yml。
+#
+# 每个 run 步骤都显式写 shell: bash：composite action 的 run 步骤**必须**声明 shell。
+# 三平台节点都自带 Git Bash（ci.yml 的 pack 步骤此前就依赖这一点）。对本文这些命令
+# （npm / node 调用，无 shell 内建依赖）而言，与原先「Windows 走 PowerShell、其余走默认 bash」
+# 语义等价。
+#
+# 发布侧顺序提示：Package tarball 随本 action 提前到 Tag guard 之前执行；产物 dist/*.tgz
+# 仍留在调用方工作区，供后面的 GitHub Release 步骤作为附件使用。
+name: Verify (install + gates)
+description: install → typecheck → typecheck:tests → test → build → bundle guard → AGENTS budget → doc path → doc version → pack
+
+runs:
+  using: composite
+  steps:
+    - name: Install dependencies
+      # Some DSH core packages live only in peerDependencies and are not on
+      # the public registry; --legacy-peer-deps skips peer resolution.
+      shell: bash
+      run: npm ci --legacy-peer-deps
+
+    - name: Typecheck
+      shell: bash
+      run: npm run typecheck
+
+    - name: Typecheck (tests)
+      # tests/** 不在根 tsconfig 的 include 内：用独立的 tsconfig.tests.json 单独过一遍类型检查。
+      # 此前 tests/** 是类型检查盲区（实测曾积压 43 条错误），该 step 让「测试代码也过类型检查」成为真实门禁。
+      # 发版侧同样必须跑：发版流水线缺这一步时，测试代码的类型错误在整个发布路径上都是盲区。
+      shell: bash
+      run: npm run typecheck:tests
+
+    - name: Test
+      shell: bash
+      run: npm test
+
+    - name: Build
+      shell: bash
+      run: npm run build
+
+    - name: Bundle self-contained guard
+      # lib/client.js 必须自包含：DSH client loader 只取这一个文件，任何被外置的
+      # require（如 lucide-react / @radix-ui/*）都会在用户端命中 module-table-miss 崩溃。
+      # `npm test` 在 Build 之前运行，此时 lib/client.js 尚不存在（该测试会跳过并说明），
+      # 因此必须在 Build 之后单独跑一次，让护栏真正生效。发版前的最后一道闸也在这里。
+      shell: bash
+      run: node --test src/client/bundle-selfcontained.test.ts
+
+    - name: AGENTS.md budget guard
+      # AGENTS.md 每个会话都进模型上下文，且受 workspace instruction 64 KiB 预算限制：
+      # 超限时模型只能看到被截断的尾巴（历史事故）。规则留在 AGENTS.md，证据必须进 docs/lessons/。
+      shell: bash
+      run: node scripts/check-agents-budget.mjs
+
+    - name: Doc path guard
+      # 活文档里指向已删除文件的路径会让读者与 agent 按图索骥失败（审计实测多例）。
+      # 只校验活文档；历史归档 / 证据库 / CHANGELOG 故意排除（见脚本头注释）。
+      shell: bash
+      run: node scripts/check-doc-paths.mjs
+
+    - name: Doc version guard
+      # 写死的版本号没有机制保证跟着发版走（审计实测：文档写 v0.1.58，实为 0.1.79）。
+      # 校验三处版本一致 + 活文档里「适用/当前版本」声明与 package.json 一致。
+      # 发版前最容易踩的正是版本漂移。
+      shell: bash
+      run: node scripts/check-doc-versions.mjs
+
+    - name: Package tarball
+      # 与发布流水线同构的打包校验：pack 失败说明 package.json "files" 白名单
+      # 或 lib/ 产物已坏——在 PR 阶段暴露，而不是等到发版时才卡住。
+      # 发版侧：可安装的 tgz 由 GitHub Release 作为附件带走。
+      # npm pack --pack-destination 在目录不存在时报 ENOENT（fresh checkout）。
+      # 显式 shell: bash —— windows-latest 自带 Git Bash；默认的 PowerShell 里 `mkdir` 没有 `-p`
+      # （三个平台用同一条命令，避免「本机跑的是另一套 shell 语义」）。
+      shell: bash
+      run: mkdir -p dist && npm pack --pack-destination ./dist

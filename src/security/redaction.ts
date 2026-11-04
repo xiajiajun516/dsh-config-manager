@@ -116,23 +116,34 @@ function replaceSensitiveField(text: string, re: RegExp, blacklist: readonly str
 }
 
 /**
- * 文本脱敏（幂等）。blacklist 为**附加**规范化字段名（小写无分隔符，如 'clientsecret'）。
- * 输出仍保留结构化形态（JSON 行合法）。
+ * 脱敏流水线（**唯一实现**，redact 与 createRedactor 共用一套顺序与语义）。
+ *
+ * 曾经这里与 createRedactor 各写一遍完全相同的 6 步（结构化 3 步 + 值形状 + URL query + userinfo），
+ * 两份代码只在「正则实例从哪来」上不同 —— 任何一步调整都要记得改两处，漏一次就是两条脱敏口径。
+ * 现在只由调用方决定正则实例的生命周期（模块级常量 / 每次预编译），流水线本身不再有副本。
  */
-export function redact(text: string, blacklist: readonly string[] = []): string {
-  let out = text;
+function redactPipeline(
+  text: string, blacklist: readonly string[], json: RegExp, kv: RegExp, colon: RegExp,
+): string {
   // 1. 结构化字段形态（顺序：JSON → kv → colon；JSON 键不会被后续形态二次命中）
-  out = replaceSensitiveField(out, JSON_FIELD_RE, blacklist);
-  out = replaceSensitiveField(out, KV_FIELD_RE, blacklist);
-  out = replaceSensitiveField(out, COLON_FIELD_RE, blacklist);
+  let out = replaceSensitiveField(text, json, blacklist);
+  out = replaceSensitiveField(out, kv, blacklist);
+  out = replaceSensitiveField(out, colon, blacklist);
   // 2. 值形状模式（字段名无关，包含式）
   for (const { re } of VALUE_PATTERNS) {
     re.lastIndex = 0;
     out = out.replace(re, REDACTED);
   }
   out = out.replace(URL_QUERY_RE, `$1${REDACTED}`);
-  out = out.replace(URL_USERINFO_RE, `$1${REDACTED}$3`);
-  return out;
+  return out.replace(URL_USERINFO_RE, `$1${REDACTED}$3`);
+}
+
+/**
+ * 文本脱敏（幂等）。blacklist 为**附加**规范化字段名（小写无分隔符，如 'clientsecret'）。
+ * 输出仍保留结构化形态（JSON 行合法）。
+ */
+export function redact(text: string, blacklist: readonly string[] = []): string {
+  return redactPipeline(text, blacklist, JSON_FIELD_RE, KV_FIELD_RE, COLON_FIELD_RE);
 }
 
 /** 对象级掩码：字段名命中敏感名单 → 整值替换（返回新对象，不改原对象；结构与类型保留） */
@@ -147,21 +158,16 @@ export function redactValue(value: unknown, blacklist: readonly string[] = []): 
   return out;
 }
 
-/** 预编译脱敏器（多次调用复用；blacklist 为附加规范化字段名） */
+/**
+ * 预编译脱敏器（多次调用复用；blacklist 为附加规范化字段名）。
+ * 正则实例**在创建时**各复制一份：模块级常量若与本函数共享，多线程无害但会让「谁动了 lastIndex」
+ * 不可追溯；复制成本只有一次，换来每个脱敏器实例自持状态。
+ */
 export function createRedactor(blacklist: readonly string[] = []): (text: string) => string {
-  const compiled = { json: JSON_FIELD_RE, kv: KV_FIELD_RE, colon: COLON_FIELD_RE };
-  return (text: string): string => {
-    let out = replaceSensitiveField(text, new RegExp(compiled.json.source, 'g'), blacklist);
-    out = replaceSensitiveField(out, new RegExp(compiled.kv.source, 'g'), blacklist);
-    out = replaceSensitiveField(out, new RegExp(compiled.colon.source, 'g'), blacklist);
-    for (const { re } of VALUE_PATTERNS) {
-      re.lastIndex = 0;
-      out = out.replace(re, REDACTED);
-    }
-    out = out.replace(URL_QUERY_RE, `$1${REDACTED}`);
-    out = out.replace(URL_USERINFO_RE, `$1${REDACTED}$3`);
-    return out;
-  };
+  const json = new RegExp(JSON_FIELD_RE.source, 'g');
+  const kv = new RegExp(KV_FIELD_RE.source, 'g');
+  const colon = new RegExp(COLON_FIELD_RE.source, 'g');
+  return (text: string): string => redactPipeline(text, blacklist, json, kv, colon);
 }
 
 /** 默认名单（文档用；redact 的默认附加名单为空，内置判定已含 DEFAULT_SECRET_FIELD_NAMES） */

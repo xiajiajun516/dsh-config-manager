@@ -34,6 +34,7 @@ import {
 import { EnvironmentLockManager, OWNERSHIP_FILE } from '../utils/env-lock.ts'
 import { scanSessionHealth, type SessionHealthScanResult } from '../utils/session-health-scan.ts'
 import type { SessionVerifyResult } from '../utils/session-verify.ts'
+import { formatDateStamp } from '../utils/time.ts'
 
 /* ------------------------------------------------------------ 进程/实例事实 */
 
@@ -1352,9 +1353,7 @@ export async function exportOfflineBackup(
     if (collection.entries.length === 0) {
       return { ok: false, code: 'nothing-to-export', message: '没有可打包的内容（该 home 下未找到可离线收集的分区）。' }
     }
-    const now = new Date()
-    const stamp = String(now.getFullYear()) + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0')
-      + '-' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0') + String(now.getSeconds()).padStart(2, '0')
+    const stamp = formatDateStamp()
     const { randomBytes } = await import('node:crypto')
     const desired = 'dsh-config-cli-' + stamp + '-' + randomBytes(4).toString('hex') + '.zip'
     await fsp.mkdir(paths.exportsDir, { recursive: true })

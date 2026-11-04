@@ -4,7 +4,7 @@
  * Workbench Rebuild（2026-09）：
  * - 每个冲突渲染为「选边卡片」：保留当前 / 使用备份 两个并排可点选块，
  *   选中侧高亮描边 + 淡底（radio 语义保留：label 包裹原生 input，键盘可操作）；
- * - 适配器标签（kindTag）+ 描述（路径等宽字体）组成卡片头；
+ * - 适配器标签（中性 Chip）+ 描述（路径等宽字体）组成卡片头；
  * - 配置更改明细（detail）不再用 <pre>（white-space:pre 不换行 → 长 JSON 横向溢出），
  *   改为切分后 prefix / current / imported 各自成行、长值自动换行（见 splitConflictDetail）；
  * - 批量决策按钮置于列表顶部工具行。
@@ -25,7 +25,7 @@ import { ConflictCollector } from '../../ui/conflict-view.ts'
 import type { ItemResolution } from '../../core/types.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { redact } from '../../security/redaction.ts'
-import { Banner } from '../common/ui.tsx'
+import { Banner, Chip } from '../common/ui.tsx'
 import css from '../config-manager.module.css'
 
 export interface ConflictListProps {
@@ -136,7 +136,7 @@ export function ConflictList({ collector, t, onChanged }: ConflictListProps) {
         return (
           <div key={item.id} className={css.conflictItem}>
             <div className={css.conflictHead}>
-              <span className={css.kindTag}>{item.adapter}</span>
+              <Chip>{item.adapter}</Chip>
               <span className={`${css.conflictId} ${css.mono}`} title={safeDescription}>{safeDescription}</span>
               {item.severity === 'error' && <span className={css.severityError}>{t('import.conflicts.severityError')}</span>}
             </div>

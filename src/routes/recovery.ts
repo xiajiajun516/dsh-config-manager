@@ -5,7 +5,7 @@
  * path/methods 就是唯一声明处；围栏、方法判定与顶层异常处理由 src/routes/kit.ts 在注册点统一提供。
  */
 
-import { endpoint, readJsonBody, writeJson } from './kit.ts'
+import { endpoint, readJsonBody, writeJson, writeMutationError } from './kit.ts'
 // t6：「英文界面零中文」——迁移历史 summary 一律由目录键产生；engineMsg 与宿主 makeRouteEnv 的
 // `msg` 同源（t2 起 this.msg = engineMsg），但它是**活翻译器**，不依赖 env 是否注入取词器。
 import { engineMsg } from './messages.ts'
@@ -17,7 +17,7 @@ import { isRollbackEnabled, setRollbackEnabled } from '../core/rollback-gate.ts'
 import { readRollbackEnabledSync, updateUiPrefs } from '../sync/ui-prefs.ts'
 import type { RollbackForkSeam, RollbackPreviewResult, RollbackRewindInput, RollbackRewindResult } from '../core/rollback-point.ts'
 import { reconcileForkSessions, type ForkReconcileChild, type ForkReconcileOutcome } from '../core/fork-reconcile.ts'
-import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
+import { runWithMutationLock } from '../utils/env-lock.ts'
 import { scanSessionHealth } from '../utils/session-health-scan.ts'
 import { applySessionTitles } from '../core/session-meta.ts'
 import { applySessionLogTitles } from '../core/session-title.ts'
@@ -563,12 +563,10 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
               },
             )
           } catch (error) {
-            if (error instanceof EnvironmentLockUnavailableError) {
-              host.log.warn(`mutation lock blocked: op=session-repair reason=${error.reason}`)
-              writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-              return
+            // 423 家族（SAFE MODE / 环境锁）的唯一映射在 kit；本组其余错误仍是既有的 500 { error } 口径。
+            if (!writeMutationError(res, host, error)) {
+              writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
             }
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
           }
           return
         }
@@ -623,12 +621,10 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
               },
             )
           } catch (error) {
-            if (error instanceof EnvironmentLockUnavailableError) {
-              host.log.warn(`mutation lock blocked: op=session-layout-repair reason=${error.reason}`)
-              writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-              return
+            // 423 家族（SAFE MODE / 环境锁）的唯一映射在 kit；本组其余错误仍是既有的 500 { error } 口径。
+            if (!writeMutationError(res, host, error)) {
+              writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
             }
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
           }
           return
         }
@@ -815,12 +811,10 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             )
             writeJson(res, 200, { ok: true, rollbackEnabled: wanted, rollbackActive: isRollbackEnabled() })
           } catch (error) {
-            if (error instanceof EnvironmentLockUnavailableError) {
-              host.log.warn('mutation lock blocked: op=rollback-prefs reason=' + error.reason)
-              writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-              return
+            // 423 家族（SAFE MODE / 环境锁）的唯一映射在 kit；本组其余错误仍是既有的 500 { error } 口径。
+            if (!writeMutationError(res, host, error)) {
+              writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
             }
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
           }
           return
         }
@@ -855,11 +849,8 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             })
             writeJson(res, 200, { ok: true, ...result })
           } catch (error) {
-            if (error instanceof EnvironmentLockUnavailableError) {
-              host.log.warn('mutation lock blocked: op=rollback-cleanup reason=' + error.reason)
-              writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-              return
-            }
+            // 423 家族（SAFE MODE / 环境锁）的唯一映射在 kit；本组其余错误仍是既有的口径。
+            if (writeMutationError(res, host, error)) return
             // 引擎侧的**显式拒绝**带机器码（存储不可用 / 台账读不出）：按码映射 HTTP，
             // 不回落成泛化 500 —— 界面要能说清「是存储栈缺了」还是「台账真读不出来」。
             if (error instanceof RollbackLedgerRefusedError) {
@@ -989,12 +980,10 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             })
             reply(result)
           } catch (error) {
-            if (error instanceof EnvironmentLockUnavailableError) {
-              host.log.warn('mutation lock blocked: op=rollback-rewind reason=' + error.reason)
-              writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-              return
+            // 423 家族（SAFE MODE / 环境锁）的唯一映射在 kit；本组其余错误仍是既有的 500 { error } 口径。
+            if (!writeMutationError(res, host, error)) {
+              writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
             }
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
           }
           return
         }
@@ -1022,12 +1011,10 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             }
             reply(result)
           } catch (error) {
-            if (error instanceof EnvironmentLockUnavailableError) {
-              host.log.warn('mutation lock blocked: op=rollback-delete reason=' + error.reason)
-              writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-              return
+            // 423 家族（SAFE MODE / 环境锁）的唯一映射在 kit；本组其余错误仍是既有的 500 { error } 口径。
+            if (!writeMutationError(res, host, error)) {
+              writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
             }
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
           }
           return
         }
@@ -1068,12 +1055,10 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
           // 盘点就读不出来（读不到父子关系）⇒ 503：**不是**「本机没有子会话」（core 用 error 区分）
           writeJson(res, result.ok ? 200 : 503, result)
         } catch (error) {
-          if (error instanceof EnvironmentLockUnavailableError) {
-            host.log.warn(`mutation lock blocked: op=fork-reconcile reason=${error.reason}`)
-            writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-            return
+          // 423 家族（SAFE MODE / 环境锁）的唯一映射在 kit；本组其余错误仍是既有的 500 { error } 口径。
+          if (!writeMutationError(res, host, error)) {
+            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
           }
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
         return
       }
@@ -1169,12 +1154,10 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
           writeJson(res, r.status, r.body)
         })
       } catch (error) {
-        if (error instanceof EnvironmentLockUnavailableError) {
-          host.log.warn(`mutation lock blocked: op=${error.op} reason=${error.reason}${error.detail !== undefined ? ` detail=${error.detail}` : ''}`)
-          writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-          return
+        // 423 家族（SAFE MODE / 环境锁）的唯一映射在 kit；本组其余错误仍是既有的 500 { error } 口径。
+        if (!writeMutationError(res, host, error)) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
-        writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
       }
     }),
   ]

@@ -37,7 +37,7 @@ import {
   type MarketPickerFilter, type MarketReviewStep,
 } from '../../ui/market-import.ts'
 import { redact } from '../../security/redaction.ts'
-import { Badge, Banner, Button, Segmented, Stepper } from '../common/ui.tsx'
+import { Badge, Banner, Button, Chip, Segmented, Stepper } from '../common/ui.tsx'
 import { ContentPicker } from '../common/ContentPicker.tsx'
 import { ConflictList } from '../import/ConflictList.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
@@ -231,7 +231,7 @@ export function MarketImportReview({
         .map((s) => (
           <div key={s.section} className={css.conflictItem}>
             <div className={css.conflictHead}>
-              <span className={css.kindTag}>{labelOf(s.section)}</span>
+              <Chip>{labelOf(s.section)}</Chip>
               <span className={css.pickerCount}>
                 {t('review.sectionUnits', { selected: String(s.selectedUnits), total: String(s.totalUnits) })}
               </span>

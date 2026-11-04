@@ -216,6 +216,29 @@ export function Badge({ kind = 'info', children, title }: BadgeProps) {
   return <span className={css.badge} data-kind={kind} title={title}>{children}</span>
 }
 
+/* ---------------- Chip ---------------- */
+
+export interface ChipProps {
+  children: ReactNode
+  /** 悬停提示（可选） */
+  title?: string
+}
+
+/**
+ * 中性分类片：**没有状态语义**的短标签（来源 / 形态 / 适配器 / 分区数）。
+ *
+ * 为什么不复用 `<Badge>`：Badge 的 kind 是四态**语义**（info/ok/warn/error），
+ * 传一个「中性」进去会逼着 `src/ui/badge-tone.ts` 再造第五档，四态表立刻失去
+ * 「一档一义」的约束；而这里要表达的是「分类，不分轻重」。所以拆成独立组件：
+ *   - Badge = 状态（颜色编码，四态唯一来源）
+ *   - Chip  = 分类（中性灰底，与 Badge 同盒模型基线）
+ * 盒模型由 `.chip` 与 `.badge` 逐字对齐保证（同高 19px / 同药丸圆角 / 同 11px 字号），
+ * 差别只在色调 —— 同屏混排时它们读起来是「同一套小片子的两种用法」。
+ */
+export function Chip({ children, title }: ChipProps) {
+  return <span className={css.chip} title={title}>{children}</span>
+}
+
 /* ---------------- Banner ---------------- */
 
 export type BannerKind = 'ok' | 'error' | 'info' | 'warn'

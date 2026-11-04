@@ -5,10 +5,9 @@
  * path/methods 就是唯一声明处；围栏、方法判定与顶层异常处理由 src/routes/kit.ts 在注册点统一提供。
  */
 
-import { endpoint, readJsonBody, writeJson } from './kit.ts'
+import { endpoint, readJsonBody, writeJson, writeMutationError } from './kit.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
-import { TransactionRecoveryRequiredError } from '../core/phase3-host.ts'
 import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned } from '../core/restore.ts'
 import type { RunState } from '../core/run-registry.ts'
 import { snapshotFileDiff, summarizeRestoreChanges } from '../core/snapshot-diff.ts'
@@ -16,7 +15,7 @@ import { buildFileDiffBody, buildRestoreBody, executeRestorePlan, makeRestoreExe
 import type { RestoreJournalPort } from '../core/restore-wal.ts'
 import { probeRestoreResume, runRestoreWithResume } from '../core/restore-resume.ts'
 import type { RestoreResumeHint } from '../core/restore-resume.ts'
-import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
+import { runWithMutationLock } from '../utils/env-lock.ts'
 import { isENOENT } from '../utils/guards.ts'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -205,12 +204,8 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
           }
         })
       } catch (error) {
-        if (error instanceof EnvironmentLockUnavailableError) {
-          host.log.warn(`mutation lock blocked: op=${error.op} reason=${error.reason}${error.detail !== undefined ? ` detail=${error.detail}` : ''}`)
-          writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-        } else if (error instanceof TransactionRecoveryRequiredError) {
-          writeJson(res, 423, { error: error.message, code: 'transaction-recovery-required' })
-        } else {
+        // 423 家族（SAFE MODE / 环境锁 / 未收敛事务）的唯一映射在 kit；本路由其余错误沿用 400 口径。
+        if (!writeMutationError(res, host, error)) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
       }

@@ -23,7 +23,8 @@ const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 // UI v2：旧的 snapshots 面板已解散，恢复报告改由产物库的动作层以 Modal 呈递 ——
 // 退出入口从「报告块内的按钮」变成「Modal.Footer 的完成按钮」，语义不变（必须显式退出）。
 const PANEL = path.join(ROOT, 'src', 'client', 'library', 'LibraryActions.tsx')
-const LOCALES = path.join(ROOT, 'src', 'client', 'locales.ts')
+// 字典已按页面域拆成 src/client/locales/*.ts（聚合器只剩 import/展开，没有字面量）——守卫跟着扫目录。
+const LOCALES_DIR = path.join(ROOT, 'src', 'client', 'locales')
 
 /** 剥掉块注释与行注释（注释里的同名文字会造成假阳性，见 AGENTS.md 的 bundle 扫描教训）。 */
 function stripComments(src: string): string {
@@ -61,8 +62,9 @@ test('恢复报告：默认不渲染（report 为 null），退出即清空 —�
 })
 
 test('恢复报告：snapshots.reportDone 在 zh / en 两套字典中都必须存在', () => {
-  const locales = fs.readFileSync(LOCALES, 'utf8')
-  const hits = [...locales.matchAll(/'snapshots\.reportDone':/g)]
+  const files = fs.readdirSync(LOCALES_DIR).filter((name) => name.endsWith('.ts'))
+  assert.ok(files.length > 0, '字典目录为空：拆分子文件找错位置了')
+  const hits = files.flatMap((name) => [...fs.readFileSync(path.join(LOCALES_DIR, name), 'utf8').matchAll(/'snapshots\.reportDone':/g)])
   assert.equal(hits.length, 2, `snapshots.reportDone 必须 zh/en 各一条（实际 ${hits.length} 条）`)
 })
 

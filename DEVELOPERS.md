@@ -44,7 +44,7 @@ src/
 
 > 下移自 `AGENTS.md` §🏗️ 架构心智：这里是完整论证与证据；规则句仍留在 AGENTS.md。
 
-- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**（W2；规则判据见 `AGENTS.md` §🏗️ 架构心智，路由守卫的活文档见 `docs/lessons/repo-overview.md` 与 `docs/maintenance/known-gaps.md` G-01/G-02；下面的实测打点出自**只读冻结存档** `docs/lessons/known-pitfalls.md`）：DSH 的 browser-session cookie 拒绝只挂在 **`kind:'prefix'`、`path:'/api'` 的 RPC 承载路由**上（源码行号见 `docs/lessons/known-pitfalls.md`「t93 容量腾挪」§1），而 host-webserver 的派发顺序是 **exact 表先命中**。本插件 82 条路由（口径见 parity 快照）都命中 exact 或更长的私有 prefix，**永不进入** DSH 的 `/api` 认证路由——实测打点见 `docs/lessons/known-pitfalls.md`「t93 容量腾挪」§1。**影响面**：本机任意非浏览器进程（含本机其它本地用户）**无 token/cookie 即可调用全部 82 条路由**（含破坏性路由，清单见 known-pitfalls）；**远程/LAN 来源**被 kit 的 `remoteAddress ∈ {127.0.0.1, ::1, ::ffff:127.0.0.1}` 判定挡掉，**浏览器跨站 CSRF** 被同源/Host 围栏挡掉——**围栏确实在生效，不得把这条写成「插件 API 无认证」**。两个不得误解的推论：① **不得把 DSH 会话认证当作插件 API 的兜底**——认证挂在通用 prefix 路由 `/api` 上 + exact 优先的派发顺序是**平台级性质**，任何在 `/api` 下注册 exact 路由的 DSH 插件同理；插件 API 的边界只能是 kit 的 `endpoint()` 围栏。② 若将来要在**共享机器**或**经本机代理/隧道转发**（非回环来源、`trustedHosts`/LAN 绑定）的场景暴露插件 API，**必须**在 kit 里自行对接认证（方向：在 `endpoint()` 注册点统一加一道校验，勿逐路由散写），届时应重新评级本条的残余风险。**复核路径**见 `docs/lessons/known-pitfalls.md`「t93 容量腾挪」§1（含 DSH 源码位置与 `outputs/e2e-w2/run-e2e.ps1 -Strict`）。
+- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**（W2；规则判据见 `AGENTS.md` §🏗️ 架构心智，路由守卫的活文档见 `docs/lessons/repo-overview.md` 与 `docs/maintenance/known-gaps.md` G-01/G-02；下面的实测打点出自**只读冻结存档** `docs/lessons/known-pitfalls.md`）：DSH 的 browser-session cookie 拒绝只挂在 **`kind:'prefix'`、`path:'/api'` 的 RPC 承载路由**上（源码行号见 `docs/lessons/known-pitfalls.md`「t93 容量腾挪」§1），而 host-webserver 的派发顺序是 **exact 表先命中**。本插件的全部 exact 路由（口径见 parity 快照）都命中 exact 或更长的私有 prefix，**永不进入** DSH 的 `/api` 认证路由——实测打点见 `docs/lessons/known-pitfalls.md`「t93 容量腾挪」§1。**影响面**：本机任意非浏览器进程（含本机其它本地用户）**无 token/cookie 即可调用全部 exact 路由**（含破坏性路由，清单见 known-pitfalls）；**远程/LAN 来源**被 kit 的 `remoteAddress ∈ {127.0.0.1, ::1, ::ffff:127.0.0.1}` 判定挡掉，**浏览器跨站 CSRF** 被同源/Host 围栏挡掉——**围栏确实在生效，不得把这条写成「插件 API 无认证」**。两个不得误解的推论：① **不得把 DSH 会话认证当作插件 API 的兜底**——认证挂在通用 prefix 路由 `/api` 上 + exact 优先的派发顺序是**平台级性质**，任何在 `/api` 下注册 exact 路由的 DSH 插件同理；插件 API 的边界只能是 kit 的 `endpoint()` 围栏。② 若将来要在**共享机器**或**经本机代理/隧道转发**（非回环来源、`trustedHosts`/LAN 绑定）的场景暴露插件 API，**必须**在 kit 里自行对接认证（方向：在 `endpoint()` 注册点统一加一道校验，勿逐路由散写），届时应重新评级本条的残余风险。**复核路径**见 `docs/lessons/known-pitfalls.md`「t93 容量腾挪」§1（含 DSH 源码位置与 `outputs/e2e-w2/run-e2e.ps1 -Strict`）。
 
 ## 🚀 自动发布（npm + GitHub Release）
 
@@ -259,11 +259,11 @@ install → typecheck（src）→ typecheck:tests（tests/**）→ npm test（�
 - **Utility**：`src/utils/` 或模块私有；带业务语义的纯函数优先 `src/ui/`。
 
 ### 🚀 发布（打 tag 全自动）
-CI `.github/workflows/publish.yml`：tag `v*` push → typecheck（src + tests）→ test → build → 护栏 → pack → **CHANGELOG 亮点段门禁** → npm publish(OIDC) → GitHub Release。
+CI `.github/workflows/publish.yml`：tag `v*` push → 【共享校验 composite action：typecheck（src + tests）→ test → build → 护栏 → pack】 → **CHANGELOG 亮点段门禁** → npm publish(OIDC) → GitHub Release。
 步骤：①bump 三处版本；②`CHANGELOG.md` 顶部加当前版本双语亮点段（漏写 CI fail-fast，release 由 `.github/scripts/extract-release-notes.py` 抽取）；③push main；④`git tag -a vX.Y.Z && push`。
 **门禁顺序**（2026-09 修正）：亮点段抽取 + 非空校验是**独立 step，排在 `npm publish` 之前**且不带 `if:` —— 两条触发路径都会执行。此前它嵌在「Create GitHub Release（tag-only）」步骤里，于是 CHANGELOG 漏写时流水线会红但包**已经发到 npm**（同版本号不可重发），而 `workflow_dispatch` 路径更是整段跳过该门禁、照常发布。
 注意：手动 `workflow_dispatch` 不建 Release（该步骤仍为 tag-only），但**发布与亮点段门禁照常执行**（无 tag 时版本号取 `package.json.version`）；npm 用 OIDC 无长令牌；版本 `0.1.x`；commit 惯例 `chore: bump to X.Y.Z`；不配 `.github/release.yml`（无 PR+label，GitHub 默认 conventional 分组更好）。
-CI 门禁：`.github/workflows/ci.yml` 对 `pull_request`→main 与 `push`→main 跑 typecheck（src）/ typecheck:tests / test / build / 护栏 / pack（最小权限、零发布副作用）；**发版仍只走 tag → `publish.yml`**，两条流水线互不重叠。
+CI 门禁：`.github/workflows/ci.yml` 对 `pull_request`→main 与 `push`→main 跑 typecheck（src）/ typecheck:tests / test / build / 护栏 / pack（阶梯定义只有一份：`.github/actions/verify/action.yml`，由 `tests/ci-workflow-contract.test.ts` 钉住两处不得再各写一套；最小权限、零发布副作用）；**发版仍只走 tag → `publish.yml`**，两条流水线互不重叠。
 
 #### 状态管理
 - 高频可恢复流程(Export/Import)状态在 `run-store.ts`；新视图需「切 tab 不丢/刷新恢复」就入 runStore。

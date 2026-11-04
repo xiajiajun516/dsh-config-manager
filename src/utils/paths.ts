@@ -41,14 +41,38 @@ export function isPathSafe(entryName: string): boolean {
   return true;
 }
 
-/** 候选目录是否位于父目录之内（含等于父目录）。
+/** 越界判定选项。 */
+export interface PathInsideOptions {
+  /**
+   * 比较前折叠大小写（Windows 文件系统大小写不敏感）。缺省按当前平台。
+   * 显式传 false 的场景：拿另一台机器的路径做形状判定（跨平台导入）。
+   */
+  foldCase?: boolean;
+}
+
+/** 候选路径是否位于父目录之内（含等于父目录）。
  *
- * 纯字符串语义（不碰文件系统）：两侧必须是**同一种拼写**，调用方若混用
- * realpath 结果与原路径（Windows 8.3 短名、macOS `/var`→`/private/var`）会误判为越界 ——
- * `path.relative` 不会折叠短名，务必先各自 realpath 再调用。 */
+ * 全仓**唯一**的越界判定（restore / verify-recovery / zip / recursive-walk / 路由都走这里）：
+ * 早期四处各写一份，其中三份用 `rel.startsWith('..')` 判越界 —— 名字真的叫 `..foo` 的
+ * 兄弟目录会被误判为逃逸（`path.relative('/a/b','/a/b/..foo') === '..foo'`）。
+ * 越界只有两种形态：相对结果是 `..` 段本身，或以 `..` + 分隔符开头；绝对结果（跨盘符）同样越界。
+ *
+ * 纯字符串语义（**不碰文件系统**）：两侧各自 `path.resolve` 后比较。调用方若混用
+ * realpath 结果与原路径（Windows 8.3 短名、macOS `/var`→`/private/var`）仍会误判为越界 ——
+ * `path.resolve` 不折叠短名，真实路径那一层必须两侧都先 realpath 再调用。
+ */
+export function isPathInside(child: string, parent: string, options: PathInsideOptions = {}): boolean {
+  const foldCase = options.foldCase ?? process.platform === 'win32';
+  const fold = (v: string): string => (foldCase ? v.toLowerCase() : v);
+  const rel = path.relative(fold(path.resolve(parent)), fold(path.resolve(child)));
+  if (rel === '') return true;
+  if (path.isAbsolute(rel)) return false; // 跨盘符（win32 relative 直接回绝对路径）
+  return rel !== '..' && !rel.startsWith(`..${path.sep}`);
+}
+
+/** 候选目录是否位于父目录之内（含等于父目录）—— `isPathInside` 的读法友好别名。 */
 export function isSameOrChild(p: string, parent: string): boolean {
-  const rel = path.relative(parent, p);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return isPathInside(p, parent);
 }
 
 /**

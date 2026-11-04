@@ -56,7 +56,7 @@ export function inspectSummary(analysis: ImportAnalysis, plan: ImportPlan): Back
 /** 变更明细分组键（渲染顺序 = 冲突 → 变更 → 路径映射 → 一致跳过 → 其他）。 */
 export type InspectGroupKey = 'conflicts' | 'changes' | 'paths' | 'skipped' | 'others';
 
-/** 单分组：key（语义）+ kind（Badge/kindTag 颜色语义）+ 组内条目。 */
+/** 单分组：key（语义）+ kind（Badge 四态颜色语义）+ 组内条目。 */
 export interface InspectChangeGroup {
   key: InspectGroupKey;
   /** 颜色语义：error=冲突 / info=变更 / warn=路径映射与其它 / ok=一致跳过 */

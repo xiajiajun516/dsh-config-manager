@@ -88,7 +88,7 @@ v3 删掉了页面级那张绑定「隐式当前通道」的分区卡（它此�
 | **Token 驱动，零硬编码** | 颜色/字体/阴影全部 `--dsw-*`；tint 用 `color-mix(in srgb, <token> <pct>, transparent)` |
 | **薄壳渲染，逻辑下沉** | React 只装配；渲染模型/状态判定在 `src/ui/` 纯函数（node 单测） |
 | **密度优先** | 基准字号 12.5px；行高 1.5；卡片 padding 12px；页面 padding 16px；区块间距 10px |
-| **状态即语义** | ok/info/warn/error 四态贯穿 Badge/Banner/StatusDot/choiceCard |
+| **状态即语义** | ok/info/warn/error 四态贯穿 Badge/Banner/StatusDot/choiceCard。**Badge 只装状态**；中性分类（来源/适配器/产物类型/有无改动）一律 `Chip`，不借 Badge 的四态色，也不另起第二套徽章 |
 | **危险操作隔离** | 删除/恢复恒 `danger` 变体或 `data-danger` 图标 + ConfirmDialog 二次确认；行内用 `.rowDivider` 与安全操作分隔 |
 | **开发者排版** | 路径/文件名/时间戳/命令一律等宽栈（`.mono`）；长文件名**中段省略**（保留尾部时间戳）+ `title` 全文 |
 | **无障碍** | 所有交互元素 `:focus-visible` 双环；图标按钮必须 `aria-label`；表格行选择支持 Enter/Space |
@@ -139,6 +139,11 @@ v3 删掉了页面级那张绑定「隐式当前通道」的分区卡（它此�
 - **执行者**：`src/client/css-token-guard.test.ts` —— 四态/主色 token 只允许出现在 §1 TOKENS 定义行；
   组件规则里出现裸 `--dsw-alias-state-*` / `--dsw-alias-button-info-*` 即红灯。
   结构类 token（label / border / bg / hover / input）**不受约束**：它们语义稳定，直用更短、更易读。
+- **同一执行者也管 TSX 内联样式**：`var(--dsw-`、`fontSize` 字面量 px、`color`/`background` 字面量色值、
+  `padding`/`margin`/`gap` 字面量 px 在 `src/client` 的 TSX 里出现即红灯（tsx-01）。
+  例外只能进 `TSX_STYLE_WHITELIST`，每条写明「为什么它不能进 CSS」且带 `max` 上限（只许减不许增，
+  迁干净后必须删条目 —— tsx-02 抓死条目）。`Modal.Body` 的 `maxHeight`、`gridColumn`、`width: auto`、
+  `ProgressBar` 的动态宽度百分比、`Icon` 的 `style` 透传属于**合法最小补丁**，不是债。
 
 ---
 
@@ -325,7 +330,12 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
 - `IconButton`（`.iconBtn`；`active`/`danger` 修饰；必须 `aria-label`）
 - `StatusDot`（idle/ok/info/warn/error + `pulse`）
 - `Badge`（info / ok / warn / error → **原生 `Tag` 的 info / success / warning / danger tone**；
-  原生包不可用时回落同口径的 `.badge[data-kind]`）
+  原生包不可用时回落同口径的 `.badge[data-kind]`）。**只表达状态**：`BadgeKind` 就四态，不扩 `neutral`；
+  拿不到语义的标签不要硬塞一个 tone
+- `Chip`（`.chip`，中性标签原语，2026-11）：19px 高 / pill / `--cm-fs-meta` / `--cm-hover` 底，
+  与 `Badge` 同一条基线（同高、同内边距、同字号、同圆角），差别只在**无色** —— 语义维度上中性，
+  视觉上不抢注意力。用于来源 / 适配器 / 产物类型 / 有无改动这类「分类而非状态」的标签。
+  它是 `.kindTag` 那套第二视觉体系（16px / `r-1` / weight 600）的唯一替代：**已删除，不要再造第三套**
 - `Banner`（四态；操作按钮一律**内嵌右侧**）
 - `Segmented`（页内子视图切换；受控）
 - `Card` / `Field` / `SectionTitle` / `Empty` / `Checkbox` / `Stepper`
@@ -480,6 +490,13 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   迁移后全仓再无手写 `dialogMask+dialogCard` 弹窗（`grep css.dialogMask` 仅余注释）。
   **Release 正文渲染是共享原语**（`src/client/about/ReleaseBody.tsx`）：ReleaseNotes 与新版本弹窗共用同一份
   纯文本 Markdown 分块 + 行内格式渲染（零 `dangerouslySetInnerHTML`），**不得各自实现一份**。
+  样式同样只有一份（2026-11 收 inline style）：`.releaseBody`（根，纵向 gap 6 / 正文 13px）·
+  `.releaseHeading`（+ `[data-level='1']` 更大的上边距）· `.releaseListItem`/`.releaseBullet`/`.releaseItemBody` ·
+  `.releaseQuote` · `.releaseCode`（叠在 `.cliCommand` 上）· `.releaseRule` · `.releaseEmpty`；
+  弹窗外壳用 `.releaseCard`/`.releaseCardHead`/`.releaseTitleRow`/`.releaseTitle`/`.releaseDate`/
+  `.releaseNotesEmpty`/`.releaseNotesLoadingMore`/`.releaseNotesAllLoaded`/`.releaseNotesFoot`/`.releaseNotesFootActions`。
+  **唯一留在内联样式里的东西**是标题三级字号 15/14/13px —— 14/15px 不在 §4 的四档内，写进 CSS 会让
+  `scale-01` 直接变红；它登记在 `css-token-guard.test.ts` 的 `TSX_STYLE_WHITELIST`（`max: 1`）。
 - **构建接线**：`tsdown.config.ts` 的 `deps.alwaysBundle: [/^lucide-react(\/.*)?$/, /^@radix-ui\//]`
   强制把二者打进单文件 cjs（否则被当 dependencies 外部化 → 运行时 `require` 命中 DSH loader
   「module table miss」崩溃）。注意 tsdown 0.22 读 `deps.alwaysBundle`，旧的顶层 `noExternal`
@@ -959,6 +976,10 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
 - `.actionRowTop`：上方紧跟说明文案的操作行（同 `.actionRow` 但**上边距 10px**），
   用于「hint / 计数行之后才是按钮」的场景（同步页「配置同步通道」与「选择同步分区」）。
   **普通 `.actionRow` 没有上边距** —— 直接跟在文字后面会把按钮与文字贴在一起（实测过）。
+- `.actionRowSpaced`：`.actionRow` 的**上间距修饰**（`margin-top: 8px`）—— 用于「紧跟在卡片/结果块
+  后面的收尾操作行」。定义必须排在 `.actionRow` **之后**：两条都是单类选择器，`.actionRow` 写的是
+  `margin: 0 0 10px` 简写，写在前面会被它盖掉。**只有这一个上间距修饰**：以前各处写
+  `style={{ marginTop: '12px' }}`，现在统一到它（8px），不要再造 12px 的第二档。
 - `.tabRow`：**独占一行**的分段/页签行（`.modeTabs` 是 inline-flex，直接跟在文案后
   会与文案同行）。**当前无调用点**：同步页的「默认 / 高级」模式分段已移除（分区恒由用户
   手动勾选），本类保留为原语，供后续需要独占一行的分段控件使用。
@@ -966,6 +987,12 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   baseline 对齐（按钮组需居中），且 `.headRow .groupLabel { margin-bottom: 0 }`，
   否则标题的 8px 下边距会把整行撑高。右侧推靠用既有的 `.statusSpacer`。
 - `.authorRow`：标签 + 值的居中行（关于页作者行），同样带 `.groupLabel{margin-bottom:0}`。
+- `.statRowStack`：`.statRow` 的**纵向堆叠修饰**（`flex-direction: column; align-items: flex-start`，
+  gap 4px）。窄栏里「一个大数字 + 一句说明」并排会挤成两行折字，堆叠后读起来是一条。
+- `.statRowWrap`：`.statRow` 的**折行修饰**（`flex-wrap: wrap`，gap 8px）。徽章行条目数不定时用它，
+  窄栏里折行而不是溢出卡片（导入页「来源」徽章行）。
+- `.blockStack`：**块级纵向堆叠**（column，gap 12px）—— 一屏里几个彼此独立的块（Banner / 徽章行 /
+  动作行）之间的统一节奏。与 `.statRowStack` 的分工：后者是「同一条事实的多个字段」（4px）。
 - `.sectionOptionRow`：同步分区弹窗里「分区勾选行 + 该分区专属参数」（历史会话的「最新 N 个」）
   的纵向容器。**必须包在 `Checkbox` 之外** —— `Checkbox` 内部是 `<label>` 元素，
   把输入控件放进去会让「点输入框」也切换勾选状态。
@@ -1002,7 +1029,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   - 活动行容器 `.activityRows` 取 `flex: 0 1 auto; min-height: 0`（**不可用 `flex: none`**）：
     页面被压缩时列表须随之收缩并自身内滚，否则内容溢出卡片边框（曾实测 274px 内容 vs 205px 卡片）。
 - **产物库**（v2）：源筛选 Segmented（全部 / 本机快照 / 备份文件 / 远端快照 / 市场产物）+ **扁平列表**。
-  行 = `.kindTag` 来源标签 + 标题 + 元信息 + 时间；展开态给详情对（`.artifactDetail`）。
+  行 = `Chip` 来源标签 + 标题 + 元信息 + 时间；展开态给详情对（`.artifactDetail`）。
   能力集合 `ArtifactCapability = restore|import|pull|install|inspect|download|consult|pin|unpin|delete`
   由 `src/ui/artifact-view.ts` 统一判定（四源共用一份模型），**行只冒泡能力，弹窗由页面级持有**。
   **不做批量操作**、排序只有时间/名称；「改备注」已砍（收益低、状态多）。
@@ -1031,7 +1058,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     无动作（各自计数）+ 行数合计（`.diffStatAdd` 绿 / `.diffStatDel` 红）。
   - 分组顺序固定：`changes`（修改+新增）→ `deletes` → `plugins` → `hints` → `skips`；
     **`skips` 默认折叠**（`.diffGroupToggle`）—— 几十条「跳过」不再淹没真实变更。
-  - 文件行（`.restorePlanRow`）：状态标签（复用 `.kindTag` 四态）+ 等宽路径
+  - 文件行（`.restorePlanRow`）：状态标签（四态走 `Badge`；`plugin`/`hint`/`skip` 这类非状态标签走 `Chip`）+ 等宽路径
     （`.restorePlanPath`，单行中段/尾部省略）+ 行数（`.restorePlanStat`）+ 展开箭头；
     不可展开的行（插件/提示/跳过）用 `.restorePlanRowStatic`（保留可读性，不置灰）。
   - 展开后为**左右双栏对照**（`.diffTable`：行号 + 内容 ×2，`table-layout: fixed`）：左=当前磁盘内容、
@@ -1107,7 +1134,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     撑满档下**加载 / 一致 / 看不了 / 读失败四种状态也套同一个整块容器**，否则状态切换时一屏高度会跳。
     弹窗内的就地差异**不给 fill**（卡片高度不是它那一屏）。
   - **不引入**无功能的勾选框：回退是整体语义，放一个取消不掉的勾选框只是装饰（诚实性优先于形似）。
-- **冲突解决**（ConflictList）：选边卡片模式——每项一张卡（kindTag 适配器 + 等宽描述），
+- **冲突解决**（ConflictList）：选边卡片模式——每项一张卡（`Chip` 适配器 + 等宽描述），
   两个并排 `.choiceCard` 选边（radio 语义，选中高亮），**可见文案取字典**
   `import.conflicts.keepCurrent` / `useImported`（zh「保留当前 / 使用备份」、en「Keep current / Use backup」）；
   批量决策在顶部。

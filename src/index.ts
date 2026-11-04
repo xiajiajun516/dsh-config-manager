@@ -55,13 +55,24 @@ import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 
-import { endpoint, registerRoutes, requireJsonObject, writeJson, readJsonBody, errorMessage } from './routes/kit.ts'
+import { endpoint, registerRoutes, requireJsonObject, writeJson, readJsonBody, errorMessage, writeMutationError } from './routes/kit.ts'
 import { buildRoutes } from './routes/index.ts'
 import type { RecoveryOrchestrator } from './core/recovery-orchestrator.ts'
 import type { Portability } from './core/types.ts'
 import { Exporter, FileSnapshotStore, Importer, verifySnapshot } from './core/index.ts'
 import { DshProfileLauncher, DshProfileManager, DshProfileRuntimeRegistry } from './profiles/index.ts'
 import { cleanupCaches } from './core/cache-cleaner.ts'
+// tech-debt #23：宿主调度器下沉（纯调度语义可单测，index.ts 只留一次装配）。
+import { createCacheCleanupScheduler } from './core/host-schedulers/cache-cleanup.ts'
+import { createHostLifecycle } from './core/host-schedulers/lifecycle-hooks.ts'
+import {
+  createMarketCacheLayout,
+  marketItemCached,
+  pruneStagedMarketZips as pruneMarketStagedZips,
+  readMarketCacheIndexText,
+  writeMarketItemCache,
+} from './core/host-schedulers/market-cache.ts'
+import type { HostLifecycle, StartupVerdict } from './core/host-schedulers/lifecycle-hooks.ts'
 import { isValidSnapshotId, planRestore } from './core/restore.ts'
 import { rollback as performRollback } from './core/rollback.ts'
 // Phase 1 P0-1/P0-2：配置生命周期（自动快照 / 撤销 / 重做）与 P0-5 崩溃归因。
@@ -106,10 +117,10 @@ import { probeSessionFormats, resolveSessionFormatVersion } from './utils/sessio
 import { describePatchYamlError, dumpPatchDocument, loadPatchDocument } from './utils/patch-yaml.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
 import { isENOENT } from './utils/guards.ts'
-import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError, type MutationLockContext } from './utils/env-lock.ts'
+import { EnvironmentLockManager, runWithMutationLock, type MutationLockContext } from './utils/env-lock.ts'
 import { activeProxySummary } from './utils/proxy.ts'
 import { listRecursiveFollowingLinks } from './utils/recursive-walk.ts'
-import { Phase3Recovery, TransactionRecoveryRequiredError, mapLockStateForStartup } from './core/phase3-host.ts'
+import { Phase3Recovery, mapLockStateForStartup } from './core/phase3-host.ts'
 import type { JournalRunContext } from './core/phase3-host.ts'
 import { classifyStartup, FAIL_CLOSED_STARTUP, resolveStartupSafeMode } from './core/startup-barrier.ts'
 import type { MutationLockPort } from './utils/env-lock.ts'
@@ -134,7 +145,7 @@ import { selectPruneCandidates } from './core/backup.ts'
 import { appendAutosyncEntry } from './sync/sync-history.ts'
 import { MigrationStore, type MigrationKind, type MigrationResult, historyResultFromAutosyncStatus, MIGRATION_HISTORY_DIR } from './core/migration-history.ts'
 import { createHistoryPruner } from './core/history-prune.ts'
-import { validateRepoUrl, validateWebDavUrl, isWebDavConfig, isS3Config, isGistConfig, channelOf, parseSyncChannel, SYNC_CHANNELS, GIST_PROVIDER, isS3CompatProvider, validateCloudChannelInput, cloudSecretRef } from './sync/sync-config.ts'
+import { isWebDavConfig, isS3Config, isGistConfig, channelOf, SYNC_CHANNELS, GIST_PROVIDER, cloudSecretRef } from './sync/sync-config.ts'
 import {
   resolveSessionFormatDisposition,
   sessionFormatAbortResponse,
@@ -158,19 +169,19 @@ import { StarCache } from './market/star-cache.ts'
 import { createConfiguredSecretScanner } from './security/secret-scanner.ts'
 import type { ConfiguredSecretPatterns } from './security/secret-scanner.ts'
 import type { SecretScanner } from './core/types.ts'
-import { sha256Hex } from './utils/hashing.ts'
 import { createTtlAsyncCache } from './utils/ttl-cache.ts'
 import { isFileSection, SECTION_IDS } from './schema/config.ts'
 import { stringifyJsonSafe } from './utils/json.ts'
 import type { SectionId, WorkspaceRecord } from './schema/types.ts'
 import { isSameOrChild } from './utils/paths.ts'
+import { formatDateOnly } from './utils/time.ts'
 import { isRecord } from './utils/guards.ts'
 import { createLogger, parseLogLevel, type Logger } from './utils/logger.ts'
 // 与 HTTP 路径**同一份**「运行中对话」判据（命令入口绝不能各写一套）
 import { sessionActiveDenied, sessionActiveGateApplies } from './routes/recovery.ts'
 
 // P4：路由组共享的纯工具已下沉到 routes/route-support.ts —— 组文件不再反向 import 本文件。
-import { ROUTE_TIMEOUT_MS, SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF, SyncRouteError, credentialRef, decryptErrorText, executeRestorePlan, isControlledPath, makeRestoreExecutor, safeCredentialRef, syncPasswordRef, tryDecryptCredentials, withTimeout } from './routes/route-support.ts'
+import { ROUTE_TIMEOUT_MS, SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF, credentialRef, decryptErrorText, executeRestorePlan, isControlledPath, makeRestoreExecutor, safeCredentialRef, syncPasswordRef, tryDecryptCredentials, withTimeout } from './routes/route-support.ts'
 export { ROUTE_TIMEOUT_MS, REVIEW_KINDS, SYNC_CREDENTIAL_REF, SYNC_ENCRYPT_PASSWORD_REF_PREFIX, SYNC_DECRYPT_PASSWORD_REF_PREFIX, SYNC_WEBDAV_CREDENTIAL_REF, SyncRouteError, buildAutosyncStatus, buildAutosyncStatusByChannel, buildFileDiffBody, buildRestoreBody, credentialRef, decryptErrorText, executeRestorePlan, extractSyncSections, extractSyncSessions, isAutosyncInterval, isControlledPath, isGitHubAuthMissing, isToolchainChangeItem, makeRestoreExecutor, parseMeForm, planToConfirmItems, safeCredentialRef, sessionHealthNextSteps, syncPasswordRef, tryDecryptCredentials, withTimeout, writeProfileError, writeRequestBodyToFile, writeSyncRouteError } from './routes/route-support.ts'
 export type { AutosyncStatusResponse, BuildFileDiffBodyResult, BuildRestoreBodyResult, RestoreExecutor, SyncConfirmItem } from './routes/route-support.ts'
 
@@ -2136,13 +2147,6 @@ export class ConfigManagerHostContext implements HostContext {
 /* ---------------------------------------------------------------- routes */
 
 
-function dateStamp(d: Date = new Date()): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
 /** Minimal real dependency check (MCP §15): `which`/`where` probe. */
 async function dependencyAvailable(command: string): Promise<boolean> {
   const probe = process.platform === 'win32' ? 'where' : 'which'
@@ -2219,202 +2223,12 @@ interface RoutesDeps {
 /* -------------------------------------------------- sync 路由（m-sync-ui） */
 
 
-/** parseSyncBody 的凭据写入依赖（只用到 set；测试可注入内存 mock）。 */
-export interface ParseSyncBodyDeps {
-  credentials: Pick<CredentialProvider, 'set'>
-}
+// 请求体解析下沉到 routes/route-support.ts（tech-debt #23：组合根只留装配）。
+// 组合根继续导出这些符号，`src/index.sync.test.ts` 与既有调用方口径不变。
+import { mergePersistedWebDavUsername, parseSyncBody, webdavBaseUrl } from './routes/route-support.ts'
 
-/**
- * 解析同步请求体，按 transport 分支返回归一化的 SyncConfig（可辨识联合，schemaVersion=2）。
- * 请求体形状（flat，M4 契约）：
- * - git:    { transport:'git', repoUrl, token? } —— token 非空写 SYNC_CREDENTIAL_REF；
- *   git 可执行文件固定使用系统 PATH 中的 git（不再接受自定义 gitBin）。
- * - webdav: { transport:'webdav', url, username?, password? } —— password 非空写 SYNC_WEBDAV_CREDENTIAL_REF。
- * 返回值不含任何 secret（password/token 只进 credentials，永不回传/落同步文件）。
- */
-export async function parseSyncBody(
-  body: Record<string, unknown>,
-  deps: ParseSyncBodyDeps,
-): Promise<SyncConfig> {
-  const rawTransport = body['transport']
-  // 通道值解析：接受通道名（s3/gist）；也接受**具体兼容商**（oss/cos/minio/kodo）直接落到 s3 通道
-  const transport = parseSyncChannel(rawTransport) ?? (isS3CompatProvider(rawTransport) ? 's3' : 'git')
-  if (transport === 's3') return parseCloudS3Body(body, rawTransport, deps)
-  if (transport === 'gist') return parseCloudGistBody(body, deps)
-  if (transport === 'webdav') {
-    const url = typeof body['url'] === 'string' ? body['url'].trim() : ''
-    if (url === '') throw new SyncRouteError('url is required for webdav')
-    const urlError = validateWebDavUrl(url)
-    if (urlError !== null) throw new SyncRouteError(urlError)
-    const username = typeof body['username'] === 'string' && body['username'] !== '' ? body['username'] : undefined
-    const password = typeof body['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
-    if (password !== undefined) {
-      try {
-        await deps.credentials.set(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF), password)
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error)
-        throw new SyncRouteError(
-          engineMsg('host.syncWebdavPasswordWriteFailed', { reason, ref: SYNC_WEBDAV_CREDENTIAL_REF }),
-        )
-      }
-    }
-    return {
-      schemaVersion: 2,
-      transport: 'webdav',
-      webdav: { url, ...(username !== undefined ? { username } : {}) },
-    }
-  }
-  // git 通道（沿用现有逻辑）
-  const repoUrl = typeof body['repoUrl'] === 'string' ? body['repoUrl'].trim() : ''
-  if (repoUrl === '') throw new SyncRouteError('repoUrl is required')
-  const urlError = validateRepoUrl(repoUrl)
-  if (urlError !== null) throw new SyncRouteError(urlError)
-  const token = typeof body['token'] === 'string' && body['token'] !== '' ? body['token'] : undefined
-  if (token !== undefined) {
-    try {
-      await deps.credentials.set(credentialRef(SYNC_CREDENTIAL_REF), token)
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
-      throw new SyncRouteError(
-        engineMsg('host.syncTokenWriteFailed', { reason, ref: SYNC_CREDENTIAL_REF }),
-      )
-    }
-  }
-  return {
-    schemaVersion: 2,
-    transport: 'git',
-    git: { repoUrl },
-  }
-}
-
-/** 请求体字段 → 去空白字符串（非字符串 = 空）。 */
-function syncStr(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : ''
-}
-
-/** 云端点密钥写入失败 → 可操作错误（**含 ref 名、绝不含密钥值**）。 */
-function cloudCredentialWriteError(ref: string, kind: string, error: unknown): SyncRouteError {
-  const reason = error instanceof Error ? error.message : String(error)
-  return new SyncRouteError(
-    engineMsg('host.syncCredentialWriteFailed', { kind, reason, ref }),
-    400,
-    'cloud.credentialsWriteFailed',
-  )
-}
-
-/**
- * s3 通道请求体 → SyncConfig（provider 必填或由 transport 直接给出）。
- * 非密字段按 validateCloudChannelInput 校验（错误码 = HTTP body.code，由 UI 映射字典）；
- * 密钥**只写**进 DSH credentials 的 cloudSecretRef(provider) 槽位，绝不进返回值 / 文件 / 日志。
- */
-async function parseCloudS3Body(
-  body: Record<string, unknown>,
-  rawTransport: unknown,
-  deps: ParseSyncBodyDeps,
-): Promise<SyncConfig> {
-  const provider = isS3CompatProvider(body['provider'])
-    ? body['provider']
-    : (isS3CompatProvider(rawTransport) ? rawTransport : null)
-  if (provider === null) {
-    throw new SyncRouteError('provider is required for s3 (s3/oss/cos/minio/kodo)', 400, 'cloud.providerUnknown')
-  }
-  const endpoint = syncStr(body['endpoint']).replace(/\/+$/, '')
-  const region = syncStr(body['region'])
-  const bucket = syncStr(body['bucket'])
-  const accessKeyId = syncStr(body['accessKeyId'])
-  const prefix = syncStr(body['prefix'])
-  const pathStyle = typeof body['pathStyle'] === 'boolean' ? body['pathStyle'] : undefined
-  const dialectId = body['dialectId'] === 'aws4' || body['dialectId'] === 'oss4' ? body['dialectId'] : undefined
-  const issue = validateCloudChannelInput(provider, {
-    endpoint,
-    region,
-    bucket,
-    accessKeyId,
-    ...(prefix === '' ? {} : { prefix }),
-    ...(pathStyle === undefined ? {} : { pathStyle }),
-    ...(dialectId === undefined ? {} : { dialectId }),
-  })
-  if (issue !== null) throw new SyncRouteError(issue, 400, issue)
-  const secret = typeof body['secret'] === 'string' && body['secret'] !== '' ? body['secret'] : undefined
-  if (secret !== undefined) {
-    const ref = cloudSecretRef(provider)
-    try {
-      await deps.credentials.set(credentialRef(ref), secret)
-    } catch (error) {
-      throw cloudCredentialWriteError(ref, engineMsg('host.syncKindS3Secret'), error)
-    }
-  }
-  return {
-    schemaVersion: 2,
-    transport: 's3',
-    s3: {
-      provider,
-      endpoint,
-      region,
-      bucket,
-      accessKeyId,
-      ...(prefix === '' ? {} : { prefix }),
-      ...(pathStyle === undefined ? {} : { pathStyle }),
-      ...(dialectId === undefined ? {} : { dialectId }),
-    },
-  }
-}
-
-/**
- * gist 通道请求体 → SyncConfig。token 只写进 cloudSecretRef('gist') 槽位
- * （请求体字段名 token 或 secret 都接受；值绝不进返回值 / 文件 / 日志）。
- */
-async function parseCloudGistBody(body: Record<string, unknown>, deps: ParseSyncBodyDeps): Promise<SyncConfig> {
-  const gistId = syncStr(body['gistId'])
-  const apiBaseUrl = syncStr(body['apiBaseUrl'])
-  const filePrefix = syncStr(body['filePrefix'])
-  const issue = validateCloudChannelInput(GIST_PROVIDER, {
-    gistId,
-    ...(apiBaseUrl === '' ? {} : { apiBaseUrl }),
-    ...(filePrefix === '' ? {} : { filePrefix }),
-  })
-  if (issue !== null) throw new SyncRouteError(issue, 400, issue)
-  const token = typeof body['token'] === 'string' && body['token'] !== ''
-    ? body['token']
-    : (typeof body['secret'] === 'string' && body['secret'] !== '' ? body['secret'] : undefined)
-  if (token !== undefined) {
-    const ref = cloudSecretRef(GIST_PROVIDER)
-    try {
-      await deps.credentials.set(credentialRef(ref), token)
-    } catch (error) {
-      throw cloudCredentialWriteError(ref, 'Gist token', error)
-    }
-  }
-  return {
-    schemaVersion: 2,
-    transport: 'gist',
-    gist: {
-      gistId,
-      ...(apiBaseUrl === '' ? {} : { apiBaseUrl }),
-      ...(filePrefix === '' ? {} : { filePrefix }),
-    },
-  }
-}
-
-/** 由 SyncConfig 合成 WebDAV 通道 baseUrl（webdav.url，尾部规范化带 '/'；git 通道返回 ''）。 */
-export function webdavBaseUrl(cfg: SyncConfig): string {
-  if (!isWebDavConfig(cfg)) return ''
-  return cfg.webdav.url.replace(/\/+$/, '') + '/'
-}
-
-/**
- * 补全 webdav 配置缺失的 username（从持久化配置回填；纯函数，不修改入参）。
- * 语义与 password 一致：请求未带 username（表单留空/挂载自动加载）→ 沿用已保存的值；
- * 请求显式带 username → 原样保留（用户新输入优先）。非 webdav / 无持久化 → 原样返回。
- */
-export function mergePersistedWebDavUsername(cfg: SyncConfig, persisted: SyncConfig | null): SyncConfig {
-  if (!isWebDavConfig(cfg) || (cfg.webdav.username !== undefined && cfg.webdav.username !== '')) return cfg
-  if (persisted !== null && isWebDavConfig(persisted)
-    && typeof persisted.webdav.username === 'string' && persisted.webdav.username !== '') {
-    return { ...cfg, webdav: { ...cfg.webdav, username: persisted.webdav.username } }
-  }
-  return cfg
-}
+export { mergePersistedWebDavUsername, parseSyncBody, webdavBaseUrl } from './routes/route-support.ts'
+export type { ParseSyncBodyDeps } from './routes/route-support.ts'
 
 /** /status 的插件诊断位（issue #28）。仅回非敏感元信息：目录、profile 名、计数。 */
 export interface PluginDiagnostics {
@@ -2759,18 +2573,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           }
         })
       } catch (error) {
-        if (error instanceof EnvironmentLockUnavailableError) {
-          // 内部诊断（op/reason）进日志；用户只看到友好文案（error.message 恒为中文友好版，
-          // 不暴露环境锁/op/路径等技术细节）。
-          host.log.warn(`mutation lock blocked: op=${error.op} reason=${error.reason}${error.detail !== undefined ? ` detail=${error.detail}` : ''}`)
-          writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-          return
-        }
-        // 非 423：若已由 runJournaled 置 SAFE MODE/失败，保持既有错误语义（400/500）
-        if (error instanceof TransactionRecoveryRequiredError) {
-          writeJson(res, 423, { error: error.message, code: 'transaction-recovery-required' })
-          return
-        }
+        // 423 家族（SAFE MODE / 环境锁 / 未收敛事务）的唯一映射在 routes/kit.ts 的 writeMutationError；
+        // 其余错误**必须 rethrow** —— endpoint() 的出口与救急台的 errorRenderer 都依赖这条抛出。
+        if (writeMutationError(res, host, error)) return
         throw error
       }
     }
@@ -3023,12 +2828,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   // ------------------------------------------------ market 辅助（m-market）
   // 目录：<marketDir>/cache/<url-hash>/（index/条目缓存）
   //       + <marketDir>/work/<url-hash>/（git 只读工作副本，--depth 1）。无任何凭据。
-  const marketCacheRoot = join(marketDir, 'cache')
-  const marketWorkRoot = join(marketDir, 'work')
-  const urlHash = (url: string) => sha256Hex(url).slice(0, 32)
-  const marketCacheIndex = (url: string) => join(marketCacheRoot, urlHash(url), 'index.json')
-  const marketCacheItemDir = (url: string) => join(marketCacheRoot, urlHash(url), 'items')
-  const marketWorkDir = (url: string) => join(marketWorkRoot, urlHash(url))
+  // 布局与暂存 GC 的下沉实现见 core/host-schedulers/market-cache.ts（可单测）。
+  const marketCache = createMarketCacheLayout(marketDir)
+  const marketCacheIndex = marketCache.cacheIndex
+  const marketCacheItemDir = marketCache.itemDir
+  const marketWorkDir = marketCache.workDir
 
   /**
    * 进程生命周期标记：本次 dsh 启动后市场是否已成功刷新过一次（内存态，dsh 重启后自动归零）。
@@ -3056,13 +2860,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
 
   /** 读缓存的 index.json（结构校验通过才返回，否则 null）。 */
   async function readCachedIndexObj(url: string): Promise<MarketIndex | null> {
-    try {
-      const raw = await fs.readFile(marketCacheIndex(url), 'utf8')
-      const res = parseMarketIndex(raw)
-      return res.ok ? res.index : null
-    } catch {
-      return null
-    }
+    const raw = await readMarketCacheIndexText(marketCache, url)
+    if (raw === null) return null
+    const res = parseMarketIndex(raw)
+    return res.ok ? res.index : null
   }
 
   /** 由配置条目构建市场摘要（name/itemCount/lastFetchedAt 来自缓存 index，可空）。 */
@@ -3081,50 +2882,17 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   }
 
   /** 条目是否已有完整缓存（manifest + config.zip）。 */
-  async function itemCached(url: string, itemId: string): Promise<boolean> {
-    try {
-      await fs.access(join(marketCacheItemDir(url), itemId, 'config.zip'))
-      await fs.access(join(marketCacheItemDir(url), itemId, 'manifest.json'))
-      return true
-    } catch {
-      return false
-    }
-  }
+  const itemCached = (url: string, itemId: string): Promise<boolean> => marketItemCached(marketCache, url, itemId)
 
   /** 写条目缓存（manifest + config.zip）供离线重复查看。内容始终视为不可信。 */
-  async function writeItemCache(url: string, itemId: string, manifestRaw: string, zipBytes: Uint8Array): Promise<void> {
-    const dir = join(marketCacheItemDir(url), itemId)
-    await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(join(dir, 'manifest.json'), manifestRaw, 'utf8')
-    await fs.writeFile(join(dir, 'config.zip'), zipBytes)
-  }
+  const writeItemCache = (url: string, itemId: string, manifestRaw: string, zipBytes: Uint8Array): Promise<void> =>
+    writeMarketItemCache(marketCache, url, itemId, manifestRaw, zipBytes)
 
   /**
-   * 清理滞留在 tmpDir 的过期市场暂存 zip（market-*.zip）。
-   * market/download 每次暂存新 zip 前调用（懒 GC）：保留最近 RETENTION_MS 内的（供刚下载
-   * 后立即执行的 /execute 消费），清理更旧的 —— 防止未确认导入的暂存文件无限堆积。
-   * 一次性尽力而为：任何读取/删除失败不影响主流程。
+   * 清理滞留在 tmpDir 的过期市场暂存 zip（market-*.zip / publish-*.zip）。
+   * market/download 每次暂存新 zip 前调用（懒 GC）；保留期与尽力而为语义见 market-cache.ts。
    */
-  const MARKET_TMP_RETENTION_MS = 10 * 60 * 1000
-  async function pruneStagedMarketZips(): Promise<void> {
-    try {
-      const names = await fs.readdir(tmpDir)
-      const now = Date.now()
-      for (const name of names) {
-        // market-*.zip（未确认导入的暂存）与 publish-*.zip（发布向导产物）都纳入保留策略
-        if ((!name.startsWith('market-') && !name.startsWith('publish-')) || !name.endsWith('.zip')) continue
-        const p = join(tmpDir, name)
-        try {
-          const st = await fs.stat(p)
-          if (now - st.mtimeMs > MARKET_TMP_RETENTION_MS) await fs.rm(p, { force: true, recursive: true })
-        } catch {
-          // 单文件 stat/删除失败 → 跳过（尽力而为）
-        }
-      }
-    } catch {
-      // tmpDir 读取失败 → 跳过（尽力而为）
-    }
-  }
+  const pruneStagedMarketZips = async (): Promise<void> => { await pruneMarketStagedZips(tmpDir) }
 
   // -------------------------------------------------- me 装配（m-my-configs）
   // 「一键上传 / 我的配置」：GitHub REST 客户端 + 上传编排。
@@ -3427,7 +3195,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         const desiredName = customFileName !== null
           ? customFileName
-          : `dsh-config-${dateStamp()}-${randomBytes(3).toString('hex')}.zip`
+          : `dsh-config-${formatDateOnly(new Date())}-${randomBytes(3).toString('hex')}.zip`
         const finalFileName = resolveNonCollidingExportName(desiredName, existingExportNames)
         const outPath = join(exportsDir, finalFileName)
         // m1：执行开始注册 run（同 kind 已有进行中任务 → 409 拒绝，防止重复导出）
@@ -3928,11 +3696,11 @@ export function apply(ctx: Context, config?: Config): void {
     host.log.warn('Phase 3 SAFE MODE 激活：存在未恢复的 transaction，destructive 操作被阻断（如需恢复请先显式处理）')
   }
   // P1-B：启动 recovery 分类 barrier。调度器（AutoSync/Backup）只在分类完成且 state=NORMAL 时启动。
-  // schedulerGate.start 由 makeRoutes 返回 scheduler + apply 构造 backupScheduler 后赋值；apply 为同步，
-  // 故在该异步分类块 await 完成前，schedulerGate.start 通常已就绪。fail-closed：分类抛错 → 不启动调度器。
-  const schedulerGate = { start: null as (() => void) | null }
-  let startupStateResolved = false
-  let shouldStartSchedulers = false
+  // 启停 / 退出兜底释放锁 / 实例心跳的装配下沉到 core/host-schedulers/lifecycle-hooks.ts：
+  // 这里只把分类结论投给它，arm 与 classify 谁先到都收敛到同一结果。
+  // fail-closed：分类抛错 → 结论 BLOCKED（终态）→ 调度器不启动。
+  const lifecycleRef: { current: HostLifecycle | null } = { current: null }
+  const startupVerdictRef: { value: StartupVerdict | null } = { value: null }
   void (async () => {
     try {
       await phase3Recovery.initFingerprint()
@@ -3953,7 +3721,6 @@ export function apply(ctx: Context, config?: Config): void {
         lockState: mapLockStateForStartup(lockInsp.state),
       })
       const { state } = await startupState.classify()
-      startupStateResolved = true
       // 残留锁自愈（可证 stale 回收 + 孤儿心跳清理），判定与理由见 core/env-lock-lifecycle.ts。
       const effectiveLockState = await reclaimStaleLockAtStartup({ kind: state.kind, inspected: lockInsp.state, lock: envLockManager, log: host.log })
       // issue #87：分类结论才是本轮权威。NORMAL 且没有活锁者 ⇒ 上一轮留下的 durable SAFE MODE 是**陈旧标记**
@@ -3969,12 +3736,12 @@ export function apply(ctx: Context, config?: Config): void {
         await phase3Recovery.clearSafeMode().catch(() => undefined)
         host.log.info('Phase 3 启动分类 NORMAL：上一轮遗留的 SAFE MODE 标记已复位（无未决事务、无活锁者）')
       }
-      shouldStartSchedulers = (state.kind === 'NORMAL')
+      const verdict: StartupVerdict = state.kind === 'NORMAL' ? 'NORMAL' : 'BLOCKED'
+      startupVerdictRef.value = verdict
       if (state.kind === 'RECOVERY_REQUIRED' || state.kind === 'NEEDS_ATTENTION') {
         host.log.warn(`Phase 3 ${state.kind}：上次 destructive operation 崩溃残留，需显式恢复；destructive 调度器未启动（read-only host 存活）`)
-      } else if (shouldStartSchedulers && schedulerGate.start !== null) {
-        schedulerGate.start()
       }
+      lifecycleRef.current?.onStartupClassified(verdict)
       // Phase 1 P0-5：启动分类已得出结论 → 本次启动判定为成功（推进 lastGoodAt）。
       // 灾备总开关关闭时不写 boot-state。
       try {
@@ -3987,8 +3754,8 @@ export function apply(ctx: Context, config?: Config): void {
       // fail-open —— 此刻无法证明环境干净，destructive 路由必须一并被阻断：置内存 SAFE MODE
       // （isBlocked 谓词立即生效）+ 写 durable 标记（下次启动不判 NORMAL），与 phase3-host.ts
       // runJournaled 异常分支的姿态一致。清理通道仍是用户显式 recovery（clearSafeMode）。
-      startupStateResolved = true
-      shouldStartSchedulers = FAIL_CLOSED_STARTUP.startSchedulers
+      // 分类抛错时保留 null：接线期若仍无结论，lifecycle 不会启动调度器（fail-closed 的第一道）。
+      startupVerdictRef.value = FAIL_CLOSED_STARTUP.startSchedulers ? 'NORMAL' : 'BLOCKED'
       if (FAIL_CLOSED_STARTUP.safeModeRequired) {
         phase3Recovery.safeModeActive = true
         await phase3Recovery.store.writeSafeMode(true).catch(() => undefined)
@@ -4002,12 +3769,11 @@ export function apply(ctx: Context, config?: Config): void {
       })
     }
   })()
-  // 缓存自动清理：启动即清一次 + 每 24h 定时清一次。
+  // 缓存自动清理：启动即清一次 + 每 24h 定时清一次（调度语义见 core/host-schedulers/cache-cleanup.ts）。
   // 只清「可重建/一次性」缓存与临时文件（tmp 暂存、exports 导出副本、market cache/work），
   // 保留期内的文件不删（供刷新恢复导入/下载等窗口继续消费）；snapshots 与 sync 属用户数据/安全网不动。
-  // 尽力而为：任何失败仅记日志，不影响插件挂载与其他功能。
-  const runCacheCleanup = (): void => {
-    void cleanupCaches({
+  const cacheCleanup = createCacheCleanupScheduler({
+    cleanup: () => cleanupCaches({
       tmpDir,
       exportsDir,
       // 定时备份产物（dsh-config-auto-*）豁免按天回收：保留策略归 BackupScheduler
@@ -4015,20 +3781,12 @@ export function apply(ctx: Context, config?: Config): void {
       exportsExemptPrefix: AUTO_BACKUP_PREFIX,
       marketCacheRoot: join(marketDir, 'cache'),
       marketWorkRoot: join(marketDir, 'work'),
-    })
-      .then((report) => {
-        if (report.removed > 0) {
-          host.log.info('缓存自动清理完成', { removed: report.removed, freedBytes: report.freedBytes })
-        }
-      })
-      .catch((error) => {
-        host.log.warn('缓存自动清理失败', { error: error instanceof Error ? error.message : String(error) })
-      })
-  }
-  runCacheCleanup()
-  const cacheCleanupTimer = setInterval(runCacheCleanup, CACHE_CLEANUP_INTERVAL_MS)
-  ctx.effect(() => () => clearInterval(cacheCleanupTimer), 'config-manager: cache cleanup scheduler')
-  // self 分区目录（相对 ~/.dsh 根）：dataDir 在 homeDir 下 → 用相对路径挂载 self adapter；
+    }),
+    intervalMs: CACHE_CLEANUP_INTERVAL_MS,
+    log: host.log,
+  })
+  cacheCleanup.start()
+  ctx.effect(() => () => cacheCleanup.dispose(), 'config-manager: cache cleanup scheduler')
   // 自定义 dataDir 位于 ~/.dsh 之外时 Host fs 门面无法覆盖（confined to home root），
   // 不挂 self 分区并告警（其余分区不受影响）。
   const selfRel = relative(homeDir, dataDir)
@@ -4133,33 +3891,21 @@ export function apply(ctx: Context, config?: Config): void {
     // M1：与 HTTP 导出路由同一个 scanner（G-09 文件类分区凭据告警在两条路径上一致）。
     scanner: secretScanner,
   })
-  // P1-B：backupScheduler 不再同步 start —— 由启动 recovery 分类完成后（仅 NORMAL）启动。
-  schedulerGate.start = () => {
-    scheduler.start();
-    backupScheduler.start();
-  }
-  // 若启动分类已在此构造完成前解析为 NORMAL（罕见竞态），立即补启动。
-  if (startupStateResolved && shouldStartSchedulers && schedulerGate.start !== null) { schedulerGate.start(); }
-  ctx.effect(() => () => backupScheduler.stop(), 'config-manager: backup scheduler')
-  // 自动同步调度器随插件生命周期停止：插件重载/卸载时清理定时器，
-  // 避免旧调度器残留导致重复后台同步。
-  ctx.effect(() => () => scheduler.stop(), 'config-manager: autosync scheduler')
-  // 退出兜底释放环境锁：关窗时若后台同步正在跑，各入口的 finally 等不到 ⇒ 锁留盘（见 core/env-lock-lifecycle.ts）。
-  // 强杀 / 崩溃 / 断电仍靠下次启动的自动回收兜底。
-  const releaseLockOnExit = createExitLockReleaser(envLockManager)
-  process.once('exit', releaseLockOnExit)
-  ctx.effect(() => () => {
-    process.removeListener('exit', releaseLockOnExit)
-    releaseLockOnExit()
-  }, 'config-manager: environment lock exit release')
-  // m-profiles：实例心跳（自报 + 定期刷新）；dispose 时撤回自己的心跳文件，别让别人把死实例当成活的。
-  ctx.effect(() => {
-    const stopHeartbeat = profileRuntime.startHeartbeat()
-    return () => {
-      stopHeartbeat()
-      profileRuntime.withdraw()
-    }
-  }, 'config-manager: profile runtime heartbeat')
+  // P1-B：backupScheduler 与 autosync scheduler 都不在构造期启动 —— 由启动分类结论驱动（仅 NORMAL）。
+  // 启停顺序、卸载清理、退出兜底释放环境锁、实例心跳统一在 lifecycle-hooks 里装配（可单测）。
+  const lifecycle = createHostLifecycle({
+    scheduler,
+    backupScheduler,
+    releaseLockOnExit: createExitLockReleaser(envLockManager),
+    profileRuntime,
+    effect: (label, setup) => { ctx.effect(setup, label) },
+  })
+  lifecycle.mount()
+  lifecycleRef.current = lifecycle
+  lifecycle.arm()
+  // 分类结论若已先到（异步 barrier 抢在接线前跑完），补投一次；重复投递无副作用。
+  const pendingVerdict = startupVerdictRef.value
+  if (pendingVerdict !== null) lifecycle.onStartupClassified(pendingVerdict)
   // ------------------------------------------- S1：回合自动留点（宿主真接线）
   //
   // 订阅 `session/event`（@deepseek-ai/dsh-session 的 post-commit fire-and-forget feed）。

@@ -157,10 +157,10 @@ rg -n "<改动的符号名|路由|错误码>" docs AGENTS.md DEVELOPERS.md DESIG
 | 项 | 结果 | 证据 | 耗时 |
 |---|---|---|---|
 | ① 索引覆盖 | **通过**：`docs/{modules,components,spec,maintenance,decisions}/*.md` 19 份全部在 `docs/index.md`（0 缺失）；2026-10-28 整理后为 24 份，仍 0 缺失 | 逐文件比对表格 + `node scripts/check-doc-paths.mjs` 的 `[doc-index]` 段 | ~2 min |
-| ② 模块文档与代码 | **通过**（抽查 4 份）：路由总数 82 = `src/index.ts` 7 + `src/routes/*` 75，由 `tests/route/route-parity.test.ts:228`/`:287`/`:289` 钉住；入口/上限/失败语义与实现一致 | 上述测试 + 逐份核对源码 | ~12 min |
+| ② 模块文档与代码 | **通过**（抽查 4 份）：路由清单由 `tests/route/route-parity.test.ts:228`/`:287`/`:289` 钉住；入口/上限/失败语义与实现一致 | 上述测试 + 逐份核对源码 | ~12 min |
 | ③ tech-debt 已修项 | **基本通过**：16 条已修中 14 条直接带测试名；#2 只写文件与文案键，靠同表 F8 行补测试名（可接受）；未修 11 条仍标修 | `docs/maintenance/tech-debt.md` | ~3 min |
 | ④ known-limits 已解禁 | **通过**：15 条无「已解禁仍留档」；但 §5 与 §7/§12 的部分表述属**平台判断**，已按 §4.1 标注 | `docs/maintenance/known-limits.md` | ~2 min |
-| ⑤ ADR 前提失效 | **通过**：0001（82 条路由/exact 先命中/围栏即唯一认证）前提仍成立且与 route-parity 一致；0002–0006 前提未被证伪；0004 背景含平台判断，已标注 | `docs/decisions/` + 上表测试 | ~3 min |
+| ⑤ ADR 前提失效 | **通过**：0001（路由集合/exact 先命中/围栏即唯一认证）前提仍成立且与 route-parity 一致；0002–0006 前提未被证伪；0004 背景含平台判断，已标注 | `docs/decisions/` + 上表测试 | ~3 min |
 | ⑥ AGENTS 预算 | **未通过（已知债 #12）**：28657 B / 28672 B，距硬上限 15 B，超警戒线 2033 B。`📌 常见坑` 一节 12462 B（43.5%）；>200 B 的单行 54 条共 13776 B | `node scripts/check-agents-budget.mjs` + 分节字节统计 | ~3 min |
 
 **这次跑不出来的两项**（不算失败，是清单本身的边界）：

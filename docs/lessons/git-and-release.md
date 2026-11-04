@@ -26,7 +26,7 @@
 ## CI 平台矩阵与 tests 类型检查（下移自 AGENTS.md §🧪 命令）
 
 - **CI 是平台矩阵**（2026-09）：`.github/workflows/ci.yml` 的 `verify` 在 **ubuntu + windows + macOS** 跑同一套阶梯
-  （`fail-fast: false`；pack 步骤显式 `shell: bash` —— PowerShell 的 `mkdir` 没有 `-p`）——全仓 32 处
+  （阶梯本体在 `.github/actions/verify/action.yml`，composite 的每个 run 步骤都显式 `shell: bash` —— PowerShell 的 `mkdir` 没有 `-p`；`fail-fast: false`）——全仓 32 处
   非测试 `process.platform` 分支此前只被 ubuntu 覆盖。**macOS 是观察期**（`experimental: true` +
   job 级 `continue-on-error`）：连续 1~2 次绿灯后删掉那一行即变硬门禁（不做长期「允许失败」）。详见 `DEVELOPERS.md`。
 - **`tests/**` 的类型检查是独立一条命令**（`tsconfig.tests.json`）：根 config 只 include `src/**`，历史上 228 个测试文件长期在类型检查之外（实测曾积压 43 条错误，已修完并接进 CI）。改动测试后请跑 `npm run typecheck:tests`。

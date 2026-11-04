@@ -225,6 +225,23 @@ export const KNOWN_CATALOG_FILES: readonly string[] = [
   'src/client/sync/sync-locales.ts',         // syncZh/syncEn
   'src/migrations/messages-migrations.ts',   // zh/en 由 src/core/messages-core.ts 的 registerMessageCatalog 注册
   'src/client/chat/chat-locales.ts',         // 聊天内「↺ 回退」入口的独立字典（captain 登记 2026-10-10）
+  // tech-debt #22（2026-11）拆分：src/client/locales.ts 按页面域拆成下面 15 本，聚合器仍在清单首条。
+  // 登记由 captain 随 task-6 一并授权（lead 裁决 m00054）；每本都只导出 `zh`/`en` 两个对象。
+  'src/client/locales/common.ts',           // commonZh/commonEn：入口与公共（分区显示名、公共标点、Toast）
+  'src/client/locales/overview.ts',         // overviewZh/overviewEn：总览（首页）健康/指标/活动表
+  'src/client/locales/export.ts',           // exportZh/exportEn：导出与内容选择器
+  'src/client/locales/import.ts',           // importZh/importEn：导入（计划/执行/冲突/向导）
+  'src/client/locales/restore.ts',          // restoreZh/restoreEn：快照恢复与恢复预览
+  'src/client/locales/backup.ts',           // backupZh/backupEn：定时全量备份与保留策略
+  'src/client/locales/report.ts',           // reportZh/reportEn：导入报告
+  'src/client/locales/next-steps.ts',       // nextStepsZh/nextStepsEn：导入/同步后的收尾清单
+  'src/client/locales/about.ts',            // aboutZh/aboutEn：Star 引导与关于页
+  'src/client/locales/profiles.ts',         // profilesZh/profilesEn：DSH 档案管理
+  'src/client/locales/import-compat.ts',    // importCompatZh/importCompatEn：导入兼容性评分
+  'src/client/locales/shell.ts',            // shellZh/shellEn：导航条/状态栏与运行中心
+  'src/client/locales/overview-control.ts', // overviewControlZh/overviewControlEn：总览控制中心
+  'src/client/locales/sessions.ts',         // sessionsZh/sessionsEn：会话归位
+  'src/client/locales/foreign.ts',          // foreignZh/foreignEn：外部 agent 导入
 ] as const;
 
 /** 目录归属调用点（t16）：文件自身声明目录的三条既有通道。 */
@@ -569,9 +586,24 @@ export function checkAllowlist(
   return issues;
 }
 
-/** en 目录体检文件（A2；8 本字典 + locale/en.json）。 */
+/** en 目录体检文件（A2；8 本字典 + locale/en.json；tech-debt #22 拆分出的 15 本分域字典同检）。 */
 export const EN_CATALOG_FILES: readonly string[] = [
   'src/client/locales.ts',
+  'src/client/locales/common.ts',           // commonZh/commonEn：入口与公共（分区显示名、公共标点、Toast）
+  'src/client/locales/overview.ts',         // overviewZh/overviewEn：总览（首页）健康/指标/活动表
+  'src/client/locales/export.ts',           // exportZh/exportEn：导出与内容选择器
+  'src/client/locales/import.ts',           // importZh/importEn：导入（计划/执行/冲突/向导）
+  'src/client/locales/restore.ts',          // restoreZh/restoreEn：快照恢复与恢复预览
+  'src/client/locales/backup.ts',           // backupZh/backupEn：定时全量备份与保留策略
+  'src/client/locales/report.ts',           // reportZh/reportEn：导入报告
+  'src/client/locales/next-steps.ts',       // nextStepsZh/nextStepsEn：导入/同步后的收尾清单
+  'src/client/locales/about.ts',            // aboutZh/aboutEn：Star 引导与关于页
+  'src/client/locales/profiles.ts',         // profilesZh/profilesEn：DSH 档案管理
+  'src/client/locales/import-compat.ts',    // importCompatZh/importCompatEn：导入兼容性评分
+  'src/client/locales/shell.ts',            // shellZh/shellEn：导航条/状态栏与运行中心
+  'src/client/locales/overview-control.ts', // overviewControlZh/overviewControlEn：总览控制中心
+  'src/client/locales/sessions.ts',         // sessionsZh/sessionsEn：会话归位
+  'src/client/locales/foreign.ts',          // foreignZh/foreignEn：外部 agent 导入
   'src/ui/i18n.ts',
   'src/core/messages.ts',
   'src/client/history/history-locales.ts',

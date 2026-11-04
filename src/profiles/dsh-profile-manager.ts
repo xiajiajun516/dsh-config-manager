@@ -21,7 +21,7 @@
  * 物理删除：remove() 走 rmSync(recursive)，profile 目录内的 junction（pnpm 链接）
  * 只删链接本身，不会跟随进 pnpm store。
  */
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, type Dirent } from 'node:fs'
 // 复制走 async fs（整档案上万个文件，cpSync 会把宿主事件循环卡住二十多秒）
 import { copyFile, cp, mkdir, readdir, readlink, rm, stat, symlink, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -102,6 +102,72 @@ export interface DshProfileIncompleteCopiesScan {
 
 /** t89：profiles 根目录枚举失败的原因码（诊断/日志用）。 */
 export const PROFILES_ROOT_UNREADABLE = 'profiles-root-unreadable'
+
+/** 回滚复制目标目录的缺省删除实现（递归强制；不存在不算错）。 */
+const defaultProfileRemove = async (target: string): Promise<void> => {
+  await rm(target, { recursive: true, force: true })
+}
+
+/**
+ * 复制失败时回滚目标目录（cross-F3 收尾 / tech-debt #5）。
+ *
+ * **顺序即不变量：先删内容，标记留到最后。** 标记（`.dcm-copy-in-progress.json`）是「这个目录是半截副本」
+ * 的唯一证据 —— `listIncompleteCopies()` 只认它，`requireManagedDir` 也只认它，没有 package.json
+ * 又没有标记的目录既不进列表、删除还报 notFound（孤儿）。
+ *
+ * 此前 catch 里是一把 `rm(recursive)` 加一句注释：rm 先删掉标记再失败（例如某个只读子目录让它中途放弃），
+ * 残留目录恰好落进那个「看不见也删不掉」的形态。这里两道保险：
+ *  ① 逐条删顶层内容，标记不参与删除批次 —— 中途失败时标记必然还在；
+ *  ② 收尾时若目录仍存在而标记没了（rm 部分生效 / 外部工具删过），**按原样重写标记**再放手。
+ *
+ * 因此只要返回，残留（若还在）**必然**能被 `listIncompleteCopies()` / `listIncompleteCopiesScan()`
+ * 扫到，并能经 `remove()`（UI 的 diskApi.profileDelete）删除。
+ *
+ * @param remove 删除实现（缺省递归强制删除），仅供测试注入「部分失败」的 fs。
+ */
+export async function rollbackCopiedProfileDir(
+  destDir: string,
+  marker: DshProfileCopyMarker,
+  remove: (target: string) => Promise<void> = defaultProfileRemove,
+): Promise<{ removed: boolean; failedEntries: string[]; markerRestored: boolean }> {
+  const markerPath = join(destDir, PROFILE_COPY_MARKER_FILENAME)
+  const failedEntries: string[] = []
+  let entries: Dirent[] = []
+  try {
+    entries = await readdir(destDir, { withFileTypes: true })
+  } catch {
+    // 读不出目录（已被删掉 / 无权限）：交给下面的存在性判据，不在此下结论
+    entries = []
+  }
+  for (const entry of entries) {
+    // 标记不进删除批次：它必须活到「内容全删完」那一刻
+    if (entry.name === PROFILE_COPY_MARKER_FILENAME) continue
+    try {
+      await remove(join(destDir, entry.name))
+    } catch {
+      failedEntries.push(entry.name)
+    }
+  }
+  if (failedEntries.length === 0) {
+    // 内容已空：连标记带目录一起删（这一步失败也不影响下面的补写）
+    try {
+      await remove(destDir)
+    } catch {
+      // 目录删不掉（标记已随 rm 消失的风险由下面兜住）
+    }
+  }
+  if (!existsSync(destDir)) return { removed: true, failedEntries: [], markerRestored: false }
+  let markerRestored = false
+  if (!existsSync(markerPath)) {
+    try {
+      atomicWriteFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o644 })
+      markerRestored = true
+    } catch {
+      // 目录已不可写：连标记都补不回去，只能让调用方照常抛错（用户可手动删）
+    }
+  }
+  return { removed: false, failedEntries, markerRestored }
+}
 
 /** 「档案」= DSH profile 的读写引擎（同步 fs；profile 数量级为个位数，无需异步）。 */
 export class DshProfileManager {
@@ -249,10 +315,12 @@ export class DshProfileManager {
         atomicWriteFileSync(join(destDir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o644 })
       }
     } catch (error) {
+      // 回滚失败 ≠ 放任孤儿：rollbackCopiedProfileDir 把标记留到最后，并在「目录还在、标记没了」时补写标记
+      // —— 残留目录因此仍能被 listIncompleteCopies() 扫到，并能经 remove()（UI 的「删除残留副本」）删掉。
       try {
-        await rm(destDir, { recursive: true, force: true })
+        await rollbackCopiedProfileDir(destDir, marker)
       } catch {
-        // 回滚也失败时无能为力：错误照抛，用户可手动删掉这个半套目录
+        // 连回滚入口都抛（理论上不会）：标记在写盘前就已落盘，用户仍可手动删掉这个半套目录
       }
       throw new DshProfileError('copyFailed', `copyFailed: ${error instanceof Error ? error.message : String(error)}`)
     }

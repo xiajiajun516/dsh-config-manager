@@ -13,7 +13,7 @@ import type { TranslateNS } from '../client-types.ts'
 import type { SyncPushPreview } from '../../sync/sync-engine.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import type { SectionId } from '../../schema/types.ts'
-import { Banner, Card } from '../common/ui.tsx'
+import { Banner, Card, Chip } from '../common/ui.tsx'
 import { pushPreviewView } from './sync-view.ts'
 import css from '../config-manager.module.css'
 
@@ -44,7 +44,7 @@ export function PushPreviewCard({ preview, t, uiT, sectionName }: {
           <ul className={css.reportList}>
             {view.rows.map((row) => (
               <li key={row.section}>
-                <span className={css.kindTag}>{row.changed ? t('syncflow.pushChanged') : t('syncflow.pushUnchanged')}</span>
+                <Chip>{row.changed ? t('syncflow.pushChanged') : t('syncflow.pushUnchanged')}</Chip>
                 {' '}{sectionName(row.section)} · {row.count}
               </li>
             ))}

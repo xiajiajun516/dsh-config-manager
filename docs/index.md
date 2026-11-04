@@ -13,7 +13,7 @@
 
 | 我想… | 读这个 |
 |---|---|
-| 快速知道仓库怎么分层、82 条路由怎么来的、改哪里会炸 | `docs/modules/architecture.md` |
+| 快速知道仓库怎么分层、路由清单怎么来的、改哪里会炸 | `docs/modules/architecture.md` |
 | 改备份/导出/导入/恢复/加密 | `docs/modules/backup-restore.md` + `docs/spec/` |
 | 改同步通道、合并、自动同步、配置档案 | `docs/modules/sync.md` |
 | 改对话回退、回滚点、救援台、CLI 写入门 | `docs/modules/recovery.md` |

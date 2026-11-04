@@ -123,7 +123,7 @@ function OperationRow({ row, t }: { row: SyncHistoryEntry; t: TranslateNS<'confi
     <tr>
       {/* 等宽 11px + 固定列宽 → 单行不换行；title 给完整本地时间（含秒） */}
       <td className={css.dim} title={formatDateTimeFull(row.createdAt)}>
-        <span className={css.mono} style={{ fontSize: '11px' }}>{formatDateTime(row.createdAt)}</span>
+        <span className={css.mono + ' ' + css.syncLogTime}>{formatDateTime(row.createdAt)}</span>
       </td>
       <td>
         <div className={css.cellMain}>
@@ -149,7 +149,7 @@ function AutosyncRow({ entry, t }: { entry: AutosyncHistoryEntry; t: TranslateNS
     <tr>
       {/* 与人为操作行一致的时间呈现（等宽 11px 单行 + title 完整本地时间） */}
       <td className={css.dim} title={formatDateTimeFull(row.createdAt)}>
-        <span className={css.mono} style={{ fontSize: '11px' }}>{formatDateTime(row.createdAt)}</span>
+        <span className={css.mono + ' ' + css.syncLogTime}>{formatDateTime(row.createdAt)}</span>
       </td>
       <td>
         <div className={css.cellMain}>

@@ -8,8 +8,10 @@
  * 规则：
  * - 拆小了就把这里的天花板一起下调（棘轮只往下走）。
  * - 真要上调，必须同时写清理由与拆解计划，并在 `docs/maintenance/tech-debt.md` 记一笔。
- *   （已有上调记录：rollback-point 5963 → 5980，D3 内置敏感文件排除，见 tech-debt #3；
- *    locales 1749 → 1751 → 1776，前者为「读取超时」语义的 zh/en 两行、后者为路径浏览器 13 条 zh/en（见 tech-debt #22）。）
+ *   （上调记录：rollback-point 5963 → 5980，D3 内置敏感文件排除，见 tech-debt #3；
+ *    run-store 2166 → 2221，恢复面板「写盘进行中」瞬态切片 + 4 处共用的登记 hook，
+ *    这是 tech-debt #7 的修法本体，不是新增功能；locales 曾上调到 1797，本轮已按页面域
+ *    拆成 `src/client/locales/*.ts`，聚合器回落 63 行并从本表移除（tech-debt #22）。）
  * - 新文件超过 1400 行也要登记进来（否则它会绕开棘轮继续长）。
  */
 import { test } from 'node:test';
@@ -23,22 +25,19 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** 路径 → 行数上限（当前实测值，只许下调）。 */
 const CEILINGS: Record<string, number> = {
   'src/core/rollback-point.ts': 5980,
-  // 4379 → 4389（2026-11-04）：+5 是迁移历史自动清理的宿主接线（逻辑本体在 src/core/history-prune.ts），
-  // 其余是残留锁生命周期接线；理由与拆解计划见 tech-debt #23。
-  'src/index.ts': 4389,
-  'src/sync/sync-engine.ts': 2227,
-  'src/client/run-store.ts': 2166,
-  'src/client/recovery/RecoveryPanel.tsx': 1922,
-  // 1776 → 1795（2026-11-01，视觉 pass）：+19 行全是新增的用户可见文案，理由与拆解计划见
-  // tech-debt #22（首页活动表 4 个列头 ×2 语言、自动备份关闭档、产物库筛选计数、档案行端口徽章）。
-  // 1795 → 1797（2026-11-04，0.4.1）：overview.result.pending 的 zh/en 两行（「待裁决」不再显示成失败）。
-  'src/client/locales.ts': 1797,
-  'src/core/analyzer.ts': 1500,
-  'src/client/sync/SyncPanel.tsx': 1591,
-  'src/cli/actions.ts': 1575,
+  // 4389 → 4135（2026-11-04）：调度/心跳/缓存清理下沉到 src/core/host-schedulers/，
+  // parseSyncBody 家族下沉 route-support.ts；理由与残留见 tech-debt #23。
+  'src/index.ts': 4135,
+  'src/sync/sync-engine.ts': 2213,
+  // 2166 → 2221（2026-11-04）：恢复面板「写盘进行中」瞬态切片 + begin/endRecoveryWrite
+  // （不落盘，PersistedRecoveryState 显式 Omit 'write'），是 tech-debt #7 的修法本体。
+  'src/client/run-store.ts': 2221,
+  'src/core/analyzer.ts': 1481,
+  'src/client/sync/SyncPanel.tsx': 1590,
+  'src/cli/actions.ts': 1574,
   'src/ui/rollback-view.ts': 1558,
   'src/core/rollback-ledger.ts': 1462,
-  'src/cli/index.ts': 1461,
+  'src/cli/index.ts': 1460,
 };
 
 /** wc -l 口径：按换行计数，末行无换行不计。 */

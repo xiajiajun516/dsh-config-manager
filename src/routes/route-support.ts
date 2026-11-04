@@ -28,13 +28,15 @@ import { collectCredentialRefs } from '../security/credentials-yaml.ts'
 import { decryptCredentials, SecurityError } from '../security/index.ts'
 import type { Manifest, SectionId } from '../schema/types.ts'
 import type { HostContext, ImportPlan, PlanItemKind } from '../core/types.ts'
+import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { engineMsg } from '../core/engine-locale.ts'
 import { createPreRestoreAttemptDir } from '../core/restore.ts'
 import type { RestoreActionKind, RestorePlan, RestoreReport } from '../core/restore.ts'
 import { collectRestoreWalEntries, createRestoreWal, restoreActionStepId, restoreWalHandlesFromSteps } from '../core/restore-wal.ts'
 import type { RestoreResumeHint } from '../core/restore-resume.ts'
 import type { RestoreJournalPort, RestoreWalHandle, RestoreWalSettleStatus } from '../core/restore-wal.ts'
-import type { SyncTransportType } from '../sync/sync-config.ts'
+import type { SyncConfig, SyncTransportType } from '../sync/sync-config.ts'
+import { GIST_PROVIDER, cloudSecretRef, isS3CompatProvider, isWebDavConfig, parseSyncChannel, validateCloudChannelInput, validateRepoUrl, validateWebDavUrl } from '../sync/sync-config.ts'
 import { DEFAULT_AUTOSYNC_AUTO_APPLY_TIER, DEFAULT_AUTOSYNC_CONFLICT_POLICY, DEFAULT_AUTOSYNC_REALTIME, DEFAULT_AUTOSYNC_REMOTE_CHECK_MS, lastRunFailureMessage, readAllAutosyncConfigs, readAutosyncConfig } from '../sync/autosync-config.ts'
 import type { AutosyncAutoApplyTier, AutosyncConflictPolicy, AutosyncInterval, AutosyncRunStatus } from '../sync/autosync-config.ts'
 import { SYNC_CHANNELS } from '../sync/sync-config.ts'
@@ -732,4 +734,209 @@ export function makeRestoreExecutor(snapshotDir: string, host: HostContext, prof
       return { ok: false, message: msgOf(host)('host.restoreUninstallFailed', { name, code: String(result.exitCode), tail }) }
     },
   }
+}
+
+
+/* ------------------------------------------- 同步通道请求体解析（tech-debt #23 下沉）
+ *
+ * 原在 src/index.ts 的宿主组合根里，但它们是**不依赖组合根状态**的纯解析：
+ * body → 归一化 SyncConfig（可辨识联合）+ 密钥只写 DSH credentials 槽位。
+ * 下沉后 `src/index.sync.test.ts` 仍经组合根的再导出取用（符号名不变）。
+ */
+
+/** parseSyncBody 的凭据写入依赖（只用到 set；测试可注入内存 mock）。 */
+export interface ParseSyncBodyDeps {
+  credentials: Pick<CredentialProvider, 'set'>
+}
+
+/**
+ * 解析同步请求体，按 transport 分支返回归一化的 SyncConfig（可辨识联合，schemaVersion=2）。
+ * 请求体形状（flat，M4 契约）：
+ * - git:    { transport:'git', repoUrl, token? } —— token 非空写 SYNC_CREDENTIAL_REF；
+ *   git 可执行文件固定使用系统 PATH 中的 git（不再接受自定义 gitBin）。
+ * - webdav: { transport:'webdav', url, username?, password? } —— password 非空写 SYNC_WEBDAV_CREDENTIAL_REF。
+ * 返回值不含任何 secret（password/token 只进 credentials，永不回传/落同步文件）。
+ */
+export async function parseSyncBody(
+  body: Record<string, unknown>,
+  deps: ParseSyncBodyDeps,
+): Promise<SyncConfig> {
+  const rawTransport = body['transport']
+  // 通道值解析：接受通道名（s3/gist）；也接受**具体兼容商**（oss/cos/minio/kodo）直接落到 s3 通道
+  const transport = parseSyncChannel(rawTransport) ?? (isS3CompatProvider(rawTransport) ? 's3' : 'git')
+  if (transport === 's3') return parseCloudS3Body(body, rawTransport, deps)
+  if (transport === 'gist') return parseCloudGistBody(body, deps)
+  if (transport === 'webdav') {
+    const url = typeof body['url'] === 'string' ? body['url'].trim() : ''
+    if (url === '') throw new SyncRouteError('url is required for webdav')
+    const urlError = validateWebDavUrl(url)
+    if (urlError !== null) throw new SyncRouteError(urlError)
+    const username = typeof body['username'] === 'string' && body['username'] !== '' ? body['username'] : undefined
+    const password = typeof body['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
+    if (password !== undefined) {
+      try {
+        await deps.credentials.set(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF), password)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        throw new SyncRouteError(
+          engineMsg('host.syncWebdavPasswordWriteFailed', { reason, ref: SYNC_WEBDAV_CREDENTIAL_REF }),
+        )
+      }
+    }
+    return {
+      schemaVersion: 2,
+      transport: 'webdav',
+      webdav: { url, ...(username !== undefined ? { username } : {}) },
+    }
+  }
+  // git 通道（沿用现有逻辑）
+  const repoUrl = typeof body['repoUrl'] === 'string' ? body['repoUrl'].trim() : ''
+  if (repoUrl === '') throw new SyncRouteError('repoUrl is required')
+  const urlError = validateRepoUrl(repoUrl)
+  if (urlError !== null) throw new SyncRouteError(urlError)
+  const token = typeof body['token'] === 'string' && body['token'] !== '' ? body['token'] : undefined
+  if (token !== undefined) {
+    try {
+      await deps.credentials.set(credentialRef(SYNC_CREDENTIAL_REF), token)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new SyncRouteError(
+        engineMsg('host.syncTokenWriteFailed', { reason, ref: SYNC_CREDENTIAL_REF }),
+      )
+    }
+  }
+  return {
+    schemaVersion: 2,
+    transport: 'git',
+    git: { repoUrl },
+  }
+}
+
+/** 请求体字段 → 去空白字符串（非字符串 = 空）。 */
+function syncStr(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+/** 云端点密钥写入失败 → 可操作错误（**含 ref 名、绝不含密钥值**）。 */
+function cloudCredentialWriteError(ref: string, kind: string, error: unknown): SyncRouteError {
+  const reason = error instanceof Error ? error.message : String(error)
+  return new SyncRouteError(
+    engineMsg('host.syncCredentialWriteFailed', { kind, reason, ref }),
+    400,
+    'cloud.credentialsWriteFailed',
+  )
+}
+
+/**
+ * s3 通道请求体 → SyncConfig（provider 必填或由 transport 直接给出）。
+ * 非密字段按 validateCloudChannelInput 校验（错误码 = HTTP body.code，由 UI 映射字典）；
+ * 密钥**只写**进 DSH credentials 的 cloudSecretRef(provider) 槽位，绝不进返回值 / 文件 / 日志。
+ */
+async function parseCloudS3Body(
+  body: Record<string, unknown>,
+  rawTransport: unknown,
+  deps: ParseSyncBodyDeps,
+): Promise<SyncConfig> {
+  const provider = isS3CompatProvider(body['provider'])
+    ? body['provider']
+    : (isS3CompatProvider(rawTransport) ? rawTransport : null)
+  if (provider === null) {
+    throw new SyncRouteError('provider is required for s3 (s3/oss/cos/minio/kodo)', 400, 'cloud.providerUnknown')
+  }
+  const endpoint = syncStr(body['endpoint']).replace(/\/+$/, '')
+  const region = syncStr(body['region'])
+  const bucket = syncStr(body['bucket'])
+  const accessKeyId = syncStr(body['accessKeyId'])
+  const prefix = syncStr(body['prefix'])
+  const pathStyle = typeof body['pathStyle'] === 'boolean' ? body['pathStyle'] : undefined
+  const dialectId = body['dialectId'] === 'aws4' || body['dialectId'] === 'oss4' ? body['dialectId'] : undefined
+  const issue = validateCloudChannelInput(provider, {
+    endpoint,
+    region,
+    bucket,
+    accessKeyId,
+    ...(prefix === '' ? {} : { prefix }),
+    ...(pathStyle === undefined ? {} : { pathStyle }),
+    ...(dialectId === undefined ? {} : { dialectId }),
+  })
+  if (issue !== null) throw new SyncRouteError(issue, 400, issue)
+  const secret = typeof body['secret'] === 'string' && body['secret'] !== '' ? body['secret'] : undefined
+  if (secret !== undefined) {
+    const ref = cloudSecretRef(provider)
+    try {
+      await deps.credentials.set(credentialRef(ref), secret)
+    } catch (error) {
+      throw cloudCredentialWriteError(ref, engineMsg('host.syncKindS3Secret'), error)
+    }
+  }
+  return {
+    schemaVersion: 2,
+    transport: 's3',
+    s3: {
+      provider,
+      endpoint,
+      region,
+      bucket,
+      accessKeyId,
+      ...(prefix === '' ? {} : { prefix }),
+      ...(pathStyle === undefined ? {} : { pathStyle }),
+      ...(dialectId === undefined ? {} : { dialectId }),
+    },
+  }
+}
+
+/**
+ * gist 通道请求体 → SyncConfig。token 只写进 cloudSecretRef('gist') 槽位
+ * （请求体字段名 token 或 secret 都接受；值绝不进返回值 / 文件 / 日志）。
+ */
+async function parseCloudGistBody(body: Record<string, unknown>, deps: ParseSyncBodyDeps): Promise<SyncConfig> {
+  const gistId = syncStr(body['gistId'])
+  const apiBaseUrl = syncStr(body['apiBaseUrl'])
+  const filePrefix = syncStr(body['filePrefix'])
+  const issue = validateCloudChannelInput(GIST_PROVIDER, {
+    gistId,
+    ...(apiBaseUrl === '' ? {} : { apiBaseUrl }),
+    ...(filePrefix === '' ? {} : { filePrefix }),
+  })
+  if (issue !== null) throw new SyncRouteError(issue, 400, issue)
+  const token = typeof body['token'] === 'string' && body['token'] !== ''
+    ? body['token']
+    : (typeof body['secret'] === 'string' && body['secret'] !== '' ? body['secret'] : undefined)
+  if (token !== undefined) {
+    const ref = cloudSecretRef(GIST_PROVIDER)
+    try {
+      await deps.credentials.set(credentialRef(ref), token)
+    } catch (error) {
+      throw cloudCredentialWriteError(ref, 'Gist token', error)
+    }
+  }
+  return {
+    schemaVersion: 2,
+    transport: 'gist',
+    gist: {
+      gistId,
+      ...(apiBaseUrl === '' ? {} : { apiBaseUrl }),
+      ...(filePrefix === '' ? {} : { filePrefix }),
+    },
+  }
+}
+
+/** 由 SyncConfig 合成 WebDAV 通道 baseUrl（webdav.url，尾部规范化带 '/'；git 通道返回 ''）。 */
+export function webdavBaseUrl(cfg: SyncConfig): string {
+  if (!isWebDavConfig(cfg)) return ''
+  return cfg.webdav.url.replace(/\/+$/, '') + '/'
+}
+
+/**
+ * 补全 webdav 配置缺失的 username（从持久化配置回填；纯函数，不修改入参）。
+ * 语义与 password 一致：请求未带 username（表单留空/挂载自动加载）→ 沿用已保存的值；
+ * 请求显式带 username → 原样保留（用户新输入优先）。非 webdav / 无持久化 → 原样返回。
+ */
+export function mergePersistedWebDavUsername(cfg: SyncConfig, persisted: SyncConfig | null): SyncConfig {
+  if (!isWebDavConfig(cfg) || (cfg.webdav.username !== undefined && cfg.webdav.username !== '')) return cfg
+  if (persisted !== null && isWebDavConfig(persisted)
+    && typeof persisted.webdav.username === 'string' && persisted.webdav.username !== '') {
+    return { ...cfg, webdav: { ...cfg.webdav, username: persisted.webdav.username } }
+  }
+  return cfg
 }

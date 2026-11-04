@@ -230,6 +230,13 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* 同步日志的时间列：等宽 + 最小档字号 + 单行（此前两个组件各写一次内联 fontSize: '11px'）。
+   单行的理由：表格列宽固定，时间是行内锚点，折行会把它从「一列」变成两行噪声。 */
+.syncLogTime {
+  font-size: var(--cm-fs-meta);
+  white-space: nowrap;
+}
+
 /* Lucide 图标统一行为：继承文字色（跟随 --dsw-* token / data-danger / hover），
    在 flex 容器（按钮/行）内不收缩、垂直居中，描边与正文视觉重量匹配。 */
 .section svg {
@@ -1572,6 +1579,26 @@ body {
 .badgeHost {
   display: inline-flex;
   align-items: center;
+}
+
+/* —— 中性分类片（Chip，tech-debt #10 / 2026-11） ——
+   职责划分：**Badge = 状态语义**（四态只由 src/ui/badge-tone.ts 的 BadgeKind 定义）；
+   **Chip = 中性分类**（来源 / 形态 / 适配器 / 分区数 —— 没有轻重缓急，也不该有颜色）。
+   此前这条是第二套徽章 .kindTag（16px / r-1 / weight 600），与 .badge（19px / pill / 500）
+   并存 ⇒ 同屏两套「小片子」，用户读不出差别。现在两者盒模型逐字对齐，只有色调与职责不同：
+   分类片用中性灰底 + 次级文字色，状态片用四态 color-mix 淡底（见上方 .badge[data-kind]）。 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 8px;
+  border-radius: var(--cm-r-pill);
+  background: var(--cm-hover);
+  font-size: var(--cm-fs-meta);
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--cm-text-2);
+  white-space: nowrap;
 }
 
 /* —— 横幅（四态；紧凑） —— */
@@ -3006,6 +3033,12 @@ body {
   gap: 8px;
   flex-wrap: wrap;
   margin: 0 0 10px;
+}
+
+/* 紧跟说明/错误条的动作行：上边补 8px，否则按钮贴着 Banner 下沿。
+   必须定义在 .actionRow 之后：两者同为单类选择器，靠顺序取胜（margin 简写会覆盖 margin-top）。 */
+.actionRowSpaced {
+  margin-top: var(--cm-sp-4);
 }
 
 /* 平分整行的动作行（2026-11-01 同步页）：两个方向按钮各占一半，右边缘与卡内其余行齐平 ——
@@ -4892,38 +4925,9 @@ body {
   margin-bottom: 10px;
 }
 
-.kindTag {
-  display: inline-flex;
-  align-items: center;
-  height: 16px;
-  padding: 0 6px;
-  border-radius: var(--cm-r-1);
-  background: var(--dsw-alias-interactive-bg-hover);
-  font-size: var(--cm-fs-meta);
-  font-weight: 600;
-  color: var(--dsw-alias-label-secondary);
-  white-space: nowrap;
-}
-
-.kindTagOk {
-  background: color-mix(in srgb, var(--cm-ok) 13%, transparent);
-  color: var(--cm-ok);
-}
-
-.kindTagInfo {
-  background: color-mix(in srgb, var(--cm-accent) 13%, transparent);
-  color: var(--cm-accent);
-}
-
-.kindTagWarn {
-  background: color-mix(in srgb, var(--cm-warn) 13%, transparent);
-  color: var(--cm-warn);
-}
-
-.kindTagError {
-  background: color-mix(in srgb, var(--cm-error) 13%, transparent);
-  color: var(--cm-error);
-}
+/* 注：此处原有第二套徽章 .kindTag / .kindTagOk/Info/Warn/Error（2026-11 删除，tech-debt #10）。
+   四态语义现在只有 .badge[data-kind] 一套（由 src/ui/badge-tone.ts 派生），
+   中性分类改用 .chip —— 见 §3 徽章段。 */
 
 /* —— git 风格恢复预览：分组行 + 左右双栏逐行对照（2026-09） ——
    颜色一律走 --dsw-* token + color-mix（绿=success / 红=error 的 12% 淡底），零硬编码。 */
@@ -5260,6 +5264,30 @@ body {
   margin-bottom: 10px;
 }
 
+/* 竖排变体（关于页统计位：大数字一行、说明一行）。间距取 4 档而非行的 8 档：
+   这里是「同一条事实数字 + 它的注脚」，不是彼此独立的徽章。 */
+.statRowStack {
+  flex-direction: column;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  gap: var(--cm-sp-2);
+}
+
+/* 折行变体（导入页来源徽章行：条目数不定，窄栏里必须折行而不是溢出卡片）。
+   间距取 8px —— 折行后的行距同样必须在 9 档里。 */
+.statRowWrap {
+  flex-wrap: wrap;
+  gap: var(--cm-sp-4);
+}
+
+/* 块级纵向堆叠：一屏里的若干独立块（Banner / 徽章行 / 动作行）之间的统一节奏。
+   与 .statRowStack 的分工：那是「同一条事实的多个字段」（4px），这里是彼此独立的块（12px）。 */
+.blockStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-6);
+}
+
 /* 咨询卡内的徽章行：与上方小节标题拉开一点距离（原先与标题贴在一起） */
 .consultSection {
   margin-top: 10px;
@@ -5488,6 +5516,147 @@ button.profileRowMain:hover {
   outline: var(--cm-focus-width) solid var(--cm-focus-color);
   outline-offset: 1px;
   border-radius: var(--cm-r-1);
+}
+
+/* —— 更新日志（ReleaseBody 结构化 Markdown 块 / ReleaseNotesDialog 卡片流） ——
+   2026-11（tech-debt #11）：此前这些样式全写在组件的 style={{…}} 里（11 处裸 var(--dsw-*) +
+   一排字面量 px），CSS 侧的 token/scale 守卫完全看不见。现在逐条迁到类，
+   颜色只走 --cm-text-* / --cm-line-*，字号只走 --cm-fs-*，间距只取 9 档。 */
+.releaseBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-3);
+  font-size: var(--cm-fs-title);
+  line-height: 1.5;
+  color: var(--cm-text-1);
+}
+
+/* 标题层级：块级 Markdown 的 h1/h2/h3 —— 只有边距与一级标题的字号差，
+   其余层级共用一条规则（三级标题层级再细分就是给 changelog 做排版了，不值得）。 */
+.releaseHeading {
+  margin-top: var(--cm-sp-4);
+  margin-bottom: var(--cm-sp-2);
+  font-weight: 600;
+  color: var(--cm-text-1);
+}
+
+.releaseHeading[data-level='1'] {
+  margin-top: var(--cm-sp-6);
+}
+
+/* 列表项：项目符号列 + 正文列（flex，符号不参与折行） */
+.releaseListItem {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--cm-sp-3);
+  padding-left: var(--cm-sp-2);
+}
+
+.releaseBullet {
+  color: var(--cm-text-3);
+  user-select: none;
+}
+
+.releaseItemBody {
+  flex: 1;
+}
+
+/* 引用块：左侧 3px 竖线（发丝线用 3px 是为了在淡色下仍可辨，--cm-line-1 已是最浅档） */
+.releaseQuote {
+  border-left: 3px solid var(--cm-line-1);
+  padding-left: var(--cm-sp-4);
+  color: var(--cm-text-2);
+  font-style: italic;
+}
+
+/* 代码块：复用 .cliCommand（等宽 + 折行），这里只补块级留白与表格档字号 */
+.releaseCode {
+  margin: var(--cm-sp-2) 0;
+  padding: var(--cm-sp-4);
+  font-size: var(--cm-fs-table);
+}
+
+/* 分隔线：Markdown 的 --- 是「段落级断点」，不承担信息 */
+.releaseRule {
+  margin: var(--cm-sp-4) 0;
+  border-bottom: 1px solid var(--cm-line-2);
+}
+
+.releaseEmpty {
+  color: var(--cm-text-3);
+  font-style: italic;
+}
+
+/* 版本卡片流（ReleaseNotesDialog）：卡片 = 表面 + 描边 + 12px 内距 */
+.releaseCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-4);
+  padding: var(--cm-sp-6);
+  background: var(--cm-surface-1);
+  border: 1px solid var(--cm-line-1);
+  border-radius: var(--cm-r-2);
+}
+
+.releaseCardHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--cm-sp-4);
+  flex-wrap: wrap;
+}
+
+.releaseTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-4);
+  flex-wrap: wrap;
+}
+
+.releaseTitle {
+  font-size: var(--cm-fs-title);
+  font-weight: 600;
+  color: var(--cm-text-1);
+}
+
+.releaseDate {
+  font-size: var(--cm-fs-table);
+  color: var(--cm-text-3);
+}
+
+.releaseNotesEmpty {
+  padding: var(--cm-sp-9) 0;
+  text-align: center;
+  color: var(--cm-text-2);
+}
+
+.releaseNotesLoadingMore {
+  display: flex;
+  justify-content: center;
+  padding: var(--cm-sp-6) 0;
+}
+
+.releaseNotesAllLoaded {
+  padding: var(--cm-sp-4) 0;
+  text-align: center;
+  font-size: var(--cm-fs-table);
+  color: var(--cm-text-3);
+}
+
+/* 底部操作条：沿用 .actionRow，只补与正文区的分隔与内距 */
+.releaseNotesFoot {
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cm-sp-4);
+  border-top: 1px solid var(--cm-line-1);
+  padding: var(--cm-sp-5) var(--cm-sp-8) var(--cm-sp-7);
+}
+
+.releaseNotesFootActions {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-4);
 }
 
 .consultDimension {

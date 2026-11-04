@@ -96,7 +96,7 @@ test('A5 白名单无过期条目 + 计数锚定（4 条 / 133 命中）+ reason
 
 /* ------------------------------------------------------------------ A2 */
 
-test('A2 en 目录值零 CJK（8 本字典 + locale/en.json，取生效作用域内的文件）', () => {
+test('A2 en 目录值零 CJK（24 本字典 + locale/en.json，取生效作用域内的文件）', () => {
   const files = EN_CATALOG_FILES.filter((f) => effectiveSet.has(f));
   const hits = files.flatMap((f) => scanFile(f));
   assert.equal(hits.length, 0, 'en 目录出现 CJK（en 值必须是纯英文）：\n' + hits.map(formatHit).join('\n'));
@@ -248,7 +248,7 @@ test('S10 fail-closed：未闭合字符串/块注释/正则/模板/括号/大括
   assert.equal(s5.hits.length, 1, 'fail-closed：大括号未闭合时 E3 不豁免');
 });
 
-test('S11 合法 zh 形状全部可归属（21 处，逐一声明归属方式）', () => {
+test('S11 合法 zh 形状全部可归属（36 处，逐一声明归属方式）', () => {
   const registered = [
     'src/adapters/messages.ts', 'src/core/messages-core.ts', 'src/foreign/messages.ts',
     'src/market/messages-market.ts', 'src/profiles/messages.ts', 'src/routes/messages.ts',
@@ -261,10 +261,25 @@ test('S11 合法 zh 形状全部可归属（21 处，逐一声明归属方式）
     'src/client/market/market-locales.ts', 'src/client/recovery/recovery-locales.ts',
     'src/client/sync/sync-locales.ts', 'src/migrations/messages-migrations.ts',
     'src/client/chat/chat-locales.ts',
-  ]; // 通道②：KNOWN_CATALOG_FILES 显式清单
+    'src/client/locales/common.ts',
+    'src/client/locales/overview.ts',
+    'src/client/locales/export.ts',
+    'src/client/locales/import.ts',
+    'src/client/locales/restore.ts',
+    'src/client/locales/backup.ts',
+    'src/client/locales/report.ts',
+    'src/client/locales/next-steps.ts',
+    'src/client/locales/about.ts',
+    'src/client/locales/profiles.ts',
+    'src/client/locales/import-compat.ts',
+    'src/client/locales/shell.ts',
+    'src/client/locales/overview-control.ts',
+    'src/client/locales/sessions.ts',
+    'src/client/locales/foreign.ts',
+  ]; // 通道②：KNOWN_CATALOG_FILES 显式清单（末 15 条 = tech-debt #22 拆分出的分域字典，lead 裁决 m00054 授权）
   const all = [...registered, ...base, ...factory, ...knownFiles];
-  assert.equal(all.length, 21, '合法 zh 形状共 21 处');
-  assert.equal(new Set(all).size, 21, '21 处不得重复');
+  assert.equal(all.length, 36, '合法 zh 形状共 36 处');
+  assert.equal(new Set(all).size, 36, '36 处不得重复');
   for (const f of all) {
     const src = readFileSync(join(REPO_ROOT, f), 'utf8');
     assert.equal(isCatalogOwnerFile(f, src), true, f + ' 必须可归属（register* 调用或 KNOWN_CATALOG_FILES）');

@@ -17,6 +17,7 @@ import { buildManifest, CHECKSUMS_FILE, MANIFEST_FILE, EXPORTER_NAME } from '../
 import { SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../schema/config.ts';
 import { DEFAULT_SENSITIVE_RELS, refreshVault } from '../security/vault.ts';
 import { writeZip } from '../utils/zip.ts';
+import { formatDateOnly } from '../utils/time.ts';
 import { msgOf } from './messages.ts';
 import { engineMsg } from './messages-core.ts';
 import { declareBundledSessionsInWorkspaces, normalizeSessionLimit, sessionIdKey } from './session-select.ts';
@@ -533,10 +534,7 @@ function buildSectionFlags(sections: ExportSection[]): Manifest['sections'] {
 }
 
 function defaultOutPath(now: Date): string {
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `dsh-config-${y}-${m}-${d}.zip`;
+  return `dsh-config-${formatDateOnly(now)}.zip`;
 }
 
 /** 供报告使用：导出器身份（避免与 manifest 常量重复维护） */

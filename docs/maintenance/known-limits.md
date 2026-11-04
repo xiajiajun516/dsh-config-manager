@@ -49,7 +49,7 @@ DSH 不回读已写入的凭据明文，插件也无法凭 ref 反查值。因�
 > **类型**：前半句（DSH 的 cookie 策略）是**平台行为判断**，属宿主代码、仓内不可证；后半句（exact 表先命中）由 `tests/route/route-parity.test.ts` 钉住。
 
 DSH 把 cookie 拒绝挂在 `kind:'prefix', path:'/api'` 的 RPC 承载路由上，而派发是 exact 表先命中。
-⇒ 本插件 82 条路由的**唯一认证边界是 kit 的 loopback 围栏**。经代理/隧道暴露时必须另加认证，不能指望宿主。
+⇒ 本插件每条 exact 路由的**唯一认证边界是 kit 的 loopback 围栏**（完整清单的唯一事实源是 `tests/route/route-parity.test.ts` 的 `ROUTE_SNAPSHOT`）。经代理/隧道暴露时必须另加认证，不能指望宿主。
 
 ## 8. 分区载荷版本只能「硬失败」，没有降级读取
 读写器遇到不认识的载荷版本必须报错，而不是尽力解析：半解析的备份比拒绝更危险。

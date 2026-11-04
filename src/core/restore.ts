@@ -39,6 +39,7 @@ import {
 import type { RestoreJournalPort, RestoreWalHandle, RestoreWalSettleStatus } from './restore-wal.ts';
 import type { RestoreResumeHint } from './restore-resume.ts';
 import { parseJsonSafe } from '../utils/json.ts';
+import { isPathInside } from '../utils/paths.ts';
 import { atomicCopyFile, atomicWriteFile } from '../utils/atomic-write.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { HostContext, Snapshot, SnapshotStatus } from './types.ts';
@@ -214,16 +215,17 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-/** 越界防御：abs 必须等于 homeDir 或在 homeDir 之内（导出供 snapshot-diff 复用同一护栏） */
-export function isWithinHome(homeDir: string, abs: string): boolean {
-  const root = path.resolve(homeDir);
-  return abs === root || abs.startsWith(root + path.sep);
-}
+/*
+ * 越界防御只有一份实现：`src/utils/paths.ts` 的 `isPathInside`。
+ * 这里曾自带 `isWithinHome`（`abs.startsWith(root + sep)`），`verify-recovery.ts` 又逐字复制了一份 ——
+ * 四份同义守卫分散在四个模块，其中三份用 `rel.startsWith('..')` 判越界，
+ * 会把名字真叫 `..foo` 的兄弟目录误判成逃逸（`path.relative('/a/b','/a/b/..foo') === '..foo'`）。
+ */
 
 /** homeDir 内绝对路径（越界抛错） */
 export function homeAbs(homeDir: string, relPath: string, msg: MsgFunc): string {
   const abs = path.resolve(homeDir, relPath);
-  if (!isWithinHome(homeDir, abs)) throw new Error(msg('restore.pathEscape', { path: relPath }));
+  if (!isPathInside(abs, homeDir)) throw new Error(msg('restore.pathEscape', { path: relPath }));
   return abs;
 }
 
@@ -243,20 +245,20 @@ export function resolveRestoreTargetAbs(homeDir: string, target: string): string
 /** 快照目录内 blob 绝对路径（防 snapshot.json 里伪造 ../ 越界读） */
 export function blobAbs(snapshotDir: string, blobPath: string, msg: MsgFunc): string {
   const abs = path.resolve(snapshotDir, blobPath);
-  if (!isWithinHome(snapshotDir, abs)) throw new Error(msg('restore.blobPathEscape', { path: blobPath }));
+  if (!isPathInside(abs, snapshotDir)) throw new Error(msg('restore.blobPathEscape', { path: blobPath }));
   return abs;
 }
 
 /** 绝对路径 → 相对 $DSH_HOME（跨平台归一为 / 分隔；越界返回空串） */
 function toRelPath(homeDir: string, abs: string): string {
-  if (!isWithinHome(homeDir, abs)) return '';
+  if (!isPathInside(abs, homeDir)) return '';
   return path.relative(homeDir, abs).split(path.sep).join('/');
 }
 
 /* ------------------------- 目标侧真实路径围栏（junction / symlink 防写穿，D4） */
 
 /**
- * 目标侧路径安全：字符串前缀围栏 `isWithinHome` 挡不住两类逃逸 ——
+ * 目标侧路径安全：纯字符串围栏（`isPathInside`）挡不住两类逃逸 ——
  *  1. `$DSH_HOME` 内某个**目录**本身是链接（Windows junction / POSIX 目录 symlink）：
  *     字符串前缀成立，真实落点却在 home 之外；
  *  2. **目标文件本身是 symlink**：`atomicCopyFile` 缺省 `symlink:'follow'`
@@ -291,11 +293,7 @@ function foldPathKey(p: string): string {
   return process.platform === 'win32' ? p.toLowerCase() : p;
 }
 
-/** child 是否等于 root 或位于 root 之内（两侧都应是已解析的真实路径） */
-function isRealInside(root: string, child: string): boolean {
-  const rel = path.relative(foldPathKey(root), foldPathKey(child));
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
-}
+/* child 是否位于 root 之内（两侧都应是已解析的真实路径）→ `isPathInside`（共享实现，Windows 折大小写）。 */
 
 /**
  * 生成「目标安全性」判定函数；返回 null = 安全，否则返回**机器码**（只作日志/诊断，
@@ -340,7 +338,7 @@ function createTargetSafetyChecker(homeDir: string): (absTarget: string) => stri
     }
     const parentReal = projectedParentReal(path.dirname(absTarget));
     if (parentReal === null) return 'parent-unresolvable';
-    if (!isRealInside(rootReal, parentReal)) return 'parent-escape';
+    if (!isPathInside(parentReal, rootReal)) return 'parent-escape';
     return null;
   };
 }
@@ -359,7 +357,7 @@ function assertPlanTargetsSafe(actions: RestoreAction[], homeDir: string, msg: M
   for (const a of actions) {
     if (a.target === undefined || !WRITE_TARGET_KINDS.has(a.kind)) continue;
     const abs = path.resolve(homeDir, a.target);
-    if (!isWithinHome(homeDir, abs)) continue;
+    if (!isPathInside(abs, homeDir)) continue;
     const unsafe = check(abs);
     if (unsafe !== null) {
       // 复用既有「路径越界」语义与错误码：planRestore 顶层抛出 ⇒ restore() 一个字节都没写。
@@ -467,7 +465,7 @@ export interface RestoreSnapshotValidation {
 /** 递归检查快照目录内关键文件非 symlink（F25：拒绝 symlink 化 metadata/blob 写穿）。 */
 async function assertNoSnapshotSymlink(dir: string, rel: string): Promise<string | null> {
   const p = path.join(dir, rel);
-  if (!isWithinHome(dir, p)) return engineMsg('core.restore.pathEscaped', { rel });
+  if (!isPathInside(p, dir)) return engineMsg('core.restore.pathEscaped', { rel });
   try {
     const st = await fs.lstat(p);
     if (st.isSymbolicLink()) return engineMsg('core.restore.symlinkCriticalFile', { rel });
@@ -500,7 +498,7 @@ export async function validateSnapshotForRestore(
 
   // 目录边界：snapshotDir 必须紧邻 snapshotsRoot 下的一层
   const rel = path.relative(snapshotsRoot, snapshotDir).split(path.sep).join('/');
-  if (rel === '' || rel.includes('/') || !isWithinHome(snapshotsRoot, snapshotDir)) {
+  if (rel === '' || rel.includes('/') || !isPathInside(snapshotDir, snapshotsRoot)) {
     return { verdict: 'INVALID', reason: engineMsg('core.restore.snapshotDirOutOfBounds') };
   }
 

@@ -14,7 +14,7 @@
 
 ```
 src/cli/      离线 CLI（`dcm`）：snapshots/restore/reinstall/verify/backup/import/sessions/web；actions.ts=动作层 · help.ts=文案单一事实源 · web/=救急台
-src/index.ts  host 入口（apply() 装配 + 保留的 7 条路由）· src/routes/ kit.endpoint() 围栏 + 按域组文件（14 个域组文件 + kit/route-support/context 等共享部分）
+src/index.ts  host 入口（apply() 装配 + 保留的 7 条路由）· src/routes/ kit.endpoint() 围栏 + 按域组文件（域组文件 + kit/route-support/context 等共享部分）
 src/core/     引擎（exporter/importer/restore/rollback/rollback-point/run-registry/plugin-cli），与 DSH 解耦（ConfigAdapter/HostContext + 内存 mock）
 src/foreign/  外部 agent 配置 → bundle v1（30 来源 = 6 配置类 + 24 会话类，装配集中在 registry.ts 的 builtinForeignSources()；74 个非测试模块；会话转码经 IR；凭据值绝不进包）
 src/schema/   类型/Manifest/版本 · src/security/ 安全内核 · src/migrations/ 迁移链
@@ -26,7 +26,7 @@ src/ui/       框架无关 UI 逻辑（纯函数，node 可测） ← 业务逻�
 tests/        node --test 集成测试 · docs/（spec/modules/components/decisions/maintenance/lessons/design）· .dsh/skills/
 ```
 
-> **计数口径（2026-10-28 实测）**：`src/routes` 14 个域组文件、`src/adapters` 24、`src/profiles` 8、`src/foreign` 74 个非测试模块（= 目录内 `*.ts` 去掉 `*.test.ts`）。「来源数 30」是契约值（`src/foreign/registry.ts` 顶部注释 + t12 冻结、测试钉住 `FOREIGN_SOURCE_IDS`），不随文件数变化 —— 别把模块数当来源数。
+> **计数口径（2026-10-28 实测）**：`src/routes` 的域组文件数不写死（随功能增长，清单看目录）、`src/adapters` 24、`src/profiles` 8、`src/foreign` 74 个非测试模块（= 目录内 `*.ts` 去掉 `*.test.ts`）。「来源数 30」是契约值（`src/foreign/registry.ts` 顶部注释 + t12 冻结、测试钉住 `FOREIGN_SOURCE_IDS`），不随文件数变化 —— 别把模块数当来源数。
 
 ## 常用命令（下移自 AGENTS.md §🧪 命令）
 

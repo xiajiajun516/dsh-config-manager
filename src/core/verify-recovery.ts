@@ -34,6 +34,7 @@ import { validateSnapshotForRestore } from './restore.ts';
 import type { RecoveryVerification, RecoveryVerificationVerdict } from './journal.ts';
 import type { HostContext, Snapshot } from './types.ts';
 import type { SectionId } from '../schema/types.ts';
+import { isPathInside } from '../utils/paths.ts';
 
 export interface VerifyRecoveryOptions {
   /** 快照根目录（<snapshotsDir>，<snapshotDir> 的直接父级）。 */
@@ -44,22 +45,18 @@ export interface VerifyRecoveryOptions {
   expectedOperationId?: string;
 }
 
-/** 越界防御：abs 必须等于 homeDir 或在 homeDir 之内 */
-function isWithinHome(homeDir: string, abs: string): boolean {
-  const root = path.resolve(homeDir);
-  return abs === root || abs.startsWith(root + path.sep);
-}
+/* 越界防御只有一份实现：`src/utils/paths.ts` 的 `isPathInside`（此处原有逐字复制的一份）。 */
 
 /** 绝对路径 → 相对 homeDir（跨平台归一为 / 分隔；越界返回空串） */
 function toRelPath(homeDir: string, abs: string): string {
-  if (!isWithinHome(homeDir, abs)) return '';
+  if (!isPathInside(abs, homeDir)) return '';
   return path.relative(homeDir, abs).split(path.sep).join('/');
 }
 
 /** 快照目录内 blob 绝对路径（防 snapshot.json 里伪造 ../ 越界读） */
 function blobAbs(snapshotDir: string, blobPath: string): string {
   const abs = path.resolve(snapshotDir, blobPath);
-  if (!isWithinHome(snapshotDir, abs)) throw new Error(engineMsg('core.verifyRecovery.blobPathEscaped', { path: blobPath }));
+  if (!isPathInside(abs, snapshotDir)) throw new Error(engineMsg('core.verifyRecovery.blobPathEscaped', { path: blobPath }));
   return abs;
 }
 

@@ -12,6 +12,7 @@
  * 约束：不 import node 模块、不 import `../client/*`（架构边界 tests/architecture-boundaries.test.ts）、
  * 无 React 依赖；类型仅从 `../core/*` / `../sync/*` 以 type-only 方式取（运行时不加载）。
  */
+import { formatMinuteStamp } from '../utils/time.ts'
 import type { RestorePlan, RestoreReport, SnapshotMeta } from '../core/restore.ts'
 import type { RestoreChangeSummary } from '../core/snapshot-diff.ts'
 import type { BackupFileMeta } from '../sync/backup-files.ts'
@@ -210,8 +211,7 @@ export function filterBackupFiles(files: readonly BackupFileMeta[], query: strin
 export function formatBackupFileTime(ms: number): string {
   const d = new Date(ms)
   if (Number.isNaN(d.getTime())) return ''
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  return formatMinuteStamp(d)
 }
 
 /**

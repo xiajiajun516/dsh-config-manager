@@ -9,7 +9,9 @@
 # 部分 @deepseek-ai/* 只声明在 peerDependencies 且未发布到公共 registry，
 # 不带 `--legacy-peer-deps` 的普通 `npm ci` 会因无法解析 peer 而红灯。
 #
-# 单 job × 平台矩阵跑完整阶梯（install → typecheck → typecheck:tests → test → build → bundle guard → pack）：
+# 单 job × 平台矩阵跑完整阶梯（install → typecheck → typecheck:tests → test → build → bundle guard → pack）。
+# 阶梯本体在共享 composite action `.github/actions/verify/action.yml`（与 publish.yml 同一份，tech-debt #17）：
+# composite action 的 run 步骤必须显式声明 shell，故这些步骤三平台统一 shell: bash（与 pack 步骤原有的选择一致）。
 # 实测全量测试约 90 秒（ubuntu），三平台并行；拆成多个 job 只会重复 checkout/setup-node，
 # 并增加「哪个 job 才是 required」的出错面。耗时由 concurrency + timeout 控制。
 # 平台矩阵的理由见 jobs.verify 的 matrix 注释（32 处 process.platform 分支此前只有 ubuntu 覆盖）。
@@ -73,52 +75,9 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
 
-      - name: Install dependencies
-        # Some DSH core packages live only in peerDependencies and are not on
-        # the public registry; --legacy-peer-deps skips peer resolution.
-        run: npm ci --legacy-peer-deps
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Typecheck (tests)
-        # tests/** 不在根 tsconfig 的 include 内：用独立的 tsconfig.tests.json 单独过一遍类型检查。
-        # 此前 tests/** 是类型检查盲区（实测曾积压 43 条错误），该 step 让「测试代码也过类型检查」成为真实门禁。
-        run: npm run typecheck:tests
-
-      - name: Test
-        run: npm test
-
-      - name: Build
-        run: npm run build
-
-      - name: Bundle self-contained guard
-        # lib/client.js 必须自包含：DSH client loader 只取这一个文件，任何被外置的
-        # require（如 lucide-react / @radix-ui/*）都会在用户端命中 module-table-miss 崩溃。
-        # `npm test` 在 Build 之前运行，此时 lib/client.js 尚不存在（该测试会跳过并说明），
-        # 因此必须在 Build 之后单独跑一次，让护栏真正生效。
-        run: node --test src/client/bundle-selfcontained.test.ts
-
-      - name: AGENTS.md budget guard
-        # AGENTS.md 每个会话都进模型上下文，且受 workspace instruction 64 KiB 预算限制：
-        # 超限时模型只能看到被截断的尾巴（历史事故）。规则留在 AGENTS.md，证据必须进 docs/lessons/。
-        run: node scripts/check-agents-budget.mjs
-
-      - name: Doc path guard
-        # 活文档里指向已删除文件的路径会让读者与 agent 按图索骥失败（审计实测多例）。
-        # 只校验活文档；历史归档 / 证据库 / CHANGELOG 故意排除（见脚本头注释）。
-        run: node scripts/check-doc-paths.mjs
-
-      - name: Doc version guard
-        # 写死的版本号没有机制保证跟着发版走（审计实测：文档写 v0.1.58，实为 0.1.79）。
-        # 校验三处版本一致 + 活文档里「适用/当前版本」声明与 package.json 一致。
-        run: node scripts/check-doc-versions.mjs
-
-      - name: Package tarball (dry run)
-        # 与发布流水线同构的打包校验：pack 失败说明 package.json "files" 白名单
-        # 或 lib/ 产物已坏——在 PR 阶段暴露，而不是等到发版时才卡住。
-        # npm pack --pack-destination 在目录不存在时报 ENOENT（fresh checkout）。
-        # 显式 shell: bash —— windows-latest 自带 Git Bash；默认的 PowerShell 里 `mkdir` 没有 `-p`
-        # （三个平台用同一条命令，避免「本机跑的是另一套 shell 语义」）。
-        shell: bash
-        run: mkdir -p dist && npm pack --pack-destination ./dist
+      # 校验阶梯本体（install → typecheck → typecheck:tests → test → build → bundle 护栏 →
+      # AGENTS 预算守卫 → 文档路径守卫 → 文档版本守卫 → pack）在共享 composite action 里，
+      # 与 publish.yml 是同一份（tech-debt #17）：新增检查只改 .github/actions/verify/action.yml。
+      # Checkout / Setup Node.js 留在本文件：三平台 matrix 与 cache: npm 是调用方语义。
+      - name: Install / verify（共享 composite action）
+        uses: ./.github/actions/verify

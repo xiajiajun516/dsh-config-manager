@@ -19,7 +19,7 @@ import {
 import type { UiT } from '../../ui/i18n.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { midEllipsis } from '../../ui/mid-ellipsis.ts'
-import { Badge, Button, Spinner } from '../common/ui.tsx'
+import { Badge, Button, Chip, Spinner } from '../common/ui.tsx'
 import { ExpandChevron } from '../common/Icon.tsx'
 import { MoreMenu } from '../common/MoreMenu.tsx'
 import { ArtifactDetail } from './ArtifactDetail.tsx'
@@ -104,7 +104,7 @@ export function ArtifactRowView({
         <div className={css.artifactMain}>
           <div className={css.artifactTitle}>
             {/* 来源标签上标题行（定案 B）：来源已由此表达，再放一个 kind 图标属重复表达 */}
-            <span className={css.kindTag}>{uiT(ARTIFACT_KIND_LABEL_KEY[row.kind])}</span>
+            <Chip>{uiT(ARTIFACT_KIND_LABEL_KEY[row.kind])}</Chip>
             {/* 文件名走等宽栈 + 中段省略（DESIGN.md:93 / §9-5）：尾部才是区分信息
                 （同一分钟导出的两份备份只差尾部时间戳），尾部截断会让两行看起来一样。 */}
             <span

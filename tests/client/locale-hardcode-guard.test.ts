@@ -14,8 +14,9 @@ import path from 'node:path'
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 
-test('F6：locales.ts 必须提供 common.parens / common.listSeparator（zh+en 各一条）', () => {
-  const src = read('src/client/locales.ts')
+test('F6：locales/common.ts 必须提供 common.parens / common.listSeparator（zh+en 各一条）', () => {
+  // tech-debt #22：字典按域拆分后 common.* 落在 locales/common.ts（聚合器只做展开）
+  const src = read('src/client/locales/common.ts')
   for (const key of ['common.parens', 'common.listSeparator']) {
     const hits = [...src.matchAll(new RegExp("'" + key.replace('.', '\\.') + "':", 'g'))]
     assert.equal(hits.length, 2, key + ' 必须在 zh/en 字典里各有一条（实际 ' + hits.length + '）')

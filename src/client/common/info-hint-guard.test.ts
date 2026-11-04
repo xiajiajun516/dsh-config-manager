@@ -139,7 +139,7 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'profiles.create.hint', file: 'src/client/environment/EnvironmentPanel.tsx', kind: '机制' },
   { key: 'profiles.list.hint', file: 'src/client/environment/EnvironmentPanel.tsx', kind: '省事提示' },
   // t5：recovery/
-  { key: 'sessions.desc', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
+  { key: 'sessions.desc', file: 'src/client/recovery/SessionHealthCard.tsx', kind: '机制' },
   { key: 'recovery.preview.hint', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
   // t7（2026-10-12 用户要求「所有描述都收进 ⓘ」）：页级 / 分区级副标题 + 卡片 / 字段说明。
   // 判定口径见 DESIGN.md §7（本次把原 KEEP-2 的**静态安全说明**与 KEEP-7 的**静态副标题**一并纳入 MOVE；
@@ -171,9 +171,9 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'snapshots.selectHint', file: 'src/client/library/LibraryActions.tsx', kind: '省事提示' },
   { key: 'diskUsage.clean.hint', file: 'src/client/environment/maintenance/DiskUsageCard.tsx', kind: '边界' },
   { key: 'recovery.safeMode.detail', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
-  { key: 'sessions.repair.desc', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
+  { key: 'sessions.repair.desc', file: 'src/client/recovery/SessionHealthDialog.tsx', kind: '机制' },
   { key: 'recovery.rescue.desc', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
-  { key: 'sessions.layout.planReadOnly', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '边界' },
+  { key: 'sessions.layout.planReadOnly', file: 'src/client/recovery/SessionLayoutSection.tsx', kind: '边界' },
   { key: 'recovery.incomplete.hint', file: 'src/client/recovery/IncompleteCopiesSection.tsx', kind: '机制' },
   { key: 'repoPicker.privateOnly', file: 'src/client/sync/SyncRepositoryPicker.tsx', kind: '输入规则' },
   { key: 'config.tokenHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
@@ -250,9 +250,15 @@ const HINT_CALL_RE = /<InfoHint\b[\s\S]*?\/>/g;
 const CANON_ZH = '查看说明';
 const CANON_EN = 'Show description';
 
-/** 必须带该键的命名空间字典（出现 ⓘ 调用点的命名空间；history 零 MOVE，不参与）。 */
+/**
+ * 必须带该键的命名空间字典（出现 ⓘ 调用点的命名空间；history 零 MOVE，不参与）。
+ *
+ * tech-debt #22（2026-11 字典按域拆分）：`common.infoHint` 在原文里物理位于「会话归位」段
+ * （HEAD:src/client/locales.ts:715），拆完落在 `src/client/locales/sessions.ts`；聚合器
+ * `src/client/locales.ts` 只剩展开语句，不再含任何键字面量。
+ */
 const INFO_HINT_DICTS: readonly string[] = [
-  'src/client/locales.ts',
+  'src/client/locales/sessions.ts',
   'src/client/market/market-locales.ts',
   'src/client/sync/sync-locales.ts',
   'src/client/recovery/recovery-locales.ts',

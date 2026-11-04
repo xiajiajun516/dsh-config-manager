@@ -9,6 +9,7 @@
  * - 轻量级安全 Markdown 分块解析器（纯文本结构化，零 dangerouslySetInnerHTML / 零 XSS 风险）
  */
 import type { TranslateNS } from '../client-types.ts';
+import { formatDateOnly, parseDateInput } from '../../utils/time.ts';
 
 export interface GitHubReleaseRaw {
   id?: number;
@@ -76,20 +77,12 @@ export function deriveReleasesUrl(repoUrl: string): string {
 }
 
 /**
- * 格式化 ISO 日期为可读字符串（YYYY-MM-DD）。
+ * 格式化 ISO 日期为可读字符串（YYYY-MM-DD）；缺失 = 空串、非法输入原样回显。
  */
 export function formatReleaseDate(isoDate: string | null | undefined): string {
   if (!isoDate || typeof isoDate !== 'string') return '';
-  try {
-    const d = new Date(isoDate);
-    if (isNaN(d.getTime())) return isoDate;
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  } catch {
-    return isoDate;
-  }
+  const d = parseDateInput(isoDate);
+  return d === null ? isoDate : formatDateOnly(d);
 }
 
 /**
