@@ -26,6 +26,18 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > 体例细节、分组表、发版两道门禁与写后自检命令见项目 skill `.dsh/skills/changelog-writing/SKILL.md`（DSH 会自动发现并加载）。
 
+## [Unreleased]
+
+### 🔧 变更 · Changed
+- 环境页的磁盘占用与档案行改成两行式清单：名称与体积同一条线、动作收成图标按钮，不再挤成四列表格。
+  Disk usage and profile rows became two-line scan rows: name and size share a line, actions are icon buttons instead of a four-column table.
+- 会话体检弹窗把「修复计划 / 应用结果」放在列表上方，列表自己限高内滚 —— 点一行修复后不用再往外滚才看得见结果。
+  The session health dialog keeps its plan and result panels above the list and scrolls the list itself, so a repair result stays in view.
+- 会话体检的四条数据口径改成横排，不再竖着占掉小半屏。
+  The four data-scope notes in session health now wrap horizontally instead of stacking vertically.
+- 回滚卡把回滚点、会话数与台账占用并成同一组数字，「为什么现在点不了」按警告语气呈现。
+  The rollback card groups its counters into one cluster and shows blocked reasons with warning emphasis.
+
 ## [0.3.1] - 2026-11-02
 
 > **本版主题**：只修一件事 —— 阿里云 OSS 同步不再因为一个服务商根本不支持的条件请求头而失败：条件写改成按各家实际能力选头，测试连接与本地验签也照真机口径判定。
