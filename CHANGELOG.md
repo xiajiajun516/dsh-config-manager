@@ -28,6 +28,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-04
+
+> **本版主题**：两次「看不见的失败」都不再藏起来 —— 复制档案留下残骸现在会被点名、可一键清掉，恢复中的写操作切走再回来也不再假装卡住。
+>
+> **Theme**: two invisible failures stop hiding — a half-copied profile is now named on the page and removable in one click, and an in-flight recovery write no longer looks stuck after you navigate away.
+
 ### 🐛 修复 · Fixed
 
 - **复制档案失败后不再留下半截目录**：复制中途出错时若清理也失败，此前只会在日志里留一条注释，磁盘上留着一棵不完整的档案树、既不能启动也不会自己消失；现在这棵树会被标记成「未完成的复制」，档案页里直接列出并提供一次删除，重启后仍然认得。
