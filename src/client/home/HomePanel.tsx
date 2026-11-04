@@ -476,9 +476,8 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
           <Card className={css.activityCard}>
             <div className={css.activityHeader}>
               <span className={css.activityTitle}>{t('overview.activity.title')}</span>
-              {/* 加载说明放列头右侧（2026-11-04）：旧骨架把「加载中…」渲在占位块**下面**，
-                  数据到达时那行说明消失 ⇒ 整块再跳一次。放这里与真实态的空白位同一行同一处。 */}
-              {historyState === 'loading' && <span className={css.activityLoadingNote}>{t('common.loading')}</span>}
+              {/* 加载态不写字（2026-11-04 用户第二条）：列头右侧原先挂「加载中…」，
+                  现在骨架就是唯一反馈；加载语义仍由骨架的 role="status" + aria-busy + aria-label 承担。 */}
             </div>
             {/* 列头提到三元之外（2026-11-04）：加载态与完成态共用同一行表头 ⇒ 列位、行高、
                 滚动条槽全部一致；数据到达时是「占位条原位换成文字」，不是整块重排。

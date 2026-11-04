@@ -7,8 +7,8 @@
  * 因此按钮里的 `Button loading` 与 `.pickerOverlay` 保持 Spinner，**不要**改成骨架。
  *
  * 无障碍：视觉块统一 aria-hidden，加载语义由外框的 `role="status"` + `aria-busy` +
- * **可见文案**（caption，与 Spinner 的 label 同义）承担 —— 只给色块不留文案，读屏用户
- * 与「看不出这是加载态」的用户都拿不到信息（此前的 Spinner 都带 label，骨架不能把这条丢掉）。
+ * `aria-label` 承担 —— **骨架不渲染任何加载文案**（2026-11-04 用户要求「骨架屏只保留骨架」：
+ * 色块下面那行「加载中…」在数据到达时消失、又与 Spinner 的措辞重复；读屏仍有 status 名）。
  *
  * 动画：shimmer 与递进延迟见 config-manager.module.css §3；
  * `prefers-reduced-motion: reduce` 下退化为静态占位块（§15）。
@@ -34,7 +34,8 @@ function indices(count: number): number[] {
 }
 
 /**
- * 骨架外框：加载语义（role=status + aria-busy）挂在这里，视觉块由调用方 aria-hidden。
+ * 骨架外框：加载语义（role=status + aria-busy + aria-label）挂在这里，视觉块由调用方 aria-hidden。
+ * `label` 只做无障碍名（读屏播报），**不渲染成可见文案**。
  */
 function SkeletonRoot({ label, className, children }: { label?: string; className?: string; children: ReactNode }) {
   return (
@@ -42,9 +43,9 @@ function SkeletonRoot({ label, className, children }: { label?: string; classNam
       className={className !== undefined ? css.skeletonRoot + ' ' + className : css.skeletonRoot}
       role="status"
       aria-busy="true"
+      aria-label={label}
     >
       {children}
-      {label !== undefined && <span className={css.skeletonCaption}>{label}</span>}
     </div>
   )
 }
@@ -54,7 +55,7 @@ export interface SkeletonProps {
   shape?: SkeletonShape
   /** 重复条数（默认 1） */
   count?: number
-  /** 可见文案（已翻译），同时是读屏文案 */
+  /** 读屏文案（已翻译）：只做 `aria-label`，**不渲染**成可见文案 */
   label?: string
   /** 额外类（尺寸微调等；常规布局仍走 CSS 类） */
   className?: string
@@ -76,7 +77,7 @@ export function Skeleton({ shape = 'line', count = 1, label, className }: Skelet
 export interface SkeletonListProps {
   /** 条目数（默认 3） */
   count?: number
-  /** 可见文案（已翻译） */
+  /** 读屏文案（已翻译）：只做 `aria-label`，不渲染成可见文本 */
   label?: string
 }
 
@@ -103,7 +104,7 @@ export function SkeletonList({ count = 3, label }: SkeletonListProps) {
 export interface SkeletonTableProps {
   /** 行数（默认 5） */
   rows?: number
-  /** 可见文案（已翻译） */
+  /** 读屏文案（已翻译）：只做 `aria-label`，不渲染成可见文本 */
   label?: string
 }
 
@@ -130,14 +131,14 @@ export function SkeletonTable({ rows = 5, label }: SkeletonTableProps) {
 export interface SkeletonRowsProps {
   /** 行数（默认 6） */
   count?: number
-  /** 可见文案（已翻译） */
+  /** 读屏文案（已翻译）：只做 `aria-label`，不渲染成可见文本 */
   label?: string
 }
 
 export interface SkeletonActivityRowsProps {
   /** 行数（默认 5，与首页一次展示的条数一致） */
   count?: number
-  /** 加载文案（已翻译）。**只做无障碍名**，可见文案由调用方渲染在表头 —— 见下方注释。 */
+  /** 读屏文案（已翻译）：**只做无障碍名**，本组件不渲染任何可见文案 */
   label?: string
 }
 
@@ -152,9 +153,8 @@ export interface SkeletonActivityRowsProps {
  * 两点刻意偏离 `SkeletonRoot`：
  * ① 外框不带 `.skeletonRoot`（flex column + gap 8 + margin-top 8）—— 骨架行必须与真实行
  *    同处一个滚动容器、行与行之间没有额外间距，否则几何又对不上；
- * ② 可见文案不由本组件渲染：骨架下方的那条 caption 会在数据到达时消失（旧的抖动来源之一），
- *    改由调用方把它放进表头（首页的 `.activityLoadingNote`）。加载语义仍由
- *    `role="status"` + `aria-busy` + `aria-label` 承担，读屏不丢信息。
+ * ② 不渲染任何可见文案（与其余骨架同一口径）：加载语义由 `role="status"` + `aria-busy`
+ *    与 `aria-label` 承担，读屏不丢信息。
  */
 export function SkeletonActivityRows({ count = 5, label }: SkeletonActivityRowsProps) {
   return (

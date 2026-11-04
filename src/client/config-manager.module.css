@@ -171,6 +171,15 @@ body {
   --cm-motion-fast: 120ms;
   --cm-motion-base: 180ms;
   --cm-motion-slow: 300ms;
+  /* 勾形描边的专用时长（2026-11-04 用户实测「没有动画、或者太快」）：
+     180ms 的 base 放在 16px 方框上只是一闪，读不出「一路画过去」的行程；340ms 才看得见笔尖移动。
+     **只给 checkStroke 用**，别扩散到其它过渡（其它动效的克制靠 fast/base/slow 三档）。 */
+  --cm-motion-draw: 340ms;
+  /* 描边的缓动也单独一支，**只给 checkStroke 用**（2026-11-04 实测三组进度）：
+     `ease-out` 前 60ms 就画完 82%，看上去仍像"啪"地出现；`ease-in-out` 前 60ms 只画 6%，
+     像先卡住再猛跳。这一支在 60/85/170/255ms 分别是 13%/23%/64%/91% —— 起笔立刻动、
+     中段匀速、收笔收敛，才读得出是"画"出来的。 */
+  --cm-motion-ease-draw: cubic-bezier(0.3, 0.05, 0.5, 1);
   --cm-motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --cm-motion-ease-in-out: cubic-bezier(0.4, 0, 0.6, 1);
   /* 按压回弹的弹簧曲线（2026-11-04）：**只有按压回弹用它**，别扩散到其它过渡。
@@ -1467,7 +1476,7 @@ body {
 }
 
 .section input[type='checkbox']:checked::after {
-  animation: checkStroke var(--cm-motion-base) var(--cm-motion-ease-out) forwards;
+  animation: checkStroke var(--cm-motion-draw) var(--cm-motion-ease-draw) forwards;
 }
 
 @keyframes checkStroke {
@@ -1815,12 +1824,6 @@ body {
   width: 26px;
   height: 12px;
   border-radius: var(--cm-r-1);
-}
-
-/* 骨架下方的可见文案（与 Spinner 的 label 同义）：加载反馈必须能被读到，不只靠色块 */
-.skeletonCaption {
-  font-size: var(--cm-fs-meta);
-  color: var(--dsw-alias-label-tertiary);
 }
 
 /* ================================================================ §4 Surfaces */
@@ -3423,15 +3426,6 @@ body {
   font-size: var(--cm-fs-meta);
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-/* 加载说明放列头右侧，而不是骨架下方（2026-11-04）：旧骨架把「加载中…」渲在占位块下面，
-   数据到达时那行说明消失 ⇒ 整块再跳一次。放列头后它与真实态的空白位同一行同一处，
-   出现/消失都不改变任何高度。 */
-.activityLoadingNote {
-  flex: none;
-  font-size: var(--cm-fs-meta);
   color: var(--dsw-alias-label-tertiary);
 }
 

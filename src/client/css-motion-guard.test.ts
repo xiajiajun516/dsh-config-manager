@@ -182,6 +182,22 @@ function findCheckStrokeViolations(css: string): string[] {
   }
   const checked = ruleBody(css, ".section input[type='checkbox']:checked::after {");
   if (checked === null || !/animation:\s*checkStroke/.test(checked)) violations.push('勾选态必须播放 checkStroke');
+  else if (!/animation:\s*checkStroke\s+var\(--cm-motion-draw\)/.test(checked)) {
+    // 用户实测（2026-11-04 第二条）：「没有动画或者太快」—— 180ms 的 base 在 16px 方框上只是一闪。
+    violations.push('勾选态必须用 --cm-motion-draw 播描边（base 的 180ms 太快，读不出笔画移动）');
+  } else if (!/var\(--cm-motion-draw\)\s+var\(--cm-motion-ease-draw\)/.test(checked)) {
+    // 缓动也是观感的一部分：ease-out 前 60ms 就画完 82%（仍像瞬间出现），ease-in-out 前 60ms 只有 6%（像先卡住）。
+    violations.push('勾选态必须用 --cm-motion-ease-draw（通用缓动的前段进度不适合「画」，实测要么一闪要么先卡住）');
+  }
+  const draw = /--cm-motion-draw:\s*(\d+)ms;/.exec(css);
+  if (draw === null) {
+    violations.push('--cm-motion-draw 必须定义在 body 上（缺定义 ⇒ 时长在 computed-value 阶段失效，动画静默不播）');
+  } else if (Number(draw[1]) < 300) {
+    violations.push('--cm-motion-draw 至少 300ms（用户实测 180ms 太快）');
+  }
+  if (!/--cm-motion-ease-draw:\s*cubic-bezier\(/.test(css)) {
+    violations.push('--cm-motion-ease-draw 必须以 cubic-bezier(…) 定义在 body 上');
+  }
   return violations;
 }
 
@@ -194,6 +210,12 @@ test('t13-3 勾选框自绘 + 勾形从左下画到右上（mask 笔画 + 左→
   assert.ok(findCheckStrokeViolations(noAppearance).length >= 1, '负向自检：退回原生勾选框必须报红');
   const noReveal = mutate(css, '    clip-path: inset(0 100% 0 0);\n  }\n  to {', '  }\n  to {');
   assert.ok(findCheckStrokeViolations(noReveal).length >= 1, '负向自检：描边起点不裁掉必须报红');
+  const tooFast = mutate(css, '  animation: checkStroke var(--cm-motion-draw)', '  animation: checkStroke var(--cm-motion-base)');
+  assert.ok(findCheckStrokeViolations(tooFast).length >= 1, '负向自检：退回 180ms 的 base 必须报红');
+  const genericEase = mutate(css, 'var(--cm-motion-draw) var(--cm-motion-ease-draw)', 'var(--cm-motion-draw) var(--cm-motion-ease-out)');
+  assert.ok(findCheckStrokeViolations(genericEase).length >= 1, '负向自检：改用通用 ease-out 必须报红');
+  const noToken = mutate(css, '  --cm-motion-draw: 340ms;', '  --cm-motion-draw: 150ms;');
+  assert.ok(findCheckStrokeViolations(noToken).length >= 1, '负向自检：描边时长低于 300ms 必须报红');
 });
 
 test('t13-4 reduced-motion：关动画必须补终态（否则勾形永远看不见）', () => {

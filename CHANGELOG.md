@@ -36,8 +36,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 ### 🔧 变更 · Changed
 - **按钮按下有回弹了**：所有按钮（含链接形态的按钮）按下时缩到 96%，松手用弹簧动画先微微放大过原尺寸再落回 100%。
   **Buttons now spring back on press**: every button (link-styled ones included) dips to 96% while held, then overshoots slightly and settles at 100% with a spring.
-- **勾选框的勾是画出来的**：勾选时勾形沿从左下到右上的方向描出来，而不是整枚瞬间出现。
-  **The check mark is now drawn**: ticking a box strokes the check from bottom-left to top-right instead of popping in whole.
+- **勾选框的勾是画出来的**：勾选时勾形用约三分之一秒沿从左下到右上的方向描出来，看得清笔尖的行程（此前一闪而过，几乎像凭空出现）。
+  **The check mark is now drawn**: ticking a box strokes the check from bottom-left to top-right over roughly a third of a second, so the motion is visible instead of flashing past.
+- **骨架屏只留骨架**：占位块旁边不再写「加载中…」之类的字样，数据到达就直接在原位换成内容；读屏仍会播报加载状态。
+  **Loading skeletons now show only the skeleton**: placeholder blocks no longer carry a "Loading…" label, and content swaps in place when data arrives; screen readers still announce the loading state.
 - **首页的最近活动不再等全量历史**：首屏只读最近 100 条记录，历史攒到几千条首页也立刻出内容（历史页与导出仍覆盖全量）。
   **The home page no longer waits for the full history**: the first screen reads only the newest 100 records, so a history of thousands no longer holds the page back (the history page and exports still cover everything).
 - 环境页的磁盘占用与档案行改成两行式清单：名称与体积同一条线、动作收成图标按钮，不再挤成四列表格。
