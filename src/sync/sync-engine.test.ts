@@ -2635,6 +2635,94 @@ test('push: 远端列表读不出来 → 无法判定，按原样继续但如实
   }
 });
 
+/* ---------- 0.4.1 自愈：远端最新是「本机自己推的」快照时收养基线，不再永久互锁 ---------- */
+
+test('push: 远端最新是本机自推的快照但基线没跟上（上传后、写基线前被打断）→ 收养为基线并继续推送', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-push-adopt-own-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc') });
+    assert.equal((await engine.push({ snapshotId: 'sync-001' })).ok, true);
+    const ownId = transport.metas.at(-1)!.manifest.deviceId;
+    assert.ok(typeof ownId === 'string' && ownId !== '', '快照必须带本机 deviceId（否则无从判定「这是我自己推的」）');
+
+    // 复现事故形态：上传已落地、sync-state 的基线指针仍停在更早的值
+    await saveSyncState(tmp, {
+      ...(await loadSyncState(tmp)),
+      lastSnapshotId: 'sync-000',
+      ancestorId: '',
+    });
+    transport.calls.length = 0;
+
+    const report = await engine.push({ snapshotId: 'sync-002' });
+    assert.equal(report.ok, true, '本机自己的快照绝不把自己永久锁死: ' + (report.message ?? ''));
+    assert.equal(report.adoptedBase, 'sync-001', '报告点明被收养的基线');
+    assert.ok(
+      report.warnings.some((w) => w.includes('sync-001')),
+      '必须如实说明已收养（用户要知道基线自己动了）: ' + report.warnings.join(' | '),
+    );
+    assert.equal(transport.snapshots.has('sync-002'), true, '收养后照常上传本次快照');
+    const after = await loadSyncState(tmp);
+    assert.equal(after.lastSnapshotId, 'sync-002', '基线推进到本次推送');
+    assert.equal(after.ancestorId, 'sync-002', '本地有该收养快照的副本 → 祖先指针跟上（三方合并不降级）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 远端最新是别的设备推的（deviceId 不同）→ 仍判冲突，零改写 sync-state', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-push-adopt-other-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc') });
+    assert.equal((await engine.push({ snapshotId: 'sync-base' })).ok, true);
+    const stateBefore = await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8');
+
+    const other = remoteSettingsSnapshot('sync-other', 'light', 5);
+    other.manifest.deviceId = 'device-of-bob';
+    seedRemoteSnapshot(transport, other);
+    transport.calls.length = 0;
+
+    const refused = await engine.push({ snapshotId: 'sync-mine' });
+    assert.equal(refused.ok, false, '别人推的绝不收养（那是要合并的改动，不是本机残留）');
+    assert.equal(refused.conflict, true);
+    assert.equal(refused.adoptedBase, undefined, '非本机快照不得给出 adoptedBase');
+    assert.ok(!transport.calls.includes('upload'), '绝不 upload: ' + transport.calls.join(','));
+    assert.equal(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'), stateBefore, 'sync-state 逐字节不变');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 远端最新是旧快照（无 deviceId）→ 不猜，仍判冲突（旧快照可能来自任何机器）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-push-adopt-legacy-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc') });
+    assert.equal((await engine.push({ snapshotId: 'sync-base' })).ok, true);
+    const stateBefore = await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8');
+
+    const legacy = remoteSettingsSnapshot('sync-legacy', 'light', 5);
+    assert.equal(legacy.manifest.deviceId, undefined, '夹具就是「没记 deviceId」的旧快照');
+    seedRemoteSnapshot(transport, legacy);
+    transport.calls.length = 0;
+
+    const refused = await engine.push({ snapshotId: 'sync-mine' });
+    assert.equal(refused.ok, false, '缺 deviceId → 不能证明是本机推的 → 不收养');
+    assert.equal(refused.conflict, true);
+    assert.ok(!transport.calls.includes('upload'));
+    assert.equal(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'), stateBefore, 'sync-state 逐字节不变');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('previewMerge: 只读零写入 + 决策/计数/三侧预览（敏感值必须已脱敏）', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-preview-merge-'));
   try {

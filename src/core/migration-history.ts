@@ -79,8 +79,29 @@ const MIGRATION_KINDS = [
 /** §5 覆盖的操作 kind（COMPLETE 不变量；常量枚举，天然非敏感）。 */
 export type MigrationKind = (typeof MIGRATION_KINDS)[number];
 
-/** 操作结果。 */
-export type MigrationResult = 'success' | 'failed' | 'skipped';
+/**
+ * 操作结果。
+ *
+ * 'pending'（0.4.1）：操作**跑完了但仍有待裁决项**（自动同步上传成功、下行冲突未裁决；
+ * 合并已应用一部分）。它不是 failed —— 网络/凭据/repo 都是好的；也不是 skipped ——
+ * 那一轮确实做了事。旧实现把 partial 直接折成 'failed'，用户看到「自动同步 失败」而
+ * 实际只需要在同步页确认一次冲突。读侧（parseEntry / query 解析）必须接受该值，
+ * 否则含 pending 的历史条目会被整条丢弃。
+ */
+export type MigrationResult = 'success' | 'failed' | 'skipped' | 'pending';
+
+/**
+ * 自动同步一轮的状态 → 历史 result（宿主 appendHistoryFn 的唯一映射，0.4.1）。
+ *
+ * 关键一条：`partial`（跑完了但仍有待裁决分区）**不是** failed —— 通道与凭据都正常，
+ * 只是需要用户在同步页确认一次冲突。落成 failed 会让首页红字报「同步失败」，
+ * 用户据此去查网络/凭据，方向完全错。
+ */
+export function historyResultFromAutosyncStatus(status: 'success' | 'skipped' | 'partial' | 'failed'): MigrationResult {
+  if (status === 'success') return 'success';
+  if (status === 'skipped') return 'skipped';
+  return status === 'partial' ? 'pending' : 'failed';
+}
 
 /** 触发来源（常量）。 */
 export type MigrationSource = 'api' | 'autosync' | 'backup-scheduler' | 'recovery' | 'cli' | 'internal';
@@ -308,7 +329,7 @@ function parseEntry(text: string): StoredMigrationHistoryEntry | null {
     if (p.schemaVersion !== MIGRATION_HISTORY_SCHEMA_VERSION) return null;
     if (!isValidMigrationKind(p.kind)) return null;
     if (typeof p.at !== 'string' || p.at === '') return null;
-    if (!['success', 'failed', 'skipped'].includes(p.result)) return null;
+    if (!['success', 'failed', 'skipped', 'pending'].includes(p.result)) return null;
     if (typeof p.source !== 'string') return null;
     if (typeof p.summary !== 'string') return null;
     // 可选字段校验
@@ -479,7 +500,9 @@ export function renderExport(entries: StoredMigrationHistoryEntry[], format: Exp
     ? T('core.migrationHistory.resultSuccess')
     : r === 'failed'
       ? T('core.migrationHistory.resultFailed')
-      : T('core.migrationHistory.resultSkipped');
+      : r === 'pending'
+        ? T('core.migrationHistory.resultPending')
+        : T('core.migrationHistory.resultSkipped');
 
   if (format === 'json') {
     const stats = summarizeHistory(entries);
@@ -506,7 +529,7 @@ export function parseHistoryQuery(raw: Record<string, unknown>): MigrationQuery 
   const kinds = parseList(raw['kind']);
   if (kinds.length > 0) q.kinds = kinds.filter(isValidMigrationKind);
   const results = parseList(raw['result']);
-  if (results.length > 0) q.result = results.filter((r): r is MigrationResult => r === 'success' || r === 'failed' || r === 'skipped');
+  if (results.length > 0) q.result = results.filter((r): r is MigrationResult => r === 'success' || r === 'failed' || r === 'skipped' || r === 'pending');
   const sections = parseList(raw['sections']);
   if (sections.length > 0) q.sections = sections;
   const from = parseNum(raw['from']);

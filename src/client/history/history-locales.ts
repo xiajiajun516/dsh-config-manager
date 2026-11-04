@@ -101,6 +101,7 @@ export const zh = {
   'history.result.success': '成功',
   'history.result.failed': '失败',
   'history.result.skipped': '跳过',
+  'history.result.pending': '待裁决',
 } as const satisfies Record<HistoryKey, string>;
 
 export const en = {
@@ -158,5 +159,6 @@ export const en = {
   'history.result.success': 'Success',
   'history.result.failed': 'Failed',
   'history.result.skipped': 'Skipped',
+  'history.result.pending': 'Needs decision',
 } as const satisfies Record<HistoryKey, string>;
 

@@ -334,6 +334,25 @@ test('QUERYABLE：parseHistoryQuery 解析过滤参数并丢弃非法 kind', () 
   assert.deepEqual(q.sections, ['plugins']);
 });
 
+test('0.4.1 待裁决：result=pending 可落盘读回、可被查询过滤、导出写人话而非裸枚举', async (t) => {
+  const dir = tmp(t);
+  const appended = await mkStore(dir).append(makeRaw({ kind: 'autosync', result: 'pending', summary: '自动同步有 1 个分区待裁决' }));
+  assert.equal(appended.ok, true);
+
+  const read = await mkStore(dir).read();
+  assert.deepEqual(read.corrupted, [], 'pending 是合法结果 —— 不得被当成篡改条目静默丢弃');
+  assert.equal(read.entries.length, 1);
+  assert.equal(read.entries[0]!.result, 'pending', '读回必须保留 pending（否则「待裁决」在刷新后消失）');
+
+  assert.deepEqual(parseHistoryQuery({ result: 'pending,failed' }).result, ['pending', 'failed'], '过滤白名单必须认 pending');
+  assert.equal(queryHistory(read.entries, { result: ['pending'] }).length, 1);
+  assert.equal(queryHistory(read.entries, { result: ['failed'] }).length, 0, 'pending 不得被当成 failed 命中');
+
+  const md = renderExport(read.entries, 'markdown', 'zh');
+  assert.match(md, /待裁决/, '导出要写人话');
+  assert.ok(!md.includes('| pending |'), '原文列绝不出现裸枚举值');
+});
+
 test('EXPORTABLE：renderExport json 输出合法 JSON + 统计', () => {
   const entries = [sanitizeEntry(makeRaw()), sanitizeEntry(makeRaw({ kind: 'restore', result: 'failed' }))];
   const json = renderExport(entries, 'json');

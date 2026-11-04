@@ -883,11 +883,15 @@ export class AutoSyncScheduler {
             : partial
               ? conflictedSections
               : deferredSections;
+          // 0.4.1：推送前收养了「本机自己推上去的」远端快照（上次推送在写基线前被打断）→
+          // 如实记一条 skipReason，让历史与首页能说清「这次推上去之前先修好了基线」，
+          // 而不是让用户以为又发生了一次莫名冲突。冲突原因优先（真有冲突时更该被看见）。
+          const adoptedReason = pushReport.adoptedBase !== undefined ? ('baseline-adopted' as const) : undefined;
           const result: AutosyncRunResult = {
             status: partial ? 'partial' : 'success',
             direction: appliedSections.length ? 'both' : 'push',
             appliedSections, pushedSnapshotId: pushReport.snapshotId, historyId,
-            ...(skipReason !== undefined ? { skipReason } : {}),
+            ...(skipReason !== undefined || adoptedReason !== undefined ? { skipReason: skipReason ?? adoptedReason } : {}),
             ...(reportedConflicted.length > 0 ? { conflictedSections: reportedConflicted } : {}),
             consecutiveFailures: 0,
             ...forcedMark,
@@ -896,7 +900,7 @@ export class AutoSyncScheduler {
             direction: appliedSections.length ? 'both' : 'push',
             status: partial ? 'partial' : 'success',
             appliedSections, pushedSnapshotId: pushReport.snapshotId,
-            ...(skipReason !== undefined ? { skipReason } : {}),
+            ...(skipReason !== undefined || adoptedReason !== undefined ? { skipReason: skipReason ?? adoptedReason } : {}),
             ...(reportedConflicted.length > 0 ? { conflictedSections: reportedConflicted } : {}),
             createdAt: nowIso, failureCountAtRun: 0,
             ...forcedMark,

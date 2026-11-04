@@ -132,7 +132,7 @@ import type { RetentionPolicy } from './sync/retention-policy.ts'
 import type { PruneSelector } from './core/backup.ts'
 import { selectPruneCandidates } from './core/backup.ts'
 import { appendAutosyncEntry } from './sync/sync-history.ts'
-import { MigrationStore, type MigrationKind, type MigrationResult, MIGRATION_HISTORY_DIR } from './core/migration-history.ts'
+import { MigrationStore, type MigrationKind, type MigrationResult, historyResultFromAutosyncStatus, MIGRATION_HISTORY_DIR } from './core/migration-history.ts'
 import { createHistoryPruner } from './core/history-prune.ts'
 import { validateRepoUrl, validateWebDavUrl, isWebDavConfig, isS3Config, isGistConfig, channelOf, parseSyncChannel, SYNC_CHANNELS, GIST_PROVIDER, isS3CompatProvider, validateCloudChannelInput, cloudSecretRef } from './sync/sync-config.ts'
 import {
@@ -183,7 +183,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-export const PLUGIN_VERSION = '0.4.0'
+export const PLUGIN_VERSION = '0.4.1'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -3007,7 +3007,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       await appendAutosyncEntry(syncDir, entry).catch(() => undefined)
       await history.append({
         kind: 'autosync',
-        result: entry.status === 'success' ? 'success' : entry.status === 'skipped' ? 'skipped' : 'failed',
+        result: historyResultFromAutosyncStatus(entry.status),
         sections: entry.appliedSections ?? [],
         source: 'autosync',
         summary: engineMsg('host.autosyncSummary', {

@@ -45,7 +45,7 @@ export interface OverviewSyncLite {
 export interface OverviewHistoryLite {
   at: string
   kind: string
-  result: 'success' | 'failed' | 'skipped'
+  result: 'success' | 'failed' | 'skipped' | 'pending'
   summary: string
 }
 
@@ -290,8 +290,8 @@ export function overviewKindKey(kind: string): string {
 
 export interface OverviewActivityItem {
   at: string
-  /** 徽章语义（success→ok / failed→error / skipped→warn，与 history-model 同判定）。 */
-  badge: 'ok' | 'error' | 'warn'
+  /** 徽章语义（success→ok / failed→error / skipped→warn / pending→pending，与 history-model 同判定）。 */
+  badge: 'ok' | 'error' | 'warn' | 'pending'
   /** UI 渲染 key（`overview.kind.<kind>`；未知 kind 归一为 other → `overview.kind.other`）。 */
   kindKey: string
   /** 原始摘要（上层渲染前 redact()）。 */
@@ -311,7 +311,15 @@ export function overviewActivity(
   })
   return sorted.slice(0, limit).map((e) => ({
     at: e.at,
-    badge: e.result === 'success' ? 'ok' : e.result === 'failed' ? 'error' : 'warn',
+    badge: e.result === 'success'
+      ? 'ok'
+      : e.result === 'failed'
+        ? 'error'
+        // pending：跑完了但仍有待裁决项（自动同步下行冲突未裁决）—— 首页必须说「待裁决」，
+        // 既不能红成「失败」，也不该混进「跳过」（那一轮确有上传/应用发生）
+        : e.result === 'pending'
+          ? 'pending'
+          : 'warn',
     kindKey: overviewKindKey(e.kind),
     summary: e.summary,
   }))

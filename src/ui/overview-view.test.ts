@@ -183,6 +183,18 @@ test('overviewActivity: 倒序 + limit + 徽章语义 + kind key 归一', () => 
   assert.equal(overviewActivity([]).length, 0)
 })
 
+test('overviewActivity: result=pending（跑完但仍有待裁决）→ badge pending，既不红成失败也不混进跳过', () => {
+  const items = overviewActivity([
+    { at: '2026-09-01T00:00:00Z', kind: 'autosync', result: 'pending', summary: '自动同步有冲突待裁决' },
+    { at: '2026-09-02T00:00:00Z', kind: 'autosync', result: 'skipped', summary: '跳过' },
+    { at: '2026-09-03T00:00:00Z', kind: 'autosync', result: 'failed', summary: '失败' },
+  ])
+  const bySummary = (s: string) => items.find((i) => i.summary === s)!
+  assert.equal(bySummary('自动同步有冲突待裁决').badge, 'pending')
+  assert.equal(bySummary('跳过').badge, 'warn', 'skipped 仍是 warn —— 两种语义不能合并')
+  assert.equal(bySummary('失败').badge, 'error')
+})
+
 /* ---------------- 空态 ---------------- */
 
 test('overviewEmptyState: 备份与快照均加载且为空 → true', () => {

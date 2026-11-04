@@ -91,6 +91,7 @@ export const zh = {
   'core.migrationHistory.resultSuccess': '成功',
   'core.migrationHistory.resultFailed': '失败',
   'core.migrationHistory.resultSkipped': '跳过',
+  'core.migrationHistory.resultPending': '待裁决',
 
   // ---------- local-plugin-pack ----------
   'core.localPluginPack.dirCreateFailed': '本地插件打包目录创建失败，已跳过全部本地插件: {reason}',
@@ -405,6 +406,7 @@ export const en: Record<keyof typeof zh, string> = {
   'core.migrationHistory.resultSuccess': 'success',
   'core.migrationHistory.resultFailed': 'failed',
   'core.migrationHistory.resultSkipped': 'skipped',
+  'core.migrationHistory.resultPending': 'needs decision',
 
   // ---------- local-plugin-pack ----------
   'core.localPluginPack.dirCreateFailed': 'Failed to create the local plugin packing directory; skipped all local plugins: {reason}',

@@ -26,6 +26,19 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > 体例细节、分组表、发版两道门禁与写后自检命令见项目 skill `.dsh/skills/changelog-writing/SKILL.md`（DSH 会自动发现并加载）。
 
+## [0.4.1] - 2026-11-04
+
+> **本版主题**：自动同步不再被「自己的快照」锁死，首页也不再把自己的待办说成失败。
+>
+> **Theme**: auto-sync can no longer be locked out by its own snapshot, and the home page stops calling your outstanding decisions a failure.
+
+### 🐛 修复 · Fixed
+
+- **自动同步不会再被自己的快照卡死**：上一次推送若在「上传完成、记录基线」之间被打断（退出 DSH、崩溃、断电），此后每轮自动同步都会判定「远端被别的设备推进了」并一直失败；现在会认出远端最新那份快照是本机自己推的，自动把它收养为基线并继续推送，历史里也会标明「基线已自动收养」。别的设备推上去的快照一律不收养，仍走原来的合并流程。
+  **Auto-sync is no longer locked out by its own snapshot**: if a push was interrupted between uploading and recording the baseline (DSH quit, crash, power loss), every later run used to report "remote was advanced by another device" and keep failing; now the newest remote snapshot is recognised as this machine's own, adopted as the baseline, and the push continues — the history notes the adoption. Snapshots from other devices are never adopted and still go through the normal merge flow.
+- **「待裁决」不再显示成失败**：自动同步跑完但仍有一个分区冲突等你裁决时，首页此前把它标成红色「失败」；现在单独显示「待裁决」，迁移历史也能按这一结果筛选，刷新后不会丢掉这类记录。
+  **"Needs decision" is no longer shown as a failure**: when a run completes but one section still waits for your decision, the home page used to flag it as a red failure; it now reads "Needs decision", the history can filter on it, and these records survive a refresh.
+
 ## [0.4.0] - 2026-11-04
 
 > **本版主题**：把界面从「能用」推到「手感对」，同时让长时间使用不再越用越脏 —— 按钮按下会回弹、勾是画出来的、骨架屏不再抢一句「加载中…」；迁移历史会自己按设定的上限清理，首页只读最近 100 条记录，退出 DSH 也不再留下挡住写操作的残留锁。

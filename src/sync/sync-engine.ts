@@ -41,6 +41,7 @@ import type { ZipWriteEntry } from '../utils/zip.ts';
 import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
 import { writeSnapshotToDir } from './layout.ts';
+import { resolvePushBase } from './push-precheck.ts';
 import {
   credentialsMapFromYaml, decryptCredentialsPayload, decryptSectionsPayload,
   encryptCredentialsPayload, encryptSectionsPayload,
@@ -49,7 +50,7 @@ import { OPT_IN_SYNC_SECTIONS } from './sync-selection.ts';
 import {
   listRemoteSnapshotIndex, planSessionBookkeeping, remoteTombstonesOf, stripTombstonedSessionsInPlace,
 } from './session-tombstones.ts';
-import type { RemoteSnapshotIndex, SessionBookkeepingResult } from './session-tombstones.ts';
+import type { SessionBookkeepingResult } from './session-tombstones.ts';
 import { DEFAULT_RETENTION_POLICY, selectPruneCandidatesByPolicy } from './retention-policy.ts';
 import type { RetentionPolicy } from './retention-policy.ts';
 import { hashSection, loadSyncState, resolveDeviceIdentity, saveSyncState } from './sync-state.ts';
@@ -88,6 +89,8 @@ const zh = {
   'sync.applyMergeResolutionsNoImporter': 'applyMergeResolutions: SyncEngine 缺少 importer（需在 options 中注入）',
   'sync.mergePendingConflicts': '仍有 {count} 个分区未裁决（{sections}）：已裁决的部分已写入本机，但基线不推进，冲突下一轮会重新出现',
   'sync.baselineRexportFailed': '写回成功但重新导出本机分区失败（{sections}）：无法证明基线与本机一致，本次**不记基线**（远端指针保持原值，下一轮重新合并收敛）',
+  'sync.pushBaselineAdopted': '远端最新快照 {remote} 是本机上次推送的（本机基线停在 {base}，上次推送在记录基线前被打断）：已把它收养为基线并继续本次推送',
+  'sync.pushBaselineAdoptedNoAncestor': '远端最新快照 {remote} 是本机上次推送的，但本机没有它的本地祖先副本：已收养基线（下次合并退化为两方合并，结果仍安全）',
 } as const;
 
 const en: Record<keyof typeof zh, string> = {
@@ -97,6 +100,8 @@ const en: Record<keyof typeof zh, string> = {
   'sync.applyMergeResolutionsNoImporter': 'applyMergeResolutions: SyncEngine is missing the importer (must be injected via options)',
   'sync.mergePendingConflicts': '{count} section(s) still have no decision ({sections}): the decided parts were written locally, but the baseline is not advanced, so the conflicts will reappear next round',
   'sync.baselineRexportFailed': 'The write succeeded but re-exporting the local section(s) failed ({sections}): the baseline cannot be proven to match this machine, so no baseline was recorded (the remote pointer keeps its old value and the next merge converges again)',
+  'sync.pushBaselineAdopted': 'The newest remote snapshot {remote} was pushed by this device (its baseline stopped at {base}: that push was interrupted before recording the baseline): the baseline has been adopted and this push continues',
+  'sync.pushBaselineAdoptedNoAncestor': 'The newest remote snapshot {remote} was pushed by this device, but no local ancestor copy exists for it: the baseline has been adopted (the next merge degrades to a two-way merge, which is still safe)',
 };
 
 registerMessageCatalog({ id: 'sync-engine-merge', zh, en });
@@ -248,6 +253,15 @@ export interface SyncPushReport {
    * 而不是记成「同步失败」。
    */
   conflict?: boolean;
+  /**
+   * 本次推送前**收养了本机自己推上去的远端最新快照**（0.4.1 自愈）：该值 = 被收养的快照 id。
+   *
+   * 触发场景：上次推送在上传成功、写基线之前被打断（进程退出/崩溃/断电），远端已前进而本机
+   * `lastSnapshotId` 仍是上一版 → 前置检测会永久拒绝推送（每次都说「远端被别人推进了」），
+   * 单设备用户因此被自己的快照锁死。判据只看「远端最新快照的 manifest.deviceId == 本机
+   * deviceId」，别的设备推进过就仍然按冲突返回，绝不越过。
+   */
+  adoptedBase?: string;
 }
 
 /** 差异报告中的单个变更项（PlanItem 摘要，不含敏感细节） */
@@ -843,6 +857,8 @@ export class SyncEngine {
    */
   async push(opts: SyncPushOptions = {}): Promise<SyncPushReport> {
     const warnings: string[] = [];
+    /** 0.4.1：本次推送前收养的「本机自己推的」远端快照（非空 ⇒ 上次推送被打断过，已在报告里如实回传） */
+    let adopted: string | undefined;
     const includeSecrets = opts.includeSecrets ?? false;
     const encrypt = opts.encrypt ?? false;
     // 安全不变量：导出密钥必须加密；加密必须给密码（密码绝不落盘）
@@ -855,23 +871,16 @@ export class SyncEngine {
     // SYN-02：本轮只列一次远端 index（推进检测 + 继承会话删除墓碑共用；墓碑累积在最新快照里）
     const remoteIndex = await listRemoteSnapshotIndex(this.transport);
     const remoteTombstones = remoteIndex.reason === undefined ? remoteTombstonesOf(remoteIndex.metas) : [];
-    // 远端推进检测：不一致 = 远端被别的设备推过（或本机基线已被裁剪）。
-    // 此时推上去会覆盖/架空别人的改动 → 直接返回冲突（**不抛错**、不 upload、不记基线、不改 sync-state）。
+    // 远端推进检测（判据与 0.4.1 自愈收养全在 push-precheck.ts）；冲突时**不抛错**、
+    // 不 upload、不记基线、不改 sync-state，只把文案回给调用方走 force 出口。
     if (opts.force !== true) {
-      const check = await this.remoteAdvancedCheck(remoteIndex);
-      if (check.reason !== undefined) {
-        // 读不到远端列表 ⇒ 无法判定。按原样继续（上传本身会再暴露通道问题），但如实说明。
-        warnings.push(this.msg('sync.pushAdvanceCheckFailed', { reason: check.reason }));
-      } else if (check.blocked) {
-        return {
-          ok: false,
-          snapshotId: '',
-          sections: [],
-          warnings,
-          conflict: true,
-          message: this.msg('sync.pushRemoteAdvanced', { remote: check.latest, base: check.base }),
-        };
-      }
+      const pre = await resolvePushBase({
+        stateDir: this.stateDir, fsx: this.fsx, localSnapshotsDir: this.localSnapshotsDir,
+        index: remoteIndex, transport: { type: this.transport.type, ref: this.transportRef },
+        msg: this.msg, warnings,
+      });
+      if (!pre.ok) return { ok: false, snapshotId: '', sections: [], warnings, conflict: true, message: pre.message };
+      adopted = pre.adopted;
     }
     const plainSections: Partial<Record<SectionId, SectionData>> = {};
     const targets = this.pushTargets(opts.sections, warnings);
@@ -977,7 +986,13 @@ export class SyncEngine {
         : {}),
     });
 
-    return { ok: true, snapshotId: id, sections: Object.keys(plainSections) as SectionId[], warnings };
+    return {
+      ok: true,
+      snapshotId: id,
+      sections: Object.keys(plainSections) as SectionId[],
+      warnings,
+      ...(adopted !== undefined ? { adoptedBase: adopted } : {}),
+    };
   }
 
   /**
@@ -1183,31 +1198,6 @@ export class SyncEngine {
     } catch {
       return DEFAULT_RETENTION_POLICY;
     }
-  }
-
-  /**
-   * push 前置：远端是否已被别的设备推进（防「推上去把别人的改动架空」）。
-   *
-   * 判据与 hasNewRemoteSnapshot() 同源但方向相反：
-   *  - 首次同步（lastSnapshotId === ''）→ **不拦**（本机没有基线可丢，第一次推送就是建立基线）；
-   *  - 远端为空 → 不拦（没有可比对的快照）；
-   *  - 其余：远端最新快照 id !== lastSnapshotId ⇒ 远端被推进（或本机基线已被裁剪）→ 拦。
-   *    两种情况都**无法安全断言「远端没变」**，保守拒绝并给出 force 出口。
-   *  - list() 抛错 → 返回 reason（调用方按原样继续并告警），绝不把「读不到」当成「没变」。
-   *  - SYN-02：index 可由 push() 传入（同一轮只列一次远端），缺省自己 list（其它调用点行为不变）。
-   */
-  private async remoteAdvancedCheck(
-    index?: RemoteSnapshotIndex,
-  ): Promise<{ blocked: boolean; base: string; latest: string; reason?: string }> {
-    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
-    const base = state.lastSnapshotId;
-    if (base === '') return { blocked: false, base, latest: '' };
-    const listed = index ?? await listRemoteSnapshotIndex(this.transport);
-    if (listed.reason !== undefined) return { blocked: false, base, latest: '', reason: listed.reason };
-    const metas = listed.metas;
-    if (metas.length === 0) return { blocked: false, base, latest: '' };
-    const latest = metas[metas.length - 1]!.id; // list 按 createdAt 升序 → 最新在末
-    return { blocked: latest !== base, base, latest };
   }
 
   /**

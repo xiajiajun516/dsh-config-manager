@@ -15,7 +15,8 @@ import type { MigrationKind, MigrationResult, StoredMigrationHistoryEntry } from
 export function resultBadgeKind(result: MigrationResult): 'ok' | 'error' | 'warn' | 'info' {
   if (result === 'success') return 'ok';
   if (result === 'failed') return 'error';
-  return 'warn'; // skipped
+  // pending（0.4.1）= 跑完了但还有待裁决项：绝不当成失败（红），也不是跳过 —— 用琥珀告警色
+  return 'warn'; // skipped / pending
 }
 
 /** kind 标签（本地化 key 基名；i18n 字典用 `history.kind.<kind>` 渲染）。 */
@@ -34,7 +35,7 @@ export const HISTORY_KIND_OPTIONS: readonly MigrationKind[] = [
 ] as const;
 
 /** 结果过滤选项。 */
-export const HISTORY_RESULT_OPTIONS: readonly MigrationResult[] = ['success', 'failed', 'skipped'] as const;
+export const HISTORY_RESULT_OPTIONS: readonly MigrationResult[] = ['success', 'pending', 'skipped', 'failed'] as const;
 
 /** 过滤模型（UI 状态；空 = 不过滤）。 */
 export interface HistoryFilter {

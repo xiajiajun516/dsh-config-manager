@@ -56,7 +56,8 @@ test('HISTORY_KIND_OPTIONS：恰为 §5 全清单（含 profile-import）', () =
     'sync-apply', 'autosync', 'recovery',
     'backup', 'backup-manual', 'snapshot-delete', 'snapshot-prune',
   ]);
-  assert.deepEqual(HISTORY_RESULT_OPTIONS, ['success', 'failed', 'skipped']);
+  // pending（待裁决）排在 skipped 之前：它需要用户动手，比「跳过」更该先看到。
+  assert.deepEqual(HISTORY_RESULT_OPTIONS, ['success', 'pending', 'skipped', 'failed']);
 });
 
 test('groupByKind：空组不渲染、组内按时间倒序、顺序保持清单序', () => {

@@ -544,6 +544,29 @@ test('push 被远端推进检测拒绝（conflict）→ skipped(conflict) 而非
   );
 });
 
+test('0.4.1 自愈：push 收养了本机残留基线（adoptedBase）→ success + 跳过码 baseline-adopted（面板能看见基线自己动过）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 3 };
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async () => ({
+      ok: true, snapshotId: 'snap-healed', sections: [] as never,
+      warnings: ['远端最新快照 sync-001 是本机上次推送的：已收养为基线'],
+      adoptedBase: 'sync-001',
+    }),
+  };
+  const { scheduler, getConfig, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.status, 'success', '收养后照常推送 = 成功，不是跳过也不是失败');
+  assert.equal(result.skipReason, 'baseline-adopted', '要有独立跳过码，否则既有的「跳过」看不出为什么');
+  assert.equal(result.consecutiveFailures, 0, '自愈成功即归零连续失败');
+  assert.equal(getConfig().lastRunSkipReason, 'baseline-adopted');
+  assert.ok(
+    getEntries().some((e) => e.status === 'success' && e.skipReason === 'baseline-adopted'),
+    '历史必须留痕：不然用户看到基线跳变却查不到原因',
+  );
+});
+
 test('runOnce: 无冲突且无变化 → success(pull,unchanged)，不上传（本地也无改动）', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
   const engine = {

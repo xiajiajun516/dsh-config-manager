@@ -372,11 +372,17 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
   /** 某指标段是否仍在等数据：同步段只看自己的加载态，其余三段/四段看首屏快请求。 */
   const segLoading = (key: OverviewMetricKey): boolean => (key === 'sync' ? syncState === 'loading' : loading)
 
-  /** 结果渲染：ok = 绿点（降噪）；failed/skipped = 徽章（需要被看见）。 */
-  const resultNode = (badge: 'ok' | 'error' | 'warn'): ReactNode =>
+  /** 结果渲染：ok = 绿点（降噪）；failed/skipped/pending = 徽章（需要被看见）。 */
+  const resultNode = (badge: 'ok' | 'error' | 'warn' | 'pending'): ReactNode =>
     badge === 'ok'
       ? <span className={css.activityResultOk}><StatusDot kind="ok" />{t('overview.result.success')}</span>
-      : <Badge kind={badge}>{badge === 'error' ? t('overview.result.failed') : t('overview.result.skipped')}</Badge>
+      : <Badge kind={badge === 'error' ? 'error' : 'warn'}>{
+        badge === 'error'
+          ? t('overview.result.failed')
+          : badge === 'pending'
+            ? t('overview.result.pending')
+            : t('overview.result.skipped')
+      }</Badge>
 
   return (
     <div className={css.viewBody}>

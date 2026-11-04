@@ -109,6 +109,9 @@ export function skipReasonKey(reason: string | undefined): SyncKey | null {
     // 真·自动同步（conflictPolicy='local'）：冲突已按策略「保留本机并推上去」消解，
     // 远端那一版被覆盖（仍在远端历史快照里，可回滚）—— 必须与「冲突待裁决」分开说。
     case 'conflict-kept-local': return 'history.autosyncReasonConflictKeptLocal';
+    // 0.4.1：推送前收养了本机自己推的远端快照（上次推送在写基线前被打断）—— 结果仍是 success，
+    // 这条原因只是把「基线是被修好的」讲明白。
+    case 'baseline-adopted': return 'history.autosyncReasonBaselineAdopted';
     // 未知原因：没有字典键（调用方决定回退策略）
     default: return null;
   }
