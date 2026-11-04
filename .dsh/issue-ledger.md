@@ -16,6 +16,11 @@
 | 122 | 远端仓库远大于同步内容时 git 通道卡死：全量 clone/fetch 拉完整对象图（1.8 GB 仓库 / 6 MB 同步内容），超时只杀 git.exe 使 git-remote-https/index-pack 成孤儿继续写 tmp_pack_*（累积 7.3 GB），UI 永久停在「正在检查远端变更…」 | done | aafc93f | v0.2.4 | 2026-11-01 |
 | 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（修复：helper 失败时改用 env 注入 `Authorization: basic` 重试一次，仍失败则点名平台原因） | done | 73b6fe4 | v0.2.2 | 2026-10-30 |
 
+- `2026-11-04` **发版 v0.4.0（0.3.1 → 0.4.0，MINOR：新增「迁移历史上限/自动清理」+ 一批界面与体验修补）**：提交 `0f15702`（`chore(release): v0.4.0`）→ tag `v0.4.0` push；
+  `main` 同步推到 `origin/main`（此前 8 个未推提交随本版一次性公开）。`publish` 流水线 `41908109199` 全绿（typecheck → typecheck:tests → test 5316 项 pass 5314 / fail 0 / skip 2 → build → bundle 自包含 → AGENTS 预算 → 文档路径 → 文档版本 → Tag guard → pack → 亮点段门禁 → npm publish(OIDC) → GitHub Release），`main` 上的 CI `41908102715` success；
+  Release `v0.4.0` 已建（asset `dsh-config-manager-0.4.0.tgz`，双语亮点在位）；registry 侧 `dsh-config-manager@0.4.0` 可查、`dist-tags.latest = 0.4.0`（发布后约 5 分钟才可见，期间 `npm view` 404 属正常）。
+  **本版无需回 issue 版本号**：清单里 `awaiting-release` 行 0 条（#109/#115/#116/#119/#120/#121/#122 均 done；#117 仍 open 等报告者接受授权范围说明；#118 dropped）。
+  另修一处发版闸门阻断：`docs/maintenance/tech-debt.md` 第 23 行的「拟新增 `src/core/host-schedulers.ts`」被文档路径守卫判为失效路径（`130f36c` 引入，该文件尚未创建），改成「`src/core/` 下拟新增的 `host-schedulers` 工厂（尚未创建，故此处不写成路径）」——否则 publish 的 Doc path guard 必红。
 - `2026-11-02` **#109 第二层修复（待发版）**：提交 `71a93ca`。报告者升到 v0.1.82 后「测试连接」通过但真推报 HTTP 400 `InvalidArgument`
   「A header you provided implies functionality that is not implemented.」（`Header: If-None-Match`，错误码 0017-00000245）——
   签名早已正确，**是条件写头本身**：阿里云 OSS 的 PutObject 不支持 `If-Match`/`If-None-Match`，而我们首推发 `if-none-match: *`（`src/sync/s3/s3-transport.ts` 的 `conditionalHeaders`），索引已存在时还会发 `if-match`。
