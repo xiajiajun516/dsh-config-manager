@@ -475,20 +475,24 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
 
         {status === 'ready' && (
           <>
+            {/* 数字摘要：**回滚点/会话**与**台账占用**是同一件事的两个面（「有多少东西、占多大」），
+                原来被 spacer 推到行的两端、中间一大片空白，眼睛要来回跳两次才拼得起来。
+                现在同一视觉组、同一条基线，行尾只留动作（2026-10-13 密度收敛）。 */}
             <div className={css.rollbackToolbar}>
               <span className={css.rollbackSummary}>
                 {t('rollback.summary', { points: total, sessions: groups.length })}
+                {/* issue #89 P2：台账占用（记录数 · 字节）。老宿主没有这个字段 ⇒ 这一段不渲染。 */}
+                {ledger !== undefined && (
+                  <>
+                    <span className={css.rollbackMetaDot} aria-hidden="true"> · </span>
+                    {t('rollback.ledger.summary', {
+                      records: ledger.records,
+                      size: formatSessionBytes(ledger.bytes),
+                    })}
+                  </>
+                )}
               </span>
               <span className={css.statusSpacer} />
-              {/* issue #89 P2：台账占用（记录数 · 字节）。老宿主没有这个字段 ⇒ 这一行不渲染。 */}
-              {ledger !== undefined && (
-                <span className={css.rollbackSummary}>
-                  {t('rollback.ledger.summary', {
-                    records: ledger.records,
-                    size: formatSessionBytes(ledger.bytes),
-                  })}
-                </span>
-              )}
               {/* issue #89：清理入口（只删自动点；救援点由弹窗里的勾选决定） */}
               {hasPurgeApi && (
                 <Button size="sm" variant="ghost" disabled={busy || cleanupBusy} onClick={() => { setCleanupOpen(true); setCleanupGuards(false) }}>
@@ -702,20 +706,23 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                 已经说清「这次回退会动什么」；计数散文会把决策信息埋掉（DESIGN.md §7 文案克制）。
                 键值仍留在字典里（删渲染不删键，本仓既有先例）；真出事时的告警 / 指引照旧渲染（见下）。 */}
             {/* 点级告警（宿主 preview.warnings：trackMissing / trackDegraded / protected…）：此前只渲染 result.warnings，导致「留点被跳过 / 被截断」在预览里完全不可见。 */}
-            {previewWarnings.length > 0 && (
+            {/* 告警与指引是**同一类**「读一眼再说」的文本（都不改变清单本身），
+                原来一个进容器、一个裸在正文流里，两段的间距与权重各不相同 ⇒ 合并进一个块：
+                块内 4px 逐条、块外统一 10px。文案一个字未改。 */}
+            {(previewWarnings.length > 0 || previewGuidance.length > 0) && (
               <div className={css.rollbackWarnings}>
                 {previewWarnings.map((warning) => (
                   <div key={warning.key + (warning.detail ?? '')} className={css.hint}>
                     {t(dyn(warning.key))}{warning.detail !== null ? ' — ' + warning.detail : ''}
                   </div>
                 ))}
+                {previewGuidance.map((guide) => (
+                  <div key={guide.key + (guide.detail ?? '')} className={css.hint}>
+                    {t(dyn(guide.key))}{guide.detail !== null ? ' — ' + guide.detail : ''}
+                  </div>
+                ))}
               </div>
             )}
-            {previewGuidance.map((guide) => (
-              <div key={guide.key + (guide.detail ?? '')} className={css.hint}>
-                {t(dyn(guide.key))}{guide.detail !== null ? ' — ' + guide.detail : ''}
-              </div>
-            ))}
 
             {/* 会被**改动**的文件（引擎 preview.workspace.files）+ 会被**删除**的文件（引擎的删除集，
                 与执行阶段同一份规划 planCreatedRemovals ⇒ 逐条 = 实际会删的，清单全量）。
@@ -786,8 +793,10 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             {verdict.incomplete && (
               <Checkbox checked={allowPartial} disabled={busy} onChange={setAllowPartial} label={t('rollback.rewind.allowPartial')} />
             )}
+            {/* 「为什么点不了」：聊天侧同一个事实用 `.warnText`（警告语气），设置页原来是普通 `.hint`
+                —— 同一件事两种权重，用户读到的严重性取决于入口。统一为警告语气。 */}
             {!verdict.canRestore && verdict.reasonKey !== null && (
-              <div className={css.hint}>{t(dyn(verdict.reasonKey))}</div>
+              <div className={css.warnText}>{t(dyn(verdict.reasonKey))}</div>
             )}
 
             {/* 动作顺序与 MergeModal 同口径（DESIGN §9）：**取消在左、主操作在右**。
