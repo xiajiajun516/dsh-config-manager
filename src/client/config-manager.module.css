@@ -1951,6 +1951,19 @@ body {
 }
 
 /* 空态 */
+/* —— 一行式状态行（2026-11-04）——
+ * 「暂无恢复事项」这类**已知为空**的结论只需要一行字 + 一个状态点，不需要虚线空框：
+ * 空框有 24px 上下内边距 + 边框，视觉上读作「这里本该有内容却没加载出来」，
+ * 而且它会把下面的磁盘占用 / 会话体检 / 回滚点整块推到首屏之外。
+ * 用 .empty 的空态（如列表没数据、需要引导）继续用 .empty；只表达状态时用本类。 */
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .empty {
   animation: itemEnter var(--cm-motion-base) var(--cm-motion-ease-out);
   display: flex;
@@ -3232,28 +3245,68 @@ body {
   min-height: 0;
 }
 
-/* 列宽显式给定（2026-11-01）：table-layout: fixed 下不给宽度时浏览器按首行内容分配，
-   Cleanup policy 只剩 ~118px —— "Auto-removed after 7 days"、"Your data / safety net
-   (never auto-removed)" 全被省略号截掉，而这一列恰好是「这块数据能不能删」的唯一答案。 */
-.diskUsageScroll th:nth-child(2) { width: 78px; }
-.diskUsageScroll th:nth-child(3) { width: 86px; }
-.diskUsageScroll th:nth-child(4) { width: 160px; }
-
-/* 数值两列不需要省略号：内容永远是「4.8 KB」「235 file(s)」这种短串，
-   一旦被 .tableFixed 的 ellipsis 截成 "265.0 …" 就完全读不出量级。 */
-.diskUsageScroll td:nth-child(2),
-.diskUsageScroll td:nth-child(3) {
-  overflow: visible;
-  text-overflow: clip;
+/* —— 磁盘明细：两行式行卡（2026-11-04，替换原四列表格）——
+ *
+ * 为什么换：564px 画布下四列把「回收策略」压到 160px，"Your data / safety net
+ * (never auto-removed)" 折成三行；表头再固定吃掉 24px。而这张卡的唯一决定是
+ * 「哪几块能删、删了多大」—— 靠的是**比大小**，不是三列对齐。
+ *
+ * 行内层级：
+ *   ① 首行 = 区域名（左）+ 占用（右，整卡唯一的右边缘 ⇒ 量级一眼可比）；
+ *   ② meta 行 = 文件数 + 回收策略徽章 + 过期量 —— 策略拿到整行宽度，不再折行。
+ * 表头由行内语义承担：占用自带单位（4.8 KB），文件数自带「个文件」。
+ * 区域名**允许换行**而不是省略号：它是「这是哪块数据」的唯一线索，
+ * 长名字截成「Sync config & work…」等于没写；行高增长交给滚动区吸收。 */
+.duList {
+  display: flex;
+  flex-direction: column;
 }
 
-/* 策略列允许换行（其余列是短标签，保持单行省略） */
-.diskUsageScroll td:nth-child(4) { white-space: normal; }
+.duRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
 
-/* 第一列也允许换行（2026-11-01）：内容列剩 186px，"Sync config & workbook copies" 这类
-   长名字一律被截成「Sync config & work…」—— 而这一列就是「这是哪块数据」的唯一线索。
-   表格行高由 .tableFixed 的 min-height 兜住，换行后仍是两行可读，不会塌成 4px。 */
-.diskUsageScroll td:nth-child(1) { white-space: normal; }
+.duRow:last-child {
+  border-bottom: none;
+}
+
+.duRowTop {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.duRowName {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--cm-fs-table);
+  color: var(--dsw-alias-label-primary);
+}
+
+.duRowSize {
+  flex: none;
+  font-size: var(--cm-fs-table);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary);
+}
+
+.duRowMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.duRowFiles {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
 
 /* 卡内小节之间留出间隔（2026-11-01）：表格滚动区下方紧贴的「Legacy data」分组标签
    原本与最后一行数据只差 2px，读起来像表格的又一行数据。 */

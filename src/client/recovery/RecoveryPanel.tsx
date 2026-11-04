@@ -1525,10 +1525,11 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
         </Card>
       )}
 
-      {/* 空态：只在**确知没有事项**时出现（recoveryRequired 的口径见 recovery-view.ts）。
-          「枚举失败」是不知道、不是没有（t89）—— 那时由上面的告警条承担解释，不在这里说「暂无」。 */}
+      {/* 空态只在**确知没有事项**时出现（口径见 recovery-view.ts）；「枚举失败」是不知道、
+          不是没有（t89），那时由上面的告警条解释。2026-11-04：原 92px 虚线空框改一行状态行 ——
+          它白占的高度把磁盘 / 体检 / 回滚整块推到首屏之外。 */}
       {state.status === 'ready' && view?.recoveryRequired !== true && view?.incompleteCopiesNotice !== 'unreadable' && (
-        <Empty>{t('recovery.empty')}</Empty>
+        <div className={css.statusLine} role="status"><StatusDot kind="ok" /><span>{t('recovery.empty')}</span></div>
       )}
 
       {/* issue #31：残留配置锁（非 journal 事项）——纯锁残留时 incidents 恒为空，

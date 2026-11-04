@@ -35,7 +35,8 @@ import { runStore, toProfilesStoreSlice, type ProfilesStoreSlice } from '../run-
 import { RecoveryPanel } from '../recovery/RecoveryPanel.tsx'
 import type { RecoveryPort } from '../../ui/types.ts'
 import type { IncidentApi } from '../recovery/incident-api.ts'
-import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Segmented } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Segmented } from '../common/ui.tsx'
+import { Icon } from '../common/Icon.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
@@ -625,12 +626,10 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                           )}
                           {/* 残留行必须自报「未完成的副本」——不得伪装成普通「自定义」档案（t50）；非残留行走原形态键 */}
                           <Badge kind={incomplete ? 'warn' : 'info'}>{t(profileShapeLabelKey(profile))}</Badge>
-                          {version.dshVersion !== null && (
-                            <Badge kind="info">{t('profiles.version.dsh', { version: version.dshVersion })}</Badge>
-                          )}
-                          {version.sessionFormatVersion !== null && (
-                            <Badge kind="info">{t('profiles.version.format', { version: String(version.sessionFormatVersion) })}</Badge>
-                          )}
+                          {/* 2026-11-04：DSH 版本 / 会话格式版本两个徽章移到行摘要（meta 行）。
+                              徽章区是「这一行有没有问题」的扫描带，最多时挤了 7 个 pill（≈300px），
+                              把档案名和摘要一起压到省略号。版本号是**描述**不是**状态**：
+                              它几乎总是不变、也从不改变你要不要动这一行 —— 属于 meta 行的料。 */}
                           {formatRisk !== 'none' && (
                             <Badge kind={formatRisk === 'newer' ? 'warn' : 'error'}>
                               {t(formatRisk === 'newer' ? 'profiles.format.newer' : 'profiles.format.older')}
@@ -656,7 +655,11 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                               {/* 2026-11-01：这里原来还跟着「node_modules present · patch hot reload」
                                   两段 —— 它们与详情弹窗里的同名徽章重复（EnvironmentPanel 详情区），
                                   而三颗动作按钮已经把这一行压到尾部截断。行摘要只留三个计数，
-                                  那两段在点开详情时仍然逐字可见。 */}
+                                  那两段在点开详情时仍然逐字可见。
+                                  2026-11-04：DSH / 会话格式版本从徽章区挪到这里（同一行事实桶：
+                                  「这行是什么版本、什么时候变过」），徽章区只留状态。 */}
+                              {version.dshVersion !== null && <>{t('profiles.version.dsh', { version: version.dshVersion })}{' · '}</>}
+                              {version.sessionFormatVersion !== null && <>{t('profiles.version.format', { version: String(version.sessionFormatVersion) })}{' · '}</>}
                               {t('profiles.row.summary', { bundles: facts.bundles, patch: facts.patchEntries, deps: facts.deps })}
                               {profile.updatedAtMs !== null && ` · ${t('profiles.updatedAt', { time: formatProfileTime(profile.updatedAtMs) })}`}
                             </>
@@ -692,31 +695,40 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                           {t('profiles.launch')}
                         </Button>
                       )}
+                      {/* 2026-11-04：复制 / 重命名 / 删除 收成图标按钮（复制与删除带危险语义）。
+                          三颗文字按钮合起来 ≈150px，全部花在「复制」「重命名」「删除」这六个字上；
+                          它们是**低频且不需要读**的动作 —— 图标 + title + aria-label 已经够认，
+                          省下的宽度还给档案名与徽章。启动/停止仍用文字按钮：那是这一行的主 CTA，
+                          图标化会让「现在能不能点、点了会发生什么」多绕一步。 */}
                       {caps.duplicate && (
-                      <Button
-                        size="sm"
-                        title={t('profiles.duplicateHint')}
-                        disabled={state.copying}
-                        onClick={() => {
-                          patch({
-                            copyTargetName: profile.name,
-                            copyValue: suggestCopyName(profile.name, profileList.map((p) => p.name)),
-                            copyIncludeModules: profile.hasNodeModules,
-                            error: null,
-                          })
-                        }}
-                      >
-                        {t('profiles.duplicate')}
-                      </Button>
+                        <IconButton
+                          icon={<Icon name="copy" />}
+                          label={t('profiles.duplicate')}
+                          title={t('profiles.duplicateHint')}
+                          disabled={state.copying}
+                          onClick={() => {
+                            patch({
+                              copyTargetName: profile.name,
+                              copyValue: suggestCopyName(profile.name, profileList.map((p) => p.name)),
+                              copyIncludeModules: profile.hasNodeModules,
+                              error: null,
+                            })
+                          }}
+                        />
                       )}
                       {caps.rename && (
-                      <Button size="sm" onClick={() => { patch({ renameTargetName: profile.name, renameValue: profile.name, error: null }) }}>
-                        {t('profiles.rename')}
-                      </Button>
+                        <IconButton
+                          icon={<Icon name="pencil" />}
+                          label={t('profiles.rename')}
+                          onClick={() => { patch({ renameTargetName: profile.name, renameValue: profile.name, error: null }) }}
+                        />
                       )}
-                      <Button size="sm" variant="danger" onClick={() => { patch({ deleteTargetName: profile.name, deleteCurrentConfirmed: false, error: null }) }}>
-                        {t('profiles.delete')}
-                      </Button>
+                      <IconButton
+                        icon={<Icon name="delete" />}
+                        label={t('profiles.delete')}
+                        danger
+                        onClick={() => { patch({ deleteTargetName: profile.name, deleteCurrentConfirmed: false, error: null }) }}
+                      />
                     </span>
                   </div>
                 </div>

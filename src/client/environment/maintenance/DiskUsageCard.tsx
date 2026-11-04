@@ -171,39 +171,33 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
           {/* 读不到的子区如实说明：既不显示 0，也不整卡报错（硬边界：unreadable ≠ 0） */}
           {vm.summary.anyUnreadable && <div className={css.hint}>{t('diskUsage.partial')}</div>}
 
-          <div className={css.planScroll + ' ' + css.diskUsageScroll}>
-            <table className={`${css.dataTable} ${css.tableFixed} ${css.tableCompact}`}>
-              <thead>
-                <tr>
-                  <th>{t('diskUsage.col.area')}</th>
-                  <th className={css.num}>{t('diskUsage.col.size')}</th>
-                  <th className={css.num}>{t('diskUsage.col.files')}</th>
-                  <th>{t('diskUsage.col.policy')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {vm.rows.map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      <div>{row.label}</div>
-                      <div className={css.cellMetaNoteText}>{row.desc}</div>
-                    </td>
-                    <td className={css.num}>
-                      {row.unreadable ? <span className={css.dim}>{t('diskUsage.unreadable')}</span> : row.size}
-                    </td>
-                    <td className={css.num}>{row.unreadable ? '—' : row.files}</td>
-                    <td>
-                      {row.policy === 'regenerable' && <Badge kind="ok">{t('diskUsage.policy.regenerable')}</Badge>}
-                      {row.policy === 'retained' && <Badge kind="info">{t('diskUsage.policy.retained', { retention: row.retention })}</Badge>}
-                      {row.policy === 'protected' && <span className={css.dim}>{t('diskUsage.policy.protected')}</span>}
-                      {row.expired !== null && (
-                        <div className={css.cellMetaNoteText}>{t('diskUsage.expiredHint', { size: row.expired })}</div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {/*
+           * 两行式行卡（2026-11-04）：原先四列表格在 564px 画布下把「回收策略」列压到 160px，
+           * "Your data / safety net (never auto-removed)" 折成三行；表头还固定吃掉 24px。
+           * 现在第一行 = 区域名 + 右对齐占用（唯一右边缘），第二行 = 文件数 + 策略 + 过期量
+           * —— 策略拿到整行宽度，不再折行；表头由行内语义承担（占用单位在数值里，文件数自带
+           * 「个文件」）。desc 进 title：它说明「这块是哪来的」，不改变「能不能删」这个决定。
+           */}
+          <div className={css.planScroll + ' ' + css.diskUsageScroll + ' ' + css.duList} role="list">
+            {vm.rows.map((row) => (
+              <div key={row.id} className={css.duRow} role="listitem" title={row.desc}>
+                <div className={css.duRowTop}>
+                  <span className={css.duRowName}>{row.label}</span>
+                  <span className={css.duRowSize}>
+                    {row.unreadable ? t('diskUsage.unreadable') : row.size}
+                  </span>
+                </div>
+                <div className={css.duRowMeta}>
+                  <span className={css.duRowFiles}>{row.unreadable ? '—' : row.files}</span>
+                  {row.policy === 'regenerable' && <Badge kind="ok">{t('diskUsage.policy.regenerable')}</Badge>}
+                  {row.policy === 'retained' && <Badge kind="info">{t('diskUsage.policy.retained', { retention: row.retention })}</Badge>}
+                  {row.policy === 'protected' && <span>{t('diskUsage.policy.protected')}</span>}
+                  {row.expired !== null && (
+                    <span className={css.cellMetaNoteText}>{t('diskUsage.expiredHint', { size: row.expired })}</span>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
 
           {/*
@@ -273,6 +267,7 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
               variant={includeExpired ? 'danger' : 'primary'}
               disabled={busy || nothingToReclaim}
               loading={busy}
+              title={nothingToReclaim ? t('diskUsage.clean.nothing') : undefined}
               onClick={() => { setConfirmOpen(true) }}
             >
               {busy ? t('diskUsage.clean.cleaning') : t('diskUsage.clean.now')}

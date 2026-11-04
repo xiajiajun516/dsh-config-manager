@@ -55,11 +55,15 @@ test('cross-F3 UI：动作行三处把守 + 删除不被把守', () => {
   assert.match(block, /caps\.launchOrStop && rowAction === 'stop'/, '停止按钮必须由 caps.launchOrStop 把守')
   assert.match(block, /caps\.duplicate &&/, '复制按钮必须由 caps.duplicate 把守')
   assert.match(block, /caps\.rename &&/, '改名按钮必须由 caps.rename 把守')
-  // 删除是残留行的唯一动作：它必须出现在改名把守闭合之后，本身不带任何 caps 条件
-  assert.match(block, /\)\}\s*<Button size="sm" variant="danger"/,
-    '删除按钮必须紧跟最后一个把守闭合、自身不带条件（残留行也要能点删除）')
-  const dangerIndex = block.indexOf('variant="danger"')
-  assert.ok(dangerIndex > 0 && !/caps\./.test(block.slice(dangerIndex)), '删除按钮内部不得再夹 caps 条件')
+  // 删除是残留行的唯一动作：它必须出现在改名把守闭合之后，本身不带任何 caps 条件。
+  // 2026-11-04：删除从文字按钮收成图标按钮（<IconButton danger>，行密度改造），控件形态变了、
+  // 判据不变 —— 仍是「紧跟最后一个把守闭合 + 自身不带 caps 条件」。
+  // rename 把守闭合之后紧跟着的必须是无条件的删除控件（危险语义）。
+  // 不按 lastIndexOf 取尾巴：`label={t('profiles.delete')}` 自身就以 `)}` 结尾。
+  assert.match(block, /caps\.rename &&[\s\S]*?\n\s*\)\}\s*<IconButton[\s\S]*?label=\{t\('profiles\.delete'\)\}[\s\S]*?\bdanger\b/,
+    '删除控件必须紧跟最后一个把守闭合、自身不带条件（残留行也要能点删除），且是危险语义')
+  const deleteStart = block.lastIndexOf('<IconButton', block.indexOf("profiles.delete'"))
+  assert.ok(deleteStart > 0 && !/caps\./.test(block.slice(deleteStart)), '删除控件内部不得再夹 caps 条件')
 })
 
 test('cross-F3 UI：残留行展示来源 / 开始时间 / 目录（目录经 redact）', () => {
