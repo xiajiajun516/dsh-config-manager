@@ -28,6 +28,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-06
+
+> **本版主题**：从别的机器打开内嵌面板不再是死路 —— 请求交给宿主自己判定，真被拒时也会说清原因与出路。
+>
+> **Theme**: opening the panel from another machine is no longer a dead end — requests are judged by the host's own trust rules, and a real refusal explains why and what to do instead.
+
 ### 🐛 修复 · Fixed
 
 - **从别的机器打开内嵌面板不再是一片「读取失败」**：宿主以局域网地址启动 `dsh web` 后，页面能打开但每条请求都被拒，首页只显示「有 5 项数据读取失败」并给一个点了没用的重试；现在这类请求由宿主自己判断是否可信（已信任地址 + 已登录会话），真被拒时也会直接说明「当前访问方式不被允许」、页面地址与改用隧道或回环启动的办法。（issue #126）

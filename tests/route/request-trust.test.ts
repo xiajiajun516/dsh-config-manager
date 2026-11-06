@@ -102,8 +102,9 @@ test('宿主判定抛错 → 记一行 warn 并退回严格回环（不让异常
   );
   assert.equal(resolver(lanRequest())?.code, 'loopback-only');
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /requestRejection threw/);
-  assert.match(warnings[0], /browserAuth unavailable/);
+  const warning = warnings[0] ?? '';
+  assert.match(warning, /requestRejection threw/);
+  assert.match(warning, /browserAuth unavailable/);
 });
 
 test('成员调用保留 this：宿主方法依赖自身状态（browserAuth / trustedHosts）', () => {
@@ -178,8 +179,9 @@ test('读服务抛错 → 记 warn 并退回严格回环（围栏抛错会绕过
   );
   assert.equal(resolver(lanRequest())?.code, 'loopback-only');
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /reading the connection service threw/);
-  assert.match(warnings[0], /context disposed/);
+  const warning = warnings[0] ?? '';
+  assert.match(warning, /reading the connection service threw/);
+  assert.match(warning, /context disposed/);
 });
 
 test('安装器：ctx.effect 装上委托，清理函数把围栏卸回严格回环', async () => {
