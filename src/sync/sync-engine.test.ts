@@ -1459,6 +1459,102 @@ test('hasLocalChanges: 从未同步→true；推后无改动→false；本地改
   }
 });
 
+/**
+ * 连接器存储（mcp 分区的**第二个**数据源，用户实际配 MCP 的地方）：`storages/mcp_connector.json`。
+ * 形态取自 core/mcp-connector-store.ts:361-378（`tables.connections` 表，按 key 索引）。
+ */
+function seedConnectorStore(ctx: ReturnType<typeof makeContext>, args: string[]): void {
+  const store = {
+    tables: {
+      connections: {
+        citra: {
+          key: 'citra',
+          connectorId: 'citra',
+          kind: 'manual',
+          name: 'Citra',
+          serverName: 'citra',
+          transport: 'stdio',
+          command: 'npx',
+          args,
+          enabled: true,
+        },
+      },
+    },
+  };
+  void ctx.fs.writeFile('storages/mcp_connector.json', new TextEncoder().encode(JSON.stringify(store)));
+}
+
+/**
+ * 复现：自动同步只放行 'auto' 档可选分区（当前 = mcp，src/index.ts:2796-2810），
+ * 而 hasLocalChanges 只比 portable 分区（sync-engine.ts:1397-1413）⇒ 用户勾了 mcp 后
+ * **只改连接器存储**时判「无改动」，Phase C 不 push（autosync-scheduler.ts:800-819）⇒ 改动永不单独上行。
+ *
+ * 注意（实测，见报告）：patch 行（cordis.patch.yml 的 dsh-mcp-client 行）那条路径**已被顺带覆盖** ——
+ * plugins（portable）也导出全部 patch 行（src/adapters/plugins.ts:430-434），所以改 patch 行会让 plugins
+ * 的 hash 变。连接器存储没有任何 portable 分区覆盖（pluginData 是 deviceSpecific），这才是真空洞。
+ */
+test('hasLocalChanges 必须覆盖「已勾选的 mcp」：仅改连接器存储也要判有改动', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-haslocal-optin-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    seedMcp(ctx);
+    seedConnectorStore(ctx, ['-y', '@sylphx/citra']);
+    const transport = new MemSyncTransport();
+    // 自动同步装配形态：push 不带 sections，optInSections = 'auto' 档 = ['mcp']
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, extra: { optInSections: ['mcp'] } });
+
+    const first = await engine.push({ snapshotId: 'sync-optin-001' });
+    assert.ok(first.sections.includes('mcp'), '放行的 mcp 进快照: ' + first.sections.join(','));
+    assert.equal(await engine.hasLocalChanges(), false, '刚推完 → 无改动（mcp 基线已记）');
+    // 稳定性：判定字节若含易变字段（exportedAt = 导出当刻），这里会恒为 true ⇒ 每轮轮询真推一次空推
+    assert.equal(await engine.hasLocalChanges(), false, '再判一次仍须是「无改动」（判定字节必须稳定）');
+
+    // 只改连接器存储：portable 分区与 patch 行一律不动
+    seedConnectorStore(ctx, ['-y', '@sylphx/citra@2']);
+    assert.equal(
+      await engine.hasLocalChanges(), true,
+      '勾选 mcp 后仅连接器存储改动必须被识别为有改动（否则自动同步永不推它）',
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('hasLocalChanges: 未勾选分区既不参与判定、也不进载荷（注入 sections 收窄范围）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-haslocal-scope-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    seedMcp(ctx);
+    await ctx.fs.writeFile('skills/coding.md', Buffer.from('# Coding\n', 'utf8'));
+    const transport = new MemSyncTransport();
+    // 高级模式只勾了 settings（= effectiveSections 注入），mcp 未勾
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, extra: { sections: ['settings'] } });
+    const report = await engine.push({ snapshotId: 'sync-scope-001' });
+    assert.deepEqual(report.sections, ['settings'], '载荷只含已勾选分区: ' + report.sections.join(','));
+    assert.equal(await engine.hasLocalChanges(), false, '刚推完 → 无改动');
+
+    // 未勾选分区（skills 文件、mcp patch 行）改动 → 不得被判为有改动
+    await ctx.fs.writeFile('skills/coding.md', Buffer.from('# Coding v2\n', 'utf8'));
+    ctx.patchFile.lines.set('mcp-citra', {
+      lineId: 'mcp-citra',
+      raw: {
+        id: 'mcp-citra',
+        name: 'dsh-mcp-client',
+        config: { serverName: 'citra', command: 'npx', args: ['-y', '@sylphx/citra@2'] },
+      },
+    });
+    assert.equal(await engine.hasLocalChanges(), false, '未勾选分区改动不参与「有无改动」比较');
+
+    // 已勾选分区改动 → 必须识别
+    ctx.settings.ns.set('general', { value: { theme: 'light', language: 'zh-CN' }, revision: 9, secrets: [] });
+    assert.equal(await engine.hasLocalChanges(), true, '已勾选分区改动必须被识别');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('push + webdav 快照级跳过：同 id 同内容二次 push → 不重复 PUT 快照文件（端到端组合）', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-webdav-skip-'));
   try {

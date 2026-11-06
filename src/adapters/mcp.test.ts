@@ -89,6 +89,34 @@ test('mcp: export 提取 + analyzeImport Create/Skip/Conflict + applyItem 写 pa
   assert.deepEqual((raw['config'] as Record<string, unknown>)['args'], ['-y', 'x'], 'Conflict useImported 应更新目标行');
 });
 
+test('同步判定前提：mcp 导出字节必须可复现 —— 载荷里不得含「导出当刻」的时间戳', async () => {
+  // 为什么钉这条：SyncEngine.hasLocalChanges 直接 hashSection(export())，基线也取自同一份载荷；
+  // 载荷里只要有 now()，hash 每次都不同 ⇒ 每轮轮询都判「有改动」⇒ 真推一次空快照（AGENTS.md 同步节）。
+  const ctx = makeContext('win32', 'C:\\Users\\alice');
+  ctx.patchFile.lines.set('mcp-fs', {
+    lineId: 'mcp-fs',
+    raw: { id: 'mcp-fs', name: 'dsh-mcp-client', config: { serverName: 'filesystem', command: 'npx', args: ['-y', 'x'] } },
+  });
+  await ctx.fs.writeFile('storages/mcp_connector.json', new TextEncoder().encode(JSON.stringify({
+    tables: {
+      connections: {
+        citra: {
+          key: 'citra', connectorId: 'citra', kind: 'manual', name: 'Citra',
+          serverName: 'citra', transport: 'stdio', command: 'npx', args: ['-y', '@sylphx/citra'], enabled: true,
+        },
+      },
+    },
+  })));
+  const adapter = new McpAdapter();
+  const first = await adapter.export(ctx, { includeSecrets: false });
+  await new Promise((resolve) => { setTimeout(resolve, 25); });
+  const second = await adapter.export(ctx, { includeSecrets: false });
+  assert.deepEqual(
+    second.data, first.data,
+    '同一份本地状态两次导出必须逐字节一致（否则同步判定恒为「有改动」）',
+  );
+});
+
 test('issue #71: profile 层 MCP 行也要导出，且写回**原层**（不再凭空消失 / 不搬家）', async () => {
   const src = makeContext('win32', 'C:\\Users\\alice', 'tauri');
   // 真机形态：MCP server 由手写/工具写进 profile 层（home 层只有别的行）

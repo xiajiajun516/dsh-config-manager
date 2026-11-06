@@ -103,6 +103,13 @@ export interface ConnectorOauthRef {
 export interface McpConnectorExport {
   format: typeof MCP_CONNECTOR_EXPORT_FORMAT;
   version: typeof MCP_CONNECTOR_EXPORT_VERSION;
+  /**
+   * 这批连接**状态**的时间戳（内容派生：最晚的 updatedAt/createdAt，无时间戳则固定纪元值）。
+   *
+   * 为什么不是「导出当刻」：同步的「本地有无改动」直接哈希这份载荷（SyncEngine.hasLocalChanges），
+   * 基线也取自同一份载荷；写 now() 会让 hash 每轮都变 ⇒ 每轮轮询都真推一次空快照。
+   * 本字段没有任何读取方（导入只认 connections / oauthConnections），因此取内容派生值不丢信息。
+   */
   exportedAt: string;
   connections: ConnectorExportEntry[];
   oauthConnections: ConnectorOauthRef[];
@@ -276,8 +283,26 @@ export function exportConnectorRecord(record: ConnectorRecord): ConnectorExportE
   return entry;
 }
 
+/**
+ * 导出块的稳定时间戳：这批连接里最晚的一次变更（updatedAt 优先，其次 createdAt）；
+ * 一条都没有时间戳时退回固定纪元值（1970-01-01T00:00:00.000Z）——**恒定**比「像样但会漂移」重要，
+ * 因为它参与同步的「有无改动」哈希（见 McpConnectorExport.exportedAt 的注释）。
+ */
+export function connectorBlockStamp(records: readonly ConnectorRecord[]): string {
+  let latest = 0;
+  for (const r of records) {
+    for (const v of [r.updatedAt, r.createdAt]) {
+      if (typeof v === 'number' && Number.isFinite(v) && v > latest) latest = v;
+    }
+  }
+  return new Date(latest > 0 ? latest : 0).toISOString();
+}
+
 /** 全部连接 → 导出块（OAuth 只留引用；按 key 排序，便于 diff 与稳定哈希） */
-export function exportConnectorBlock(records: readonly ConnectorRecord[], exportedAt = new Date().toISOString()): McpConnectorExport {
+export function exportConnectorBlock(
+  records: readonly ConnectorRecord[],
+  exportedAt = connectorBlockStamp(records),
+): McpConnectorExport {
   const sorted = [...records].sort((a, b) => a.key.localeCompare(b.key));
   return {
     format: MCP_CONNECTOR_EXPORT_FORMAT,

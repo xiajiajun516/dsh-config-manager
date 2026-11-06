@@ -1388,16 +1388,16 @@ export class SyncEngine {
   }
 
   /**
-   * 本地 portable 配置当前内容与上次基线（sync-state.sections hash）相比是否有变化（§3.1 上传「看变化」）。
+   * 本地**会进载荷**的配置与上次基线（sync-state.sections hash）相比是否有变化（§3.1 上传「看变化」）。
    * - 从未同步（sync-state.sections 为空）→ true；
-   * - 任一 portable 分区当前导出 hash ≠ 基线 hash → true；
-   * - 全部一致 → false（无本地改动，不上传）。
-   * 只读本地导出 + sync-state，不写任何东西、不碰远端。
+   * - 任一 pushTargets 分区（portable + 本次放行的可选分区）导出 hash ≠ 基线 → true；
+   * - 全部一致 → false（无本地改动，不上传）。只读本地导出 + sync-state，不碰远端。
+   * 判定集合必须 == 推送载荷集合，且被比较字节必须可复现（细节与实测 → docs/evidence/sync-channel.md）。
    */
   async hasLocalChanges(): Promise<boolean> {
     const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
     if (Object.keys(state.sections).length === 0) return true;
-    for (const adapter of this.portableAdapters()) {
+    for (const adapter of this.pushTargets(undefined, [])) {
       let section: ExportSection;
       try {
         section = await adapter.export(this.ctx, { includeSecrets: false });

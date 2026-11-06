@@ -28,6 +28,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🐛 修复 · Fixed
+
+- **勾了「MCP 连接器」同步后，只改连接器列表也会自动上行**：以前这类改动在自动同步里一律判成「没有本地改动」，必须顺带改一个普通配置才会被捎带上去；现在它自己就会被识别并上传，且没改动的轮次不会空推一次快照。
+  **Connector-only edits now sync on their own**: with “MCP connectors” enabled, changing just the connector list used to be judged as “no local change” and only went up alongside some other setting; such edits are now detected and uploaded by themselves, and unchanged rounds no longer push an empty snapshot.
+
 ## [0.4.3] - 2026-11-06
 
 > **本版主题**：从别的机器打开内嵌面板不再是死路 —— 请求交给宿主自己判定，真被拒时也会说清原因与出路。

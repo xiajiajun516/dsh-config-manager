@@ -465,4 +465,33 @@ detail 请求且不同 repoUrl 不共用 / TTL 过期后重跑）、`tests/home-
 有变化时 fetch 带 `--no-tags` 不带 filter、partial 副本保持 `--filter=blob:none`、网络子命令带低速上限而本地不带、
 首次 clone 走 partial+sparse 且 sparse 面逐字、老 git 回落全量、**真实进程树 kill**：孙进程 1.5 s 后写标记文件、
 超时 200 ms 收尾后标记文件必须不存在）。`src/sync/git/git-probe.test.ts` 的「探针只发一条 ls-remote」按前置 `-c` 剥离后仍逐字断言。
+## 自动同步「只看 portable」⇒ 勾了 mcp 也永不单独上行（2026-11-06 实测）
+
+**现象**：用户在同步设置里勾了「MCP 连接器」（mcp 分区）后，只改连接器列表（`storages/mcp_connector.json`）时自动同步一轮判 `upToDate`，一个快照都不上传；必须顺带改一个 portable 分区才被「捎带」上去。
+
+**根因（判定集合 ≠ 载荷集合）**：`hasLocalChanges()` 只遍历 `portableAdapters()`，而 `push()` 的载荷是 `pushTargets()` = portable + `optInAdapters()`（`src/sync/sync-engine.ts:642-664`），`recordBaseline()`（:1795-1851）也只记已推分区 —— 基线里有 mcp 的 hash，判定却从不看它。自动同步只放行 `'auto'` 档（`src/index.ts:2801` 的 `onlyAuto=true`；`src/sync/sync-selection.ts:86`），而 mcp 正是唯一 `syncOptIn='auto'` 的分区（`src/schema/section-registry.ts:244-259`）⇒ 该档位的改动检测整体失效，Phase C 不 push（`src/sync/autosync-scheduler.ts:800-819`）。
+
+**第二处根因（判定字节不可复现）**：mcp 导出载荷带 `exportedAt: new Date().toISOString()`，就算把它纳入比较，每轮都会判「有改动」并真推一次空快照。修法：`src/core/mcp-connector-store.ts` 新增 `connectorBlockStamp(records)`（取 `max(updatedAt, createdAt)`，无时间戳退回 epoch），`exportConnectorBlock(records, exportedAt = connectorBlockStamp(records))`；该字段无读取方（导入只认 `connections`/`oauthConnections`），签名与形状不变。
+
+**复现（先失败后通过，三处）**：
+- `src/sync/sync-engine.test.ts` 的 `hasLocalChanges 必须覆盖「已勾选的 mcp」…`：`optInSections:['mcp']` → `push` → `hasLocalChanges()===false`（连判两次防易变字段）→ 只改 connector `args` → 期望 `true`；修复前在该断言处 `false !== true` 失败。
+- `src/adapters/mcp.test.ts` 的载荷稳定性用例：同一 ctx 两次 `export` 间隔 25 ms，`deepEqual` 必须相等；修复前 `exportedAt` 相差 40 ms 失败。
+- 端到端 `src/sync/autosync-scheduler.test.ts`：真实 `SyncEngine` + 真实调度器 + 内存 transport，`runOnce('git')` 基线 1 次 upload → 只改连接器 → 第二轮必须第 2 次 upload 且快照含新 `args`；把循环临时改回 `portableAdapters()` 时 FAIL（`actual: 1, expected: 2`），改回 `pushTargets(undefined, [])` 后 PASS。第三轮 `skipReason==='upToDate'` 且 upload 仍为 2（不空推）。
+
+**「即时」实测（真实 fs.watch，临时 home）**：一次保存 → 一次 flush，延迟 ≈1500 ms（首事件 307 ms、flush 1823 ms，两次写入合并成一个 `changed` 数组）。参数：去抖 1500 ms 固定窗口（`src/sync/sync-watcher.ts:44`；`scheduleFlush` :214-220 窗口自首事件起算、后续事件不延长 ⇒ 跨窗口的连续改动会分成两次触发）；自写静默 2000 ms（:46）；触发最小间隔 3000 ms（`src/sync/autosync-scheduler.ts:311`，不足则合并）；远端轮询缺省 60 s（`src/sync/autosync-config.ts:41`）；失败无专门退避（靠 interval / 下一次 poll / 下一次 local-change），连续 3 次才 warn（:1028-1034）；历史保留 200 条（`src/sync/sync-history.ts:23`）；运行中按通道串行补跑（:521-528）。
+
+**不变量**：判定集合 == 载荷集合；被比较字节 == 载荷字节（`src/adapters/file-collection.ts:242-258` 的 `identity` 即导出 `data`；`src/sync/sync-state.ts:128-137` 的 hash 口径）。
+
+**未修（既有语义，需产品决定）**：`src/adapters/plugins.ts:433-434` 的 plugins 分区无条件带走 `cordis.patch.yml` 的**全部** patch 行，包括 mcp 适配器写的 `dsh-mcp-client` 行与其 `cwd`（`src/adapters/mcp.ts:75,111`）⇒ 未勾选 mcp 时该行仍随 plugins 上远端，且 `cwd` 不在 `scanner` 的敏感形状内。
+
+## 即时同步不覆盖历史会话：不支持（2026-11-06 决策，勿反复讨论）
+
+**结论**：不支持。sessions 分区保持「只出现在手动一键同步的载荷里」。
+
+**现状依据**：`sessions.syncOptIn='manual'`、`portability='deviceSpecific'`、`defaultIncluded=false`（`src/schema/section-registry.ts:365-377`）；自动同步只放行 `'auto'` 档（`src/index.ts:2801` + `src/sync/sync-selection.ts:86`，`src/sync/sync-selection.test.ts:240-243` 断言 `['mcp']` 且不含 sessions）；监听面 `buildWatchTargets` 不含 `sessions/`（`src/sync/watch-scope.ts:15-27`，`src/sync/watch-scope.test.ts:70-75` 钉住）。⇒ 默认关闭时它的改动**已被完全排除**：既不进载荷（push 需显式 `sections` 含 sessions 且带 `sessions` 参数，`src/routes/sync.ts:459-485`），也不参与改动判定（`hasLocalChanges` 的集合里没有它）。
+
+**支持后的代价（否的理由）**：sessions 是 files 分区 ⇒ 原字节直出、**零脱敏**（`src/sync/sync-engine.ts:901-903`），唯一保护是用户可选的加密快照；会话是 zstd jsonl、单会话可达数十 MB 且逐回合追加，接进 realtime 等于「每轮对话都触发一次上传」，1500 ms 去抖挡不住；`sessions/` 不监听还有自激理由（同步写工作副本 → 触发 → 再同步，`watch-scope.ts:16-19`）；真要支持得另做增量（按会话文件 mtime + 尾部追加）、独立节流、脱敏白名单（会话首帧 `cwd` 属设备相关）、墓碑与回滚点/SAFE MODE 的交互，等于新开一条通道。
+
+**用户实际看到什么**：勾了「历史会话」后，会话只在手动「立即同步」里上行；聊完天不会自动上传，定时轮次也不会（`onlyAuto=true`）。替代路径：按回合自动留点的回滚点（`src/core/rollback-point.ts`，只在本机）+ 手动一键同步。
+
 

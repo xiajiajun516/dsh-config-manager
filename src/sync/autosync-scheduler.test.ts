@@ -24,7 +24,12 @@ import type { AutosyncHistoryEntry } from './sync-history.ts';
 import type { MergePlan, MergeSectionResult } from './merge.ts';
 import type { SyncSnapshotMeta } from './transport.ts';
 import type { SectionId } from '../schema/types.ts';
-import type { SyncEngine } from './sync-engine.ts';
+import { SyncEngine } from './sync-engine.ts';
+import { createAdapters } from '../adapters/index.ts';
+import { makeContext, MemSnapshotStore } from '../adapters/test-helpers.ts';
+import { Importer } from '../core/importer.ts';
+import { computeSnapshotMeta } from './transport.ts';
+import type { SyncSnapshot, SyncTransport } from './transport.ts';
 import type { SyncConfig, SyncTransportType } from './sync-config.ts';
 import { SYNC_CONFIG_FILE } from './sync-config.ts';
 import { SYNC_CHANNELS } from './sync-config.ts';
@@ -1143,4 +1148,124 @@ test('SEC-03：真的没配 → 不带 configIssue（不产生幻影告警）', 
   assert.equal(result.configIssue, undefined, '空配置不是「被拒」，不许造一条假成因');
   const entry = getEntries()[0] as AutosyncHistoryEntry & { configIssue?: string } | undefined;
   assert.equal(entry?.configIssue, undefined);
+});
+
+/* ---------------- 端到端：勾选 mcp 后「仅连接器存储改动」必须真的上行 ---------------- */
+
+/**
+ * 修复前必失败（复现）：自动同步只放行 'auto' 档可选分区（当前 = mcp，src/index.ts:2796-2810），
+ * 而 hasLocalChanges 只比 portable ⇒ 用户勾了 mcp 后「只改连接器存储」被判成无改动 ⇒
+ * Phase C 不 push（autosync-scheduler.ts:800-819），改动永不单独上行。
+ *
+ * 这里用**真实 SyncEngine + 真实调度器**跑完整一轮（不做 hasLocalChanges 的 mock）：
+ * 1) 仅改 storages/mcp_connector.json → 必须真的上传一轮，且新载荷带新 args；
+ * 2) 紧接着无改动再跑一轮 → upToDate，且**不得**再多一次上传（判定字节 == 载荷字节，不空推）。
+ */
+class E2eTransport implements SyncTransport {
+  readonly type = 'memory';
+  snapshots: SyncSnapshot[] = [];
+  calls: string[] = [];
+  async list(): Promise<SyncSnapshotMeta[]> {
+    this.calls.push('list');
+    return this.snapshots.map((s) => computeSnapshotMeta(s));
+  }
+  async upload(snapshot: SyncSnapshot): Promise<SyncSnapshotMeta> {
+    this.calls.push('upload');
+    this.snapshots.push(snapshot);
+    return computeSnapshotMeta(snapshot);
+  }
+  async download(id: string): Promise<SyncSnapshot> {
+    const found = this.snapshots.find((s) => s.id === id);
+    if (found === undefined) throw new Error('快照不存在: ' + id);
+    return found;
+  }
+  async delete(id: string): Promise<void> {
+    this.calls.push('delete');
+    this.snapshots = this.snapshots.filter((s) => s.id !== id);
+  }
+}
+
+/** 连接器存储形态取自 core/mcp-connector-store.ts:361-378（tables.connections 表，按 key 索引）。 */
+function writeConnectorStore(ctx: ReturnType<typeof makeContext>, args: string[]): void {
+  const store = {
+    tables: {
+      connections: {
+        citra: {
+          key: 'citra', connectorId: 'citra', kind: 'manual', name: 'Citra',
+          serverName: 'citra', transport: 'stdio', command: 'npx', args, enabled: true,
+        },
+      },
+    },
+  };
+  void ctx.fs.writeFile('storages/mcp_connector.json', new TextEncoder().encode(JSON.stringify(store)));
+}
+
+test('端到端：勾选 mcp 后仅改连接器存储 → 自动同步一轮真的上传；无改动的一轮不空推', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-autosync-mcp-e2e-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] });
+    writeConnectorStore(ctx, ['-y', '@sylphx/citra']);
+
+    const adapters = createAdapters({ namespaces: ['general'] });
+    const transport = new E2eTransport();
+    const engine = new SyncEngine({
+      ctx,
+      transport,
+      stateDir: tmp,
+      adapters,
+      importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
+      now: () => new Date('2026-11-06T12:00:00.000Z'),
+      optInSections: ['mcp'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    // 基线：先推一轮（此时 mcp 已被放行并记入 sync-state 基线）
+    await engine.push({});
+    const uploadsAfterBaseline = transport.calls.filter((c) => c === 'upload').length;
+    assert.equal(uploadsAfterBaseline, 1, '基线轮只上传一次');
+
+    // 只改连接器存储：portable 分区（settings）与 patch 行一律不动
+    writeConnectorStore(ctx, ['-y', '@sylphx/citra@2']);
+
+    const cfg: AutosyncConfig = {
+      enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: true,
+    };
+    const scheduler = new AutoSyncScheduler({
+      syncDir: tmp,
+      host: { log: nullLogger() },
+      makeSyncEngine: () => engine,
+      msg: (k: string) => k,
+      runs: new RunRegistry(),
+      now: () => new Date(1_000_000_000_000),
+      readConfig: async (_channel: SyncTransportType) => cfg,
+      writeConfig: async () => {},
+      readSyncConfigFn: async (_channel: SyncTransportType) =>
+        ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } }) as SyncConfig,
+      readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+      appendHistoryFn: async () => {},
+      setTimer: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      clearTimer: () => {},
+      minTriggerGapMs: 0,
+    });
+
+    const pushed = await scheduler.runOnce('git');
+    assert.equal(pushed.status, 'success', '仅改 mcp 的自动同步轮必须成功: ' + JSON.stringify(pushed));
+    const uploadsAfterChange = transport.calls.filter((c) => c === 'upload').length;
+    assert.equal(uploadsAfterChange, 2, '仅改 mcp 也必须真的上传一轮（修复前这里是 1 = 静默丢失）');
+    const latest = transport.snapshots[transport.snapshots.length - 1]!;
+    assert.ok(
+      JSON.stringify(latest.sections).includes('@sylphx/citra@2'),
+      '新快照必须带改后的连接器 args',
+    );
+
+    // 无改动的一轮：判定字节与载荷同源 ⇒ upToDate，绝不再上传（否则每轮轮询都空推一次）
+    const idle = await scheduler.runOnce('git');
+    assert.equal(idle.skipReason, 'upToDate', '无改动 → upToDate: ' + JSON.stringify(idle));
+    assert.equal(
+      transport.calls.filter((c) => c === 'upload').length, 2,
+      '无改动不得产生空推（判定集合必须与载荷同一份字节）',
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
 });
