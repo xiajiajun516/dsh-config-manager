@@ -1,23 +1,20 @@
 /**
- * 路由组：配置市场（内置公开仓库：状态 / 刷新 / 浏览 / 下载 / 发布前准备）。
+ * 路由组：配置市场（内置公开仓库：状态 / 刷新 / 浏览 / 下载）。
  *
  * W1（host-entry#F-02/#F-03）：路由只在这里声明一次 —— endpoint({ path, methods }, handler) 的
  * path/methods 就是唯一声明处；围栏、方法判定与顶层异常处理由 src/routes/kit.ts 在注册点统一提供。
  */
 
-import { endpoint, requireJsonObject, readJsonBody, writeJson } from './kit.ts'
+import { endpoint, readJsonBody, writeJson } from './kit.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
-import { isControlledPath } from './route-support.ts'
 import { BUILTIN_MARKET_URL } from '../market/builtin.ts'
 import { parseMarketIndex, parseMarketItemManifest } from '../market/index-parser.ts'
-import { prepareMarketItem } from '../market/prepare.ts'
 import { validateMarketItem } from '../market/security.ts'
 import type { MarketDownloadResult, MarketIndex, MarketItemDetail, MarketListItem } from '../market/types.ts'
 import { validateMarketRepoUrl } from '../market/url.ts'
 import { marketItemWarnings, toMarketListItem } from '../market/view.ts'
 import type { SectionId } from '../schema/types.ts'
-import { zipToBuffer } from '../utils/zip.ts'
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -36,7 +33,6 @@ export function marketRoutes(env: RoutesEnv): WebRoute[] {
     msg,
     pruneStagedMarketZips,
     readCachedIndexObj,
-    roots,
     tmpDir,
     writeItemCache,
   } = env
@@ -213,59 +209,6 @@ export function marketRoutes(env: RoutesEnv): WebRoute[] {
 
         const download: MarketDownloadResult = { ...base, zipPath, analysis, plan }
         writeJson(res, 200, download)
-      } catch (error) {
-        writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-      }
-    }),
-    // ---------------------------------------------------- market/prepare
-    // 发布向导：由「用户上传的配置 zip + 用户填写元数据」生成市场条目包
-    // （L2 manifest + config.zip SHA-256 + sections），供 UI 展示/复制与引导推送。
-    // 零写入配置：只在受控临时区生成发布目录；插件不做任何 git 写操作、不持有凭据。
-    endpoint({ path: '/api/dsh-config-manager/market/prepare', methods: ['POST'] }, async (req, res) => {
-      const body = await requireJsonObject(req)
-      const zipPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
-      if (zipPath === '' || !isControlledPath(zipPath, roots)) {
-        writeJson(res, 400, { error: 'zipPath is required and must reference a staged upload' })
-        return
-      }
-      const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
-      const name = typeof body?.['name'] === 'string' ? body['name'] : ''
-      const version = typeof body?.['version'] === 'string' ? body['version'] : undefined
-      const description = typeof body?.['description'] === 'string' ? body['description'] : undefined
-      const author = typeof body?.['author'] === 'string' ? body['author'] : undefined
-      const repoUrl = typeof body?.['repoUrl'] === 'string' && body['repoUrl'] !== '' ? body['repoUrl'] : undefined
-      const categoriesRaw = body?.['categories']
-      const categories = Array.isArray(categoriesRaw)
-        ? categoriesRaw.filter((c): c is string => typeof c === 'string')
-        : undefined
-      // F6 分享模式：share 强制排除 deviceSpecific/platformSpecific 分区 + 保守档内容扫描拦截
-      // （prepare.ts 内实现）；migrate 缺省。非法值一律回退 migrate。
-      const mode = body?.['mode'] === 'share' ? 'share' : 'migrate'
-      try {
-        const zipBytes = await fs.readFile(zipPath)
-        const result = prepareMarketItem({ itemId, name, version, description, author, repoUrl, categories, zipBytes, mode })
-        // 发布目录落到受控临时区（供 UI 展示目录结构；不写任何配置）
-        const dir = join(tmpDir, `publish-${itemId}-${randomBytes(6).toString('hex')}`)
-        const itemDir = join(dir, 'items', itemId)
-        await fs.mkdir(itemDir, { recursive: true })
-        await fs.writeFile(join(itemDir, 'manifest.json'), result.manifestText, 'utf8')
-        await fs.writeFile(join(itemDir, 'config.zip'), zipBytes)
-        // 打包发布目录为 zip（供 /download 端点下载；zip 由懒 GC 清理），
-        // 打包后删除中间目录，避免 publish-* 目录在 tmpDir 无限累积
-        const publishZip = join(tmpDir, `publish-${itemId}-${randomBytes(6).toString('hex')}.zip`)
-        await fs.writeFile(publishZip, Buffer.from(zipToBuffer([
-          { name: `items/${itemId}/manifest.json`, data: Buffer.from(result.manifestText, 'utf8') },
-          { name: `items/${itemId}/config.zip`, data: Buffer.from(zipBytes) },
-        ])))
-        await fs.rm(dir, { force: true, recursive: true }).catch(() => undefined)
-        writeJson(res, 200, {
-          ok: true,
-          zipPath: publishZip,
-          manifestText: result.manifestText,
-          sha256: result.sha256,
-          sections: result.sections,
-          warnings: result.warnings,
-        })
       } catch (error) {
         writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
       }

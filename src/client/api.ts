@@ -750,11 +750,6 @@ export class ConfigManagerApi {
     return postJson<{ ok: boolean; removed: boolean }>(CONFIG_MANAGER_API.snapshotDelete, { snapshotId }, this.t);
   }
 
-  /** P1-⑧：置顶/取消置顶快照（置顶快照豁免自动保留清理，只能手动删除）。 */
-  async setSnapshotPinned(snapshotId: string, pinned: boolean): Promise<{ pinned: boolean }> {
-    return postJson<{ ok: boolean; pinned: boolean }>(CONFIG_MANAGER_API.snapshotPin, { snapshotId, pinned }, this.t);
-  }
-
   // ------------------------------------------------- 档案（DSH 自带 profile）
   /** 列出 DSH profile：列表 + 当前运行 + 在跑的实例（台账 ∪ 心跳）+ 起步模板。 */
   async profilesList(): Promise<DshProfilesSnapshot> {

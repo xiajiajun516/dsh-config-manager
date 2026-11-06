@@ -183,8 +183,6 @@ credentialsStatus, secrets, sessions, self, pluginData, pluginAssets
 | `/api/dsh-config-manager/market/refresh` | POST | 强制 re-pull index.json |
 | `/api/dsh-config-manager/market/browse` | POST | 浏览（合并 index + 缓存状态） |
 | `/api/dsh-config-manager/market/download` | POST | 下载条目（拉 manifest+zip → 8 道校验 → dry-run 预览） |
-| `/api/dsh-config-manager/market/prepare` | POST | 发布向导：生成条目包 |
-| `/api/dsh-config-manager/download` | GET | 受控临时区文件下载（发布包） |
 
 ---
 

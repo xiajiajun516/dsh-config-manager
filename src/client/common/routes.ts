@@ -72,7 +72,6 @@ export const CONFIG_MANAGER_API = {
   snapshots: `${API_BASE}/snapshots`,
   restore: `${API_BASE}/restore`,
   snapshotDelete: `${API_BASE}/snapshots/delete`,
-  snapshotPin: `${API_BASE}/snapshots/pin`,
   snapshotFileDiff: `${API_BASE}/snapshots/file-diff`,
   backupSchedule: `${API_BASE}/backup-schedule`,
   backupScheduleRun: `${API_BASE}/backup-schedule/run`,
@@ -149,16 +148,13 @@ export const SYNC_API = {
   probe: `${API_BASE}/sync/probe`,
 } as const;
 
-/** 配置市场路由族（内置单市场：浏览 / 下载 / 发布向导；无 add/remove）。 */
+/** 配置市场路由族（内置单市场：浏览 / 下载；无 add/remove）。 */
 export const MARKET_API = {
   base: `${API_BASE}/market`,
   status: `${API_BASE}/market/status`,
   refresh: `${API_BASE}/market/refresh`,
   browse: `${API_BASE}/market/browse`,
   download: `${API_BASE}/market/download`,
-  prepare: `${API_BASE}/market/prepare`,
-  /** 受控临时区文件下载端点（发布包 zip 下载复用；GET ?path=，无凭据） */
-  fileDownload: `${API_BASE}/download`,
 } as const;
 
 /** 「我的配置」路由族（一键上传 / 查看 / 更新 / 收录状态）。 */

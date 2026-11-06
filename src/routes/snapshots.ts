@@ -1,5 +1,5 @@
 /**
- * 路由组：快照与恢复（快照列表 / 恢复 / 删除 / 置顶 / 逐文件差异）。
+ * 路由组：快照与恢复（快照列表 / 恢复 / 删除 / 逐文件差异）。
  *
  * W1（host-entry#F-02/#F-03）：路由只在这里声明一次 —— endpoint({ path, methods }, handler) 的
  * path/methods 就是唯一声明处；围栏、方法判定与顶层异常处理由 src/routes/kit.ts 在注册点统一提供。
@@ -8,7 +8,7 @@
 import { endpoint, readJsonBody, writeJson, writeMutationError } from './kit.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
-import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned } from '../core/restore.ts'
+import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore } from '../core/restore.ts'
 import type { RunState } from '../core/run-registry.ts'
 import { snapshotFileDiff, summarizeRestoreChanges } from '../core/snapshot-diff.ts'
 import { buildFileDiffBody, buildRestoreBody, executeRestorePlan, makeRestoreExecutor } from './route-support.ts'
@@ -16,7 +16,6 @@ import type { RestoreJournalPort } from '../core/restore-wal.ts'
 import { probeRestoreResume, runRestoreWithResume } from '../core/restore-resume.ts'
 import type { RestoreResumeHint } from '../core/restore-resume.ts'
 import { runWithMutationLock } from '../utils/env-lock.ts'
-import { isENOENT } from '../utils/guards.ts'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 
@@ -253,32 +252,6 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
         writeJson(res, 200, historyError === undefined ? { ok: true, removed } : { ok: true, removed, historyWriteError: historyError })
       } catch (error) {
         writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-      }
-    })),
-    // --------------------------------------------- snapshots/pin（P1-⑧）
-    // 置顶/取消置顶快照：置顶快照豁免「最多保留 N 个」的自动清理（只能手动删除）。
-    // 纯元数据写（重写 snapshot.json 的 pinned 字段）；loopback fence 必备。
-    endpoint({ path: '/api/dsh-config-manager/snapshots/pin', methods: ['POST'] }, withMutationGate('snapshot-pin', async (req, res) => {
-      try {
-        const body = await readJsonBody(req)
-        const id = typeof body === 'object' && body !== null
-          ? (body as Record<string, unknown>)['snapshotId']
-          : undefined
-        const pinned = (body as Record<string, unknown> | undefined)?.['pinned'] === true
-        if (!isValidSnapshotId(id)) {
-          writeJson(res, 400, { error: 'snapshotId is required and must be a valid snapshot id' })
-          return
-        }
-        await setSnapshotPinned(snapshotsDir, id, pinned)
-        writeJson(res, 200, { ok: true, pinned })
-      } catch (error) {
-        // e2e-F4：快照不存在时**不得**把 fs 原始错误（含服务端绝对路径）回给浏览器 ——
-        // 结构化 404 + 机器可读码，文案由界面按码映射；其余失败也不再回显原始 message。
-        if (isENOENT(error)) {
-          writeJson(res, 404, { error: 'snapshot not found', code: 'snapshot-not-found' })
-          return
-        }
-        writeJson(res, 500, { error: 'failed to update snapshot pin' })
       }
     })),
     // --------------------------------------- snapshots/file-diff（git 风格预览）

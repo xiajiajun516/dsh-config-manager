@@ -16,7 +16,6 @@
  * POST /api/dsh-config-manager/market/refresh   → MarketRefreshResponse （拉取最新 index.json）
  * POST /api/dsh-config-manager/market/browse    → MarketBrowseResponse  （合并 index + 缓存状态）
  * POST /api/dsh-config-manager/market/download  → MarketDownloadResult  （{ itemId } 拉取+校验+dry-run 预览）
- * POST /api/dsh-config-manager/market/prepare   → MarketPrepareResponse （发布向导：上传 zip + 元数据 → 条目包）
  * ```
  * 确认导入（apply）**复用现有** `POST /api/dsh-config-manager/execute`（见 ../api.ts executeImportPlan），
  * 不新增第二条导入路径 —— 保证安全校验/回滚/凭据补录全部走既有管道。
@@ -30,7 +29,7 @@
  */
 import type {
   MarketBrowseResponse, MarketDownloadResult, MarketItemDetail, MarketListItem,
-  MarketPreparePayload, MarketPrepareResponse, MarketRefreshResponse, MarketStatusResponse,
+  MarketRefreshResponse, MarketStatusResponse,
 } from '../../market/types.ts';
 import type { UiT } from '../../ui/i18n.ts';
 import { getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
@@ -78,16 +77,5 @@ export class MarketApi {
    *  真正落盘由用户对预览确认后走现有 executeImportPlan（confirm:true 安全阀 + 回滚）。 */
   async download(itemId: string, repo?: string): Promise<MarketDownloadResult> {
     return postJson<MarketDownloadResult>(MARKET_API.download, { itemId, ...(repo !== undefined && repo !== '' ? { repo } : {}) }, this.t, MARKET_OPTS);
-  }
-
-  /** 发布向导：由「上传 zip + 用户填写元数据」生成市场条目包（L2 manifest + SHA-256 + sections），
-   *  供 UI 展示/复制与引导推送。零写入配置（发布目录在受控临时区）；不含任何凭据字段。 */
-  async prepare(payload: MarketPreparePayload): Promise<MarketPrepareResponse> {
-    return postJson<MarketPrepareResponse>(MARKET_API.prepare, payload, this.t, MARKET_OPTS);
-  }
-
-  /** 发布包下载 URL（受控临时区 zip；经宿主 /download 端点，无凭据、无写操作） */
-  downloadPublishUrl(zipPath: string): string {
-    return `${MARKET_API.fileDownload}?path=${encodeURIComponent(zipPath)}`;
   }
 }

@@ -37,6 +37,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **没勾「MCP 连接器」时，MCP 服务器配置不再跟着插件同步上远端**：以前插件同步会把整份 patch 清单带走，连带 MCP 服务器定义与本机路径；现在这些行只在你勾选「MCP 连接器」时才同步。
   **MCP server definitions no longer ride along with plugin sync when “MCP connectors” is off**: plugin sync used to carry the whole patch list, including MCP server definitions and local paths; those lines now sync only when you enable “MCP connectors”.
 
+### 🗑️ 移除 · Removed
+
+- **两个早就不在界面上用的接口正式下线**：快照「置顶」与发布向导「生成条目包」这两条接口此前已从界面移除，只剩代码里没人调用的入口；这次一并删除。已被置顶的旧快照照旧不会被自动清理，只是无法再设置或取消；发布仍从「我的配置」上传与更新，路径没变。
+  **Two endpoints nobody used are gone**: the snapshot “pin” and the publish-wizard “build item package” endpoints had already been removed from the UI and were left unreferenced in code; both are now deleted. Old pinned snapshots are still exempt from automatic cleanup — they simply can no longer be pinned or unpinned, and publishing still goes through “My configs” upload/update unchanged.
+
 ## [0.4.3] - 2026-11-06
 
 > **本版主题**：从别的机器打开内嵌面板不再是死路 —— 请求交给宿主自己判定，真被拒时也会说清原因与出路。

@@ -5,7 +5,7 @@
 
 ## 背景
 
-插件对外暴露 84 条 HTTP 路由（`src/index.ts` 7 条 + `src/routes/*.ts` 77 条；条数以 `tests/route/route-parity.test.ts` 的 `ROUTE_SNAPSHOT` 为准）。改造前每条路由各自写 `methods` 判断、`try/catch` 与来源检查，
+插件对外暴露 82 条 HTTP 路由（`src/index.ts` 7 条 + `src/routes/*.ts` 75 条；条数以 `tests/route/route-parity.test.ts` 的 `ROUTE_SNAPSHOT` 为准）。改造前每条路由各自写 `methods` 判断、`try/catch` 与来源检查，
 于是出现三类历史缺陷：漏方法判断（POST 当 GET 用）、漏 `catch`（异常落到 webserver 的空体 400）、来源检查各写一份且口径不同。
 
 同时有一个容易误判的事实：DSH 的 cookie 认证**不覆盖本插件**。DSH 把 cookie 拒绝挂在 `kind:'prefix', path:'/api'` 的 RPC 承载路由上，

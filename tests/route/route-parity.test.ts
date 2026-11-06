@@ -94,7 +94,6 @@ const ROUTE_SNAPSHOT = [
 
   ['exact', 'POST', '/api/dsh-config-manager/market/browse'],
   ['exact', 'POST', '/api/dsh-config-manager/market/download'],
-  ['exact', 'POST', '/api/dsh-config-manager/market/prepare'],
   ['exact', 'POST', '/api/dsh-config-manager/market/refresh'],
   ['exact', 'GET', '/api/dsh-config-manager/market/status'],
   ['exact', 'POST', '/api/dsh-config-manager/me/delete'],
@@ -125,7 +124,6 @@ const ROUTE_SNAPSHOT = [
   ['exact', 'GET', '/api/dsh-config-manager/snapshots'],
   ['exact', 'POST', '/api/dsh-config-manager/snapshots/delete'],
   ['exact', 'POST', '/api/dsh-config-manager/snapshots/file-diff'],
-  ['exact', 'POST', '/api/dsh-config-manager/snapshots/pin'],
   ['exact', 'GET', '/api/dsh-config-manager/session-export'],
   ['exact', 'GET+POST', '/api/dsh-config-manager/star-prompt'],
   ['exact', 'GET', '/api/dsh-config-manager/status'],
@@ -229,10 +227,10 @@ function declaredRoutes(): string[] {
   return rows.sort();
 }
 
-test('W1 parity：路由清单与预期快照逐条一致（84 条）', () => {
+test('W1 parity：路由清单与预期快照逐条一致（82 条）', () => {
   const expected = ROUTE_SNAPSHOT.map(([kind, methods, routePath]) => row(kind as string, (methods as string).split('+'), routePath as string)).sort();
   const actual = declaredRoutes();
-  assert.equal(expected.length, 84, '快照自身应为 84 条');
+  assert.equal(expected.length, 82, '快照自身应为 82 条');
   assert.deepEqual(actual, expected, 'kit 化/拆组后路由声明集合必须逐条不变');
 });
 
@@ -245,7 +243,7 @@ test('W1 parity 解析器自检：少一条 / 改一条 / 改方法都会被检�
   const renamed = [...actual.slice(1), actual[0]!.replace(/\/[^/]+$/, '/__drifted__')];
   assert.notDeepEqual(renamed, expected, '路径漂移必须被判为不一致');
   // 解析器必须真的解析到 85 条（否则上面的 deepEqual 可能是「两边都空」的假绿）
-  assert.equal(actual.length, 84, `解析到的路由数应为 84，实际 ${actual.length}`);
+  assert.equal(actual.length, 82, `解析到的路由数应为 82，实际 ${actual.length}`);
 });
 
 /** 单份源码里的真实路由声明数（与 declaredRoutes 同一解析口径）。 */
@@ -288,9 +286,9 @@ test('W1 parity：路由计数散文必须与真实声明数一致（routes-F5 �
   const indexSource = sources[0] as { file: string; text: string };
   const indexCount = countDeclarations(indexSource.text);
   const builtCount = actual - indexCount;
-  assert.equal(actual, 84, '真实声明总数应为 84');
+  assert.equal(actual, 82, '真实声明总数应为 82');
   assert.equal(indexCount, 7, 'src/index.ts 保留的声明应为 7');
-  assert.equal(builtCount, 77, 'buildRoutes 拆出的声明应为 77');
+  assert.equal(builtCount, 75, 'buildRoutes 拆出的声明应为 75');
 
   const claims: Array<{ file: string; label: string; stated: number; expected: number }> = [];
   const collect = (file: string, text: string, re: RegExp, label: string, expected: number): void => {

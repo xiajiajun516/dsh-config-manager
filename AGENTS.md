@@ -39,7 +39,7 @@
 ### 架构与路由
 - **双面插件**：host `src/index.ts`（Cordis `name='config-manager'`，前缀 `/api/dsh-config-manager/*`）；web `src/client/`（React，settings.section），经 api 调 host。
 - **宿主路由只经 kit 的 `endpoint()` + `registerRoutes()`**（围栏与方法白名单在注册点统一包装；未经 kit 的路由注册直接抛错）。
-- 路由源 = `src/index.ts`（窗口守卫**钉住的 7 条**）+ `src/routes/*.ts` 其余 77 条（合计 84 条）；源码级守卫必须扫**全部**路由源。
+- 路由源 = `src/index.ts`（窗口守卫**钉住的 7 条**）+ `src/routes/*.ts` 其余 75 条（合计 82 条）；源码级守卫必须扫**全部**路由源。
 - **真实认证边界 = kit 围栏**：回环直接放行；回环之外委托宿主 `connection.requestRejection`（Host/bind 地址 + Origin + dsh web 会话 cookie），拿不到委托（老宿主 / 独立 CLI）退回严格回环。
 - 推论：**不得把 DSH 会话认证单独当唯一判据，也不得写成「插件 API 无认证」**；经代理/隧道暴露仍须在注册点加认证（判据 → `docs/known-issues/known-limits.md` §7）。
 - **新增一条 API** = 组文件里加 `endpoint({ path, methods }, handler)`；组文件不得 import `../index.ts`，共享工具进 `src/routes/route-support.ts`。

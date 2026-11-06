@@ -45,7 +45,6 @@
 | `GET /snapshots` | `src/routes/snapshots.ts:47` | 列出快照（含 unreadable） |
 | `POST /restore` | `src/routes/snapshots.ts:69` | 预览（dryRun）或执行恢复（**注意路径不带 `snapshots/` 前缀**） |
 | `POST /snapshots/delete` | `src/routes/snapshots.ts:222` | 删除快照（被恢复引用则拒绝） |
-| `POST /snapshots/pin` | `src/routes/snapshots.ts:266` | 置顶保护，避免被自动清理 |
 | `POST /snapshots/file-diff` | `src/routes/snapshots.ts:293` | 单快照与当前盘面的逐文件差异（只读，durable 引用） |
 | `GET /backup-files` | `src/routes/backup.ts:259` | 列出导出目录里的备份 |
 | `POST /backup-files/delete` | `src/routes/backup.ts:268` | 删除指定备份（只接受纯文件名） |

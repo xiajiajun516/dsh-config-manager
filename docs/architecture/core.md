@@ -41,13 +41,13 @@ schema/ ──► 无运行时依赖（纯类型 + 常量）
 
 ## 3. 路由层：一个入口、三道统一护栏
 
-- 路由源分两处：`src/index.ts` 保留 **7** 条（被窗口/生命周期守卫钉住），`src/routes/*.ts` 拆出 **77** 条；合计 **84**。
+- 路由源分两处：`src/index.ts` 保留 **7** 条（被窗口/生命周期守卫钉住），`src/routes/*.ts` 拆出 **75** 条；合计 **82**。
   计数由 `tests/route/route-fence.test.ts` 与 `tests/route/route-parity.test.ts` 双向钉住（后者逐条比对快照，少一条/改方法都会红）。
 - 装配：`src/routes/index.ts` 的 `buildRoutes(env)` 聚合各域组文件（一个域一个文件；组文件清单即 `src/routes/` 下声明 `endpoint()` 的模块）；依赖经 `makeRouteEnv()` 显式传入（类型从实现推断，见 `src/routes/context.ts`）。
 - **唯一声明入口 `src/routes/kit.ts`**：`endpoint({path,methods}, handler)` 在注册点统一包装 ① 访问面围栏（回环直接放行；其余委托宿主信任面，被拒 → 401/403 + 机器码，见 `src/routes/request-trust.ts`）
   ② 方法白名单（→ 405）③ 顶层 try/catch（→ 统一 JSON 错误，`writeRouteError`）。`registerRoutes()` 对未经 kit 的裸路由直接抛错。
 - **认证边界就是这道围栏**：回环请求不做凭据校验；回环之外的 Host/bind 地址、Origin 同源与 dsh web 会话 cookie 全部交给宿主 `connection.requestRejection`（拿不到委托 —— 老宿主 / 独立 CLI —— 退回严格回环）。DSH 的 cookie 拒绝只挂在 `kind:'prefix', path:'/api'` 的 RPC 承载路由上，而 exact 表先命中
-  ⇒ 本机任意非浏览器进程无 token 即可调用全部 84 条。经代理/隧道暴露时必须在这里补认证。
+  ⇒ 本机任意非浏览器进程无 token 即可调用全部 82 条。经代理/隧道暴露时必须在这里补认证。
 - 请求体上限 4 MiB（`readJsonBody`），上传类走独立流式写盘。
 
 ## 4. 领域模块与职责边界
