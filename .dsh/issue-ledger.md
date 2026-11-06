@@ -6,7 +6,7 @@
 
 | issue | 症状 | 状态 | 修复提交 | 版本 | 更新 |
 |---|---|---|---|---|---|
-| 126 | 宿主以非回环地址（`--host 10.0.0.10`）提供服务时内嵌面板全 403 `forbidden: loopback-only`：kit 的 `isLoopbackRequest()` 要求 socket 回环 + Host 回环字面量，比宿主 /api 的 Host/trustedHosts + 浏览器会话认证更严 ⇒ 首页 5 路只读请求（backup-files/snapshots/backup-schedule/history/sync-status）全降级、活动记录报读取失败（修复：kit 围栏改为「回环原样放行 ∪ 委托宿主 `connection.requestRejection`」，401/403 给不同机器码；首页把访问方式错误翻成可执行的下一步，不再给无效重试；自审加固：`some` 判定、委托按实例清理、读服务抛错 fail-closed、401 文案、文档/ADR 口径） | awaiting-release | db60451 | — | 2026-11-06 |
+| 126 | 宿主以非回环地址（`--host 10.0.0.10`）提供服务时内嵌面板全 403 `forbidden: loopback-only`：kit 的 `isLoopbackRequest()` 要求 socket 回环 + Host 回环字面量，比宿主 /api 的 Host/trustedHosts + 浏览器会话认证更严 ⇒ 首页 5 路只读请求（backup-files/snapshots/backup-schedule/history/sync-status）全降级、活动记录报读取失败（修复：kit 围栏改为「回环原样放行 ∪ 委托宿主 `connection.requestRejection`」，401/403 给不同机器码；首页把访问方式错误翻成可执行的下一步，不再给无效重试；自审加固：`some` 判定、委托按实例清理、读服务抛错 fail-closed、401 文案、文档/ADR 口径） | done | db60451 | 0.4.3 | 2026-11-06 |
 | 117 | 「使用 GitHub 登录」授权是整个账号，无法收窄到单仓库（真收窄被 #118 判 NOT_PLANNED；v0.1.85 只发了授权范围说明 + 细粒度 PAT 引导，故仍 open 等报告者接受说明） | open | 62049df | v0.1.85 | 2026-10-28 |
 | 116 | 新建空仓库第一次一键同步就报「同步失败：远端无快照」 | done | 62049df | v0.1.85 | 2026-10-27 |
 | 115 | 细粒度 PAT 没勾 Contents，同步只甩 git 原始 403；报告者已确认修复生效，另提「同步页两个按钮分不清该按哪个」 | done | 62049df | v0.2.0 | 2026-10-29 |
@@ -17,6 +17,9 @@
 | 122 | 远端仓库远大于同步内容时 git 通道卡死：全量 clone/fetch 拉完整对象图（1.8 GB 仓库 / 6 MB 同步内容），超时只杀 git.exe 使 git-remote-https/index-pack 成孤儿继续写 tmp_pack_*（累积 7.3 GB），UI 永久停在「正在检查远端变更…」 | done | aafc93f | v0.2.4 | 2026-11-01 |
 | 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（修复：helper 失败时改用 env 注入 `Authorization: basic` 重试一次，仍失败则点名平台原因） | done | 73b6fe4 | v0.2.2 | 2026-10-30 |
 
+- `2026-11-06` **发版 v0.4.3（0.4.2 → 0.4.3，PATCH：一条用户可见修复）**：发版提交 `daeabac`（`chore(release): v0.4.3`，含 §9 七项判断）→ tag `v0.4.3`；`main` 推到 `origin/main`（`b56d1bc..daeabac`）。`publish` 流水线 `42283193087` success（2m7s：install → typecheck → typecheck:tests → test 5416 pass / fail 0 / skip 2 → build → bundle 自包含 → 三项守卫 → Tag guard → pack → 亮点段门禁 → npm publish(OIDC) → GitHub Release）。Release `v0.4.3` 已建（双语亮点在位）；registry 侧 `dsh-config-manager@0.4.3` 可查、`dist-tags.latest = 0.4.3`（发布后约 4 分钟可见）。
+- **本版回 1 条 issue**：`#126`（内嵌面板跨机访问全 403）已回版本号评论 `6694146873` 并加 `fixed` 标签，清单行转 `done`。
+- 发版前修掉一处校验阶梯红灯：`tests/route/request-trust.test.ts` 两处 `warnings[0]` 在 `tsconfig.tests.json` 的 `noUncheckedIndexedAccess` 下是 `string | undefined`，`typecheck:tests` 失败（本地门禁先跑出来的）；改成先取再断言。
 - `2026-11-05` **发版 v0.4.2（0.4.1 → 0.4.2，PATCH：两条用户可见修复）**：发版提交 `07015f2`（`chore(release): v0.4.2`，含 §9 七项判断）→ tag `v0.4.2`；
   `main` 推到 `origin/main`（`8a7fafb..074a8d3f` 区间内的 `07015f2` → `4418f14` → `74a8d3f`）。`publish` 流水线 `41932247409` success（typecheck → typecheck:tests → test 5404 pass / fail 0 / skip 2 → build → bundle 自包含 → AGENTS 预算 → 文档路径 → 文档版本 → Tag guard → pack → 亮点段门禁 → npm publish(OIDC) → GitHub Release），`main` 上的 CI `41932243014` success（含 windows-latest）。
   Release `v0.4.2` 已建（双语亮点在位）；registry 侧 `dsh-config-manager@0.4.2` 可查、`dist-tags.latest = 0.4.2`（发布后约 7 分钟可见）。
