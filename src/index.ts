@@ -39,9 +39,8 @@ import { randomBytes } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
-import path from 'node:path'
+import path, { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { promisify } from 'node:util'
 
@@ -58,14 +57,13 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { endpoint, registerRoutes, requireJsonObject, writeJson, readJsonBody, errorMessage, writeMutationError } from './routes/kit.ts'
 import { installHostRequestTrust } from './routes/request-trust.ts'
 import { buildRoutes } from './routes/index.ts'
-import type { RecoveryOrchestrator } from './core/recovery-orchestrator.ts'
-import type { Portability } from './core/types.ts'
+import { createAgentToolDeps } from './routes/model-tools-deps.ts'
 import { Exporter, FileSnapshotStore, Importer, verifySnapshot } from './core/index.ts'
 import { DshProfileLauncher, DshProfileManager, DshProfileRuntimeRegistry } from './profiles/index.ts'
 import { cleanupCaches } from './core/cache-cleaner.ts'
 // tech-debt #23：宿主调度器下沉（纯调度语义可单测，index.ts 只留一次装配）。
 import { createCacheCleanupScheduler } from './core/host-schedulers/cache-cleanup.ts'
-import { createHostLifecycle } from './core/host-schedulers/lifecycle-hooks.ts'
+import { createHostLifecycle, type HostLifecycle, type StartupVerdict } from './core/host-schedulers/lifecycle-hooks.ts'
 import {
   createMarketCacheLayout,
   marketItemCached,
@@ -73,7 +71,6 @@ import {
   readMarketCacheIndexText,
   writeMarketItemCache,
 } from './core/host-schedulers/market-cache.ts'
-import type { HostLifecycle, StartupVerdict } from './core/host-schedulers/lifecycle-hooks.ts'
 import { isValidSnapshotId, planRestore } from './core/restore.ts'
 import { rollback as performRollback } from './core/rollback.ts'
 // Phase 1 P0-1/P0-2：配置生命周期（自动快照 / 撤销 / 重做）与 P0-5 崩溃归因。
@@ -81,53 +78,43 @@ import { rollback as performRollback } from './core/rollback.ts'
 import { BOOT_STATE_DIR_NAME, LEGACY_BOOT_STATE_DIR_NAME, adoptLegacyBootState, adviceFor, beginBoot, computeBootAlert, listCandidateLogs, markBootOk, readBootState, readCrashLogTail, writeBootState } from './core/crash-report.ts'
 // Phase 1 P0-3：启动救援模式（备份 patch/package.json → 写最小 patch → 中和 bundles）
 import { enterRescueMode, exitRescueMode, rescueAppliedInThisProcess, rescueModeStatus } from './core/boot-rescue.ts'
-import { auditBootSafety } from './core/boot-safety.ts'
-import type { BootSafetyReport } from './core/boot-safety.ts'
-import { createRecoveryOrchestrator, type RecoveryExecutorFns } from './core/recovery-orchestrator.ts'
+import { auditBootSafety, type BootSafetyReport } from './core/boot-safety.ts'
+import { createRecoveryOrchestrator, type RecoveryExecutorFns, type RecoveryOrchestrator } from './core/recovery-orchestrator.ts'
 import { JournalStore } from './core/journal.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
-import { msgOf, zhMsg } from './core/messages.ts'
+import { msgOf, zhMsg, type MsgFunc } from './core/messages.ts'
 import { createExitLockReleaser, reclaimStaleLockAtStartup } from './core/env-lock-lifecycle.ts'
 import { engineMsg, getEngineLocale, setEngineLanguageSource, setEngineLocale } from './core/engine-locale.ts'
-import { RollbackAutoTracker, RollbackPointEngine, ROLLBACK_POINTS_DIR_NAME, rollbackSessionBindingOf, rollbackTrackedEventOf } from './core/rollback-point.ts'
+import { RollbackAutoTracker, RollbackPointEngine, ROLLBACK_POINTS_DIR_NAME, rollbackSessionBindingOf, rollbackTrackedEventOf, type RollbackForkCarrier, type RollbackRewindResult } from './core/rollback-point.ts'
 import { ROLLBACK_ATTRIBUTION_FILE_NAME, RollbackWriteAttribution } from './core/rollback-attribution.ts'
 import { ROLLBACK_ACTIVITY_FILE_NAME, RollbackSessionActivity } from './core/rollback-activity.ts'
 import { isRollbackEnabled, onRollbackEnabledChange, setRollbackEnabled } from './core/rollback-gate.ts'
-import type { RollbackForkCarrier, RollbackRewindResult } from './core/rollback-point.ts'
 // t3：宿主斜杠命令 /rollback（与 HTTP 路由同一道写入门；命令服务惰取，未组合时安静跳过）。
-import { agentSessionFactsOf, registerRollbackCommand } from './core/command-rollback.ts'
-import type { CommandServiceLike, RollbackCommandHost } from './core/command-rollback.ts'
-import type { MsgFunc } from './core/messages.ts'
+import { agentSessionFactsOf, registerRollbackCommand, type CommandServiceLike, type RollbackCommandHost } from './core/command-rollback.ts'
 import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, readInstalledVersion, reconcileBundlesAfterInstall, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
-import type { ConfigAdapter, CredentialsFacade, ExportUnit, FileSystemFacade, HostContext, ImportDecisions, ImportPlan, NamedNamespaceInfo, NamespaceInfo, PatchFileFacade, PluginInfo, PluginsFacade, SessionMoveResult, SessionParentRelation, SessionRewriteResult, SessionStoreFacade, SettingsFacade, SkillDefinitionView, SkillStoreFacade, SkillSummaryView, WorkspaceFacade } from './core/types.ts'
-import { ImportUserSkippedError } from './core/types.ts'
+import { ImportUserSkippedError, type ConfigAdapter, type CredentialsFacade, type ExportUnit, type FileSystemFacade, type HostContext, type ImportDecisions, type ImportPlan, type NamedNamespaceInfo, type NamespaceInfo, type PatchFileFacade, type PluginInfo, type PluginsFacade, type Portability, type SecretScanner, type SessionFormatDisposition, type SessionMoveResult, type SessionParentRelation, type SessionRewriteResult, type SessionStoreFacade, type SettingsFacade, type SkillDefinitionView, type SkillStoreFacade, type SkillSummaryView, type WorkspaceFacade } from './core/types.ts'
 import { PLUGIN_NPM_PACKAGE } from './core/update-check.ts'
-import { planSelfUpdate, runSelfUpdate } from './core/self-update.ts'
-import type { SelfUpdateOutcome } from './core/self-update.ts'
+import { planSelfUpdate, runSelfUpdate, type SelfUpdateOutcome } from './core/self-update.ts'
 import { createAdapters } from './adapters/index.ts'
 import { isPatchLayerRel, profilePatchRel, readEffectivePatchLines, USER_PATCH_FILE } from './core/patch-layers.ts'
 import { createLocalPluginPackHook } from './core/local-plugin-host.ts'
 import { ENCRYPTED_CONTAINER_CODE, createEncryptionProvider, readContainerKind, encryptArchive } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
-import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, readSessionMeta, readSessionMetaWithTitles, subagentParentMap } from './core/session-meta.ts'
-import type { SessionMetaIndex } from './core/session-meta.ts'
+import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, readSessionMeta, readSessionMetaWithTitles, subagentParentMap, type SessionMetaIndex } from './core/session-meta.ts'
 import { projectKeyOf, sessionIdKey } from './core/session-select.ts'
 import { PROJECT_KEY_RE, readLogCwdFromBytes, rewriteSessionLogDir } from './utils/session-log.ts'
 import { probeSessionFormats, resolveSessionFormatVersion } from './utils/session-format.ts'
 import { describePatchYamlError, dumpPatchDocument, loadPatchDocument } from './utils/patch-yaml.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
 import { isENOENT } from './utils/guards.ts'
-import { EnvironmentLockManager, runWithMutationLock, type MutationLockContext } from './utils/env-lock.ts'
+import { EnvironmentLockManager, runWithMutationLock, type MutationLockContext, type MutationLockPort } from './utils/env-lock.ts'
 import { activeProxySummary } from './utils/proxy.ts'
-import { listRecursiveFollowingLinks } from './utils/recursive-walk.ts'
+import { listRecursiveFollowingLinks, type RecursiveListing } from './utils/recursive-walk.ts'
 import { Phase3Recovery, mapLockStateForStartup } from './core/phase3-host.ts'
 import type { JournalRunContext } from './core/phase3-host.ts'
 import { classifyStartup, FAIL_CLOSED_STARTUP, resolveStartupSafeMode } from './core/startup-barrier.ts'
-import type { MutationLockPort } from './utils/env-lock.ts'
-import type { RecursiveListing } from './utils/recursive-walk.ts'
-import { GitTransport } from './sync/git/git-transport.ts'
-import type { GitWorkDirFacts } from './sync/git/git-transport.ts'
+import { GitTransport, type GitWorkDirFacts } from './sync/git/git-transport.ts'
 import { WebDavTransport } from './sync/webdav/webdav-transport.ts'
 import { S3Transport } from './sync/s3/s3-transport.ts'
 import { GistTransport } from './sync/gist/gist-transport.ts'
@@ -152,7 +139,6 @@ import {
   sessionFormatAbortResponse,
   type SessionFormatAbortBody,
 } from './routes/session-format.ts'
-import type { SessionFormatDisposition } from './core/types.ts'
 import type { SyncConfig, SyncTransportType } from './sync/sync-config.ts'
 import { createPrepareSync } from './sync/config-issue-reporting.ts'
 import { AUTO_SYNC_OPT_IN_SECTIONS, defaultSyncSelection, effectiveSections, OPT_IN_SYNC_SECTIONS, readAllSyncSelections, readAllSyncSelectionsSync, readSyncSelection } from './sync/sync-selection.ts'
@@ -167,9 +153,7 @@ import { MyRepoService } from './market/my-repo.ts'
 import { createGitFileWriter } from './market/git-file-writer.ts'
 import { parseGitHubRepoUrl } from './market/repo-url.ts'
 import { StarCache } from './market/star-cache.ts'
-import { createConfiguredSecretScanner } from './security/secret-scanner.ts'
-import type { ConfiguredSecretPatterns } from './security/secret-scanner.ts'
-import type { SecretScanner } from './core/types.ts'
+import { createConfiguredSecretScanner, type ConfiguredSecretPatterns } from './security/secret-scanner.ts'
 import { createTtlAsyncCache } from './utils/ttl-cache.ts'
 import { isFileSection, SECTION_IDS } from './schema/config.ts'
 import { stringifyJsonSafe } from './utils/json.ts'
@@ -2336,7 +2320,14 @@ async function sessionHealthKnownIds(host: HostContext): Promise<ReadonlySet<str
 }
 
 /** Build the /api/dsh-config-manager route family. */
-function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler; makeSyncEngine: (cfg: SyncConfig) => SyncEngine; profileRuntime: DshProfileRuntimeRegistry } {
+function makeRoutes(deps: RoutesDeps): {
+  routes: WebRoute[]
+  scheduler: AutoSyncScheduler
+  makeSyncEngine: (cfg: SyncConfig, engineOpts?: { optInSections?: readonly SectionId[] }) => SyncEngine
+  profileRuntime: DshProfileRuntimeRegistry
+  /** agent 工具面（D3/D5/D6）：装配见 routes/model-tools-deps.ts，与路由同一批依赖来源。 */
+  agentToolDeps: ReturnType<typeof createAgentToolDeps>
+} {
   const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, dataDir, credentials, githubClientId, githubClientSecret, backupScheduler, history } = deps
   const roots = [exportsDir, tmpDir]
   /**
@@ -3578,7 +3569,18 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     }),
     ...buildRoutes(routeEnv),
   ]
-  return { routes: routesList, scheduler, makeSyncEngine, profileRuntime: routeEnv.profileRuntime }
+  return {
+    routes: routesList,
+    scheduler,
+    makeSyncEngine,
+    profileRuntime: routeEnv.profileRuntime,
+    agentToolDeps: createAgentToolDeps({
+      host, adapters, exportsDir, snapshotsDir, syncDir, makeSyncEngine,
+      resolveSyncPassword, syncPasswordRef, selectionOptInSections, makeImporter, roots,
+      ...(deps.scanner === undefined ? {} : { scanner: deps.scanner }),
+      exporterVersion: PLUGIN_VERSION,
+    }),
+  }
 }
 
 /* ------------------------------------------------------------------ apply */
@@ -3857,7 +3859,12 @@ export function apply(ctx: Context, config?: Config): void {
   const historyStore = new MigrationStore({ dir: historyDir })
   // 本实例的 web 端口在 webServer 就绪前未知（心跳先报 null，就绪后再报一次）。
   const webPort: { value: number | null } = { value: null }
-  const { routes, scheduler, makeSyncEngine, profileRuntime } = makeRoutes({
+  const {
+    routes,
+    scheduler,
+    profileRuntime,
+    agentToolDeps,
+  } = makeRoutes({
     host,
     adapters,
     exportsDir,
@@ -3879,19 +3886,9 @@ export function apply(ctx: Context, config?: Config): void {
     backupScheduler,
     history: historyStore,
   })
-  // Agent 可调用的模型工具（P0-1）：复用 src/core 引擎与同一 makeSyncEngine 来源。
-  // 不依赖 webServer：host 侧能力在无 Web 部署时仍可用；tools 服务未组合时内部守卫跳过。
-  registerModelTools(ctx, {
-    host,
-    adapters,
-    exportsDir,
-    snapshotsDir,
-    syncDir,
-    makeSyncEngine,
-    exporterVersion: PLUGIN_VERSION,
-    // M1：与 HTTP 导出路由同一个 scanner（G-09 文件类分区凭据告警在两条路径上一致）。
-    scanner: secretScanner,
-  })
+  // 模型工具（P0-1）：与 HTTP 路由同一批依赖（装配见 routes/model-tools-deps.ts）；
+  // 不依赖 webServer，tools 服务未组合时内部守卫跳过。
+  registerModelTools(ctx, agentToolDeps)
   // P1-B：backupScheduler 与 autosync scheduler 都不在构造期启动 —— 由启动分类结论驱动（仅 NORMAL）。
   // 启停顺序、卸载清理、退出兜底释放环境锁、实例心跳统一在 lifecycle-hooks 里装配（可单测）。
   const lifecycle = createHostLifecycle({

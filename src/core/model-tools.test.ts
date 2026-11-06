@@ -28,6 +28,7 @@ import { EnvironmentLockUnavailableError } from '../utils/env-lock.ts'
 import type { MutationLockPort } from '../utils/env-lock.ts'
 import { createSecretScanner } from '../security/secret-scanner.ts'
 import type { SecretScanner } from './types.ts'
+import type { SectionId } from '../schema/types.ts'
 
 /** 内存 SyncTransport（spy：记录方法调用，供断言「pull 不写远端」）。 */
 class MemSyncTransport implements SyncTransport {
@@ -77,7 +78,8 @@ async function makeDeps(opts: {
   const adapters = createAdapters({ namespaces: NS })
   const syncDir = path.join(tmp, 'sync')
   const transport = opts.transport ?? new MemSyncTransport()
-  const makeSyncEngine = (cfg: SyncConfig): SyncEngine => {
+  // 第二参 engineOpts：agent 侧只按 'auto' 档放行分区（D5），这里必须透传给引擎构造。
+  const makeSyncEngine = (cfg: SyncConfig, engineOpts?: { optInSections?: readonly SectionId[] }): SyncEngine => {
     const importer = new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() })
     return new SyncEngine({
       ctx,
@@ -87,6 +89,7 @@ async function makeDeps(opts: {
       zipDir: path.join(tmp, 'tmp'),
       adapters,
       importer,
+      ...(engineOpts?.optInSections === undefined ? {} : { optInSections: engineOpts.optInSections }),
       now: () => new Date('2026-08-16T12:00:00.000Z'),
     })
   }
@@ -98,6 +101,10 @@ async function makeDeps(opts: {
       snapshotsDir: path.join(tmp, 'snapshots'),
       syncDir,
       makeSyncEngine,
+      // D5/D6 真实装配口径：受控根 = 本用例 tmp、导入器与路由同一工厂、agent 只放行 'auto' 档分区。
+      roots: [tmp],
+      makeImporter: () => new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
+      optInSections: (): readonly SectionId[] => ['settings'],
       exporterVersion: '0.1.45',
       // M1：缺省不传 scanner（保持旧行为：Exporter 落回 defaultSecretScanner，无 scanText）
       ...(opts.scanner === undefined ? {} : { scanner: opts.scanner }),
@@ -106,6 +113,15 @@ async function makeDeps(opts: {
     transport,
     ctx,
   }
+}
+
+/** 建一个空快照目录（restore 用例共用；entries 空 = 计划里没有写/删动作）。 */
+async function seedEmptySnapshot(snapshotsDir: string, id = 'snap1'): Promise<void> {
+  await fs.mkdir(path.join(snapshotsDir, id), { recursive: true })
+  await fs.writeFile(
+    path.join(snapshotsDir, id, 'snapshot.json'),
+    JSON.stringify({ id, createdAt: '2026-08-16T12:00:00.000Z', sourceZip: 'x.zip', entries: [], beforePlugins: [], hostFileBackups: [] }),
+  )
 }
 
 test('config_backup：导出真实 ZIP 到 exports 目录，返回非敏感摘要（无凭据值）', async () => {
@@ -201,13 +217,17 @@ test('M1 源码守卫：index.ts 把同一个 scanner 实例注入 HTTP 导出�
   const routesBody = source.slice(routesStart, routesEnd)
   assert.ok(routesBody.includes(`scanner: ${name},`), `makeRoutes 必须注入同一个 scanner 实例（scanner: ${name},）`)
 
-  // 4) config_backup 模型工具（registerModelTools 注入 ModelToolsDeps.scanner）
-  const toolsStart = source.indexOf('registerModelTools(ctx, {')
-  assert.ok(toolsStart > 0, '应能找到 registerModelTools 调用')
-  const toolsEnd = source.indexOf('\n  })', toolsStart)
-  assert.ok(toolsEnd > toolsStart, '应能找到 registerModelTools 调用结尾')
+  // 4) config_backup 模型工具：装配已下沉到 routes/model-tools-deps.ts，
+  //    index.ts 只保留「同一实例 → agentToolDeps → registerModelTools」这条链。
+  assert.ok(source.includes('registerModelTools(ctx, agentToolDeps)'), 'index.ts 必须把 agentToolDeps 交给 registerModelTools')
+  const toolsStart = source.indexOf('agentToolDeps: createAgentToolDeps({')
+  assert.ok(toolsStart > 0, '应能找到 agentToolDeps 装配')
+  const toolsEnd = source.indexOf('\n    }),', toolsStart)
+  assert.ok(toolsEnd > toolsStart, '应能找到 agentToolDeps 装配结尾')
   const toolsBody = source.slice(toolsStart, toolsEnd)
-  assert.ok(toolsBody.includes(`scanner: ${name},`), `registerModelTools 必须注入同一个 scanner 实例（scanner: ${name},）`)
+  assert.ok(toolsBody.includes('scanner: deps.scanner'), `agentToolDeps 必须注入同一个 scanner 实例（scanner: deps.scanner），实际：${toolsBody}`)
+  const wiring = (await fs.readFile(new URL('../../src/routes/model-tools-deps.ts', import.meta.url), 'utf8')).replace(/\r\n/g, '\n')
+  assert.ok(wiring.includes('scanner: input.scanner'), 'model-tools-deps.ts 必须把 input.scanner 交给 ModelToolsDeps（否则注入了却没接上）')
 
   // 5) 路由内部确实把它交给 Exporter（防「注入了 deps 却没接上」）
   const exportRouteStart = source.indexOf('path: API.export,')
@@ -285,13 +305,19 @@ test('config_restore：confirm:false 只预览（零写入）；confirm:true 执
     await ctx.fs.writeFile('settings.yaml', Buffer.from('foo: bar', 'utf8'))
 
     const tools = createModelTools(deps)
-    const plan = (await tools.restore({ snapshotId: 'snap1', confirm: false })) as { dryRun: boolean; actions: { kind: string }[] }
+    const plan = (await tools.restore({ snapshotId: 'snap1', confirm: false })) as {
+      dryRun: boolean; planId: string; actions: { kind: string }[]
+    }
     assert.equal(plan.dryRun, true)
     const WRITE_KINDS = new Set(['hostFileRestore', 'hostFileRemove', 'pluginRemove', 'fileRestore', 'fileRemove'])
     assert.ok(plan.actions.every((a) => !WRITE_KINDS.has(a.kind)), '预览无任何写/删/卸载动作（只有 skip）')
+    assert.ok(plan.planId.length > 0, 'D2：预览必须回 planId（执行侧凭它比对）')
     assert.ok(await ctx.fs.exists('settings.yaml'), '预览不写不删')
 
-    const exec = (await tools.restore({ snapshotId: 'snap1', confirm: true })) as { dryRun: boolean; restored: string[] }
+    // D2：执行必须带回预览给的 planId（参数契约见 config_restore 的 planId）。
+    const exec = (await tools.restore({
+      snapshotId: 'snap1', confirm: true, planId: plan.planId,
+    })) as { dryRun: boolean; restored: string[] }
     assert.equal(exec.dryRun, false)
     assert.deepEqual(exec.restored, [])
   } finally {
@@ -357,9 +383,183 @@ test('config_sync_pull：空远端 → 零写入空差异', async () => {
   }
 })
 
+/* ---------------- D2：恢复预览-执行同指纹（GUI 409 的模型面等价物） ---------------- */
+
+test('config_restore：confirm:true 缺 planId → plan-required（零写入）', async () => {
+  const { deps, tmp, ctx } = await makeDeps()
+  try {
+    await seedEmptySnapshot(deps.snapshotsDir)
+    await ctx.fs.writeFile('settings.yaml', Buffer.from('foo: bar', 'utf8'))
+    const tools = createModelTools(deps)
+    const out = (await tools.restore({ snapshotId: 'snap1', confirm: true })) as {
+      ok: false; code: string; retryable: boolean; nextAction: string
+    }
+    assert.equal(out.ok, false)
+    assert.equal(out.code, 'plan-required')
+    assert.equal(out.retryable, true, '补一次预览就能继续 → 可重试')
+    assert.ok(out.nextAction.length > 0, '必须告诉模型下一步做什么')
+    assert.ok(await ctx.fs.exists('settings.yaml'), '拒绝后零写入')
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
+test('config_restore：planId 与当前盘面不符 → plan-changed（零写入）', async () => {
+  const { deps, tmp, ctx } = await makeDeps()
+  try {
+    await seedEmptySnapshot(deps.snapshotsDir)
+    await ctx.fs.writeFile('settings.yaml', Buffer.from('foo: bar', 'utf8'))
+    const tools = createModelTools(deps)
+    // 伪造指纹（等价于「预览后被别的设备/页面改过盘面」）
+    const out = (await tools.restore({ snapshotId: 'snap1', confirm: true, planId: 'deadbeef' })) as {
+      ok: false; code: string
+    }
+    assert.equal(out.code, 'plan-changed')
+    assert.ok(await ctx.fs.exists('settings.yaml'), '拒绝后零写入')
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
+/* ---------------- D3/D4：同步密码槽优先、禁止 agent 触发凭据上行 ---------------- */
+
+test('config_sync_push：encrypt 且无已存密码槽、无入参 → sync-password-missing（不写远端）', async () => {
+  const { deps, tmp, transport } = await makeDeps()
+  try {
+    await writeSyncConfig(deps.syncDir, { schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://github.com/u/r.git' } })
+    const tools = createModelTools(deps)
+    const out = (await tools.syncPush({ channel: 'git', encrypt: true })) as { ok: false; code: string; message: string }
+    assert.equal(out.ok, false)
+    assert.equal(out.code, 'sync-password-missing')
+    assert.ok(out.message.includes('git'), '错误要指明通道，模型才知道去配哪一条')
+    assert.ok(!transport.calls.includes('upload'), '拿不到密码就绝不发远端')
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
+test('config_sync_push：加密密码优先取已存凭据槽（passwordSource=stored），入参不再是常态来源', async () => {
+  const { deps, tmp, transport } = await makeDeps()
+  try {
+    await writeSyncConfig(deps.syncDir, { schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://github.com/u/r.git' } })
+    const asked: string[] = []
+    const depsWithSlot: ModelToolsDeps = {
+      ...deps,
+      syncPassword: async (kind, channel) => { asked.push(kind + ':' + channel); return 'slot-secret' },
+    }
+    const tools = createModelTools(depsWithSlot)
+    const out = (await tools.syncPush({ channel: 'git', encrypt: true, password: 'typed-into-chat' })) as {
+      ok: boolean; passwordSource?: string
+    }
+    assert.deepEqual(asked, ['ENCRYPT:git'], '只问加密槽，不碰解密槽')
+    assert.equal(out.passwordSource, 'stored', '槽位优先于入参（入参会进会话历史）')
+    assert.equal(out.ok, true)
+    assert.ok(transport.calls.includes('upload'))
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
+test('config_sync_push：includeSecrets:true → include-secrets-forbidden（不写远端，不构造引擎）', async () => {
+  const { deps, tmp, transport } = await makeDeps()
+  try {
+    const tools = createModelTools(deps)
+    const out = (await tools.syncPush({ channel: 'git', includeSecrets: true })) as { ok: false; code: string; retryable: boolean }
+    assert.equal(out.code, 'include-secrets-forbidden')
+    assert.equal(out.retryable, false, '这是硬边界，重试没有意义')
+    assert.deepEqual(transport.calls, [], '连远端探测都不做')
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
+/* ---------------- D5：三方合并预览-落地（句柄 + 锁内重比对） ---------------- */
+
+test('config_sync_preview / config_sync_apply：planId 句柄贯通；未知句柄 → plan-expired', async () => {
+  const { deps, tmp, transport } = await makeDeps()
+  try {
+    await writeSyncConfig(deps.syncDir, { schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://github.com/u/r.git' } })
+    const tools = createModelTools(deps)
+    await tools.syncPush({ channel: 'git' })
+    assert.ok(transport.calls.includes('upload'))
+
+    const preview = (await tools.syncPreview({ channel: 'git' })) as {
+      ok: boolean; planId: string; preview: { sections: { id: string; decision: string }[] }
+    }
+    assert.equal(preview.ok, true)
+    assert.match(preview.planId, /^[0-9a-f]{64}$/, 'planId = 预览指纹')
+    assert.ok(preview.preview.sections.length > 0, '预览要给出分区裁决清单')
+    // 不下发三侧预览文本（GUI 逐键对比用的分段文本，体积大且含配置内容）
+    const serialized = JSON.stringify(preview)
+    assert.ok(!serialized.includes('localPreview'), '不下发 localPreview')
+    assert.ok(!serialized.includes('remotePreview'), '不下发 remotePreview')
+
+    const unknown = (await tools.syncApply({ planId: 'unknown', resolutions: [] })) as { ok: false; code: string }
+    assert.equal(unknown.code, 'plan-expired')
+
+    const badAction = (await tools.syncApply({ planId: preview.planId, resolutions: [{ id: 'settings', action: 'nuke' }] })) as {
+      ok: false; code: string
+    }
+    assert.equal(badAction.code, 'invalid-resolution')
+
+    const applied = (await tools.syncApply({ planId: preview.planId, resolutions: [] })) as {
+      ok: boolean; applied: string[]; pendingConflicts: string[]
+    }
+    assert.equal(applied.ok, true, '无裁决项 = 全部保持现状（探针实测 9 分区全 skip）')
+    assert.deepEqual(applied.applied, [])
+    assert.deepEqual(applied.pendingConflicts, [])
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
+/* ---------------- D6：导入计划 + 执行（受控路径 + 句柄） ---------------- */
+
+test('config_import_plan / config_import_apply：受控 zip → planId → 执行；非受控路径与缺 confirm 拒绝', async () => {
+  const { deps, tmp } = await makeDeps()
+  try {
+    const tools = createModelTools(deps)
+    const backup = (await tools.backup({})) as { ok: boolean; zip: string }
+    assert.equal(backup.ok, true)
+    const zipPath = path.join(deps.exportsDir, backup.zip)
+
+    const planned = (await tools.importPlan({ zipPath })) as {
+      ok: boolean; planId: string; plan: { counts: Record<string, number>; items: { id: string }[] }
+    }
+    assert.equal(planned.ok, true)
+    assert.match(planned.planId, /^[0-9a-f]{64}$/)
+    assert.ok(Object.keys(planned.plan.counts).length > 0, '计划要给出各 kind 的计数')
+
+    const noConfirm = (await tools.importApply({ planId: planned.planId })) as { ok: false; code: string }
+    assert.equal(noConfirm.code, 'confirm-required')
+
+    const applied = (await tools.importApply({ planId: planned.planId, confirm: true })) as {
+      ok: boolean; executedCount: number
+    }
+    assert.equal(applied.ok, true)
+    assert.ok(applied.executedCount >= 0)
+
+    // 句柄已消费：同一 planId 不能重放
+    const replay = (await tools.importApply({ planId: planned.planId, confirm: true })) as { ok: false; code: string }
+    assert.equal(replay.code, 'plan-expired')
+
+    // 受控根外的归档一律拒绝（roots 是宿主张有的可写根，不是模型自选路径）
+    const outside = path.join(os.tmpdir(), 'not-controlled.zip')
+    const denied = (await tools.importPlan({ zipPath: outside })) as { ok: false; code: string; message: string }
+    assert.equal(denied.code, 'path-not-controlled')
+    assert.ok(denied.message.includes(outside), '错误要带上被拒路径')
+
+    const noRoots = createModelTools({ ...deps, roots: [] })
+    const denied2 = (await noRoots.importPlan({ zipPath })) as { ok: false; code: string }
+    assert.equal(denied2.code, 'path-not-controlled', '未装配 roots = 一律拒绝（fail-closed）')
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
 // ------------------------------------------------ 注册层（registerModelTools）
 
-test('registerModelTools：tools 服务存在 → 注册 5 个工具（走 ctx.get 结果，属性访问守卫不崩）', async () => {
+test('registerModelTools：tools 服务存在 → 注册 9 个工具（走 ctx.get 结果，属性访问守卫不崩）', async () => {
   const { deps, tmp } = await makeDeps()
   try {
     const names: string[] = []
@@ -377,8 +577,8 @@ test('registerModelTools：tools 服务存在 → 注册 5 个工具（走 ctx.g
     // 不抛错 = 注册走 toolsSvc + defineTool schema 全部可编译（无效 schema 会在定义时抛错）
     registerModelTools(wrapped, deps)
     assert.deepEqual(names.sort(), [
-      'config_backup', 'config_list_snapshots', 'config_restore',
-      'config_sync_pull', 'config_sync_push',
+      'config_backup', 'config_import_apply', 'config_import_plan', 'config_list_snapshots',
+      'config_restore', 'config_sync_apply', 'config_sync_preview', 'config_sync_pull', 'config_sync_push',
     ].sort())
   } finally {
     await fs.rm(tmp, { recursive: true, force: true })

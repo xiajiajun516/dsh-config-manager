@@ -675,9 +675,14 @@ test('M1 源码守卫：index.ts 给 BackupScheduler 注入与 makeRoutes/regist
   const routesStart = source.indexOf('makeRoutes({');
   const routesBody = source.slice(routesStart, source.indexOf('\n  })', routesStart));
   assert.ok(routesBody.includes(`scanner: ${name},`), `makeRoutes 必须注入同一 scanner（scanner: ${name},）`);
-  const toolsStart = source.indexOf('registerModelTools(ctx, {');
-  const toolsBody = source.slice(toolsStart, source.indexOf('\n  })', toolsStart));
-  assert.ok(toolsBody.includes(`scanner: ${name},`), `registerModelTools 必须注入同一 scanner（scanner: ${name},）`);
+  // 装配已下沉：index.ts 的 agentToolDeps 取 RoutesDeps 的同一实例，
+  // routes/model-tools-deps.ts 再把它交给 ModelToolsDeps.scanner。
+  const toolsStart = source.indexOf('agentToolDeps: createAgentToolDeps({');
+  assert.ok(toolsStart > 0, '应能找到 agentToolDeps 装配');
+  const toolsBody = source.slice(toolsStart, source.indexOf('\n    }),', toolsStart));
+  assert.ok(toolsBody.includes('scanner: deps.scanner'), 'agentToolDeps 必须注入同一 scanner（scanner: deps.scanner）');
+  const wiring = (await fs.readFile(new URL('../routes/model-tools-deps.ts', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  assert.ok(wiring.includes('scanner: input.scanner'), 'model-tools-deps.ts 必须把 input.scanner 交给 ModelToolsDeps（注入了却没接上会静默退回默认扫描器）');
 });
 
 /**

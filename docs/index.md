@@ -17,6 +17,7 @@
 | 改代码前先弄清分层、路由清单、改哪里会炸 | `docs/architecture/core.md` |
 | 改备份 / 导出 / 导入 / 恢复 / 加密 | `docs/architecture/backup-restore.md` + `docs/contracts/` |
 | 改同步通道、合并、自动同步 | `docs/architecture/sync.md` |
+| 改 agent 工具面 / 判断某能力该不该给模型 | `docs/architecture/agent-tools.md` |
 | 改回退、回滚点、救援台、CLI 写入门 | `docs/architecture/recovery.md` |
 | 改外部来源导入（30 个来源） | `docs/architecture/foreign-import.md` |
 | 改 React 壳、页面、状态、i18n、样式 | `docs/architecture/client-ui.md` + `docs/architecture/client-dependencies.md` + `DESIGN.md` |

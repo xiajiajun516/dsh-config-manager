@@ -24,6 +24,7 @@
 - **根目录只放**对外文档（`README*`/`CHANGELOG`/`SECURITY`/`LICENSE`）与协作规范，其余进 `docs/`。
 
 ### 安全不变量（不得破坏）
+- **agent 工具面 = `src/core/model-tools.ts` 的 9 个工具**：新增/改参先过 `docs/architecture/agent-tools.md` 准入清单并回填该文；`includeSecrets` 恒 false、密码只读 DSH 凭据槽、写操作必须「预览给 planId + 执行带回 + 锁内重比指纹」；永久禁区（会话/凭据/自更新/删除/发布/档案启停/恢复写）不得对 agent 放开。
 - **凭据值与密码绝不回读/落盘/落日志/回传浏览器**：`includeSecrets` 缺省 false；导出密钥是独立密文凭据载荷（不进 `sections`）；密码仅内存，明文 ZIP 用完即清。
 - **凭据计划项：值的有无优先于本机状态**：有值一律 `MissingSecret` 写回，无值才按 `isCredentialConfigured` 跳过；同步侧值相同 → `Skip`；`createImportPlan` 必须收到 `decryptedCredentials`。
 - **同步凭据与加密密码**：凭据走 DSH credentials 槽位（`SYNC_CREDENTIAL_REF` 等），`passwordConfigured` 只是布尔；加密密码只存专用槽位，不勾选即删不留空，绝不进 `sync-*.json`/响应/日志/浏览器。

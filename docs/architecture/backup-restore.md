@@ -152,7 +152,7 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 | DCA1 不记录 KDF 参数 | `src/security/encryption.ts:194` | 换参数后旧容器不可解，无版本可判 |
 | 解密明文包存活到导入成功 | `src/routes/import.ts:162`、`:307` | 失败/取消刻意保留；见 `tests/route/decrypt-plaintext-cleanup.test.ts` |
 | 恢复目标侧 realpath 围栏 | `src/core/restore.ts` 的 `assertPlanTargetsSafe` | 已修（home 外整单拒绝）；硬链接 / UNC / 8.3 短名仍未覆盖，见 `docs/known-issues/known-limits.md` |
-| 日期戳有三份实现 | `src/index.ts:2227`、`src/core/model-tools.ts:83`、`src/sync/backup-scheduler.ts:405` | 维护债，行为一致 |
+| 日期戳有三份实现 | `src/index.ts:2227`、`src/core/model-tools.ts:378`、`src/sync/backup-scheduler.ts:405` | 维护债，行为一致 |
 
 测试锚点（改动前先跑这些）：
 

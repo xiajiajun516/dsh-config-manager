@@ -28,6 +28,20 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🆕 新增 · Added
+
+- **助手能先预演再动手**：聊天里的 AI 现在可以先把「同步合并」与「导入配置」走一遍预览、拿到一次性凭据再执行；预览过后内容有变化，这次执行会被拒绝并要求重新预览，改错的余地留在动手之前。
+  **The assistant can rehearse before it acts**: in chat, the AI can preview a sync merge or a config import, then execute with a one-shot handle; if anything changed after the preview, execution is refused and a fresh preview is required — mistakes are caught before anything is written.
+
+### 🔧 变更 · Changed
+
+- **让助手做恢复时也必须先预览**：助手执行恢复现在必须带上它预览时拿到的凭据，否则不会动手；预览之后快照或磁盘状态有变，同样会被拒绝并要求重新预览。
+  **Assistant-driven restore now requires a preview first**: an execution must carry the handle from its own preview; a snapshot or disk state that changed after previewing is refused with a request to preview again.
+- **助手推送到远端时只用你保存的加密密码**：它不能再把密码当参数递进来（那条路已弃用），没保存时会直接提示你先在同步设置里保存密码。
+  **Assistant pushes only use the encryption password you saved**: it can no longer pass a password in as a parameter (that route is deprecated) and is told to save one in sync settings first when none exists.
+- **哪些事永远不交给助手做，现在写明了**：会话日志、凭据值、自更新、删除类操作、发布与市场写入、档案启停、恢复写动作都在明确的不开放清单里，不再是隐含约定。
+  **What is never handed to the assistant is now written down**: session logs, credential values, self-update, deletions, publishing and market writes, profile start-stop, and restore writes are on an explicit never-open list instead of an unwritten convention.
+
 ### 🐛 修复 · Fixed
 
 - **勾了「MCP 连接器」同步后，只改连接器列表也会自动上行**：以前这类改动在自动同步里一律判成「没有本地改动」，必须顺带改一个普通配置才会被捎带上去；现在它自己就会被识别并上传，且没改动的轮次不会空推一次快照。
@@ -41,6 +55,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 - **两个早就不在界面上用的接口正式下线**：快照「置顶」与发布向导「生成条目包」这两条接口此前已从界面移除，只剩代码里没人调用的入口；这次一并删除。已被置顶的旧快照照旧不会被自动清理，只是无法再设置或取消；发布仍从「我的配置」上传与更新，路径没变。
   **Two endpoints nobody used are gone**: the snapshot “pin” and the publish-wizard “build item package” endpoints had already been removed from the UI and were left unreferenced in code; both are now deleted. Old pinned snapshots are still exempt from automatic cleanup — they simply can no longer be pinned or unpinned, and publishing still goes through “My configs” upload/update unchanged.
+
+### 🔐 安全 · Security
+
+- **助手无法让备份或推送带上凭据值**：以前只是默认不带，现在这类请求会被直接拒绝，连一次远端写入都不会发生。
+  **The assistant cannot make a backup or push carry credential values**: previously just omitted by default, such requests are now refused outright and no remote write happens at all.
 
 ## [0.4.3] - 2026-11-06
 

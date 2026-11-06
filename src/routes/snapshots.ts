@@ -9,6 +9,8 @@ import { endpoint, readJsonBody, writeJson, writeMutationError } from './kit.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore } from '../core/restore.ts'
+// 预览-执行一致性指纹：与 agent 工具（config_restore）共用同一实现，口径分叉会让防呆失效。
+import { restorePlanFingerprint } from '../core/restore-plan-fingerprint.ts'
 import type { RunState } from '../core/run-registry.ts'
 import { snapshotFileDiff, summarizeRestoreChanges } from '../core/snapshot-diff.ts'
 import { buildFileDiffBody, buildRestoreBody, executeRestorePlan, makeRestoreExecutor } from './route-support.ts'
@@ -17,17 +19,6 @@ import { probeRestoreResume, runRestoreWithResume } from '../core/restore-resume
 import type { RestoreResumeHint } from '../core/restore-resume.ts'
 import { runWithMutationLock } from '../utils/env-lock.ts'
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
-
-/**
- * 恢复计划指纹（预览-执行一致性）：只取「动作类型 + 目标 + blob」三列 —— 描述文案、详情、顺序无关的
- * 易变字段一律不进，保证同一份快照 + 同一磁盘状态下指纹稳定。内容变化不会改变指纹（同 kind/target），
- * 只有**动作集合真的变了**（文件出现/消失、插件增删）才会不同 —— 那正是需要用户重新确认的情况。
- */
-function restorePlanFingerprint(plan: Awaited<ReturnType<typeof planRestore>>): string {
-  const lines = plan.actions.map((action) => [action.kind, action.target ?? '', action.blobPath ?? ''].join('\u0000'))
-  return createHash('sha256').update(lines.join('\n')).digest('hex')
-}
 
 export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
   const {

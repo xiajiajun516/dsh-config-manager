@@ -13,6 +13,7 @@
 | `client-ui.md` | client 装配、四页与加页五处、原语清单、样式/token 守卫、状态归属、i18n、测试口径 |
 | `client-dependencies.md` | client 能 / 不能 import 什么（跨端边界与零依赖模块） |
 | `cli-rescue-console.md` | 离线救急台（`dcm web`）的页面结构、样式契约与状态口径 |
+| `agent-tools.md` | Agent 工具面（9 个 model tools）、三条硬边界（禁凭据上行/密码只读槽位/预览-执行同指纹）、永久不开放清单、新增工具准入 |
 
 ## 加一条
 

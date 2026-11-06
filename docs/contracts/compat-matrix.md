@@ -49,9 +49,9 @@ export const inject = ['settings', 'credentials']
 |---|---|---|---|
 | `workspaceRegistry` | 工作区记录的列举/建/删/改标题（`workspaces` 分区） | `listRecords()` 返回 `[]`；写入抛 `host.workspaceUnavailable` | `src/index.ts` 的 `function readService`；`DshWorkspaceFacade.registry()`（唯一读取点）；`DshWorkspaceFacade` 的 `listRecords` / `writeRecord` / `removeRecord` / `attachSession` |
 | `webServer` | 注册 `/api/dsh-config-manager/*` 全部 HTTP 路由 | 记一条 warn 并 `return`：**路由完全不注册**，引擎能力仍在但浏览器半不可用 | `src/index.ts` 的 `readService<WebServer>(ctx, 'webServer')` 缺失分支（warn + `return`；路由注册见 `src/routes/kit.ts` 的 `registerRoutes`） |
-| `tools` | 注册 5 个 Agent 可调用模型工具（`config_backup` 等） | 记一条 warn 并 `return`，跳过工具注册 | `src/core/model-tools.ts`；`src/core/model-tools.ts:320+`（`defineTool` 薄壳） |
+| `tools` | 注册 9 个 Agent 可调用模型工具（`config_backup` / `config_restore` / `config_sync_push` / `config_sync_preview` / `config_sync_apply` / `config_import_plan` / `config_import_apply` 等） | 记一条 warn 并 `return`，跳过工具注册 | `src/core/model-tools.ts`；`src/core/model-tools.ts:857+`（`defineTool` 薄壳） |
 
-> `src/core/model-tools.ts:313-315` 有一条硬约束注释：**必须**经 `ctx.get('tools')` 的返回值注册，绝不能写 `ctx.tools.register` —— Cordis 的属性访问要求插件声明 `inject:['tools']`，未声明时即使服务存在也会抛 `cannot get property X without inject`。`src/core/model-tools.test.ts` 用模拟 ctx 固定了这个守卫。
+> `src/core/model-tools.ts:850-853` 有一条硬约束注释：**必须**经 `ctx.get('tools')` 的返回值注册，绝不能写 `ctx.tools.register` —— Cordis 的属性访问要求插件声明 `inject:['tools']`，未声明时即使服务存在也会抛 `cannot get property X without inject`。`src/core/model-tools.test.ts` 用模拟 ctx 固定了这个守卫。
 
 ### 1.3 非 Cordis 服务、但同样是 host 侧「官方契约」的依赖
 
@@ -279,7 +279,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 | **R2** | `credentials` 服务方法签名或 `credentialRef` 导出移除 | 同步 token / WebDAV 密码 / GitHub device flow 的槽位读写 | 同步配置保存后 `passwordConfigured` 恒 false；WebDAV/Git 同步鉴权失败 | `src/index.ts` 的 `class DshCredentialsFacade`；`Object.keys(require('@deepseek-ai/dsh-credentials'))` |
 | **R3** | `webServer` 服务名或 `register(route)` 契约变化 | **整个 `/api/dsh-config-manager/*` 路由族** | 设置页能打开但每个操作都失败；host 日志出现 `webServer 服务不可用：跳过 /api/dsh-config-manager 路由注册` | `src/index.ts` 的 `readService<WebServer>(ctx, 'webServer')` 缺失分支（缺服务即打这条 warn）；确认 `ctx.get('webServer')` |
 | **R4** | `workspaceRegistry` 服务名或 `list/get/create/delete` 契约变化 | `workspaces` 分区 | 工作区列表导出为空；导入工作区报 `host.workspaceUnavailable` | `DshWorkspaceFacade.registry()`（服务名硬编码 `'workspaceRegistry'`）；`DshWorkspaceFacade` 的其余方法 |
-| **R5** | `tools` 服务名或 `register(toolDef)` 契约变化 / `defineTool` 签名变化 | 5 个 Agent 模型工具（`config_backup` 等） | Agent 侧工具消失或调用报错；host 日志 `tools 服务不可用：跳过模型工具注册` | `src/core/model-tools.ts`；`src/core/model-tools.test.ts` 复现守卫 |
+| **R5** | `tools` 服务名或 `register(toolDef)` 契约变化 / `defineTool` 签名变化 | 9 个 Agent 模型工具（`config_backup` 等） | Agent 侧工具消失或调用报错；host 日志 `tools 服务不可用：跳过模型工具注册` | `src/core/model-tools.ts`；`src/core/model-tools.test.ts` 复现守卫 |
 | **R6** | `dshHomePath` / `resolveDshHome` 语义变化（`$DSH_HOME` 解析规则、返回路径形态） | 插件数据根、所有文件级读写、快照目录 | 数据写到意外位置；快照/导出列表「看不到刚做的备份」 | `apply()` 内 `resolveDshHome()` / `dshHomePath('dsh-config-manager')`；直接 `console.log(resolveDshHome())` |
 | **R7** | client 运行时 seed 表变化（移除 `react/jsx-runtime`，或 React 升到 19 与 peer `^18.2.0` 冲突） | **整个 client 半**（设置页整块） | 设置页 `config-manager` section 不出现，或页面出现 `client-modules: require("react/jsx-runtime") missed the module table` | 读 `dsh-web-frontend/dist/assets/index-*.js` 里的 seed 表（`by()` 函数，9 项）；读 `dsh-client-modules/lib/client.js:300-309` 的抛错点 |
 | **R8** | `settings.section` Slot 契约变化（owner props、`register` 字段、`inject` face 形态） | 设置页注册 | 设置页 section 消失或白屏；控制台报 Slot 注册失败 | `src/client/index.ts:111-118`；对照 DSH 的 `dsh-client-ui-settings` SlotMap |
