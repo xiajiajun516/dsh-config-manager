@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>home · T1 Linear</title>
+<style>
+:root{
+  /* 出处：od-ds-linear-app tokens.css（:root 段）。落地时逐条映射到 --cm-* */
+  --bg: #08090a;
+  --surface: #101112;
+  --surface-2: #191a1b;
+  --fg-1: #f7f8f8;
+  --fg-2: #b9bfc9;
+  --fg-3: #8a8f98;
+  --line-1: rgba(255,255,255,.08);
+  --line-2: rgba(255,255,255,.05);
+  --accent: #5e6ad2;
+  --accent-hover: #6e79e0;
+  --accent-fg: #ffffff;
+  --ok: #4cb782;
+  --warn: #f2c94c;
+  --error: #eb5757;
+  --hover: rgba(255,255,255,.04);
+  --font-ui: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-meta: 11px; --fs-table: 12px; --fs-base: 12.5px; --fs-title: 13px;
+  --lh-tight: 1.25; --lh-body: 1.5;
+  --sp-1: 2px; --sp-2: 4px; --sp-3: 6px; --sp-4: 8px; --sp-5: 10px; --sp-6: 12px; --sp-7: 14px; --sp-8: 16px;
+  --r-1: 4px; --r-2: 6px; --r-3: 8px; --r-pill: 999px;
+  --h-sm: 24px; --h-md: 28px;
+  --row-h: 24px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:564px;height:720px;overflow:hidden}
+body{
+  background:var(--bg); color:var(--fg-1);
+  font-family:var(--font-ui); font-size:var(--fs-base); line-height:var(--lh-body);
+  display:flex; flex-direction:column; gap:var(--sp-5);
+  padding:var(--sp-3) var(--sp-4);
+}
+.mono{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+/* ── 1 状态带 ─────────────────────────── */
+.strip{border:1px solid var(--line-1); border-radius:var(--r-3); background:var(--surface); padding:var(--sp-4) var(--sp-6) var(--sp-5)}
+.stripTop{display:flex; align-items:baseline; gap:var(--sp-4)}
+.health{display:flex; align-items:center; gap:var(--sp-3); font-size:var(--fs-base); font-weight:500}
+.dot{width:6px;height:6px;border-radius:var(--r-pill);background:var(--ok)}
+.stripMeta{margin-left:auto; font-size:var(--fs-meta); color:var(--fg-3)}
+.metrics{display:grid; grid-template-columns:repeat(4,1fr); gap:var(--sp-5); margin-top:var(--sp-5); padding-top:var(--sp-5); border-top:1px solid var(--line-2)}
+.metric{display:block; text-align:left; background:none; border:0; padding:0; cursor:pointer; color:inherit; font:inherit}
+.metric:hover .mValue{color:var(--accent)}
+.mLabel{font-size:var(--fs-meta); color:var(--fg-3); letter-spacing:.02em}
+.mValue{display:block; margin-top:var(--sp-1); font-size:var(--fs-title); font-weight:510; font-family:var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap}
+.mDim{display:block; font-size:var(--fs-meta); color:var(--fg-3); font-weight:400}
+/* ── 2 动作 ───────────────────────────── */
+.tools{display:flex; gap:var(--sp-3)}
+.btn{height:var(--h-md); border-radius:var(--r-2); font:inherit; font-size:var(--fs-table); cursor:pointer; display:inline-flex; align-items:center; gap:var(--sp-3); padding:0 var(--sp-5); white-space:nowrap}
+.btn.primary{background:var(--accent); color:var(--accent-fg); border:1px solid var(--accent)}
+.btn.primary:hover{background:var(--accent-hover); border-color:var(--accent-hover)}
+.btn.ghost{background:transparent; color:var(--fg-2); border:1px solid var(--line-1)}
+.btn.ghost:hover{background:var(--hover); color:var(--fg-1)}
+/* ── 3 最近活动 ───────────────────────── */
+.card{flex:1; min-height:0; display:flex; flex-direction:column; border-top:1px solid var(--line-1); padding-top:var(--sp-4)}
+.cardHead{display:flex; align-items:baseline; gap:var(--sp-4); padding-bottom:var(--sp-3)}
+.cardTitle{font-size:var(--fs-title); font-weight:510}
+.cardMeta{margin-left:auto; font-size:var(--fs-meta); color:var(--fg-3)}
+.thead,.row{display:grid; grid-template-columns:74px 66px 1fr 66px; gap:var(--sp-4); align-items:center}
+.thead{height:22px; font-size:var(--fs-meta); color:var(--fg-3); letter-spacing:.04em; border-bottom:1px solid var(--line-1)}
+.rows{flex:1; min-height:0; overflow:hidden}
+.row{height:var(--row-h); border-bottom:1px solid var(--line-2); font-size:var(--fs-table)}
+.row:hover{background:var(--hover)}
+.time{color:var(--fg-3); font-family:var(--font-mono); font-size:var(--fs-meta)}
+.kind{color:var(--fg-2)}
+.detail{color:var(--fg-3); font-family:var(--font-mono); font-size:var(--fs-meta); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.result{display:flex; align-items:center; gap:var(--sp-2); font-size:var(--fs-meta); color:var(--fg-3); justify-self:end}
+.result.ok .rdot{width:5px;height:5px;border-radius:var(--r-pill);background:var(--ok)}
+.tag{font-size:var(--fs-meta); padding:1px var(--sp-3); border-radius:var(--r-1)}
+.tag.fail{color:var(--error); background:rgba(235,87,87,.12)}
+.tag.skip{color:var(--warn); background:rgba(242,201,76,.12)}
+/* ── 4 页脚 ───────────────────────────── */
+.foot{display:flex; gap:var(--sp-3); font-size:var(--fs-meta); color:var(--fg-3); padding-top:var(--sp-2)}
+.foot .sep{color:var(--line-1)}
+</style>
+</head>
+<body>
+  <!-- data-block="stat-strip" -->
+  <section class="strip">
+    <div class="stripTop">
+      <span class="health"><i class="dot"></i>一切正常</span>
+      <span class="stripMeta mono">最后检查 12:04</span>
+    </div>
+    <div class="metrics">
+      <button class="metric"><span class="mLabel">备份</span><span class="mValue">3<span class="mDim">2 小时前</span></span></button>
+      <button class="metric"><span class="mLabel">快照</span><span class="mValue">12</span></button>
+      <button class="metric"><span class="mLabel">定时备份</span><span class="mValue">开启<span class="mDim">明天 09:00</span></span></button>
+      <button class="metric"><span class="mLabel">同步</span><span class="mValue">已连接<span class="mDim">macbook-pro</span></span></button>
+    </div>
+  </section>
+
+  <!-- data-block="quick-actions" -->
+  <div class="tools">
+    <button class="btn primary">立即备份</button>
+    <button class="btn ghost">导出 ZIP</button>
+    <button class="btn ghost">导入</button>
+    <button class="btn ghost">外部来源</button>
+  </div>
+
+  <!-- data-block="recent-activity" -->
+  <section class="card">
+    <div class="cardHead">
+      <span class="cardTitle">最近活动</span>
+      <span class="cardMeta mono">共 63 条</span>
+    </div>
+    <div class="thead"><span>时间</span><span>事件</span><span>详情</span><span style="justify-self:end">结果</span></div>
+    <div class="rows">
+      <div class="row"><span class="time">刚刚</span><span class="kind">备份</span><span class="detail">手动备份 · 84 个文件</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">12 分钟前</span><span class="kind">同步</span><span class="detail">会话 3 · 配置 8 · 插件 2</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">1 小时前</span><span class="kind">导出</span><span class="detail">dcm-export-20261107-1042.zip</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">2 小时前</span><span class="kind">备份</span><span class="detail">定时任务 · 84 个文件</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">3 小时前</span><span class="kind">导入</span><span class="detail">cursor-settings-20261107.zip</span><span class="result"><span class="tag skip">跳过 2</span></span></div>
+      <div class="row"><span class="time">昨天 22:14</span><span class="kind">快照删除</span><span class="detail">snap-2026-11-01-2214</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">昨天 21:40</span><span class="kind">恢复</span><span class="detail">snap-2026-11-05-1830 · 12 个文件</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">昨天 18:30</span><span class="kind">同步应用</span><span class="detail">远端 6 项变更 · 冲突 1</span><span class="result"><span class="tag fail">失败</span></span></div>
+      <div class="row"><span class="time">11-05 18:30</span><span class="kind">快照</span><span class="detail">定时快照 · 12 个文件</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">11-05 09:00</span><span class="kind">定时备份</span><span class="detail">84 个文件 · 12.4 MB</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">11-04 22:14</span><span class="kind">配置回滚</span><span class="detail">回合 18 · 3 个文件</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">11-04 09:00</span><span class="kind">定时备份</span><span class="detail">83 个文件 · 12.3 MB</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">11-03 21:02</span><span class="kind">导入</span><span class="detail">claude-code-mcp.json</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">11-03 09:00</span><span class="kind">定时备份</span><span class="detail">81 个文件 · 12.1 MB</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">11-02 09:00</span><span class="kind">定时备份</span><span class="detail">81 个文件 · 12.1 MB</span><span class="result"><span class="tag fail">失败</span></span></div>
+      <div class="row"><span class="time">11-01 22:14</span><span class="kind">快照删除</span><span class="detail">snap-2026-10-25-2214</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">11-01 09:00</span><span class="kind">定时备份</span><span class="detail">80 个文件 · 12.0 MB</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+      <div class="row"><span class="time">10-31 18:20</span><span class="kind">档案切换</span><span class="detail">work → default</span><span class="result ok"><i class="rdot"></i>成功</span></div>
+    </div>
+  </section>
+
+  <div class="foot"><span class="mono">保留 30 天</span><span class="sep">/</span><span>上次清理 2 天前</span><span class="sep">/</span><span class="mono">快照 48.2 MB</span></div>
+</body>
+</html>
