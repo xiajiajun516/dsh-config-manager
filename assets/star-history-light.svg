@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="470" viewBox="0 0 860 470" role="img" aria-label="Star history for xiajiajun516/dsh-config-manager: 304 stars, series from 2026-08-14 to 2026-11-06">
+  <title>Star history for xiajiajun516/dsh-config-manager: 304 stars, series from 2026-08-14 to 2026-11-06</title>
+  <desc>Cumulative stars (left axis) and new stars per day (right axis), generated from the GitHub stargazers API by scripts/star-history.mjs.</desc>
+  <defs>
+    <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#cf222e" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#cf222e" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+  <rect width="860" height="470" fill="#ffffff" />
+  <text x="50%" y="34" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#1f2328"><tspan fill="#bf8700">★</tspan> Star History</text>
+  <text x="64" y="52" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#cf222e">Total Stars</text>
+  <text x="792" y="52" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#0969da">Daily New</text>
+  <line x1="64" y1="60" x2="792" y2="60" stroke="#e4e8ed" stroke-width="1" />
+  <text x="54" y="64" text-anchor="end" font-size="12" fill="#cf222e" opacity="0.9">500</text>
+  <text x="802" y="64" text-anchor="start" font-size="12" fill="#0969da" opacity="0.9">20</text>
+  <line x1="64" y1="148.5" x2="792" y2="148.5" stroke="#e4e8ed" stroke-width="1" />
+  <text x="54" y="152.5" text-anchor="end" font-size="12" fill="#cf222e" opacity="0.9">375</text>
+  <text x="802" y="152.5" text-anchor="start" font-size="12" fill="#0969da" opacity="0.9">15</text>
+  <line x1="64" y1="237" x2="792" y2="237" stroke="#e4e8ed" stroke-width="1" />
+  <text x="54" y="241" text-anchor="end" font-size="12" fill="#cf222e" opacity="0.9">250</text>
+  <text x="802" y="241" text-anchor="start" font-size="12" fill="#0969da" opacity="0.9">10</text>
+  <line x1="64" y1="325.5" x2="792" y2="325.5" stroke="#e4e8ed" stroke-width="1" />
+  <text x="54" y="329.5" text-anchor="end" font-size="12" fill="#cf222e" opacity="0.9">125</text>
+  <text x="802" y="329.5" text-anchor="start" font-size="12" fill="#0969da" opacity="0.9">5</text>
+  <line x1="64" y1="414" x2="792" y2="414" stroke="#e4e8ed" stroke-width="1" />
+  <text x="54" y="418" text-anchor="end" font-size="12" fill="#cf222e" opacity="0.9">0</text>
+  <text x="802" y="418" text-anchor="start" font-size="12" fill="#0969da" opacity="0.9">0</text>
+  <path d="M64 414 L64 412.58 L72.67 412.58 L81.33 412.58 L90 412.58 L98.67 411.17 L107.33 411.17 L116 410.46 L124.67 409.04 L133.33 406.21 L142 403.38 L150.67 401.26 L159.33 399.13 L168 394.88 L176.67 392.05 L185.33 388.51 L194 382.14 L202.67 379.31 L211.33 375.06 L220 372.23 L228.67 370.1 L237.33 365.86 L246 360.9 L254.67 358.07 L263.33 355.94 L272 353.11 L280.67 349.57 L289.33 347.45 L298 344.62 L306.67 342.49 L315.33 338.24 L324 338.24 L332.67 337.54 L341.33 336.83 L350 336.12 L358.67 335.41 L367.33 335.41 L376 334.7 L384.67 333.29 L393.33 333.29 L402 330.46 L410.67 329.75 L419.33 328.33 L428 327.62 L436.67 324.79 L445.33 322.67 L454 321.25 L462.67 320.54 L471.33 318.42 L480 313.46 L488.67 312.76 L497.33 311.34 L506 307.09 L514.67 305.68 L523.33 302.14 L532 300.01 L540.67 297.89 L549.33 295.06 L558 290.81 L566.67 290.1 L575.33 284.44 L584 281.6 L592.67 279.48 L601.33 279.48 L610 278.77 L618.67 273.82 L627.33 269.57 L636 263.9 L644.67 262.49 L653.33 258.95 L662 255.41 L670.67 253.28 L679.33 246.91 L688 245.5 L696.67 240.54 L705.33 235.58 L714 228.5 L722.67 222.13 L731.33 220.01 L740 219.3 L748.67 212.22 L757.33 210.1 L766 209.39 L774.67 205.14 L783.33 201.6 L792 198.77 L792 414 Z" fill="url(#fill)" />
+  <path d="M64 378.6 L72.67 414 L81.33 414 L90 414 L98.67 378.6 L107.33 414 L116 396.3 L124.67 378.6 L133.33 343.2 L142 343.2 L150.67 360.9 L159.33 360.9 L168 307.8 L176.67 343.2 L185.33 325.5 L194 254.7 L202.67 343.2 L211.33 307.8 L220 343.2 L228.67 360.9 L237.33 307.8 L246 290.1 L254.67 343.2 L263.33 360.9 L272 343.2 L280.67 325.5 L289.33 360.9 L298 343.2 L306.67 360.9 L315.33 307.8 L324 414 L332.67 396.3 L341.33 396.3 L350 396.3 L358.67 396.3 L367.33 414 L376 396.3 L384.67 378.6 L393.33 414 L402 343.2 L410.67 396.3 L419.33 378.6 L428 396.3 L436.67 343.2 L445.33 360.9 L454 378.6 L462.67 396.3 L471.33 360.9 L480 290.1 L488.67 396.3 L497.33 378.6 L506 307.8 L514.67 378.6 L523.33 325.5 L532 360.9 L540.67 360.9 L549.33 343.2 L558 307.8 L566.67 396.3 L575.33 272.4 L584 343.2 L592.67 360.9 L601.33 414 L610 396.3 L618.67 290.1 L627.33 307.8 L636 272.4 L644.67 378.6 L653.33 325.5 L662 325.5 L670.67 360.9 L679.33 254.7 L688 378.6 L696.67 290.1 L705.33 290.1 L714 237 L722.67 254.7 L731.33 360.9 L740 396.3 L748.67 237 L757.33 360.9 L766 396.3 L774.67 307.8 L783.33 325.5 L792 343.2" fill="none" stroke="#0969da" stroke-width="1.5" stroke-dasharray="4 3" stroke-linejoin="round" opacity="0.85" />
+  <path d="M64 412.58 L72.67 412.58 L81.33 412.58 L90 412.58 L98.67 411.17 L107.33 411.17 L116 410.46 L124.67 409.04 L133.33 406.21 L142 403.38 L150.67 401.26 L159.33 399.13 L168 394.88 L176.67 392.05 L185.33 388.51 L194 382.14 L202.67 379.31 L211.33 375.06 L220 372.23 L228.67 370.1 L237.33 365.86 L246 360.9 L254.67 358.07 L263.33 355.94 L272 353.11 L280.67 349.57 L289.33 347.45 L298 344.62 L306.67 342.49 L315.33 338.24 L324 338.24 L332.67 337.54 L341.33 336.83 L350 336.12 L358.67 335.41 L367.33 335.41 L376 334.7 L384.67 333.29 L393.33 333.29 L402 330.46 L410.67 329.75 L419.33 328.33 L428 327.62 L436.67 324.79 L445.33 322.67 L454 321.25 L462.67 320.54 L471.33 318.42 L480 313.46 L488.67 312.76 L497.33 311.34 L506 307.09 L514.67 305.68 L523.33 302.14 L532 300.01 L540.67 297.89 L549.33 295.06 L558 290.81 L566.67 290.1 L575.33 284.44 L584 281.6 L592.67 279.48 L601.33 279.48 L610 278.77 L618.67 273.82 L627.33 269.57 L636 263.9 L644.67 262.49 L653.33 258.95 L662 255.41 L670.67 253.28 L679.33 246.91 L688 245.5 L696.67 240.54 L705.33 235.58 L714 228.5 L722.67 222.13 L731.33 220.01 L740 219.3 L748.67 212.22 L757.33 210.1 L766 209.39 L774.67 205.14 L783.33 201.6 L792 198.77" fill="none" stroke="#cf222e" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
+  <line x1="64" y1="60" x2="64" y2="414" stroke="#cf222e" stroke-width="1.5" opacity="0.8" />
+  <line x1="792" y1="60" x2="792" y2="414" stroke="#0969da" stroke-width="1.5" opacity="0.8" />
+  <line x1="64" y1="414" x2="792" y2="414" stroke="#d1d9e0" stroke-width="1" />
+  <line x1="64" y1="414" x2="64" y2="419" stroke="#d1d9e0" stroke-width="1" />
+  <text x="64" y="436" text-anchor="middle" font-size="12" fill="#59636e">08/14</text>
+  <line x1="211.33" y1="414" x2="211.33" y2="419" stroke="#d1d9e0" stroke-width="1" />
+  <text x="211.33" y="436" text-anchor="middle" font-size="12" fill="#59636e">08/31</text>
+  <line x1="358.67" y1="414" x2="358.67" y2="419" stroke="#d1d9e0" stroke-width="1" />
+  <text x="358.67" y="436" text-anchor="middle" font-size="12" fill="#59636e">09/17</text>
+  <line x1="497.33" y1="414" x2="497.33" y2="419" stroke="#d1d9e0" stroke-width="1" />
+  <text x="497.33" y="436" text-anchor="middle" font-size="12" fill="#59636e">10/03</text>
+  <line x1="644.67" y1="414" x2="644.67" y2="419" stroke="#d1d9e0" stroke-width="1" />
+  <text x="644.67" y="436" text-anchor="middle" font-size="12" fill="#59636e">10/20</text>
+  <line x1="792" y1="414" x2="792" y2="419" stroke="#d1d9e0" stroke-width="1" />
+  <text x="792" y="436" text-anchor="middle" font-size="12" fill="#59636e">11/06</text>
+  <text x="792" y="456" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" fill="#59636e">304 stars · 2026-11-06</text>
+</svg>

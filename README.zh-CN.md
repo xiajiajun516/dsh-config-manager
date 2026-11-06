@@ -778,6 +778,18 @@ $env:HTTPS_PROXY='http://127.0.0.1:7897'; dsh web
 
 > 维护者与开发者：从[文档总索引](docs/index.md)开始（架构、模块文档、ADR、已知技术债）；构建、测试、自动发布与完整技术说明见 [DEVELOPERS.md](DEVELOPERS.md)。
 
+## ⭐ 星标历史
+
+<a href="https://github.com/xiajiajun516/dsh-config-manager/stargazers">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/star-history-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/star-history-light.svg" />
+    <img alt="星标历史：累计星标与每日新增" src="assets/star-history-dark.svg" width="860" />
+  </picture>
+</a>
+
+*数据取自仓库真实的星标时间戳，由 `npm run readme:stars` 生成、每周自动刷新；图脚日期是最近一颗星的那天，图过期会自己露出来。*
+
 ---
 
 **产品原则**：宁可少迁移一个配置，也不要破坏你现有的配置。任何导入都遵循 `分析 → 预览 → 备份 → 修改 → 验证 → 回滚(如需要)`；任何密钥都遵循 `不默认导出 / 不记日志 / 不暴露 / 不静默转移`。

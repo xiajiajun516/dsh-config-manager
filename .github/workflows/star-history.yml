@@ -1,0 +1,53 @@
+# README 星标图自动刷新：每周一 03:17 UTC + 手动触发
+#
+# 为什么存在：assets/star-history-dark.svg 与 assets/star-history-light.svg 由
+# scripts/star-history.mjs 从 GitHub 星标时间戳生成；静态文件不会自己变新，而 README 里那张图
+# 一旦过期就是假信息。本流水线只做一件事：重跑生成器，**文件真有变化才提交**。
+# 生成器的图脚日期取「最近一颗星所在的 UTC 日」而不是运行时刻，所以没有新星时输出逐字节不变，
+# 定时运行不会制造空提交（脚本里也有同样的判据，这里再兜一次）。
+#
+# 权限：只申请 contents: write 用于提交图片，不碰 registry、不申请 OIDC。
+# actions 与 ci.yml / publish.yml 固定到同一批 SHA（供应链口径一致；升级时三处必须同时改）。
+name: Star history chart
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-history
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Regenerate chart
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/star-history.mjs
+
+      - name: Commit only if the data moved
+        run: |
+          if git diff --quiet -- assets/star-history-dark.svg assets/star-history-light.svg; then
+            echo "no new stars — nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/star-history-dark.svg assets/star-history-light.svg
+          git commit -m "chore(docs): refresh star history chart"
+          git push

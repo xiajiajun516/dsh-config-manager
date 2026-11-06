@@ -794,6 +794,18 @@ Found a bug, a misaligned panel, a button that does nothing — or just have an 
 
 > Maintainers & developers: start at the [documentation index](docs/index.md) — architecture, module docs, ADRs and known tech debt; [DEVELOPERS.md](DEVELOPERS.md) covers build, testing, auto-publishing and full technical notes.
 
+## ⭐ Star History
+
+<a href="https://github.com/xiajiajun516/dsh-config-manager/stargazers">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/star-history-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/star-history-light.svg" />
+    <img alt="Star history: total stars over time and new stars per day" src="assets/star-history-dark.svg" width="860" />
+  </picture>
+</a>
+
+*Real stargazer timestamps, drawn by `npm run readme:stars` — a weekly workflow refreshes it, and the date in the corner is the newest star, so a stale chart shows itself.*
+
 ---
 
 **Product principles**: better to migrate one config less than to break your existing config. Every import follows `Analyze → Preview → Backup → Apply → Validate → Rollback(if needed)`; every secret follows `never export by default / never log / never expose / never silently transfer`.
