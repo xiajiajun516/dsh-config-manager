@@ -59,3 +59,14 @@
 - **直启实测**：`spawn(process.execPath, [bin.js,'--profile','web','--port','3087','--no-open'], {detached:true, windowsHide:true, stdio:['ignore',fd,fd]})` → 2 秒写入 11162 字节、8 秒出现 token URL；Electron 宿主形态（`DeepSeek Harness.exe` + `ELECTRON_RUN_AS_NODE=1`）同样 8 秒出 URL。
 - **20 秒为什么不够**：URL 打印被夹在 `loader.await()`（整棵插件树 settle）+ `auditStartupEntries`（纯本地遍历，不联网）之后；web 档案有 10 个 bundle 因 peerDependencies 与 dsh 0.2.0-rc.2 不兼容被跳过（每条约 1KB 警告），实测 URL 到达 8–10 秒，也有 >20 秒的样本 ⇒ `DSH_PROFILE_LAUNCH_TIMEOUT_MS` 由 20_000 放宽到 30_000（UI 文案引用同一常量，自动同步显示）。
 - **判据（别退回旧写法）**：Windows 上 `spawn` 长驻 node 子进程必须直启入口文件；`shell:true` 只允许出现在「拿不到入口、且不依赖子进程输出」的降级路径上。单测钉住：`findCliEntryForShim`（三布局）、`resolveDirectCliRunner`（Electron/node）、以及「直启时 spawn 不带 shell」。
+
+## 用桌面 asar 里的同版本 CLI 做真机 E2E（2026-11-06 实测，dsh 0.2.2-rc.1）
+
+- **动机**：`npm i -g` 的 dsh 常落后桌面端（本例全局 0.2.0-rc.2、桌面 asar 0.2.2-rc.1），要验证「新版宿主 + 本插件」的真实往返，不必先重装全局。
+- **命令**（asar 内的 bin 用 Electron 当 node 跑，asar 路径可直接 require）：
+  `ELECTRON_RUN_AS_NODE=1 "D:/Apps/DSH/DeepSeek Harness.exe" "D:/Apps/DSH/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" --profile web --host 192.168.0.205 --port 3080 --no-open`
+- **入口别名**：`dsh web` 就是 `--profile web`（`dsh-web-app/lib/startup.js:25` 的 `Command().name("dsh --profile web")`）；`--host` 只接受**一个具体接口字面量**，通配地址直接 `program.error`；另有 `--trusted-host <authority...>`、`--public-url`（只广告不授权）、`--tls-cert/--tls-key`。
+- **启动产出**：日志尾部 `dsh web: listening on <host> over plain HTTP` + `http://<host>:<port>/?token=…`（token 仅进程内，见上节）。
+- **用 curl 复现围栏三态**（都带 `--interface <LAN IP>` 保证源地址不是回环）：无 cookie → `401 {"error":"unauthorized: browser-session","code":"browser-session"}`；先 `curl -c jar "http://<host>:<port>/?token=…"` 拿 `dsh-auth-*` cookie → `200` 真实 payload；同一 cookie 换成外来 `Host: 10.9.9.9:3080` → `403 {"error":"forbidden: untrusted-authority"}`。
+- **坑**：`web` 档案若长期没跟宿主升级，会有一串 `skipping profile bundle … is incompatible with dsh 0.2.2-rc.1`（本例 7 条），只影响那些插件，不影响本插件的围栏结论。
+
