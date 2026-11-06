@@ -45,3 +45,4 @@
   - `src/foreign/qoder.test.ts:97` t3：`探针根无连字符时反解必须命中：D--Projects-personal-dsh-config-manager-.tmp-buildtmp-qoderProbe<pid>-real` → `actual: false`；
   - 同文件 t4：反解回落成仓库根，`actual: 'D:\Projects\personal\dsh-config-manager'` / `expected: '…\.tmp\buildtmp\qoderProbe<pid>Home<rand>'`（相对 TEMP `.tmp/buildtmp` 被按仓库根解析）。
 - **落点**：build / install 用仓库内 TEMP（`TEMP=TMP=.tmp/buildtmp npm run build`），test 用系统 `TEMP`；两条分开跑，别 export 一次吃到底（同一个 shell 里 `$env:TEMP` 会一直生效，很容易把 test 也带走）。
+- **Git-Bash 里给 `TEMP` 必须写 Windows 绝对路径**（2026-11-06 实测）：`TEMP=$PWD/.tmp/buildtmp` 展开成 `/d/Projects/...`，tsgo 把首段当驱动器相对根 → 报**同一句** `mkdir /d/Projects/.../rolldown-plugin-dts-*/src: Access is denied` + `tsgo process exited with code 2`（看起来像 ACL 问题，实际是路径方言），`mkdir` 手工能成功会误导排查。改用 `TEMP="D:\\Projects\\personal\\dsh-config-manager\\.tmp\\buildtmp"` 后 exit 0（1591 ms）。
