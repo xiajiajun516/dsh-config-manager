@@ -111,13 +111,18 @@ function buildSeries(stamps) {
   return { days, total: stamps.length, lastDay: days[days.length - 1].day }
 }
 
-/** 轴上限取整到 1/2/2.5/5/10 × 10^k，避免出现 27 这种刻度 */
-function niceCeil(value) {
-  if (!(value > 0)) return 1
-  const pow = 10 ** Math.floor(Math.log10(value))
-  const norm = value / pow
-  const step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10
-  return step * pow
+/**
+ * 左轴刻度：用户口径是「每次都 +100」，不是取整家族（299 颗星会被切成 125 的刻度）。
+ * 所以按整百递增，只有星数涨到画不下（>6 格）才升档到 200/500/1000，绝不出现 125 这种刻度。
+ */
+function totalScale(max) {
+  const steps = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]
+  for (const step of steps) {
+    const top = Math.ceil(Math.max(max, step) / step) * step
+    if (top / step <= 6) return { step, top }
+  }
+  const step = steps[steps.length - 1]
+  return { step, top: Math.ceil(max / step) * step }
 }
 
 const r2 = (n) => Math.round(n * 100) / 100
@@ -142,9 +147,12 @@ function render(series, theme, repo) {
   const p = PALETTE[theme]
   const { days, total, lastDay } = series
   const n = days.length
-  const maxTotal = niceCeil(days[n - 1].cumulative)
-  // 右侧留出余量：不加余量时单日爆发会把整条虚线拉到顶，图只看得到噪声、看不出趋势
-  const maxDaily = niceCeil(Math.max(...days.map((d) => d.added)) * 1.55)
+  const { step: totalStep, top: maxTotal } = totalScale(days[n - 1].cumulative)
+  const intervals = Math.round(maxTotal / totalStep)
+  // 右侧留出余量：不加余量时单日爆发会把整条虚线拉到顶，图只看得到噪声、看不出趋势。
+  // 步长取整到整数格，右轴标签才是整数、且与左轴共用同一条网格线。
+  const dailyStep = Math.max(1, Math.ceil((Math.max(...days.map((d) => d.added)) * 1.55) / intervals))
+  const maxDaily = dailyStep * intervals
   const xAt = (i) => (n === 1 ? PAD_L : PAD_L + (i / (n - 1)) * PLOT_W)
   const yTotal = (v) => PAD_T + PLOT_H - (v / maxTotal) * PLOT_H
   const yDaily = (v) => PAD_T + PLOT_H - (v / maxDaily) * PLOT_H
@@ -153,11 +161,11 @@ function render(series, theme, repo) {
   const areaPath = `M${r2(xAt(0))} ${r2(yTotal(0))} ` + days.map((d, i) => `L${r2(xAt(i))} ${r2(yTotal(d.cumulative))}`).join(' ') + ` L${r2(xAt(n - 1))} ${r2(yTotal(0))} Z`
   const dailyPath = days.map((d, i) => `${i === 0 ? 'M' : 'L'}${r2(xAt(i))} ${r2(yDaily(d.added))}`).join(' ')
 
-  const ticks = [0, 1, 2, 3, 4]
+  const ticks = Array.from({ length: intervals + 1 }, (_, k) => k)
   const gridLines = ticks.map((k) => {
-    const y = r2(PAD_T + (k / 4) * PLOT_H)
-    const totalLabel = Math.round((maxTotal * (4 - k)) / 4)
-    const dailyLabel = Math.round((maxDaily * (4 - k)) / 4)
+    const y = r2(PAD_T + (k / intervals) * PLOT_H)
+    const totalLabel = maxTotal - k * totalStep
+    const dailyLabel = maxDaily - k * dailyStep
     return [
       `  <line x1="${PAD_L}" y1="${y}" x2="${PAD_L + PLOT_W}" y2="${y}" stroke="${p.grid}" stroke-width="1" />`,
       `  <text x="${PAD_L - 10}" y="${y + 4}" text-anchor="end" font-size="12" fill="${p.total}" opacity="0.9">${totalLabel}</text>`,
@@ -174,6 +182,51 @@ function render(series, theme, repo) {
       `  <text x="${x}" y="${PAD_T + PLOT_H + 22}" text-anchor="middle" font-size="12" fill="${p.muted}">${md(days[i].day)}</text>`,
     ].join('\n')
   }).join('\n')
+
+  // 单日新增只标最高那一根：读者一眼看到的应该是「高峰有多高」，而不是自己数格子。
+  const peakIndex = days.reduce((best, d, i) => (d.added > days[best].added ? i : best), 0)
+  const peak = days[peakIndex].added
+  const peakY = yDaily(peak)
+  const peakX = xAt(peakIndex)
+  const peakLabel = String(peak)
+  const boxW = 9 + 6.8 * peakLabel.length
+  const boxH = 15
+  // 高峰常常正好落在红线穿过的位置，随便往上顶会被红线压住：四个候选位各试一次，
+  // 取「与红线相交最少」的那个，再夹回绘图区内。
+  const redYAt = (x) => {
+    const t = ((x - PAD_L) / (PLOT_W || 1)) * (n - 1)
+    const i0 = Math.max(0, Math.min(n - 1, Math.floor(t)))
+    const i1 = Math.min(n - 1, i0 + 1)
+    return yTotal(days[i0].cumulative + (days[i1].cumulative - days[i0].cumulative) * (t - i0))
+  }
+  const clashes = (left, top) => {
+    let hits = 0
+    for (let x = left; x <= left + boxW; x += 2) {
+      const y = redYAt(x)
+      if (y > top - 3 && y < top + boxH + 3) hits++
+    }
+    return hits
+  }
+  const spots = [
+    { left: peakX - boxW / 2, top: peakY - 11 - boxH },
+    { left: peakX - boxW / 2, top: peakY + 11 },
+    { left: peakX - 9 - boxW, top: peakY - boxH / 2 },
+    { left: peakX + 9, top: peakY - boxH / 2 },
+  ].map((s) => ({
+    left: Math.min(Math.max(s.left, PAD_L + 2), PAD_L + PLOT_W - boxW - 2),
+    top: Math.min(Math.max(s.top, PAD_T + 2), PAD_T + PLOT_H - boxH - 2),
+  }))
+  const spot = spots.reduce((best, s) => (clashes(s.left, s.top) < clashes(best.left, best.top) ? s : best), spots[0])
+  const boxLeft = spot.left
+  const boxTop = spot.top
+  const peakText = peak > 0
+    ? [
+        `  <g>`,
+        `    <rect x="${r2(boxLeft)}" y="${r2(boxTop)}" width="${r2(boxW)}" height="${boxH}" rx="3" fill="${p.bg}" opacity="0.92" />`,
+        `    <text x="${r2(boxLeft + boxW / 2)}" y="${r2(boxTop + boxH - 3.5)}" text-anchor="middle" font-family="${FONT}" font-size="11" font-weight="600" fill="${p.daily}">${peakLabel}</text>`,
+        `  </g>`,
+      ].join('\n')
+    : ''
 
   const aria = `Star history for ${repo}: ${total} stars, series from ${days[0].day} to ${lastDay}`
 
@@ -193,6 +246,7 @@ function render(series, theme, repo) {
 ${gridLines}
   <path d="${areaPath}" fill="url(#fill)" />
   <path d="${dailyPath}" fill="none" stroke="${p.daily}" stroke-width="1.5" stroke-dasharray="4 3" stroke-linejoin="round" opacity="0.85" />
+${peakText}
   <path d="${totalPath}" fill="none" stroke="${p.total}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
   <line x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${PAD_T + PLOT_H}" stroke="${p.total}" stroke-width="1.5" opacity="0.8" />
   <line x1="${PAD_L + PLOT_W}" y1="${PAD_T}" x2="${PAD_L + PLOT_W}" y2="${PAD_T + PLOT_H}" stroke="${p.daily}" stroke-width="1.5" opacity="0.8" />
