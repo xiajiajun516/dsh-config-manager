@@ -23,6 +23,7 @@
 | 实现一个兼容本仓备份格式的第三方工具 | `docs/spec/`（对外契约 + 兼容矩阵） |
 | 给第三方市场仓库写 `index.json`（收录本插件） | `docs/spec/market-index-v1.md` |
 | 知道「为什么当初这么设计」 | `docs/decisions/` |
+| 处理 issue（分类 / 工单 / wayfinder 地图）或写领域词表 | `docs/agents/`（issue-tracker / triage-labels / domain） |
 | 看已知债与排期依据 | `docs/maintenance/tech-debt.md` |
 | 看「这个方向别再试了」的硬限制 | `docs/maintenance/known-limits.md` |
 | 找某条规则的证据（真机事故、量化数据、复现脚本） | `docs/lessons/`（规则本身在 `AGENTS.md`） |

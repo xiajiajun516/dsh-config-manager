@@ -142,3 +142,18 @@
 - `docs/design/` — 设计决策记录；改契约、结构或跨模块边界前查阅。
 - `DEVELOPERS.md` — 机制细则、发版阶段表、字典与适配器口径。
 - `DESIGN.md` — UI/样式唯一权威；动 UI 前必读。
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues（`xiajiajun516/dsh-config-manager`，走 `gh` CLI）。See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+五角色沿用默认名：`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`。See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+single-context：根 `GLOSSARY.md` + `docs/decisions/`。See `docs/agents/domain.md`.
+
