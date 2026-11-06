@@ -12,7 +12,7 @@ import path from 'node:path';
 import {
   AUTO_SYNC_OPT_IN_SECTIONS, defaultSyncSelection, effectiveSections, normalizeSessionsInclude, normalizeSessionsLimit, OPT_IN_SYNC_SECTIONS,
   readSyncSelection, writeSyncSelection,
-  readAllSyncSelections, DEFAULT_SYNC_SESSIONS_LIMIT, SYNC_SELECTION_FILE, SYNC_SELECTION_SCHEMA_VERSION,
+  readAllSyncSelections, readAllSyncSelectionsSync, DEFAULT_SYNC_SESSIONS_LIMIT, SYNC_SELECTION_FILE, SYNC_SELECTION_SCHEMA_VERSION,
 } from './sync-selection.ts';
 import { OPT_IN_SYNC_SECTION_IDS } from '../schema/section-registry.ts';
 import type { SectionId } from '../schema/types.ts';
@@ -144,6 +144,46 @@ test('v1 迁移：顶层单通道字段 → git 通道（webdav 缺省）', asyn
     const webdav = await readSyncSelection(dir, 'webdav');
     assert.equal(webdav.mode, 'default', 'webdav 通道回退缺省');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+/* ---------------- C6：同步读取（apply 期种入缓存） ---------------- */
+
+test('C6：readAllSyncSelectionsSync 与异步读取逐字段一致（v2 / v1 / 损坏 / 缺失）', async () => {
+  const cases: [string, string][] = [
+    ['v2', JSON.stringify({
+      schemaVersion: 2,
+      channels: {
+        git: { mode: 'advanced', sections: ['settings', 'mcp'], sessionsLimit: 3, sessionsInclude: ['s-1'], encrypt: true, includeSecrets: true },
+        webdav: { mode: 'default' },
+      },
+    })],
+    ['v1', JSON.stringify({ schemaVersion: 1, mode: 'advanced', sections: ['skills'], encrypt: true })],
+    ['损坏', '{ not json'],
+    ['不支持 schema', JSON.stringify({ schemaVersion: 99, channels: {} })],
+  ];
+  for (const [label, raw] of cases) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-sync-'));
+    try {
+      await fs.writeFile(path.join(dir, SYNC_SELECTION_FILE), raw, 'utf8');
+      const synced = readAllSyncSelectionsSync(dir);
+      const awaited = await readAllSyncSelections(dir);
+      assert.deepEqual(synced, awaited, `${label}: 同步/异步必须是同一份解析结果`);
+      assert.deepEqual(effectiveSections(synced.git), effectiveSections(awaited.git), `${label}: 生效范围必须一致`);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  }
+  // 文件不存在：同步版也回缺省（不抛错、不返回 undefined）
+  const empty = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-sync-none-'));
+  try {
+    assert.deepEqual(readAllSyncSelectionsSync(empty), await readAllSyncSelections(empty), '缺失文件两侧都回缺省');
+    assert.equal(effectiveSections(readAllSyncSelectionsSync(empty).git), undefined, '缺省 = 全部 portable');
+  } finally { await fs.rm(empty, { recursive: true, force: true }); }
+});
+
+test('C6 接线守卫：apply() 必须同步种入 selectionCache（异步 fire-and-forget 会留启动窗口）', async () => {
+  const src = await fs.readFile(path.join(import.meta.dirname, '..', 'index.ts'), 'utf8');
+  assert.match(src, /const seededSelections = readAllSyncSelectionsSync\(syncDir\)/, 'apply() 必须同步读取分区选择');
+  assert.match(src, /for \(const channel of SYNC_CHANNELS\) selectionCache\[channel\] = seededSelections\[channel\]/, '同步结果必须种进全部通道');
+  assert.doesNotMatch(src, /void readAllSyncSelections\(syncDir\)\.then\(/, '不得再用 fire-and-forget 异步种入（窗口内引擎会兜底 defaultSyncSelection）');
 });
 
 /* ---------------- sessions（可选分区）与「最新 N 个」上限 ---------------- */

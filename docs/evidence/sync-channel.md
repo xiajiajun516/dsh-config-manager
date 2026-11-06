@@ -486,6 +486,27 @@ detail 请求且不同 repoUrl 不共用 / TTL 过期后重跑）、`tests/home-
 验收：`src/adapters/plugins.test.ts` 的 `C8: 未勾选 MCP 时 plugins 载荷不带 MCP patch 行…`（关掉剔除时 FAIL：`MCP 行不得进 plugins 载荷: skill-badge,mixed,mcp-citra`；开启后 PASS，并断言 mcp 分区仍导出 `citra`/`mixed`）。
 副作用（预期，一次性）：升级后首轮同步会把 plugins 判为有改动（载荷少了 MCP 行）→ 真推一次；旧快照里的 MCP 行仍可正常导入（导入侧未改）。
 
+## 启动窗口里「用户勾选」曾是空的 ⇒ 首轮同步按全量 portable 跑（C6，2026-11-06 已修）
+
+现象：`apply()` 是同步的，而 `selectionCache` 曾是 fire-and-forget 异步种入（`void readAllSyncSelections(syncDir).then(...)`）。
+消费者（`makeSyncEngine`、手动 push 路由、model tool、调度器首轮）都**同步**读缓存 ⇒ 同一 tick 读到 `undefined`，
+引擎兜底 `defaultSyncSelection()`（`mode='default'`）⇒ `effectiveSections` 返回 `undefined` = **全部 portable**，
+用户 advanced 勾的收窄在那一轮被吞（首轮 `startup:true` 不 push，所以表现是「多拉/多合并」，不是多推）。
+
+复现（`.tmp/probe-c6-race.ts`，真实 `sync-selection.json` = advanced + `['settings']`）：
+
+```
+[旧写法·同一 tick] cache.git = undefined ⇒ sections = undefined（全部 portable，用户收窄失效）
+[新写法·同一 tick] cache.git = loaded   ⇒ sections = ["settings"]
+[异步那一轮迟到]   sections = ["settings"] | 与同步版一致 = true
+```
+
+修法：`src/sync/sync-selection.ts` 新增 `readAllSyncSelectionsSync(dir)`（与 `readAllSyncSelections` 共用同一份
+`parseSelectionFile`，不是第二套解析口径），`src/index.ts` 在 `apply()` 同步种入全部通道后再构造任何引擎。
+守卫：`src/sync/sync-selection.test.ts` 两条 —— 同步/异步在 v2 / v1 / 损坏 / 缺失 四种来源上逐字段一致；
+源码守卫断言 `apply()` 用的是同步读取且**不得**再出现 `void readAllSyncSelections(syncDir).then(`（把旧写法改回去即 FAIL：
+`AssertionError: apply() 必须同步读取分区选择`）。
+
 ## 即时同步不覆盖历史会话：不支持（2026-11-06 决策，勿反复讨论）
 
 **结论**：不支持。sessions 分区保持「只出现在手动一键同步的载荷里」。

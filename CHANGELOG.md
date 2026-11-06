@@ -32,6 +32,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 - **勾了「MCP 连接器」同步后，只改连接器列表也会自动上行**：以前这类改动在自动同步里一律判成「没有本地改动」，必须顺带改一个普通配置才会被捎带上去；现在它自己就会被识别并上传，且没改动的轮次不会空推一次快照。
   **Connector-only edits now sync on their own**: with “MCP connectors” enabled, changing just the connector list used to be judged as “no local change” and only went up alongside some other setting; such edits are now detected and uploaded by themselves, and unchanged rounds no longer push an empty snapshot.
+- **启动后的第一轮同步严格按你勾选的分区跑**：以前刚启动那一轮可能按「全部推荐分区」执行，勾了自定义分区也会被临时忽略（只会多拉/多合并，不会多推）。
+  **The first sync round after startup now follows your selected sections**: it could previously run with “all recommended sections” for that one round, temporarily ignoring a custom selection (it could only over-pull/over-merge, never over-push).
 - **没勾「MCP 连接器」时，MCP 服务器配置不再跟着插件同步上远端**：以前插件同步会把整份 patch 清单带走，连带 MCP 服务器定义与本机路径；现在这些行只在你勾选「MCP 连接器」时才同步。
   **MCP server definitions no longer ride along with plugin sync when “MCP connectors” is off**: plugin sync used to carry the whole patch list, including MCP server definitions and local paths; those lines now sync only when you enable “MCP connectors”.
 

@@ -155,7 +155,7 @@ import {
 import type { SessionFormatDisposition } from './core/types.ts'
 import type { SyncConfig, SyncTransportType } from './sync/sync-config.ts'
 import { createPrepareSync } from './sync/config-issue-reporting.ts'
-import { AUTO_SYNC_OPT_IN_SECTIONS, defaultSyncSelection, effectiveSections, OPT_IN_SYNC_SECTIONS, readAllSyncSelections, readSyncSelection } from './sync/sync-selection.ts'
+import { AUTO_SYNC_OPT_IN_SECTIONS, defaultSyncSelection, effectiveSections, OPT_IN_SYNC_SECTIONS, readAllSyncSelections, readAllSyncSelectionsSync, readSyncSelection } from './sync/sync-selection.ts'
 import type { SyncSelection, SyncSelectionMode } from './sync/sync-selection.ts'
 import type { SyncTransport } from './sync/transport.ts'
 import { GitMarketReader } from './market/reader.ts'
@@ -2598,11 +2598,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   })
 
   /** 同步分区选择缓存（按通道；sync-selection.json；makeSyncEngine 同步读取用，保存路由更新）。
-   *  缺失通道 = 尚未加载（启动竞态窗口）；读取/使用处兜底 defaultSyncSelection。 */
+   *  **必须同步种入**（C6）：apply() 同步，异步种入会留窗口 —— 窗口内 makeSyncEngine 兜底
+   *  defaultSyncSelection（全部 portable），用户 advanced 的收窄在那一轮被吞（判据见 docs/evidence/sync-channel.md）。 */
   const selectionCache: Partial<Record<SyncTransportType, SyncSelection>> = {}
-  void readAllSyncSelections(syncDir).then((all) => {
-    for (const channel of SYNC_CHANNELS) selectionCache[channel] = all[channel]
-  }).catch(() => { /* 读失败保持缺省 */ })
+  const seededSelections = readAllSyncSelectionsSync(syncDir)
+  for (const channel of SYNC_CHANNELS) selectionCache[channel] = seededSelections[channel]
 
   /** 确保指定通道缓存已加载（status/save 路由调用；启动竞态兜底）。 */
   const ensureSelectionLoaded = async (channel: SyncTransportType): Promise<SyncSelection> => {

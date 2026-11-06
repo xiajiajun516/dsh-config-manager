@@ -18,6 +18,7 @@
  * 持久化原因：自动同步调度器运行于 Host 进程（浏览器关闭也在跑），必须从磁盘读
  * 用户选择，而不是依赖浏览器 localStorage。
  */
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -157,15 +158,8 @@ function parseChannelSelection(obj: Record<string, unknown>): SyncSelection {
   return sel;
 }
 
-/** 读取全部通道的分区选择配置；文件不存在 / 损坏 / 不支持 schema → 缺省值（不抛错）。 */
-export async function readAllSyncSelections(dir: string): Promise<SyncSelectionByChannel> {
-  const file = path.join(dir, SYNC_SELECTION_FILE);
-  let raw: string;
-  try {
-    raw = await fs.readFile(file, 'utf8');
-  } catch {
-    return channelMap(() => defaultSyncSelection());
-  }
+/** 解析持久化文本（v1/v2、损坏、不支持 schema 全在这里归一）；同步/异步两条读取路径共用这一份。 */
+function parseSelectionFile(raw: string): SyncSelectionByChannel {
   let parsed: unknown;
   try {
     parsed = parseJsonSafe(raw);
@@ -195,6 +189,37 @@ export async function readAllSyncSelections(dir: string): Promise<SyncSelectionB
       ? parseChannelSelection(ns as Record<string, unknown>)
       : defaultSyncSelection();
   });
+}
+
+/** 读取全部通道的分区选择配置；文件不存在 / 损坏 / 不支持 schema → 缺省值（不抛错）。 */
+export async function readAllSyncSelections(dir: string): Promise<SyncSelectionByChannel> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(dir, SYNC_SELECTION_FILE), 'utf8');
+  } catch {
+    return channelMap(() => defaultSyncSelection());
+  }
+  return parseSelectionFile(raw);
+}
+
+/**
+ * 同步读取全部通道的分区选择（apply 期「同步种入缓存」用，2026-11「C6」）。
+ *
+ * 为什么必须是同步：`apply()` 是同步的，而缓存消费者（调度器首轮 / 手动 push 路由 /
+ * model tool）都**同步**读缓存。异步种入会留下一个窗口：窗口内 `selectionCache[ch]` 是
+ * undefined ⇒ 引擎兜底 `defaultSyncSelection()` ⇒ `effectiveSections` 返回 undefined
+ * （全部 portable），用户 advanced 勾的收窄在那一轮被吞掉（探针
+ * `.tmp/probe-c6-race.ts` 复现：同一 tick 读到 undefined，20ms 后才变 `["settings"]`）。
+ * 解析与 `readAllSyncSelections` 完全同一份（`parseSelectionFile`），不是第二套口径。
+ */
+export function readAllSyncSelectionsSync(dir: string): SyncSelectionByChannel {
+  let raw: string;
+  try {
+    raw = readFileSync(path.join(dir, SYNC_SELECTION_FILE), 'utf8');
+  } catch {
+    return channelMap(() => defaultSyncSelection());
+  }
+  return parseSelectionFile(raw);
 }
 
 /** 读取指定通道的分区选择配置；文件不存在 / 损坏 / 不支持 schema → 缺省值（不抛错）。 */
