@@ -14,7 +14,7 @@
 ## 决策
 
 1. 所有路由必须经 `src/routes/kit.ts` 的 `endpoint({path, methods}, handler)` 声明；`registerRoutes()` 对裸路由直接抛错（fail-fast，不静默少一道护栏）。
-2. 包装在**注册点**统一做三件事：loopback 围栏（`isLoopbackRequest` 失败 → 403）、方法白名单（→ 405）、顶层 `try/catch` → `writeRouteError`。
+2. 包装在**注册点**统一做三件事：访问面围栏（回环放行，其余委托宿主；见下方「更新」）、方法白名单（→ 405）、顶层 `try/catch` → `writeRouteError`。
 3. 统一错误形状与唯一错误类型：`RouteError`（含 `status`/`code`）保真，其余一律 500 JSON。
 4. 路由计数与「全部经 kit」由测试钉住：`tests/route/route-fence.test.ts`、`tests/route/route-parity.test.ts`（逐条快照，条数以该文件的 `ROUTE_SNAPSHOT` 为准）。
 
@@ -22,7 +22,7 @@
 
 - 好：新增一条 API 的成本固定为「在所属组文件加一条 `endpoint(...)`」，护栏不可遗漏；计数漂移会红。
 - 好：围栏成为**唯一的认证边界**，因此它的语义可以被明确写在文档里，而不是靠「DSH 应该会管」的错觉。
-- 坏：**本机任意非浏览器进程无 token 即可调用全部 exact 路由**。远程/LAN 与跨站 CSRF 被围栏挡掉，但只要经代理或隧道暴露出去，就必须在注册点补认证。
+- 坏：**本机任意非浏览器进程无 token 即可调用全部 exact 路由**。远程/LAN 与跨站 CSRF 被围栏挡掉（2026-11-06 起 LAN 侧改由宿主信任面判定），但只要经代理或隧道暴露出去，就必须在注册点补认证。
 - 坏：任何绕过 kit 的写法（直接 `webServer.register`）都会被启动期断言拦住 —— 这既是保护，也是迁移旧路由时的硬门槛。
 
 ## 证据
@@ -30,6 +30,20 @@
 - `src/routes/kit.ts`（`endpoint`/`registerRoutes`/`writeRouteError`/`readJsonBody` 4 MiB 上限）
 - `tests/route/route-fence.test.ts`（围栏三件事 + 裸路由抛错 + 路由集合结构不变量）
 - `tests/route/route-parity.test.ts`（逐条快照 + 解析器自检）
+
+## 更新（2026-11-06，issue #126）
+
+原决策把围栏写成「只认 loopback」，于是宿主用 `dsh web --host <LAN 地址>` 起服务后，局域网里打开的内嵌面板每条 `/api/dsh-config-manager/*` 都 403
+（`forbidden: loopback-only`），而 CLI 与 agent 工具正常 —— 用户看到的是「数据读取失败」，实际是访问方式不被接受。
+
+围栏改为两段式（`src/routes/kit.ts` 的 `requestRejection`）：
+
+1. `isLoopbackRequest` 成立 → 直接放行，行为与原来逐字节一致（本机 curl/脚本不受影响）。
+2. 否则委托宿主 `connection.requestRejection`（`src/routes/request-trust.ts`）：Host/bind 地址、Origin 同源、`dsh-auth-*` 会话 cookie 由宿主判定。
+   放行 → 进 handler；401 → `browser-session`；403 → `untrusted-authority`。
+3. 拿不到该服务（老宿主 / 独立 `dcm web` 救急台）或调用抛错 → 退回原 `forbidden: loopback-only`，即更严方向。
+
+结论不变：插件仍不自己做会话校验，经代理/隧道暴露仍须在注册点补认证；独立救急台 `src/cli/web/server.ts` 继续只绑 `127.0.0.1` 并直调 `isLoopbackRequest`。
 
 ## 备选方案（未采纳）
 

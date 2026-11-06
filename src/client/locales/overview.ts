@@ -53,7 +53,7 @@ export const zh = {
   // issue #126：访问方式（宿主 --host 局域网地址 / 反代）不满足围栏时，说清原因与下一步，且不给重试
   'overview.accessMode.title': '当前访问方式不被允许读取本机数据。',
   'overview.accessMode.origin': '页面地址：{origin}。',
-  'overview.accessMode.hint': '面板只接受本机回环访问，或宿主已信任的地址与已登录会话。改法：用 ssh -L 3080:127.0.0.1:3080 隧道后从 localhost 打开；或以 dsh web --host 127.0.0.1 启动后在本机访问。',
+  'overview.accessMode.hint': '面板只接受本机回环访问，或宿主已信任的地址与已登录会话。改法：用 ssh -L 3080:127.0.0.1:3080 隧道后从 localhost 打开；或以 dsh web --host 127.0.0.1 启动后在本机访问；若本就在可信地址上，重新打开 dsh web 打印的访问链接（会话可能已过期）。',
   'overview.empty.title': '开始保护你的配置',
   'overview.empty.step1': '创建第一份备份',
   'overview.empty.step2': '导出 ZIP 带走',
@@ -127,7 +127,7 @@ export const en: Record<keyof typeof zh, string> = {
   // issue #126: the host's --host (LAN) address or a reverse proxy sits outside the fence
   'overview.accessMode.title': 'This page cannot read local data from its current address.',
   'overview.accessMode.origin': 'Page address: {origin}.',
-  'overview.accessMode.hint': 'The panel only accepts loopback access, or an address and signed-in session the host already trusts. Fix: open it through an ssh -L 3080:127.0.0.1:3080 tunnel via localhost, or start dsh web --host 127.0.0.1 and open it on this machine.',
+  'overview.accessMode.hint': 'The panel only accepts loopback access, or an address and signed-in session the host already trusts. Fix: open it through an ssh -L 3080:127.0.0.1:3080 tunnel via localhost, or start dsh web --host 127.0.0.1 and open it on this machine; if you are already on a trusted address, reopen the access link dsh web printed (the session may have expired).',
   'overview.empty.title': 'Start protecting your configuration',
   'overview.empty.step1': 'Create a backup',
   'overview.empty.step2': 'Export the ZIP',

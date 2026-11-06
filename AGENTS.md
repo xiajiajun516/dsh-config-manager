@@ -40,8 +40,8 @@
 - **双面插件**：host `src/index.ts`（Cordis `name='config-manager'`，前缀 `/api/dsh-config-manager/*`）；web `src/client/`（React，settings.section），经 api 调 host。
 - **宿主路由只经 kit 的 `endpoint()` + `registerRoutes()`**（围栏与方法白名单在注册点统一包装；未经 kit 的路由注册直接抛错）。
 - 路由源 = `src/index.ts`（窗口守卫**钉住的 7 条**）+ `src/routes/*.ts` 其余 77 条（合计 84 条）；源码级守卫必须扫**全部**路由源。
-- **真实认证边界 = kit 围栏，不是 DSH cookie**：cookie 拒绝只挂 `kind:'prefix'`/`path:'/api'` 的 RPC 路由，派发 exact 表先命中。
-- 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**；经代理/隧道暴露必须在注册点加认证（远程/LAN/CSRF 已由围栏挡住）。
+- **真实认证边界 = kit 围栏**：回环直接放行；回环之外委托宿主 `connection.requestRejection`（Host/bind 地址 + Origin + dsh web 会话 cookie），拿不到委托（老宿主 / 独立 CLI）退回严格回环。
+- 推论：**不得把 DSH 会话认证单独当唯一判据，也不得写成「插件 API 无认证」**；经代理/隧道暴露仍须在注册点加认证（判据 → `docs/maintenance/known-limits.md` §7）。
 - **新增一条 API** = 组文件里加 `endpoint({ path, methods }, handler)`；组文件不得 import `../index.ts`，共享工具进 `src/routes/route-support.ts`。
 - **同一 path 只许一条 exact 路由**：一个方法一个 handler 不在注册点表达，靠 handler 内按 `req.method` 分发（真机 webServer 对重复 `(kind, path)` 直接抛错 ⇒ 插件启动失败，只在 `buildRoutes()` 的 `paths.size === routes.length` 断言里才暴露）；判据 → `docs/lessons/known-pitfalls.md`（迁移历史清理一节）。
 - 业务逻辑放 `src/ui/`，React 壳只装配；新功能优先 `src/core/`，适配器与 UI 做薄壳。

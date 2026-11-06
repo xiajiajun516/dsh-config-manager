@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { endpoint, setRequestTrustResolver } from '../../src/routes/kit.ts';
-import { createHostRequestTrust, type HostConnectionLike } from '../../src/routes/request-trust.ts';
+import { createHostRequestTrust, installHostRequestTrust, type HostConnectionLike } from '../../src/routes/request-trust.ts';
 
 interface FakeRequestOptions {
   address?: string;
@@ -168,4 +168,62 @@ test('kit 围栏：无委托时局域网请求仍是 403 loopback-only（老宿�
   assert.match(res.body, /forbidden: loopback-only/);
   assert.match(res.body, /"code":"loopback-only"/);
   assert.equal(called, 0);
+});
+
+test('读服务抛错 → 记 warn 并退回严格回环（围栏抛错会绕过 endpoint 的 try/catch 变成空体 400）', () => {
+  const warnings: string[] = [];
+  const resolver = createHostRequestTrust(
+    () => { throw new Error('context disposed') },
+    { warn: (message) => { warnings.push(message) } },
+  );
+  assert.equal(resolver(lanRequest())?.code, 'loopback-only');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /reading the connection service threw/);
+  assert.match(warnings[0], /context disposed/);
+});
+
+test('安装器：ctx.effect 装上委托，清理函数把围栏卸回严格回环', async () => {
+  let dispose: (() => void) | undefined;
+  const ctx = {
+    effect(callback: () => () => void) {
+      dispose = callback();
+      return {};
+    },
+    get(name: string) {
+      assert.equal(name, 'connection', '安装器只读 connection 服务');
+      return { requestRejection: () => undefined };
+    },
+  };
+  installHostRequestTrust(ctx);
+  try {
+    let called = 0;
+    const res = fakeResponse();
+    await endpoint({ path: '/x', methods: ['GET'] }, async () => { called++ }).handler(lanRequest(), res.res);
+    assert.equal(called, 1, '安装后局域网请求应被宿主信任面放行');
+  } finally {
+    dispose?.();
+  }
+  const after = fakeResponse();
+  await endpoint({ path: '/y', methods: ['GET'] }, async () => {}).handler(lanRequest(), after.res);
+  assert.equal(after.status, 403);
+  assert.match(after.body, /"code":"loopback-only"/);
+});
+
+test('安装器：旧实例清理不抹掉新实例的委托（插件重载 / bundle + 隔离 profile 共存）', async () => {
+  const disposers: (() => void)[] = [];
+  const fakeCtx = (verdict: number | undefined) => ({
+    effect(callback: () => () => void) {
+      disposers.push(callback());
+      return {};
+    },
+    get() { return { requestRejection: () => verdict } },
+  });
+  installHostRequestTrust(fakeCtx(undefined)); // 旧实例：放行
+  installHostRequestTrust(fakeCtx(403)); // 新实例：拒绝
+  disposers[0]!(); // 旧实例卸载
+  const res = fakeResponse();
+  await endpoint({ path: '/z', methods: ['GET'] }, async () => {}).handler(lanRequest(), res.res);
+  assert.equal(res.status, 403);
+  assert.match(res.body, /untrusted-authority/, '应仍是新实例的判定，而不是被旧实例清理抹回 loopback-only');
+  disposers[1]!();
 });

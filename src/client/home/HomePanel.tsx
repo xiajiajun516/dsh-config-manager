@@ -168,8 +168,9 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
    *  为什么必须有它：此前 allSettled 把失败一律吞成 null，而健康判定对 null 不降级 ——
    *  宿主接口整体不可达时，用户看到的是绿色「配置健康」+「暂无操作记录」，
    *  读起来像「一切正常只是没操作过」，真实原因与重试入口都不可见。 */
-  /** accessMode：这轮失败**全部**是「当前访问方式不受支持」（issue #126）——
-   *  此时横幅必须换成解释 + 下一步，绝不能再给一个点了也没用的「重试」。 */
+  /** accessMode：这轮失败里**至少一条**是「当前访问方式不受支持」（issue #126）——
+   *  围栏对全部路由同一口径，一条被访问面拒绝就说明整页都在围栏外；其余失败（超时/连带 500）
+   *  只是连带现象，此时横幅必须换成解释 + 下一步，绝不能再给一个点了也没用的「重试」。 */
   const [loadError, setLoadError] = useState<{ count: number; message: string; accessMode: boolean } | null>(null)
   const [backupRunning, setBackupRunning] = useState(false)
   /** 卸载后不再 setState（异步回调竞态防护） */
@@ -184,7 +185,7 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
     setLoadError(list.length === 0 ? null : {
       count: list.length,
       message: first instanceof Error ? first.message : String(first),
-      accessMode: list.every(isAccessModeError),
+      accessMode: list.some(isAccessModeError),
     })
   }, [])
 

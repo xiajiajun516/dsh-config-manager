@@ -17,7 +17,7 @@
 import type { IncomingMessage } from 'node:http'
 
 import { BROWSER_SESSION_CODE, LOOPBACK_ONLY_CODE, UNTRUSTED_AUTHORITY_CODE } from '../core/access-mode.ts'
-import { setRequestTrustResolver, type RequestRejection, type RequestTrustResolver } from './kit.ts'
+import { clearRequestTrustResolver, setRequestTrustResolver, type RequestRejection, type RequestTrustResolver } from './kit.ts'
 
 /** 宿主 connection 服务的结构化窄化（只取围栏判定这一个方法）。 */
 export interface HostConnectionLike {
@@ -36,6 +36,10 @@ const LOOPBACK_ONLY: RequestRejection = Object.freeze({
   code: LOOPBACK_ONLY_CODE,
 })
 
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /**
  * 构造「非回环请求」的信任判定。
  *
@@ -44,7 +48,15 @@ const LOOPBACK_ONLY: RequestRejection = Object.freeze({
  */
 export function createHostRequestTrust(readConnection: () => unknown, log?: TrustLog): RequestTrustResolver {
   return (request: IncomingMessage): RequestRejection | undefined => {
-    const service = readConnection()
+    let service: unknown
+    try {
+      // ctx.get 在插件已卸载 / 服务组合中会抛（不是返回 undefined）—— 围栏抛错会绕过
+      // endpoint 的 try/catch 落到 webserver 的空体 400，所以这里自己接住。
+      service = readConnection()
+    } catch (error) {
+      log?.warn('reading the connection service threw; falling back to loopback-only: ' + describe(error))
+      return LOOPBACK_ONLY
+    }
     if (service === null || typeof service !== 'object') return LOOPBACK_ONLY
     const candidate = service as HostConnectionLike
     if (typeof candidate.requestRejection !== 'function') return LOOPBACK_ONLY
@@ -53,7 +65,7 @@ export function createHostRequestTrust(readConnection: () => unknown, log?: Trus
       // 成员调用：宿主的方法依赖 this（browserAuth / trustedHosts），抽出来单独调会丢绑定。
       verdict = candidate.requestRejection(request as unknown)
     } catch (error) {
-      log?.warn('connection.requestRejection threw; falling back to loopback-only: ' + (error instanceof Error ? error.message : String(error)))
+      log?.warn('connection.requestRejection threw; falling back to loopback-only: ' + describe(error))
       return LOOPBACK_ONLY
     }
     if (verdict === undefined) return undefined
@@ -77,7 +89,9 @@ export interface TrustInstallContext {
  */
 export function installHostRequestTrust(ctx: TrustInstallContext, log?: TrustLog): void {
   ctx.effect(() => {
-    setRequestTrustResolver(createHostRequestTrust(() => ctx.get('connection'), log))
-    return () => setRequestTrustResolver(undefined)
+    const resolver = createHostRequestTrust(() => ctx.get('connection'), log)
+    setRequestTrustResolver(resolver)
+    // 只撤自己装的那一个：另一实例（bundle + 隔离 profile）可能已经覆盖了委托。
+    return () => clearRequestTrustResolver(resolver)
   }, 'config-manager: request trust')
 }

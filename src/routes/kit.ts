@@ -264,6 +264,16 @@ export function setRequestTrustResolver(resolver: RequestTrustResolver | undefin
   delegatedTrust = resolver
 }
 
+/**
+ * 卸回严格回环，但**只在当前委托仍是这一个时**生效。
+ *
+ * 为什么带身份比对：插件重载或两个实例（bundle 包 + 隔离 profile）共存时，后装的委托会覆盖
+ * 前者 —— 无条件清空会把还活着的那个也抹掉，局域网访问突然退回 403，且现场没有任何报错。
+ */
+export function clearRequestTrustResolver(resolver: RequestTrustResolver): void {
+  if (delegatedTrust === resolver) delegatedTrust = undefined
+}
+
 /** 请求级信任判定（endpoint 的唯一围栏口径）。 */
 function requestRejection(request: IncomingMessage): RequestRejection | undefined {
   if (isLoopbackRequest(request)) return undefined

@@ -637,9 +637,10 @@ ssh -L 3080:127.0.0.1:3080 you@server   # then open http://localhost:3080
 ```
 
 - **Why it is fenced:** these endpoints read and write local files, credentials-backed sync settings and snapshots. The fence is the plugin's real authentication boundary — a DSH session cookie alone is not enough.
-- **`dsh web --host <LAN address>`:** the page itself loads from another machine, but the panel then only works if the host trusts that address **and** the browser carries a signed `dsh-auth` session cookie. `--host 0.0.0.0` derives the trusted hosts from your network interfaces; `--trusted-host <host>` adds one explicitly.
+- **`dsh web --host <LAN address>`:** the page itself loads from another machine, but the panel then only works if the host trusts that address **and** the browser carries a signed `dsh-auth` session cookie. `--host 0.0.0.0` derives the trusted hosts from your network interfaces; `--trusted-host <authority>` (repeatable, `host` or `host:port`) adds one explicitly.
 - **What you see when it is not allowed:** a single **“This page cannot read local data from its current address”** banner with the page's origin and the fix — not a generic “5 requests failed”, and no useless Retry button.
 - **Not affected:** the CLI (`dsh-config-manager …`) and the agent tools (`config_backup`, `config_list_snapshots`, `config_sync_*`) never go through this fence.
+
 ### 🌐 Behind a proxy? (GitHub login / sync)
 
 Node's built-in `fetch()` does **not** read `HTTP_PROXY` / `HTTPS_PROXY` by default, so on networks where GitHub is only reachable through a local proxy, "Sign in with GitHub" would previously fail with `请求 GitHub 设备码失败：fetch failed` even though your browser and `git` work fine.
