@@ -6,7 +6,7 @@
 
 | issue | 症状 | 状态 | 修复提交 | 版本 | 更新 |
 |---|---|---|---|---|---|
-| 126 | 宿主以非回环地址（`--host 10.0.0.10`）提供服务时内嵌面板全 403 `forbidden: loopback-only`：kit 的 `isLoopbackRequest()` 要求 socket 回环 + Host 回环字面量，比宿主 /api 的 Host/trustedHosts + 浏览器会话认证更严 ⇒ 首页 5 路只读请求（backup-files/snapshots/backup-schedule/history/sync-status）全降级、活动记录报读取失败（修复：kit 围栏改为「回环原样放行 ∪ 委托宿主 `connection.requestRejection`」，401/403 给不同机器码；首页把访问方式错误翻成可执行的下一步，不再给无效重试） | awaiting-release | 7e81744 | — | 2026-11-06 |
+| 126 | 宿主以非回环地址（`--host 10.0.0.10`）提供服务时内嵌面板全 403 `forbidden: loopback-only`：kit 的 `isLoopbackRequest()` 要求 socket 回环 + Host 回环字面量，比宿主 /api 的 Host/trustedHosts + 浏览器会话认证更严 ⇒ 首页 5 路只读请求（backup-files/snapshots/backup-schedule/history/sync-status）全降级、活动记录报读取失败（修复：kit 围栏改为「回环原样放行 ∪ 委托宿主 `connection.requestRejection`」，401/403 给不同机器码；首页把访问方式错误翻成可执行的下一步，不再给无效重试；自审加固：`some` 判定、委托按实例清理、读服务抛错 fail-closed、401 文案、文档/ADR 口径） | awaiting-release | db60451 | — | 2026-11-06 |
 | 117 | 「使用 GitHub 登录」授权是整个账号，无法收窄到单仓库（真收窄被 #118 判 NOT_PLANNED；v0.1.85 只发了授权范围说明 + 细粒度 PAT 引导，故仍 open 等报告者接受说明） | open | 62049df | v0.1.85 | 2026-10-28 |
 | 116 | 新建空仓库第一次一键同步就报「同步失败：远端无快照」 | done | 62049df | v0.1.85 | 2026-10-27 |
 | 115 | 细粒度 PAT 没勾 Contents，同步只甩 git 原始 403；报告者已确认修复生效，另提「同步页两个按钮分不清该按哪个」 | done | 62049df | v0.2.0 | 2026-10-29 |
