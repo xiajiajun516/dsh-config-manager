@@ -159,7 +159,7 @@ test('归档身份变化（大小/mtime）→ 只读缓存立即失效', async (
  *
  * 为什么补这条：跨实例的 TOCTOU 已有用例覆盖，但生产里存在同实例调用者
  * （src/sync/sync-engine.ts:1252 createImportPlan → :1286 executeImportPlan 用的是同一个
- * this.importer），且 Importer 是 docs/spec/headless-consumption.md 的门面契约。
+ * this.importer），且 Importer 是 docs/contracts/headless-consumption.md 的门面契约。
  * 修前实测：同实例 execute 吃实例级 bundleCache → 篡改归档不被发现、返回 ok:true。
  */
 test('同实例 TOCTOU：plan 之后换包 → 同一 Importer 实例的 execute 也必须重新校验（不得吃实例缓存）', async () => {

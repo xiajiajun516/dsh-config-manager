@@ -1,5 +1,5 @@
 /**
- * m-market：市场条目包生成（发布向导核心，docs/design/2026-08-19-market-publish-design.md §3.4）。
+ * m-market：市场条目包生成（发布向导核心，docs/archive/2026-08-19-market-publish-design.md §3.4）。
  *
  * 职责：把「用户配置 zip + 用户填写元数据」转换为市场条目（L2 manifest + config.zip 的
  * SHA-256 + sections），供发布向导展示与引导推送。纯函数、零磁盘写入（zipBytes 内存传入，

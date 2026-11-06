@@ -504,7 +504,7 @@ export class WebDavTransport implements SyncTransport {
 
   // audit-sync sync-F3（P1）：一律以 snapshotsBase()（**无尾斜杠**）为基准拼 blob 路径。
   // snapshotsColUrl() 自带尾斜杠，再拼一层会产生空路径段（…/dsh-config-manager//blobs/…），
-  // 与 docs/spec/sync-channel-v1.md §3 的 <col>/blobs/<sha256> 及其它通道（git/s3）不一致；
+  // 与 docs/contracts/sync-channel-v1.md §3 的 <col>/blobs/<sha256> 及其它通道（git/s3）不一致；
   // 不归并空路径段的 WebDAV 服务端会直接拒绝 MKCOL/PUT，使 sessions 外置整体不可用。
   private blobsColUrl(): string {
     return `${this.snapshotsBase()}/${BLOBS_SEG}`;

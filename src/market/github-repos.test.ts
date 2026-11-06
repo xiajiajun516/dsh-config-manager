@@ -1,5 +1,5 @@
 /**
- * m-market：GitHubAuthRest 单测（docs/design/2026-08-20-my-configs-design.md §4.2 / §4.8）。
+ * m-market：GitHubAuthRest 单测（docs/archive/2026-08-20-my-configs-design.md §4.2 / §4.8）。
  *
  * 覆盖：getUser 200/401；createPublicRepo 201/422；createRepo 201（private 缺省与显式）；
  * listRepos 200/非数组/401（limit 截断 + 时间戳兜底）；repoExists 200/404；

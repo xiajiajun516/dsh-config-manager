@@ -9,7 +9,7 @@ description: 写或修改 CHANGELOG.md（待发布条目、版本亮点段、Git
 读者是想知道「这个版本给了我什么」的用户，不是维护这份代码的人。
 **所以一条 = 一个用户能看懂的更新或修复，一句话说完。**
 
-改了什么文件、哪个测试钉住、根因是什么、接口字段怎么变 —— 这些**不进这里**：它们的去处是 commit message、PR 与 `docs/lessons/`。
+改了什么文件、哪个测试钉住、根因是什么、接口字段怎么变 —— 这些**不进这里**：它们的去处是 commit message、PR 与 `docs/evidence/`。
 
 本 Skill 只规定**落位、体例与自检**；具体改哪些功能、有没有发布权限由当前任务决定。
 
@@ -64,8 +64,8 @@ description: 写或修改 CHANGELOG.md（待发布条目、版本亮点段、Git
 |---|---|---|
 | 文件 / 路径 / 符号名 | `src/core/rollback-point.ts`、`withLedgerWriteLock` | commit message |
 | 测试文件名与用例数 | `rollback-view.test.ts` 新增 3 条 | 测试文件本身 |
-| 字段 / 接口 / 码值细节 | `payload.pathIndex`、`HTTP 400`、`409 plan-changed` | `docs/spec/` |
-| 根因与实现过程 | 「旧实现让首个文件因 read>0 短路绕过上限」 | `docs/lessons/` |
+| 字段 / 接口 / 码值细节 | `payload.pathIndex`、`HTTP 400`、`409 plan-changed` | `docs/contracts/` |
+| 根因与实现过程 | 「旧实现让首个文件因 read>0 短路绕过上限」 | `docs/evidence/` |
 | 内部代号 | t13 / S4 / F2 / G-30 / t5-F1 | 不入库 |
 | 「未验证」声明 | NOT VERIFIED、未做浏览器取证 | commit message |
 

@@ -1,6 +1,6 @@
 /**
  * m-market：仓库 star 缓存（StarCache）。
- * docs/design/2026-08-21-market-star-filter-sort-design.md §3.1.3。
+ * docs/archive/2026-08-21-market-star-filter-sort-design.md §3.1.3。
  *
  * 职责：市场浏览时按「条目来源仓库」批量查询 star 数的编排层——
  * - **按仓库 URL 去重**：一次浏览中同一 URL 只查一次 GitHub（官方条目共 1 个仓库、

@@ -1,7 +1,7 @@
 /**
  * tech-debt #5 回归：**复制失败后的回滚也失败时，残留目录必须仍然可被发现、可被删除**。
  *
- * 现场（docs/maintenance/tech-debt.md:20 的窄缝）：copy() 的 catch 里是一把 `rm(recursive)` 加一句注释。
+ * 现场（docs/known-issues/tech-debt.md:20 的窄缝）：copy() 的 catch 里是一把 `rm(recursive)` 加一句注释。
  * 若那次 rm 先删掉了标记（`.dcm-copy-in-progress.json`）再失败 —— 例如某个只读子目录让它中途放弃，
  * 或 rm 自身部分生效 —— 残留目录就退回「没有 package.json、也没有标记」的形态：
  *   - listIncompleteCopies() / listIncompleteCopiesScan() 扫不到（渲染面板里看不见）；

@@ -1,5 +1,5 @@
 /**
- * m-market：GitHub REST API 薄客户端 GitHubAuthRest（docs/design/2026-08-20-my-configs-design.md §4.2）。
+ * m-market：GitHub REST API 薄客户端 GitHubAuthRest（docs/archive/2026-08-20-my-configs-design.md §4.2）。
  *
  * 职责：账户级元操作 ——
  *   getUser()                  验证 token（GET /user）并取回登录名；

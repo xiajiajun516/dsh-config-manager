@@ -5,7 +5,7 @@
  * 这类**合法**（RFC 7235 / 6750：auth-scheme 名大小写不敏感）的授权头在 env / headers / url 通道上
  * 明文进包且**完全不可见**（refs / skipped 皆空）。
  *
- * 两条口径（改这条判定的任何人先读 `docs/maintenance/known-gaps.md` **G-36**）：
+ * 两条口径（改这条判定的任何人先读 `docs/known-issues/known-gaps.md` **G-36**）：
  *  ① 规范形态 `Bearer …` 的**行为与历史逐字一致**（命中名仍是 `bearer-token`）：本模块只**补**非规范大小写；
  *  ② 厂商前缀（`sk-` / `AKIA` / `ghp_` / `github_pat_`）**刻意保持大小写敏感** —— `SK-…` 不是真实厂商形态，
  *     全改 `i` 会连带放宽整个脱敏面（日志 / 导出 / 界面渲染前 redact），代价大于收益 ⇒ 登记为**已知边界**
@@ -74,7 +74,7 @@ test('t72-d：厂商前缀的大小写边界钉成事实（SK- / GHP_ / akia 是
   assert.equal(matchSecretValuePattern('AKIAIOSFODNN7A1B2C3D4'), 'aws-access-key');
   assert.equal(matchSecretValuePattern('ghp_' + 'AbCdEf0123456789aBcDeF0123456789aB'), 'github-token');
   // 不命中侧：**刻意保留**的大小写边界。改这里 = 改整个脱敏面（日志/导出/界面），需单独决策 ——
-  // 若确要收，请连同 known-gaps G-36 与 docs/lessons/security-and-credentials.md 一起改，不要只改死这条断言。
+  // 若确要收，请连同 known-gaps G-36 与 docs/evidence/security-and-credentials.md 一起改，不要只改死这条断言。
   const boundary = [
     'SK-ABCDEFGHIJKLMNOP0123456789XYZ',
     'Sk-abcdefghijklmnop0123456789XYZ',

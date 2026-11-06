@@ -310,10 +310,10 @@ test('W1 parity：路由计数散文必须与真实声明数一致（routes-F5 �
    * routes-F5b（2026-10-14 补）：**两个文件都要扫**。
    *
    * AGENTS.md 已按新体例瘦身成「只留硬规则 + 一行指针」，目录结构 / 常用命令这类清单下移到
-   * `docs/lessons/repo-overview.md` —— 只扫 AGENTS.md 会把「散文被搬到下移文件」误判成
+   * `docs/overview.md` —— 只扫 AGENTS.md 会把「散文被搬到下移文件」误判成
    * 「计数声明消失」（假红），而这段散文正是「少一条即静默少一道围栏」的对外叙述。
    */
-  const claimsFiles: readonly string[] = ['AGENTS.md', 'docs/lessons/repo-overview.md'];
+  const claimsFiles: readonly string[] = ['AGENTS.md', 'docs/overview.md'];
   const agentsClaimsSpec: ReadonlyArray<readonly [RegExp, string, number]> = [
     [/保留的 (\d+) 条/g, 'src/index.ts 保留条数', indexCount],
     [/钉住的 (\d+) 条/g, 'src/index.ts 保留条数（窗口守卫）', indexCount],
@@ -334,7 +334,7 @@ test('W1 parity：路由计数散文必须与真实声明数一致（routes-F5 �
    *
    * AGENTS.md 的 C 档重写把它瘦成「只留判据」，路由计数散文从 6 处收敛为 3 处 ——
    * 「窗口守卫钉住的 N 条」「其余 N 条（合计 N 条）」（AGENTS.md §3 一行）与
-   * 「保留的 N 条路由」（ docs/lessons/repo-overview.md 目录行）。
+   * 「保留的 N 条路由」（ docs/overview.md 目录行）。
    *
    * 这里逐个点名这三个锚点，而不是数总数：总数门槛在散文搬家/合并时会误报，
    * 也可能被「加两处重复散文」蒙过去；点名断言只认「这几句还在且数字对」——
@@ -349,7 +349,7 @@ test('W1 parity：路由计数散文必须与真实声明数一致（routes-F5 �
   requireClaim('AGENTS.md', 'src/index.ts 保留条数（窗口守卫）');
   requireClaim('AGENTS.md', '拆出条数');
   requireClaim('AGENTS.md', '合计条数');
-  requireClaim('docs/lessons/repo-overview.md', 'src/index.ts 保留条数');
+  requireClaim('docs/overview.md', 'src/index.ts 保留条数');
 
   assert.ok(claims.length >= 4, '至少要扫到 4 处计数声明（扫不到即假绿），实际 ' + String(claims.length));
   assert.deepEqual(

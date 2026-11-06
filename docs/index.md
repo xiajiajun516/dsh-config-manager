@@ -1,101 +1,92 @@
 # 文档总索引
 
-本仓库的文档按**读者要解决的问题**分区，不按文件类型。找不到时先看这里，再看 `docs/lessons/README.md`（证据库索引）。
+本仓库文档按**读者要解决的问题**分区，不按文件类型。两跳到达任意一份：本页 → 分区 README → 文件。
 
-> 维护规则：文档怎么写、写到哪、什么时候不必写 → `docs/maintenance/doc-maintenance.md`。新增文档必须回本页表格加一行；
-> 这条**由脚本强制**：`node scripts/check-doc-paths.mjs` 的 `[doc-index]` 段会检查 `docs/{spec,modules,maintenance,decisions,components}/`
-> 下的每份 md 是否在本页以明确路径收录（`lessons`/`design`/`seo` 与冻结存档不在范围内）。
-> 路径与版本声明同样由 `check-doc-paths.mjs`、`node scripts/check-doc-versions.mjs` 在 CI 里校验。
+> 维护规则（要不要写、写哪份）→ `docs/contributing/doc-maintenance.md`。
+> 本页与分区 README 的完整性由脚本强制：`node scripts/check-doc-paths.mjs` 会检查
+> ① 每个分区下的每份 md 是否在该分区 `README.md` 里有条目行；② 每个分区 `README.md` 是否在本页有条目行。
+> 路径漂移由同一脚本校验；写死的版本号由 `node scripts/check-doc-versions.mjs` 校验。
 
 ---
 
-## 1. 我该读哪份？
+## 30 秒：我该读哪份？
 
 | 我想… | 读这个 |
 |---|---|
-| 快速知道仓库怎么分层、路由清单怎么来的、改哪里会炸 | `docs/modules/architecture.md` |
-| 改备份/导出/导入/恢复/加密 | `docs/modules/backup-restore.md` + `docs/spec/` |
-| 改同步通道、合并、自动同步、配置档案 | `docs/modules/sync.md` |
-| 改对话回退、回滚点、救援台、CLI 写入门 | `docs/modules/recovery.md` |
-| 改外部来源导入（Claude Code / Codex / Cursor… 共 30 个来源） | `docs/modules/foreign-import.md` |
-| 改 React 壳、页面、状态、i18n、样式 | `docs/components/client-ui.md` + `DESIGN.md`（视觉唯一权威） |
-| 改离线救急台（`dcm web`）的页面结构与视觉 | `docs/components/cli-rescue-console.md` + `DESIGN.md` |
-| 实现一个兼容本仓备份格式的第三方工具 | `docs/spec/`（对外契约 + 兼容矩阵） |
-| 给第三方市场仓库写 `index.json`（收录本插件） | `docs/spec/market-index-v1.md` |
-| 知道「为什么当初这么设计」 | `docs/decisions/` |
-| 处理 issue（分类 / 工单 / wayfinder 地图）或写领域词表 | `docs/agents/`（issue-tracker / triage-labels / domain） |
-| 看已知债与排期依据 | `docs/maintenance/tech-debt.md` |
-| 看「这个方向别再试了」的硬限制 | `docs/maintenance/known-limits.md` |
-| 找某条规则的证据（真机事故、量化数据、复现脚本） | `docs/lessons/`（规则本身在 `AGENTS.md`） |
-| 查开发/测试/发布的具体命令 | `DEVELOPERS.md` |
-| 决定下一个版本号（PATCH/MINOR/MAJOR、预发布命名、历史版本能不能动） | `docs/maintenance/versioning.md` |
-| 查 UI 视觉与 token 决策 | `DESIGN.md` |
-| 决定这次改动要不要写文档、写在哪 | `docs/maintenance/doc-maintenance.md` |
-| 决定下一个版本号（PATCH/MINOR/MAJOR、预发布命名、历史版本能不能动） | `docs/maintenance/versioning.md` |
+| 30 秒认识这个仓库（用途、目录、常用命令、本机注意） | `docs/overview.md` |
+| 改代码前先弄清分层、路由清单、改哪里会炸 | `docs/architecture/core.md` |
+| 改备份 / 导出 / 导入 / 恢复 / 加密 | `docs/architecture/backup-restore.md` + `docs/contracts/` |
+| 改同步通道、合并、自动同步 | `docs/architecture/sync.md` |
+| 改回退、回滚点、救援台、CLI 写入门 | `docs/architecture/recovery.md` |
+| 改外部来源导入（30 个来源） | `docs/architecture/foreign-import.md` |
+| 改 React 壳、页面、状态、i18n、样式 | `docs/architecture/client-ui.md` + `docs/architecture/client-dependencies.md` + `DESIGN.md` |
+| 改离线救急台（`dcm web`） | `docs/architecture/cli-rescue-console.md` + `DESIGN.md` |
+| 照着实现一个兼容本仓格式的第三方工具 | `docs/contracts/` |
+| 知道「为什么当初这么定」 | `docs/adr/` |
+| 判断「这能力能不能做 / 还欠什么」 | `docs/known-issues/` |
+| 找某条规则的真机证据、量化数据、复现脚本 | `docs/evidence/`（规则本身在 `AGENTS.md`） |
+| 决定这次改动要不要写文档、写哪份 | `docs/contributing/doc-maintenance.md` |
+| 决定下一个版本号 | `docs/contributing/versioning.md` |
+| 处理 issue、wayfinder 地图、领域词表 | `docs/agents/` |
+| 查当时的审计与设计稿（**只读历史**） | `docs/archive/` |
 
-## 2. 当前实现（代码是什么样）
+## 1. 分区
 
-| 文档 | 内容范围 | 何时更新 |
-|---|---|---|
-| `docs/modules/architecture.md` | 分层与依赖方向、路由层与围栏、领域模块表、五条关键数据流、结构性债 | 分层/路由/模块边界变化时；行号漂移时顺手修 |
-| `docs/modules/backup-restore.md` | 导出、快照、恢复、导入、加密、ZIP 安全边界、失败与回退语义 | 上述链路的实现或语义变化时 |
-| `docs/modules/sync.md` | 同步状态机、四传输能力差异、自动同步、sessions/optInSections、档案复制 | 同步行为/通道能力变化时 |
-| `docs/modules/recovery.md` | 回滚点两态采集、台账与预算、删除集判据、回退=fork+归档、SAFE MODE、三道写入门 | 回退或救援语义变化时 |
-| `docs/modules/foreign-import.md` | 30 个外部来源的读盘/解析/合成流水线、三入口同源、IR 硬形状、体积守卫、加来源清单 | 新增来源或合成形状变化时 |
-| `docs/components/client-ui.md` | client 装配、四页与加页五处、原语清单、样式/token 守卫、状态归属、i18n、测试口径 | 组件体系或页面结构变化时 |
-| `docs/components/cli-rescue-console.md` | 离线救急台（`dcm web`）的页面结构、样式契约与状态口径 | CLI 页面结构或样式体系变化时 |
+| 分区 | 回答的问题 | 索引 | 性质 |
+|---|---|---|---|
+| `docs/overview.md` | 这是什么仓库 | — | 参考材料，随代码更新 |
+| `docs/architecture/` | 我要改这块代码 | `docs/architecture/README.md` | 活文档（当前实现） |
+| `docs/contracts/` | 外部要照着实现什么 | `docs/contracts/README.md` | 活文档（对外契约） |
+| `docs/adr/` | 当初为什么这么定 | `docs/adr/README.md` | 只追加，不改历史判断 |
+| `docs/known-issues/` | 能不能做 / 还欠什么 | `docs/known-issues/README.md` | 活台账 |
+| `docs/evidence/` | 这条规则凭什么 | `docs/evidence/README.md` | 活证据库 |
+| `docs/contributing/` | 怎么写文档 / 怎么定版本 | `docs/contributing/README.md` | 规则 |
+| `docs/archive/` | 当时看到了什么 | `docs/archive/README.md` | **只读冻结** |
+| `docs/agents/` | 技能与协作配置 | `docs/agents/README.md` | 配置 |
 
-## 3. 对外契约（第三方要能照着实现）
-
-| 文档 | 内容范围 |
-|---|---|
-| `docs/spec/bundle-format-v1.md` | 备份包（config.zip）v1 的 ZIP 布局、manifest 字段、分区语义、加密与向前兼容（取证基线 0.1.59；缺口权威在 `docs/maintenance/known-gaps.md`） |
-| `docs/spec/bundle-manifest.schema.json` | manifest 的**机器可读 schema**（`bundle-format-v1.md` §manifest 一节的配套文件；非 md，`[doc-index]` 不扫，靠人记着） |
-| `docs/spec/sync-channel-v1.md` | 同步通道的索引/快照/能力矩阵 |
-| `docs/spec/compat-matrix.md` | DSH 版本兼容矩阵：host 服务/client 包/peer（18 = 16 官方 + react·react-dom）/engines 实测与升级风险 R1–R15、M1–M8 |
-| `docs/spec/headless-consumption.md` | 无 UI 消费契约：`/core` `/schema` `/client` 导出面、宿主注入要求；§7 是示例快照，不是契约 |
-| `docs/spec/plugin-data-declaration.md` | 插件通过 `dsh.dataDirs` 自述数据目录的声明格式 |
-| `docs/spec/market-index-v1.md` | 第三方市场仓库 `index.json` 的字段、校验规则与安全边界 |
-
-改格式行为必须同步 `docs/spec/` 并重跑 `tests/conformance/`（规则在 `AGENTS.md`）。
-
-## 4. 决策记录（ADR）
-
-短、少、只记「当初为什么这样」。新增 ADR 用 `NNNN-短横线标题.md`，状态写「已采纳 / 待决策 / 已废弃」。
-
-- `docs/decisions/0001-route-fence-and-auth-boundary.md` — 路由只经 kit 声明；围栏即认证边界
-- `docs/decisions/0002-encrypted-container-unlock-gate.md` — 未解锁容器不得进解析器
-- `docs/decisions/0003-sync-conditional-write-and-gist-exception.md` — 条件写；gist 是明确例外（不做条件头，改「写后复核 + 有界重做」；**已采纳并收口**，残余窗口见 `docs/maintenance/known-limits.md`）
-- `docs/decisions/0004-rollback-point-fork-archive.md` — 回退 = fork + 归档；回滚点 = 两态 + 内容寻址台账
-- `docs/decisions/0005-safe-mode-fail-closed.md` — SAFE MODE fail-closed，解除判据只有一份
-- `docs/decisions/0006-restore-auto-resume.md` — 恢复崩溃后自动续跑：逐项证明成立才续，三个入口不跨续
-
-## 5. 维护与债
-
-- `docs/maintenance/tech-debt.md` — 按 P1/P2/P3 编号的债务清单 + 已修留档；每条带证据/影响/建议/置信度
-- `docs/maintenance/known-limits.md` — 「当前做不到 / 做了会出事」的硬限制（平台/外部事实，仓内不可证）
-- `docs/maintenance/known-gaps.md` — 已知实现缺口台账（不是路线图，也**不是**对外契约）；**只登记仍未关闭的项**（§0.1），已关闭项只留编号 + 一句话（§0.2），逐条取证在 git 历史（`git show 6f2864b:docs/maintenance/known-gaps.md`）。体积大且不随版本走，两个守卫显式跳过它
-- `docs/maintenance/doc-maintenance.md` — **文档维护规则**：改动要不要写文档、写哪份、AI 流程、季度人工清单
-- `docs/maintenance/versioning.md` — **版本管理规范**：三数字语义与 0.x 本地约定、预发布命名、历史版本保留与审计记录、「已发布」的四项定义、发布前检查清单、版本变更判断模板
-
-更新时机：修完一条把状态改为「已修」并写提交/测试名（**不要删行**）；发现新债先加行再决定排期。
-
-## 6. 证据库与历史存档
-
-| 位置 | 性质 | 说明 |
-|---|---|---|
-| `docs/lessons/` | 证据库（当前有效） | `AGENTS.md` 只写规则，**为什么**写在这里；索引进 `docs/lessons/README.md` |
-| `docs/research/` | 一次性专项审计与竞品研究（**快照**，不做增量维护）| 有审计基线（版本 + HEAD）与证据口径；判断当前行为仍以代码 + 测试为准；索引进 `docs/research/README.md` |
-| `docs/design/` | 上游设计存档（只留仍被活文档/代码引用的 11 份） | 可能早于实现；判断行为以代码 + 测试为准 |
-| `docs/lessons/known-pitfalls.md` | 冻结存档 | 2026-09/10 一次下移的记录，**只读**、不再追加；与 `docs/lessons/` 冲突时**以 lessons 与代码为准** |
-
-已移出仓库、不再在本仓维护的历史材料（需要时按文件路径从 git 历史取回，`git log --diff-filter=D --oneline -- docs` 能找到删除提交）：阶段交接记录（原 handoff 目录 2 份，全部失效）、曝光与收录记录（原 seo 目录 3 份，与功能无关）、设计存档里 7 份零引用的过期稿（面板状态持久化、self 分区、生态清单、迁移咨询、会话日志压缩、会话格式处置、2026-09 UI 审计）。
-
-## 7. 归位约定（新文档放哪）
+## 2. 归位约定（新文档放哪）
 
 1. 对外文档（`README*` / `CHANGELOG` / `SECURITY` / `LICENSE`）与协作规范（`AGENTS` / `DEVELOPERS` / `DESIGN`）留在仓库根。
-2. 「代码现在是什么样」→ `docs/modules/architecture.md` 或 `docs/modules/`、`docs/components/`。
-3. 「外部要照着实现」→ `docs/spec/`。
-4. 「为什么」→ `docs/decisions/`（一次性取舍）或 `docs/lessons/<域>.md`（可复用经验与证据）。
-5. 「已知债 / 硬限制」→ `docs/maintenance/`。
-6. 新增任何文件后回本页表格加一行（漏了 `check-doc-paths` 会直接红），并跑两个守卫。
+2. 「代码现在是什么样」→ `docs/architecture/`。「外部要照着实现」→ `docs/contracts/`。
+3. 「为什么」→ docs/adr/ 下新建 NNNN-短横线标题（.md 后缀，不带 adr- 前缀；一次性取舍）或 `docs/evidence/`（可复用经验与证据）。
+4. 「做不到 / 还欠」→ `docs/known-issues/`。「怎么维护文档与版本号」→ `docs/contributing/`。
+5. 「一次性审计、竞品研究、过期设计稿」→ `docs/archive/`，文件名 `YYYY-MM-DD-主题.md` 或 `YYYY-MM-主题.md`，日期在前以便排序。
+6. 新增任何文件后回所在分区 `README.md` 加一行；新增分区还要回本页加行（漏了守卫会红）。
+
+## 3. 旧路径 → 新路径（2026-11-06 一次性迁移）
+
+历史提交里的旧路径不改（`CHANGELOG.md` 是历史记录，守卫本来就不扫它）。
+
+> 旧路径一律**不加反引号**：它们是历史位置、如今不存在，加了会被 `check-doc-paths` 当失效引用。
+
+| 旧路径 | 新路径 |
+|---|---|
+| docs/spec/*.md（含 bundle-manifest.schema.json） | `docs/contracts/` 同名 |
+| docs/modules/architecture.md | `docs/architecture/core.md` |
+| docs/modules/{backup-restore,sync,recovery,foreign-import}.md | `docs/architecture/` 同名 |
+| docs/components/{client-ui,cli-rescue-console}.md | `docs/architecture/` 同名 |
+| src/client/CLIENT_DEPENDENCIES.md | `docs/architecture/client-dependencies.md` |
+| docs/decisions/0N-*.md | `docs/adr/0N-*.md`（文件名不变） |
+| docs/maintenance/{known-limits,known-gaps,tech-debt}.md | `docs/known-issues/` 同名 |
+| docs/maintenance/{doc-maintenance,versioning}.md | `docs/contributing/` 同名 |
+| docs/lessons/README.md | `docs/evidence/README.md` |
+| docs/lessons/域.md | `docs/evidence/` 同名 |
+| docs/lessons/repo-overview.md | `docs/overview.md` |
+| docs/lessons/known-pitfalls.md | `docs/archive/2026-10-known-pitfalls.md` |
+| docs/design/YYYY-MM-DD-*.md | `docs/archive/` 同名（v1.1 → v1-1） |
+| docs/design/info-hint-migration.md | `docs/archive/2026-10-info-hint-migration.md` |
+| docs/design/reference/{ibm,raycast}-DESIGN.md | `docs/archive/reference-{ibm,raycast}-design.md` |
+| docs/design/reference/README.md、docs/research/README.md | 内容并入 `docs/archive/README.md` |
+| docs/research/dsh-config-manager-technical-audit.md | `docs/archive/2026-11-01-technical-audit.md` |
+
+## 4. 已移出仓库的材料
+
+需要时按路径从 git 历史取回（`git log --diff-filter=D --oneline -- docs` 找删除提交）：阶段交接记录（原 handoff 目录 2 份，全部失效）、曝光与收录记录（原 seo 目录 3 份，与功能无关）、设计存档里 7 份零引用的过期稿（面板状态持久化、self 分区、生态清单、迁移咨询、会话日志压缩、会话格式处置、2026-09 UI 审计）。
+
+## 5. 守卫
+
+```
+node scripts/check-doc-paths.mjs      # 路径漂移 + 分区 README 收录 + 本页收录
+node scripts/check-doc-versions.mjs   # 三处版本一致 + 活文档里的「适用/当前版本」声明
+node scripts/check-agents-budget.mjs  # AGENTS.md 预算与指针存在性
+```

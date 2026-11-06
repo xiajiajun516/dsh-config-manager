@@ -1,5 +1,5 @@
 /**
- * 「英文界面零中文」静态守卫（契约见 docs/design/2026-10-08-i18n-en-hardcoding.md §3）。
+ * 「英文界面零中文」静态守卫（契约见 docs/archive/2026-10-08-i18n-en-hardcoding.md §3）。
  *
  * 用法：
  *   全量：node --test tests/i18n-hardcoded-guard.test.ts

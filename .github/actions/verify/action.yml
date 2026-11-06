@@ -59,7 +59,7 @@ runs:
 
     - name: AGENTS.md budget guard
       # AGENTS.md 每个会话都进模型上下文，且受 workspace instruction 64 KiB 预算限制：
-      # 超限时模型只能看到被截断的尾巴（历史事故）。规则留在 AGENTS.md，证据必须进 docs/lessons/。
+      # 超限时模型只能看到被截断的尾巴（历史事故）。规则留在 AGENTS.md，证据必须进 docs/evidence/。
       shell: bash
       run: node scripts/check-agents-budget.mjs
 

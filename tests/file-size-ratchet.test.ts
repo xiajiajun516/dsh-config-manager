@@ -7,7 +7,7 @@
  *
  * 规则：
  * - 拆小了就把这里的天花板一起下调（棘轮只往下走）。
- * - 真要上调，必须同时写清理由与拆解计划，并在 `docs/maintenance/tech-debt.md` 记一笔。
+ * - 真要上调，必须同时写清理由与拆解计划，并在 `docs/known-issues/tech-debt.md` 记一笔。
  *   （上调记录：rollback-point 5963 → 5980，D3 内置敏感文件排除，见 tech-debt #3；
  *    run-store 2166 → 2221，恢复面板「写盘进行中」瞬态切片 + 4 处共用的登记 hook，
  *    这是 tech-debt #7 的修法本体，不是新增功能；locales 曾上调到 1797，本轮已按页面域

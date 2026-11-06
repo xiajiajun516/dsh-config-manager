@@ -1,7 +1,7 @@
 /**
  * m-market：GitFileWriter —— 通用 git 文件写入器（「一键上传/我的配置」专用）。
  *
- * 背景（docs/design/2026-08-20-my-configs-design.md §4.2 / §4.3）：
+ * 背景（docs/archive/2026-08-20-my-configs-design.md §4.2 / §4.3）：
  * GitTransport（src/sync/git/git-transport.ts）实现的是 SyncTransport 接口，语义是
  * **快照同步**（list/upload/download/delete，内容提交到 snapshots/ 与 snapshots-encrypted/），
  * 不是通用 git 文件写入工具。MyRepoService 需要写入自定义目录结构

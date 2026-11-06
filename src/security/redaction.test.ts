@@ -114,7 +114,7 @@ test('t78-e（正例清单 ≥8 组）：散文/字段名/开关/路径必须原
     'the bearer scheme is defined by RFC 7235',
     'run with --api-key-required to continue',
     "kind: 'openai-style-key' is an internal enum",
-    'path: docs/spec/known-gaps.md',
+    'path: docs/contracts/known-gaps.md',
     'GET /api/health?ready=1',
     'bearer token missing from the header',
     'secrets are never exported by default',

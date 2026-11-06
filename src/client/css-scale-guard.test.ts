@@ -2,7 +2,7 @@
  * css-scale-guard — 视觉 scale 的**源级执行者**（UI v3 §4.2/§4.3、§12）。
  *
  * 为什么需要它：`DESIGN.md` 从 v1 起就写着「唯一允许的 scale」，但实测文件里同时存在
- * 10 档字号 / 11 档圆角 / 5 档行高 / 10 档 gap（见 docs/design/2026-10-05-ui-redesign-v3.md §0）——
+ * 10 档字号 / 11 档圆角 / 5 档行高 / 10 档 gap（见 docs/archive/2026-10-05-ui-redesign-v3.md §0）——
  * 散文规范拦不住新增值。本守卫把 scale 变成红灯：越界值直接失败。
  *
  * 覆盖：font-size / border-radius / line-height / z-index / padding / margin / gap。

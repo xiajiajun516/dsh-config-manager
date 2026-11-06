@@ -1,7 +1,7 @@
 /**
  * SEC-05 回归：校验表只做「正向」校验 —— 表里登记的逐条比对，**表外的归档条目没人管**。
  * 文件类分区又是按归档名原样落盘的，于是「ZIP 有、checksums 没登记」的文件照样被写进目标目录，
- * 完整性声明形同虚设（审计 docs/research/dsh-config-manager-technical-audit.md SEC-05）。
+ * 完整性声明形同虚设（审计 docs/archive/2026-11-01-technical-audit.md SEC-05）。
  *
  * 修后口径：
  *  - 会落盘的文件分区条目（Create/Update/Conflict）若不在 checksums 表内 ⇒ 计划项升级为 Error（逐条零写入），

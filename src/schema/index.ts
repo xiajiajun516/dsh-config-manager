@@ -9,7 +9,7 @@
  *    据此实现自己的 importer / exporter（ZIP 内路径与文件类分区前缀的唯一权威）；
  *  - 取到**分区注册表**（`SECTION_REGISTRY` / `SectionMeta` / `sectionMeta` / `jsonPathOf` /
  *    `PORTABLE_SECTION_IDS` / `OPT_IN_SYNC_SECTION_IDS` / `DEFAULT_INCLUDED_SECTION_IDS` …）——
- *    「有哪些分区、各自什么形态/可移植性」的机器可读唯一来源，与 `docs/spec/` 的分区清单对应；
+ *    「有哪些分区、各自什么形态/可移植性」的机器可读唯一来源，与 `docs/contracts/` 的分区清单对应；
  *  - 引用 Bundle Format v1 的全部载荷类型。
  *
  * 为什么需要它：此前的 `exports["./schema"]` 指向 `./lib/schema/types.js`，而 `types.ts`
@@ -22,7 +22,7 @@
  * `./versions.ts`）。`section-registry.ts` 自身仍然只 import 一个**类型**（`type { SectionId }`；
  * 未注册分区的错误文案 t7 起在 `config.ts`，见那里）。
  * 目标性质是**零 `node:` / 零 npm / 零 @deepseek-ai 依赖**（headless 消费：
- * `docs/spec/headless-consumption.md`；client bundle 自包含）。唯一的跨层依赖是本域消息目录
+ * `docs/contracts/headless-consumption.md`；client bundle 自包含）。唯一的跨层依赖是本域消息目录
  * （`./messages.ts` → `../core/engine-locale.ts`，纯函数、零 node / 零 npm），不破坏该性质；
  * 除此之外不得 import `../core/*`、`node:*` 或任何 UI / DSH 包。
  */

@@ -1,6 +1,6 @@
 /**
  * m-market：GitHub 仓库 URL 解析（纯函数，node 可测）。
- * docs/design/2026-08-21-market-star-filter-sort-design.md §3.1.2。
+ * docs/archive/2026-08-21-market-star-filter-sort-design.md §3.1.2。
  *
  * 职责：从条目来源仓库 URL（`https://github.com/<owner>/<repo>[.git]`）解析出
  * `{ owner, repo }`，供 star 查询（getRepoStarsPublic）使用。

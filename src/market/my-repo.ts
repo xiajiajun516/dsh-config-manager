@@ -1,5 +1,5 @@
 /**
- * m-market：MyRepoService —— 「一键上传 / 我的配置」上传编排（docs/design/2026-08-20-my-configs-design.md §4.2/§4.3/§4.4/§4.5）。
+ * m-market：MyRepoService —— 「一键上传 / 我的配置」上传编排（docs/archive/2026-08-20-my-configs-design.md §4.2/§4.3/§4.4/§4.5）。
  *
  * 数据流（upload / update 共用 runPublish 状态机）：
  *   ① 登录（rest.getUser）→ login（401 → unauthorized，明确可分类）

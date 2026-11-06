@@ -29,7 +29,7 @@ import type { ParsedTranscript } from './session-source.ts';
  * （claude → claude-code、dsh/dsh4 → 同源两代次）。
  *
  * **取证强度逐来源如实标注**（见 registry.ts 的 ForeignSource.evidence 与
- * docs/design/2026-10-04-foreign-import-v1.md §8.2 的真值表）：
+ * docs/archive/2026-10-04-foreign-import-v1.md §8.2 的真值表）：
  *  - measured ：本机实测（目录/库确实存在过，且读盘层据此实现）
  *  - fixture  ：真机未验证，但有**可复现取证方式**（夹具 + 单测端到端跑同一份布局）
  *  - documented：只有四份调研报告的落点（尚未有可复现夹具时**必须**是这个值）

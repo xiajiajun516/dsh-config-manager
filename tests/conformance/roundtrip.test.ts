@@ -7,7 +7,7 @@
  *   - 引擎走内存 mock（HostContext + ConfigAdapter 门面，`src/adapters/test-helpers.ts`），
  *     **不依赖真实 DSH**，因此任何实现者都能在无 DSH 环境下复用这套语料。
  *
- * 规格依据：`docs/spec/bundle-format-v1.md`（§7 向前兼容规则 / §10 已知缺口）。
+ * 规格依据：`docs/contracts/bundle-format-v1.md`（§7 向前兼容规则 / §10 已知缺口）。
  *
  * ── 关于已记录缺口的写法（重要） ────────────────────────────────────────────
  * 本文件对已知缺口一律采用**特征化测试（characterization test）**：
@@ -16,7 +16,7 @@
  *   - CI 保持绿：测试钉住的是当下事实，不是理想；
  *   - 缺口被永久记录：谁改坏了现状会红灯；
  *   - 一旦有人修好缺口（例如未知分区不再算 missingSections），本文件会红灯，
- *     提醒维护者**更新特征化断言**并同步 `docs/spec/bundle-format-v1.md` 的缺口表。
+ *     提醒维护者**更新特征化断言**并同步 `docs/contracts/bundle-format-v1.md` 的缺口表。
  * 绝不写成「永久红灯」的失败测试，也绝不把实现缺陷当作期望行为写进断言。
  */
 import test from 'node:test';

@@ -4,8 +4,8 @@
  *
  * 为什么存在：审计发现活文档里存在指向已删除文件的「反引号路径」，读者与 agent 按图索骥会失败。
  * 只校验**活文档**；历史归档与证据库故意不校验：
- *   - 排除：docs/design（历史设计稿）、docs/lessons（证据可能引用已删文件）、
- *           docs/lessons/known-pitfalls.md（冻结存档）、CHANGELOG.md（历史记录）
+ *   - 排除：docs/archive/ 与 docs/evidence/（记录当时的代码形状，引用后来消失的文件是职责）、
+ *           docs/known-issues/known-gaps.md（历史缺陷台账）、CHANGELOG.md（历史记录）
  *
  * 契约：
  *   - 校验对象 = 反引号内的仓库相对路径 + 相对 Markdown 链接
@@ -14,24 +14,30 @@
  *   - 无法判定为路径的片段（含空格/通配符/URL/<占位符>/纯标识符）一律跳过，避免误报
  *   - 退出码：0 = 全部存在；1 = 有失效路径（逐条打印 file:line 与目标）
  *
- * 二、活跃文档索引收录（2026-10-23 批准新增）
- * 为什么存在：新增 md 忘记回 docs/index.md 加行，导致文档事实上不可达；此前只靠人工。
- * 覆盖面**只**是正式长期维护的五目录（docs/spec、docs/modules、docs/maintenance、docs/decisions、docs/components），
- * 不扩大到 lessons（用裸文件名收录）、docs/design（历史区）与 docs/lessons/known-pitfalls.md（冻结存档）。
- * 收录判定 = **索引条目行**（表格行 / 列表项）出现该文件的全路径（反引号或相对链接）；正文顺带提到不算。
- * 判定逻辑抽在 scripts/doc-index-coverage.mjs（单测 tests/doc-index-coverage.test.ts），脚本不重复实现。
- * 豁免表 INDEX_COVERAGE_EXEMPT 当前为空；加条目必须写理由（= 公开承认这份文档故意不进索引）。
+ * 二、索引可达性（2026-11-06 文档重建后改为两跳）
+ * 为什么存在：新增 md 忘记在索引里加一行，文档事实上不可达；此前只靠人工。
+ * 两跳：docs/index.md → 八个分区 README → 分区内每份文档。
+ *   第一跳：每个分区的 README.md 必须出现在 docs/index.md 的表格行/列表项；
+ *   第二跳：分区内每份 md 的裸文件名必须出现在该分区 README.md 的表格行/列表项
+ *           （docs/archive 免第二跳 —— 只读冻结，正文不再改，只要求归档 README 仍在 index.md 里）。
+ * 不收进检查：docs/overview.md（由 index.md 直连）、docs/index.md 与分区 README 自身。
+ * 收录判定 = **索引条目行**（表格行 / 列表项）；正文顺带提到不算。
+ * 判定逻辑在 scripts/doc-index-coverage.mjs（单测 tests/doc-index-coverage.test.ts），脚本不重复实现。
  *
  * 用法：node scripts/check-doc-paths.mjs [--report]
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, sep } from 'node:path'
-import { INDEX_COVERAGE_DIRS, collectIndexCoverage } from './doc-index-coverage.mjs'
+import { PARTITIONS, collectIndexCoverage, collectPartitionCoverage } from './doc-index-coverage.mjs'
 
 const ROOT = process.cwd()
 const ROOT_FILES = ['AGENTS.md', 'DESIGN.md', 'DEVELOPERS.md', 'README.md', 'README.zh-CN.md', 'SECURITY.md']
-const DOC_DIRS = INDEX_COVERAGE_DIRS // 单份清单，见 scripts/doc-index-coverage.mjs
-const DOC_FILES = ['docs/index.md', 'docs/modules/architecture.md']
+const DOC_DIRS = PARTITIONS // 单份清单，见 scripts/doc-index-coverage.mjs
+const DOC_FILES = ['docs/index.md', 'docs/overview.md']
+// 归档（docs/archive）与证据库（docs/evidence）故意不校验内部路径：
+// 它们记录「当时的代码形状」，引用后来被删/改名的文件是职责（与 CHANGELOG 同性质）。
+// 这两区照旧**要**满足索引两跳（见文末）。
+const NOPATH_DIRS = ['docs/archive', 'docs/evidence']
 const PATH_ROOTS = ['src/', 'tests/', 'scripts/', 'docs/', 'locale/', '.github/', '.dsh/']
 // 代码类引用（组件/测试/样式）允许写成相对某源码目录的简写；
 // 其余扩展名必须带仓库根前缀，避免把 bundle 内产物路径（config/settings.json）误判为仓库文件。
@@ -78,7 +84,7 @@ function walkRepo(dir) {
 walkRepo(ROOT)
 const FILE_SET = new Set(REPO_FILES)
 function existsRepo(p) {
-  if (p.endsWith('/')) return existsSync(join(ROOT, p)) // 目录引用（docs/spec/ 之类）
+  if (p.endsWith('/')) return existsSync(join(ROOT, p)) // 目录引用（docs/contracts/ 之类）
   if (FILE_SET.has(p)) return true
   const needle = '/' + p
   return REPO_FILES.some((it) => it.endsWith(needle))
@@ -88,6 +94,7 @@ const targets = []
 for (const f of ROOT_FILES) if (existsSync(join(ROOT, f))) targets.push(f)
 for (const f of DOC_FILES) if (existsSync(join(ROOT, f))) targets.push(f)
 for (const d of DOC_DIRS) {
+  if (NOPATH_DIRS.includes(d)) continue
   for (const f of walkMd(join(ROOT, d))) targets.push(f.slice(ROOT.length + 1).split(sep).join('/'))
 }
 
@@ -116,9 +123,9 @@ function collect(line) {
   return found
 }
 
-// docs/maintenance/known-gaps.md 是**历史缺陷台账**（记录各版本基线下的代码形状），
+// docs/known-issues/known-gaps.md 是**历史缺陷台账**（记录各版本基线下的代码形状），
 // 与 CHANGELOG 同类：引用当时存在的文件是职责，不是失修。故不校验。
-const living = targets.filter((rel) => rel !== 'docs/maintenance/known-gaps.md')
+const living = targets.filter((rel) => rel !== 'docs/known-issues/known-gaps.md')
 const misses = []
 let checked = 0
 for (const rel of living) {
@@ -141,12 +148,23 @@ console.log('[doc-paths] scanned=' + living.length + ' refs=' + checked + ' miss
 for (const m of misses) console.log('  x ' + m.file + ':' + m.line + '  ->  ' + m.path)
 
 // ---------------- 活跃文档索引收录 ----------------
-// 只查正式长期维护的五目录；见文件头「二」的边界说明。
+// 两跳检查；见文件头「二」的边界说明。
 const indexMd = readFileSync(join(ROOT, 'docs/index.md'), 'utf8')
 const coverage = collectIndexCoverage({ root: ROOT, indexText: indexMd })
-const unlisted = coverage.unlisted
-console.log('[doc-index] living=' + coverage.living.length + ' unlisted=' + unlisted.length)
-for (const p of unlisted) console.log('  x 未在 docs/index.md 收录: ' + p)
+const partitions = collectPartitionCoverage({
+  root: ROOT,
+  partitions: PARTITIONS.filter((d) => d !== 'docs/archive'),
+})
+const unlisted = [...coverage.unlisted, ...partitions.unlisted]
+console.log(
+  '[doc-index] partitions=' + coverage.living.length + '/' + PARTITIONS.length +
+    ' unlisted=' + coverage.unlisted.length +
+    ' partition-files=' + partitions.living.length +
+    ' partition-unlisted=' + partitions.unlisted.length,
+)
+for (const p of coverage.unlisted) console.log('  x 分区 README 未在 docs/index.md 收录: ' + p)
+for (const p of partitions.unlisted) console.log('  x 未在所属分区 README 收录: ' + p)
+for (const p of partitions.missingIndex) console.log('  x 分区缺 README.md: ' + p)
 
 if ((misses.length > 0 || unlisted.length > 0) && !reportOnly) {
   if (misses.length > 0) {

@@ -1,7 +1,7 @@
 /**
  * 配置市场区块的客户端渲染装配层（m-market-ui，node 可测）。
  *
- * 设计纪律（市场设计上游依据 = docs/design/2026-08-19-market-publish-design.md：
+ * 设计纪律（市场设计上游依据 = docs/archive/2026-08-19-market-publish-design.md：
  * 旧的市场设计文档已在 2026-08-19 大写 Docs/ 清理中删除，其章节号在新文档中不存在，
  * 故只引用该文件、不再引用 § 号）：
  *  - **共享渲染模型唯一权威 = Host 侧 `src/market/view.ts`**（marketStatusText /
@@ -34,7 +34,7 @@ import { formatMinuteStamp, parseDateInput } from '../../utils/time.ts';
 /* ---------------------------------------------------------------- 客户端专属：来源徽章 */
 
 /**
- * 条目来源徽章 kind（阶段 1：条目级来源仓库，docs/design/2026-08-19-market-publish-design.md §3.3）：
+ * 条目来源徽章 kind（阶段 1：条目级来源仓库，docs/archive/2026-08-19-market-publish-design.md §3.3）：
  * - `'ok'`（官方）：`item.repo` 缺省（条目与市场仓库同仓）或 `item.repo` 为官方默认地址；
  * - `'warn'`（第三方）：`item.repo` 存在且非官方默认地址（条目由作者自托管仓库发布）。
  * 判定基准复用 `builtin.ts` 的 `isOfficialMarket`（固定官方地址比较）：env 覆盖为预览仓库时，
@@ -61,7 +61,7 @@ export function collectCategories(items: readonly MarketListItem[]): string[] {
 /* ---------------------------------------------------------------- 客户端专属：来源筛选 / 排序 */
 
 /**
- * 来源筛选值（docs/design/2026-08-21-market-star-filter-sort-design.md §3.3.1）：
+ * 来源筛选值（docs/archive/2026-08-21-market-star-filter-sort-design.md §3.3.1）：
  * - 'all'      全部来源；
  * - 'official' 官方配置：条目无 repo（= 官方市场仓库自身）或 repo 为官方地址；
  * - 'personal' 个人配置：条目带非官方 repo（作者自托管仓库）。

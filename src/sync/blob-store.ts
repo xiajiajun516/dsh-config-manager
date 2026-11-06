@@ -9,13 +9,13 @@
  * （`<section>.blobs.json` / WebDAV 的 JSON 载荷里的 blobRefs）。内容没变 = 同一个哈希 =
  * 已在仓里 = 不再传输。快照保留策略裁剪快照时，无人引用的 blob 由 GC 回收。
  *
- * 兼容性（**这是对外格式变更**，必须同步 docs/spec）：
+ * 兼容性（**这是对外格式变更**，必须同步 docs/contracts/）：
  *  - 外置只发生在**通道侧**：只有 transport 传了 BlobSink 才启用；引擎/导出/导入看到的
  *    仍是普通 FilesSection（含 data）。本地散文件副本、加密快照、加密载荷一律不外置。
  *  - 旧版插件读新格式：`<section>.blobs.json` 不是 FilesSection，旧版 layout 会当成
  *    「文件分区目录缺失」—— git 通道 missingFileDir='empty' 会降级为空分区（丢内容但不崩），
  *    WebDAV 通道 blobRefs 也认不出。因此 /sync/status 不下发版本协商，**跨版本混用不被支持**：
- *    两端插件版本应当一致（与既有「同步通道不做协议协商」的定位一致，见 docs/spec）。
+ *    两端插件版本应当一致（与既有「同步通道不做协议协商」的定位一致，见 docs/contracts/）。
  */
 import type { FilesSection, SectionId } from '../schema/types.ts';
 import { sha256Hex } from '../utils/hashing.ts';

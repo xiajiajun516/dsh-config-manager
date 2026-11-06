@@ -115,7 +115,7 @@ export function assertZipEntryCount(count: number, limits: ZipSafetyLimits = {})
 
 /* ---------------- 写出侧布局片段（zipToBuffer 与 writeZip 共用，避免两份布局漂移） ----------------
  * 三条 helper 的字段写入顺序与取值**必须与历史 zipToBuffer 逐字一致** —— 产物格式是对外契约
- * （docs/spec/bundle-format-v1.md），zip.test.ts 有一条「zipToBuffer 与 writeZip 产物等价」的用例钉住。 */
+ * （docs/contracts/bundle-format-v1.md），zip.test.ts 有一条「zipToBuffer 与 writeZip 产物等价」的用例钉住。 */
 
 /** 本地文件头（30 字节；不含紧随其后的文件名与压缩数据）。 */
 function buildLocalHeader(nameLen: number, crc: number, compressedSize: number, size: number, time: number, date: number): Buffer {

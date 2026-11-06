@@ -17,7 +17,7 @@
  *    （回退会让用户以为导的是 A、实际导的是 B）。
  *
  * 契约正文（六来源路径真值表 / 冲突语义 / 单元 id 向后兼容）见
- * docs/design/2026-10-04-foreign-import-v1.md §8。
+ * docs/archive/2026-10-04-foreign-import-v1.md §8。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';

@@ -326,7 +326,7 @@ test('T17：留存/救援点文案与引擎四常量逐句对齐，旧的不实�
 test('T18-F1④：createdAfter / result.counts 必须说「留点时并不存在（之后新建）」（2026-10-12 翻面）', () => {
   // **2026-10-12 翻面**：删除候选的判据从「不在记录里」改成「**能证明**留点时不存在」（方向 A+B：
   // files ∪ skipped ∪ unreadableFiles ∪ excludedDirs ∪ 路径索引；见 src/core/rollback-point.ts 的
-  // planCreatedRemovals 与 docs/lessons/recovery-console.md「删除集的可证性」）。
+  // planCreatedRemovals 与 docs/evidence/recovery-console.md「删除集的可证性」）。
   // 于是 createdAfter / leftovers 现在是**证明为留点之后新建**的路径 —— 旧文案「该点未记录」反而
   // 会把「留点时就被预算挡下、当时确实存在」的既有文件也算进去，那才是不实表述。
   // `rollback.preview.leftoversTitle` 曾在这里一起被钉；它随「文案克制」下线（清单只渲染「会删的」

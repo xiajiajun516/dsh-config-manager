@@ -81,7 +81,7 @@ import type { RecoveryPreview, RecoveryStatus, RecoveryVerifyResult } from '../u
  *
  * v3 删掉了三个化石值：`import`（导入是流程不是页面）、`market`（市场退出导航、只由 Task 承载），
  * 并把 v1 的 `overview`/`profiles` 改名为 `home`/`environment`。
- * 旧载荷一律由 parsePersistedState 的映射表迁到新值（docs/design/2026-10-05-ui-redesign-v3.md §5.1）。
+ * 旧载荷一律由 parsePersistedState 的映射表迁到新值（docs/archive/2026-10-05-ui-redesign-v3.md §5.1）。
  */
 export type PanelId = 'home' | 'library' | 'sync' | 'environment'
 

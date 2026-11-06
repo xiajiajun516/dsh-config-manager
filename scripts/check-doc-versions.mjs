@@ -2,7 +2,7 @@
 /**
  * 文档版本守卫（P1，2026-10-22 审计后新增）
  *
- * 为什么存在：审计实证「文档写死的版本号会腐烂」——docs/spec/known-gaps.md 曾写
+ * 为什么存在：审计实证「文档写死的版本号会腐烂」——docs/contracts/known-gaps.md 曾写
  * 「npm 最新 v0.1.58、将以 v0.1.59 发布」，实查已是 0.1.79；compat-matrix 写「适用 0.1.67」。
  * 写死的数字没有任何机制保证它跟着发版走，读的人无法判断真假。
  *
@@ -12,8 +12,10 @@
  *   2. 活文档里**声明当前适用版本**的句子（含「适用插件版本」）必须等于当前版本；
  *      含「最新/当前」字样的 dsh-config-manager@X.Y.Z 同样必须等于当前版本。
  *
- * 不查：CHANGELOG、docs/maintenance/known-gaps.md（历史台账）、docs/lessons、
- *       docs/design（历史设计稿），以及标注「取证/写作时」的历史证据行。
+ * 不查：CHANGELOG、docs/known-issues/known-gaps.md（历史台账）、docs/evidence/、
+ *       docs/archive/（历史设计稿与研究存档），以及标注「取证/写作时」的历史证据行。
+ * 覆盖面 = docs/index.md + docs/overview.md + 六个「当前有效」分区
+ *          （architecture / contracts / adr / known-issues / contributing / agents）。
  *
  * 用法：node scripts/check-doc-versions.mjs [--report]
  * 退出码：0 = 一致；1 = 有漂移。
@@ -26,9 +28,9 @@ const LF = String.fromCharCode(10)
 const CR = String.fromCharCode(13)
 const SEMVER = /([0-9]+[.][0-9]+[.][0-9]+)/
 const ROOT_FILES = ['AGENTS.md', 'DESIGN.md', 'DEVELOPERS.md', 'README.md', 'README.zh-CN.md', 'SECURITY.md']
-const DOC_FILES = ['docs/index.md', 'docs/modules/architecture.md']
-const DOC_DIRS = ['docs/spec', 'docs/modules', 'docs/maintenance', 'docs/decisions']
-const SKIP_FILES = ['docs/maintenance/known-gaps.md'] // 历史缺陷台账：写的是写作时的基线
+const DOC_FILES = ['docs/index.md', 'docs/overview.md']
+const DOC_DIRS = ['docs/architecture', 'docs/contracts', 'docs/adr', 'docs/known-issues', 'docs/contributing', 'docs/agents']
+const SKIP_FILES = ['docs/known-issues/known-gaps.md'] // 历史缺陷台账：写的是写作时的基线
 
 const errors = []
 const lines = (rel) => {

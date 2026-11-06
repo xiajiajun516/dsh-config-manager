@@ -1,7 +1,7 @@
 /**
  * Bundle manifest JSON Schema ↔ 实现绑定测试。
  *
- * 目的：把 `docs/spec/bundle-manifest.schema.json`（Bundle Format v1 的机器可校验形态）
+ * 目的：把 `docs/contracts/bundle-manifest.schema.json`（Bundle Format v1 的机器可校验形态）
  * 焊死在 `src/schema/manifest.ts` 的实现上。规格最大的死法是漂移——文档说一套、代码做一套。
  *
  * 方案选择：(a) 手写仅覆盖本 schema 所用关键字的最小校验器，而不是 (b) 退化为
@@ -153,7 +153,7 @@ function validateAgainstSchema(schema: SchemaNode, data: unknown): SchemaIssue[]
  * 载入 schema 原文（被验证的就是发布出去的那份文件）
  * ==========================================================================*/
 
-const SCHEMA_PATH = resolve(import.meta.dirname, '..', '..', 'docs', 'spec', 'bundle-manifest.schema.json');
+const SCHEMA_PATH = resolve(import.meta.dirname, '..', '..', 'docs', 'contracts', 'bundle-manifest.schema.json');
 const SCHEMA = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8')) as SchemaNode;
 
 /* ============================================================================

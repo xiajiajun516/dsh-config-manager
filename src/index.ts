@@ -2846,7 +2846,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   const makeMarketReader = (): GitMarketReader => new GitMarketReader({ msg, timeoutMs: 60_000 })
 
   /**
-   * 市场条目来源仓库 star 缓存（docs/design/2026-08-21-market-star-filter-sort-design.md §3.1.3）。
+   * 市场条目来源仓库 star 缓存（docs/archive/2026-08-21-market-star-filter-sort-design.md §3.1.3）。
    * - **匿名查询**（getRepoStarsPublic，不注入 token）——守住「市场端点零凭据」安全不变式；
    * - 按仓库 URL 去重 + 1 小时 TTL + 失败降级（单仓失败显示「—」，不影响整体浏览）；
    * - tokenProvider 给空函数（requestPublic 不调用它，仅满足构造签名）。

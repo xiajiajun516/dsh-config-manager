@@ -1,14 +1,14 @@
 /**
  * m-market：市场只读读取通道（MarketReader / GitMarketReader）。
  *
- * 与 docs/design/2026-08-19-market-publish-design.md §3.2「GitMarketReader：按条目选择仓库」对齐：
+ * 与 docs/archive/2026-08-19-market-publish-design.md §3.2「GitMarketReader：按条目选择仓库」对齐：
  * - 市场用「只读 git fetch」，不复用 GitTransport 的写路径（commit/push/snapshots/<id>/ 布局）；
  * - 复用点：git 命令执行层（execFile promise 封装 / 脱敏 mask / SnapshotFs）+ validateRepoUrl；
  * - 每次读取：ensureRepo() 首次 git clone --depth 1，已存在副本则快进到远端（显式 refspec fetch +
  *   merge --ff-only，不读 FETCH_HEAD；参数见 src/utils/git-fast-forward.ts）；整段在工作副本锁内；
  * - 默认公开市场不注入凭据（repoUrl 拒绝 userinfo）；二期私有市场才走 token credential helper；
  * - itemId 必须过 assertSafeItemId（防 items/<id>/ 越界）；
- * - 条目级来源仓库（方案 B，docs/design/2026-08-19-market-publish-design.md §3.2）：
+ * - 条目级来源仓库（方案 B，docs/archive/2026-08-19-market-publish-design.md §3.2）：
  *   readItemManifest/readItemZip 接受可选 repo，读取目录 = repo ?? url；workDir 由调用方按
  *   来源仓库 url-hash 分目录，index.json 永远从市场仓库读。
  */

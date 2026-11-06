@@ -1,5 +1,5 @@
 /**
- * 「关于（About）」面板（设置页第 6 个 tab 内容，docs/design/2026-08-19-about-tab-design.md §4）。
+ * 「关于（About）」面板（设置页第 6 个 tab 内容，docs/archive/2026-08-19-about-tab-design.md §4）。
  *
  * 纯静态展示视图 + 外链，无表单 / 无写操作 / 无新增依赖：
  * - 项目信息卡：插件名 + 官方 Badge；版本 / DSH / 平台 Badge（运行时信息，经 api.status() 获取）；

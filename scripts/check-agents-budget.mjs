@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // AGENTS.md 预算与结构守卫（零依赖、本地 + CI 同源）。
-// 设计前提：AGENTS.md 只放规则；真机证据/量化数据/复现脚本放 docs/lessons/<域>.md。
+// 设计前提：AGENTS.md 只放规则；真机证据/量化数据/复现脚本放 docs/evidence/<域>.md。
 // 越界即 exit 1（CI 红），并在输出里点名行号与建议落点。
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
@@ -15,7 +15,7 @@ export function evaluateAgentsText(text, pathExists = () => true) {
   const norm = String(text).replace(/\r\n/g, '\n');
   const bytes = Buffer.byteLength(norm, 'utf8');
   if (bytes > LIMITS.hardCapBytes) {
-    errors.push(`AGENTS.md ${bytes} B 超过硬上限 ${LIMITS.hardCapBytes} B：把证据/叙事搬到 docs/lessons/<域>.md`);
+    errors.push(`AGENTS.md ${bytes} B 超过硬上限 ${LIMITS.hardCapBytes} B：把证据/叙事搬到 docs/evidence/<域>.md`);
   } else if (bytes > LIMITS.warnBytes) {
     warnings.push(`AGENTS.md ${bytes} B 已过警戒线 ${LIMITS.warnBytes} B（离硬上限很近）`);
   }
@@ -34,14 +34,14 @@ export function checkAgentsDoc(root = resolve(dirname(fileURLToPath(import.meta.
   const text = readFileSync(join(root, 'AGENTS.md'), 'utf8');
   const res = evaluateAgentsText(text, (rel) => existsSync(join(root, rel)));
   const errors = [...res.errors];
-  const lessonsDir = join(root, 'docs/lessons');
+  const lessonsDir = join(root, 'docs/evidence');
   const indexFile = join(lessonsDir, 'README.md');
   if (!existsSync(indexFile)) {
-    errors.push('缺少 docs/lessons/README.md（域索引）');
+    errors.push('缺少 docs/evidence/README.md（域索引）');
   } else {
     const index = readFileSync(indexFile, 'utf8');
     for (const f of readdirSync(lessonsDir).filter((f) => f.endsWith('.md') && f !== 'README.md')) {
-      if (!index.includes(f)) errors.push(`docs/lessons/${f} 未登记进 docs/lessons/README.md 索引`);
+      if (!index.includes(f)) errors.push(`docs/evidence/${f} 未登记进 docs/evidence/README.md 索引`);
     }
   }
   return { ...res, errors, lessonsDir };

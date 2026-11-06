@@ -1,5 +1,5 @@
 /**
- * m-market：validateMarketRepoUrl 单测（docs/design/2026-08-19-market-publish-design.md §3.1）。
+ * m-market：validateMarketRepoUrl 单测（docs/archive/2026-08-19-market-publish-design.md §3.1）。
  * 覆盖：合法 https 通过；git@/ssh/scp 形态拒绝；userinfo / 空白 / 空串拒绝。
  */
 import { test } from 'node:test'

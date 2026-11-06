@@ -1,5 +1,5 @@
 /**
- * m-market：市场条目安全校验管线（依据 docs/design/2026-08-19-market-publish-design.md
+ * m-market：市场条目安全校验管线（依据 docs/archive/2026-08-19-market-publish-design.md
  * §3.6 安全分析——该节明确引用本模块的校验管线作为威胁缓解）。
  * 下载条目（config.zip）后、生成 ImportPlan 之前依次执行，全部纯函数、node 可测。
  *
@@ -128,7 +128,7 @@ export function validateMarketItem(
   for (const [sectionId, enabled] of Object.entries(internalManifest.sections) as [SectionId, boolean][]) {
     if (!enabled) continue;
     // 市场条目禁止分区（BANNED_MARKET_SECTIONS：sessions 历史会话 / pluginFiles 任意文件 / self 本地环境）：
-    // 与 secrets 同级硬约束（产品决策 2026-08-19，guide docs/spec/market-index-v1.md）。
+    // 与 secrets 同级硬约束（产品决策 2026-08-19，guide docs/contracts/market-index-v1.md）。
     if (BANNED_MARKET_SECTIONS.includes(sectionId)) {
       return { status: 'invalid', errors: [marketMsg('market.security.bannedSection', { section: sectionId })], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
     }

@@ -225,7 +225,7 @@ export function areaOfPath(
 /**
  * 解析一个已安装插件 package.json 里的自述声明（dsh.dataDirs）—— 「让别的插件自己适配」的钩子。
  *
- * 契约（对外文档见 docs/spec/plugin-data-declaration.md）：
+ * 契约（对外文档见 docs/contracts/plugin-data-declaration.md）：
  *   { "dsh": { "dataDirs": [ { "path": ".my-plugin", "role": "config", "env": ["MY_PLUGIN_DIR"] } ] } }
  *
  * 形状不认识就整条丢弃（返回 null），绝不猜；path 非法（绝对路径 / .. / 空段）同样丢弃。

@@ -44,7 +44,7 @@ jobs:
       - name: Tag guard (形态 + tag↔版本)
         # 为什么必须在 npm publish 之前：npm 上同一版本号不可重发，
         # tag 落后会让 Release 描述与包不符，tag 领先则直接把包发成另一个版本号。
-        # 规则与处置见 docs/maintenance/versioning.md §11.1/§11.2。
+        # 规则与处置见 docs/contributing/versioning.md §11.1/§11.2。
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -euo pipefail

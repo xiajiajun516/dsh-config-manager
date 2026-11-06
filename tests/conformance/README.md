@@ -2,7 +2,7 @@
 
 本目录把「DSH 配置 bundle 的格式」从**文档描述**变成**可执行的、可被外部实现复用的验收证据**。
 
-- 规格：`docs/spec/bundle-format-v1.md`
+- 规格：`docs/contracts/bundle-format-v1.md`
 - 测试本体：`roundtrip.test.ts`（`node:test`，零依赖）
 - 语料构造器：`corpus.ts`（真实 Exporter 造包 → 字节级注入 → **重算 checksums**）
 
@@ -256,8 +256,8 @@ import { rebuildBundle } from './tests/conformance/corpus.ts';
 
 **待办（不在本目录职责内）**：
 
-- `docs/spec/bundle-format-v1.md` §10 与 `docs/maintenance/known-gaps.md` 的缺口表需要同步为「已修复」
-  （`docs/spec/**` 由契约维护者负责）；具体到 H2：§7.4 与 §10 的 G-04 行仍写着
+- `docs/contracts/bundle-format-v1.md` §10 与 `docs/known-issues/known-gaps.md` 的缺口表需要同步为「已修复」
+  （`docs/contracts/**` 由契约维护者负责）；具体到 H2：§7.4 与 §10 的 G-04 行仍写着
   「**但 checksums 表缺失时整段跳过 → 零告警**」，该描述在本次修复后**已过时**，
   应改为「表缺失或为空 → `import.checksumsMissing` warning」；
 - 按 `§4` 的要求，本次行为变更应在 `CHANGELOG.md` 记一条（修复改变对外行为，属发布亮点）。
@@ -268,7 +268,7 @@ import { rebuildBundle } from './tests/conformance/corpus.ts';
 - CI 保持绿——测试钉住事实，不制造永久红灯；
 - 缺口被永久记录——谁无意中改变了现状会红灯；
 - **一旦缺口被修好**，`FC-01` / `VER-03` 会红灯，提醒维护者更新特征化断言，
-  并同步 `docs/spec/bundle-format-v1.md` §10 的缺口表。
+  并同步 `docs/contracts/bundle-format-v1.md` §10 的缺口表。
 
 > **本节的历史写法保留在此作为流程说明，但 G-01…G-07 已经修好**：
 > 上表已不再是「特征化断言」，`FC-01` / `FC-03` / `VER-03` / `INT-01` 现在断言的是
@@ -304,8 +304,8 @@ import { rebuildBundle } from './tests/conformance/corpus.ts';
   `needsMigration` 守卫的**受控块内**（顺序 + 花括号范围）。任何新增源码守卫都要用这条突变
   （`if (false)`）自检：**改坏了必须红灯**，否则它只是装饰。
 - **「缺口登记」与「缺口修复」是两件事，不要混淆**：
-  - **登记**（记录「现状是什么」）只写 `docs/maintenance/known-gaps.md` 与
-    `docs/spec/bundle-format-v1.md` §10，**不写 CHANGELOG**——既有行为不是本次发布的亮点，
+  - **登记**（记录「现状是什么」）只写 `docs/known-issues/known-gaps.md` 与
+    `docs/contracts/bundle-format-v1.md` §10，**不写 CHANGELOG**——既有行为不是本次发布的亮点，
     且 CHANGELOG 的当前版本段会被 CI 抽成 GitHub Release 描述，塞入既有缺口会污染 Release notes；
   - **修复**（改变行为）才写 CHANGELOG，因为那是对外可见的变更。
 - 新增语料请沿用 `corpus.ts`（真实 Exporter 造包 + 重算 checksums + 独立输出路径），

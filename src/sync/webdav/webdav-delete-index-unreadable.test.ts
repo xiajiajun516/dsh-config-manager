@@ -6,7 +6,7 @@
  *   删掉仍被其它快照引用的会话 blob（不可恢复）。
  *   → 索引读不出来必须**中止删除**，绝不重写 index.json、绝不触发 blob GC。
  * sync-F3（P1）：blob 仓 URL 此前多一个斜杠（…/dsh-config-manager//blobs/…），与
- *   docs/spec/sync-channel-v1.md §3 的 \`<col>/blobs/<sha256>\` 及其它通道不一致。
+ *   docs/contracts/sync-channel-v1.md §3 的 \`<col>/blobs/<sha256>\` 及其它通道不一致。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -122,7 +122,7 @@ test('sync-F1：索引读不出来时绝不重写 index.json、绝不删除被�
   assert.equal(state.blobs.has(BLOB_HASH), true, '被引用的 blob 必须仍在仓里');
 });
 
-test('sync-F3：blob 仓 URL 不得含空路径段（<col>/blobs/…，与 docs/spec §3 一致）', async () => {
+test('sync-F3：blob 仓 URL 不得含空路径段（<col>/blobs/…，与 docs/contracts/sync-channel-v1.md §3 一致）', async () => {
   const urls: string[] = [];
   const request: WebDavRequestFn = async (method, url) => {
     urls.push(url);

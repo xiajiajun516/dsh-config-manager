@@ -1,7 +1,7 @@
 /**
  * 「关于（About）」Tab 纯函数渲染模型单测（node:test + node:assert，无需 DOM）。
  *
- * 覆盖（docs/design/2026-08-19-about-tab-design.md §5）：
+ * 覆盖（docs/archive/2026-08-19-about-tab-design.md §5）：
  *  - 链接派生：repoUrl → star / docs / issues 的正确后缀；
  *  - 尾斜杠输入归一化（含多个尾斜杠）；
  *  - 状态行格式化：pluginVersion / dshVersion / platform+arch 合并；

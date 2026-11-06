@@ -1,5 +1,5 @@
 /**
- * m-market：MyRepoService 单测（docs/design/2026-08-20-my-configs-design.md §4.2/§4.3/§4.4/§4.5/§4.8）。
+ * m-market：MyRepoService 单测（docs/archive/2026-08-20-my-configs-design.md §4.2/§4.3/§4.4/§4.5/§4.8）。
  *
  * 覆盖（mock gitWriter/rest/prepare，不碰真实网络与 git）：
  * - 首次上传全流程（prepare 元数据、建仓、写用户仓库、fork、PR 创建）

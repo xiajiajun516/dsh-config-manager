@@ -1,5 +1,5 @@
 /**
- * m-market：prepareMarketItem 纯函数单测（发布向导核心，docs/design/2026-08-19-market-publish-design.md §3.4）。
+ * m-market：prepareMarketItem 纯函数单测（发布向导核心，docs/archive/2026-08-19-market-publish-design.md §3.4）。
  * 覆盖：合法生成（manifest/checksums/sections/provenance）、secrets 拒绝、id/repoUrl 校验、
  * zip 结构拒绝、空分区拒绝、可选字段缺省。
  */

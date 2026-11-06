@@ -1,10 +1,10 @@
 # 🎨 DESIGN.md — DSH Config Manager 视觉设计规范（Workbench Design System）
 
 > **本文件是项目 UI / UX / Visual Style 的 Single Source of Truth。**
-> **2026-10-06 UI v3 重做**（方案与迁移映射见 `docs/design/2026-10-05-ui-redesign-v3.md`）。
+> **2026-10-06 UI v3 重做**（方案与迁移映射见 `docs/archive/2026-10-05-ui-redesign-v3.md`）。
 > 任何开发者或 AI Agent 在创建、修改前端界面前必读；若本文件与代码冲突，以代码为准并更新本文件。
 >
-> **v2 章节作废声明**：`docs/design/2026-10-02-ui-rebuild-v2-skeleton.md` 的 §4/§5/§7–§9
+> **v2 章节作废声明**：`docs/archive/2026-10-02-ui-rebuild-v2-skeleton.md` 的 §4/§5/§7–§9
 > 与本文 2026-10-06 之前的 §1、§1.1、§2、§3–§5、§9 **已被 v3 取代**（该文档仅作评审记录保留）。
 > v3 的三处结构性变化：① 一级导航收敛为 4 页（市场退出导航、成流程）；
 > ② 语义色改为 `--dsw-*` → `--cm-*` → 组件 的三层单向依赖；③ 字号/间距/圆角/层级有了**源级守卫**。
@@ -504,7 +504,7 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
 - **依赖归类**：二者已被内联进 `lib/client.js`，因此是**构建期依赖** → 放 `devDependencies`
   （放 `dependencies` 会迫使只想复用引擎的 headless 消费者安装整套 React UI 栈）。
   这条不变量由 `src/client/bundle-selfcontained.test.ts` 钉死（build 后跑）；消费方式见
-  `docs/spec/headless-consumption.md`。
+  `docs/contracts/headless-consumption.md`。
 
 ### 数据展示
 - **数据表**：`.tableWrap > .tableScroll > .dataTable`；变体 `.tableFixed`（固定布局 +
@@ -1102,7 +1102,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     行级 diff 内核 `src/utils/line-diff.ts`（零依赖 Myers，**超预算才**降级为整块替换）；
     **保真度预算**：编辑距离上限缺省 2000、回滚单文件按需查看 4000（400 那条老口径会让几千行文件的普通改动
     一律变成「整块替换」＝用户看到的假信号）；预算的时间与内存实测（≤115 ms / RSS ≤+175 MB）与取证见
-    `docs/lessons/recovery-console.md`，再往上要换线性空间算法而不是继续加预算；
+    `docs/evidence/recovery-console.md`，再往上要换线性空间算法而不是继续加预算；
     组件 `src/client/library/RestorePlanView.tsx` 只装配（v3 随产物库归位搬移）。
   - **双栏表已抽成共享原语**（2026-10-12）：`src/client/common/DiffTable.tsx` —— 快照恢复计划与
     「回退预览 → 查看」共用同一副骨架（`.diffTable` / `.diffScroll` / `.diffCell*` / `.diffHunkRow` /
@@ -1347,9 +1347,9 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   - **颜色仍按语义命名**（`--fg/--muted/--bg/--card/--surface/--line/--accent/--accent-hover/--on-accent/--ok/--warn/--bad/--scrim`），
     并给出 `prefers-color-scheme: dark` 暗色一套 —— 因为 DSH 的 token 在这里不存在，只能自带；
     token 的**语义**与本文 §3 对齐（ok=成功、warn=需注意、bad=危险/失败）。
-  - **救急台的设计系统有外部出处（2026-10）**：亮色取 **IBM Carbon**（`docs/design/reference/ibm-DESIGN.md`）的语义四色与 surface 画布，
-    暗色取 **Raycast**（`docs/design/reference/raycast-DESIGN.md`）的 surface 阶梯与语义 accent。逐条映射、只取的四节、
-    以及**全部偏离记录**在 `docs/components/cli-rescue-console.md`。四条硬约束：
+  - **救急台的设计系统有外部出处（2026-10）**：亮色取 **IBM Carbon**（`docs/archive/reference-ibm-design.md`）的语义四色与 surface 画布，
+    暗色取 **Raycast**（`docs/archive/reference-raycast-design.md`）的 surface 阶梯与语义 accent。逐条映射、只取的四节、
+    以及**全部偏离记录**在 `docs/architecture/cli-rescue-console.md`。四条硬约束：
     ① **处方角**（一律 `border-radius:0` —— Carbon 的「半径为 0 才是品牌」，胶囊 chip / cov 一并改方）；
     ② **文字色取「能读的那一档」**：Carbon 的 `#24a148` / `#f1c21b` 只做填充，正文用 `#198038` / `#8e6a00`（AA 对比度由 `web.test.ts` 的 R3-02 逐对钉住）；
     ③ **层级只用 surface 变化 + 1px hairline，禁止阴影**（Carbon 的 do/don't）；④ 字体仍走**系统栈（含中文字族）**，
@@ -1478,7 +1478,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 - **差距 ①② 已于 2026-10-15 收回**（生态既有做法：宿主模块表可以 `require` 到 ui-primitives，见下方那一条）：① 引用 / 技能 chip —— 正文交给宿主自己的 `projectUserText`（`openFile` / `openSkill` 在时可点开）；② 文件类型图标 —— 用宿主 `FileTypeIcon`，拿不到才回落 `.chatFileExt` 扩展名徽标。
   **2026-10-17（用户要求「与 DSH 原生气泡完全一致」）：上一版登记的近似档全部收回** —— 圆角 `--cm-r-3`=8px（宿主 `--dsw-radius-xl`=**20px**，旧注释里的「14px」是错的）、动作行 24px（宿主 28px+delta）、时刻 11px（宿主次级 13px 档）、附件行 gap 4px（宿主 8px）、文件卡「小 chip」（宿主 240×64 卡）、`.chatBubble` 的 `display:flex` 列（宿主是**块**，flex 会把技能/引用 chip 挤成独立行）。现在这些位置**逐值消费宿主的同一条变量**：`--cm-r-chat` = `var(--dsw-radius-xl,20px)`、`--cm-r-act` = `var(--dsw-radius-sm,8px)`、`--cm-chat-action` = `calc(28px + var(--dsh-content-font-delta,0px))`、`--cm-chat-glyph` = `calc(15px + …)`、`--cm-chat-card-bg` = `var(--dsw-specific-input-major,transparent)`、`--cm-chat-hover-bg` = `var(--dsw-alias-interactive-bg-hover, …)`、`--cm-fs-second` = `var(--dsh-content-font-size-secondary,13px)`、文件卡 `240px / min-height 64px / padding 8px 12px / gap 10px`；**动作行的显现语义**也照抄宿主（`:is([data-chat-flow-kind=user],…):has(~ :is(…)) ⟹ 默认 `opacity:0`，`:hover`/`:focus-within` 才显）—— 即「后面还有用户消息的那几条默认收起，最后一条常亮」。
   **仍未做（如实登记）**：③ 时间**文案**只显示时刻、不做宿主那种「今天 / 昨天」自动切换（需要宿主 `clock.*` 词典，我们没有）；④ rest 块的 `JsonBlock` 外观仍是我们的 `<details>`；⑤ 无宿主同款 tooltip；⑥ 崩溃降级只保留正文。宿主 `--dsw-radius-*` 档位（ui-theme 抽出）= xs 4 / sm 8 / md 12 / lg 16 / xl 20 —— 镜像 token 一律写宿主兜底值，宿主换档时自动跟随。
-- **字号 / 行高 / 限宽跟随宿主的「内容字号」而不是我们的字号档（2026-10-17 修 issue #93，收回上一版登记的「正文 12.5px 近似档」）**：宿主 `.bubble` = `font-size: var(--dsh-content-font-size,14px)` + `line-height: calc(22px + var(--dsh-content-font-delta,0px))`，`.userStack` = `max-width: min(calc(var(--dsh-chat-content-width,748px) * .702), 82%)`（三处取值都是**从本机 `app.asar` 抽出的宿主产物**，见 `docs/maintenance/known-gaps.md` G-39 增量（七））。
+- **字号 / 行高 / 限宽跟随宿主的「内容字号」而不是我们的字号档（2026-10-17 修 issue #93，收回上一版登记的「正文 12.5px 近似档」）**：宿主 `.bubble` = `font-size: var(--dsh-content-font-size,14px)` + `line-height: calc(22px + var(--dsh-content-font-delta,0px))`，`.userStack` = `max-width: min(calc(var(--dsh-chat-content-width,748px) * .702), 82%)`（三处取值都是**从本机 `app.asar` 抽出的宿主产物**，见 `docs/known-issues/known-gaps.md` G-39 增量（七））。
   我们此前写死 `--cm-fs-base: 12.5px` + `line-height: 1.5` + `min(620px, 82%)` —— 那不是「近似」，而是**用户设置完全失效**：DSH 的「内容字号」（10–22）对用户自己发出的消息没有任何作用（真机 21px 下助手正文字形高 19px / 气泡 11px，比例 0.58），且换行位置与宿主不一致。
   `--cm-fs-meta` 11px 档仍在（扩展名徽标等我们自己的小字）；但**时刻 / 引用行 / 文件卡上屏文字已改成宿主的档**（`--cm-fs-second`、`--cm-fs-card`、12px 元信息），见上面 2026-10-17 那一条。护栏 = `src/client/chat/chat-entry-view.test.ts` 的两条：①「气泡字号/行高/限宽跟随宿主内容字号」；②「气泡与动作行逐值对齐宿主：圆角 xl(20px) / 内边距 10·16 / 动作行 28+delta / 文件卡 240·64」。
 - **气泡底色不再算近似档（2026-10-15，用户报「浅色主题下气泡看不见」）**：宿主的用户气泡底是 `--dsw-specific-bubble`，本仓库 token 层此前没有这一档，于是借用了 `--cm-surface-2`（= `--dsw-alias-bg-layer-2`）
@@ -1496,7 +1496,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   装配点因此退回最简形态：`ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry({ probe, register }))` —— 单入口没有「切档互斥」问题（T13）也不再需要为后到的槽位声明补试（T17 的有界补试随双入口一起消失）。
 - **回退预览对话框 = 简洁版（2026-10-10 用户第三条要求）**：标题固定「回退预览」；正文只有**会被回退的文件**（路径 + 「+N 行」/「−M 行」；内容已一致的一项都不列，空数组显示「工作区与该回退点一致，无需恢复」；行数算不出来显示「行数未统计」而**不是 0**）；底部只有主按钮「回退」与「取消」。**没有**三选一 mode 单选、二次确认勾选、`allowPartial` 勾选、工作区 / 会话计数面板、救援点说明段、逐段结果详情面板、留点期 notice 面板 —— 这是**有意替换**（点「回退」即确认，对话框本身就是「预览 + 确认」两步）。视觉复用既有 `dialogMask` / `dialogCard` / `dialogWide` / `dialogBodyScroll` / `actionRow` 类，**不新增样式档位**；设置页 `RollbackCard` 的预览弹窗仍保留完整能力。**描述性文案清零（2026-10-12 用户第 8 条「移除回退弹窗中的所有描述」）**：说明行「这次回退会做以下改动：」与「这些文件的行数没有统计出来…」整段都不再渲染 —— 弹窗只留能改变决定的信息（§7）；`.previewSummary` 样式随之删除，逐文件那格的「行数未统计」保留。
 - **升级风险**：宿主改用户消息渲染器 / 槽位契约 → 复刻老旧或错位。软失败：声明形态不是 `keyed` 就**跳过注册**（只丢这一个入口），回合号取不到就**如实禁用按钮**（每个禁用原因有自己的字典键）。
-  风险与差距登记 = `docs/maintenance/known-gaps.md` G-39。
+  风险与差距登记 = `docs/known-issues/known-gaps.md` G-39。
 
 ### 说明性文案分层（InfoHint，2026-10）
 
@@ -1605,7 +1605,7 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
   - **零 MOVE 的面板**：history / overview / import / consult（`.hint` 类全部命中 KEEP）。
   `common/ui.tsx` 的 `Field.hint` / `SectionTitle.subtitle` 由调用方传入且大量命中 KEEP
   （如 `export.encryptHint` 是安全告警），**不整体自动迁移**。逐键台账与 deferred 见
-  `docs/design/info-hint-migration.md`。
+  `docs/archive/2026-10-info-hint-migration.md`。
 - **t7（2026-10-12，用户要求「把**所有**描述都收进 ⓘ，页面更简洁」）：41 键** —— 把上一轮按
   「安全 / 副标题」判为 KEEP 的**静态**文案一并收进 ⓘ（判据仍是上方 KEEP 的 8 类，变的是第 2 / 第 7 条的边界）：
   - **页级 / 分区级副标题 → `SectionTitle.info`**：`profiles.subtitle`、`section.description`（同步页 + 市场页）、

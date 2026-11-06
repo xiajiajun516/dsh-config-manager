@@ -1,7 +1,7 @@
 /**
  * 「我的配置」区块的客户端纯渲染装配层（m-my-configs-view，node 可测）。
  *
- * 设计纪律（docs/design/2026-08-20-my-configs-design.md §4.5 / §4.6）：
+ * 设计纪律（docs/archive/2026-08-20-my-configs-design.md §4.5 / §4.6）：
  *  - 全部无副作用纯函数，React 壳（MyConfigsView）只装配，不承载业务逻辑；
  *  - 输入数据一律由调用方（组件 / api 层）提供 —— 本文件不发起任何请求，不持有凭据；
  *  - 录入最小化（§1.2）：表单仅 name（预填 zip 文件名，可改）/ description（可选）/

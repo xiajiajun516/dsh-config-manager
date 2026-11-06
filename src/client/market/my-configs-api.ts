@@ -4,7 +4,7 @@
  * 端点常量与请求封装都是**单一来源**：路由常量见 `common/routes.ts`，
  * `readJson` / `getJson` / `postJson`（统一超时 + 取消 + 错误映射）见 `common/http.ts`（W4 收敛）。
  *
- * 端点契约（Host 半 src/index.ts 的 makeRoutes 按 docs/design/2026-08-20-my-configs-design.md §4.2 实现）：
+ * 端点契约（Host 半 src/index.ts 的 makeRoutes 按 docs/archive/2026-08-20-my-configs-design.md §4.2 实现）：
  * ```
  * POST /api/dsh-config-manager/me/status  → MyMeStatusResponse   （登录态 + 目标仓库状态；401 → 未登录）
  * POST /api/dsh-config-manager/me/upload  → MyUploadResult       （{ zipPath, form } 一键上传全流程）

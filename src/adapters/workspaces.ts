@@ -274,7 +274,7 @@ export class WorkspacesAdapter implements ConfigAdapter<WorkspacesSection> {
             issues.push({ path: 'workspaces[]', message: msg('adapter.validate.workspaceIdentity'), severity: 'error' });
             continue;
           }
-          // ui-F3：sessionIds 是会话可见性的必需字段（docs/spec/bundle-format-v1.md §6），
+          // ui-F3：sessionIds 是会话可见性的必需字段（docs/contracts/bundle-format-v1.md §6），
           // 而 analyzeImport / finalizeImport 直接读 rec.sessionIds.length —— 缺它有两条后果：
           // ① validate 放过后 analyzeImport 抛内部 TypeError → 整包被拦下且文案不可行动；
           // ② 即便绕过，工作区记录也失去会话归属。这里按「必需数组」显式报出字段名。

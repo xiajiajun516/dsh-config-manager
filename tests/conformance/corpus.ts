@@ -6,7 +6,7 @@
  * 只在字节层面注入畸形/未知结构，并**重算 checksums**，从而精确打到
  * `analyzeImport` 里被测的那条路径（不重算会被完整性校验先拦下，测不到目标行为）。
  *
- * 关键约定（与 `docs/spec/bundle-format-v1.md` §3 对齐）：
+ * 关键约定（与 `docs/contracts/bundle-format-v1.md` §3 对齐）：
  *   - `integrity/checksums.json` 覆盖除 `manifest.json` 与自身之外的全部 ZIP 条目；
  *   - 改动任一数据条目后必须重算该表，否则第 4 步完整性校验直接抛错；
  *   - 每个重建后的 bundle 必须写到**独立路径**：Analyzer 有 `zipPath → Bundle`

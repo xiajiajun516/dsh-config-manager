@@ -8,7 +8,7 @@
  * 保证 client 与 Host 请求/响应契约单一来源，避免漂移（与 sync-api.ts 引用 sync-engine.ts 同构）。
  *
  * 端点契约（Host 半 src/index.ts 的 makeRoutes 实现；市场设计的上游依据 =
- * docs/design/2026-08-19-market-publish-design.md —— 旧的市场设计文档已在 2026-08-19
+ * docs/archive/2026-08-19-market-publish-design.md —— 旧的市场设计文档已在 2026-08-19
  * 大写 Docs/ 清理中删除，该文件自述「为市场设计的新上游依据」，故此处只指向它，
  * 不再书写已删除文档的路径、也不臆造章节号；内置单市场、只读不可编辑，无 add/remove）：
  * ```

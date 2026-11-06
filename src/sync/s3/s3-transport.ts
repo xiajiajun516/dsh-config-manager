@@ -413,7 +413,7 @@ export class S3Transport implements SyncTransport {
    * 变了 / 对象没了 → 按并发写中止（零写入）。
    *
    * **不是原子的**：复核与 PUT 之间仍有窗口（服务端不支持条件写就没有真正的解），
-   * 比无保护强、比 If-Match 弱 —— 如实登记在 docs/decisions/0003。
+   * 比无保护强、比 If-Match 弱 —— 如实登记在 docs/adr/0003。
    * 其它方言（etag）与「服务端不给 ETag」两种情况一律直接放行，不改既有行为。
    */
   private async reassertIndexEtag(etag: string | undefined, secret: string): Promise<void> {

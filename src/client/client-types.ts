@@ -2,7 +2,7 @@
  * Client 半的类型集中出口：把对 @deepseek-ai 运行时包的类型依赖收敛到本文件，
  * 其余组件只从 `../client-types.ts` 引用，避免类型散落与误用值导入。
  *
- * p3 构建前需安装的依赖（见 CLIENT_DEPENDENCIES.md）：
+ * p3 构建前需安装的依赖（见 docs/architecture/client-dependencies.md）：
  *   - @deepseek-ai/dsh-client-runtime（ClientContext 声明合并）
  *   - @deepseek-ai/dsh-client-locale（ctx.locale 声明合并）
  *   - @deepseek-ai/dsh-client-ui-settings（settings.section SlotMap 声明合并）

@@ -15,7 +15,7 @@
  *
  * ## 纪律
  * · **抽出来的方法一律 bind 回服务对象**（`openResource` / `register` 都读 `this`；丢 receiver 会抛，
- *   见 AGENTS.md 与 docs/lessons/recovery-console.md 的 `uiWorkspace.openSession` 事故）；
+ *   见 AGENTS.md 与 docs/evidence/recovery-console.md 的 `uiWorkspace.openSession` 事故）；
  * · 服务缺失 / 形态不符 / 调用抛错统统是**降级**（返回结构化结果），绝不打挂插件装配。
  */
 

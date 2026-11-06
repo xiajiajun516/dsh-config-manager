@@ -9,7 +9,7 @@
  *
  * 注意：CLI 只续跑 `cli-restore` 自己创建的 journal。别的入口（GUI restore / model-restore）
  * 崩掉的记录在这里仍是「需要恢复面板处理」的事故 —— 三者的执行器与参数来源不同，
- * 跨入口续跑没有证据支撑（详见 docs/decisions/0004）。
+ * 跨入口续跑没有证据支撑（详见 docs/adr/0004）。
  */
 import { resolveSafeModeMarker } from '../core/recovery-orchestrator.ts'
 import { probeRestoreResume, runRestoreWithResume } from '../core/restore-resume.ts'

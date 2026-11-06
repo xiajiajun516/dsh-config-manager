@@ -44,7 +44,7 @@ src/
 
 > 下移自 `AGENTS.md` §🏗️ 架构心智：这里是完整论证与证据；规则句仍留在 AGENTS.md。
 
-- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**（W2；规则判据见 `AGENTS.md` §🏗️ 架构心智，路由守卫的活文档见 `docs/lessons/repo-overview.md` 与 `docs/maintenance/known-gaps.md` G-01/G-02；下面的实测打点出自**只读冻结存档** `docs/lessons/known-pitfalls.md`）：DSH 的 browser-session cookie 拒绝只挂在 **`kind:'prefix'`、`path:'/api'` 的 RPC 承载路由**上（源码行号见 `docs/lessons/known-pitfalls.md`「t93 容量腾挪」§1），而 host-webserver 的派发顺序是 **exact 表先命中**。本插件的全部 exact 路由（口径见 parity 快照）都命中 exact 或更长的私有 prefix，**永不进入** DSH 的 `/api` 认证路由——实测打点见 `docs/lessons/known-pitfalls.md`「t93 容量腾挪」§1。**影响面**：本机任意非浏览器进程（含本机其它本地用户）**无 token/cookie 即可调用全部 exact 路由**（含破坏性路由，清单见 known-pitfalls）；**远程/LAN 来源**被 kit 的 `remoteAddress ∈ {127.0.0.1, ::1, ::ffff:127.0.0.1}` 判定挡掉，**浏览器跨站 CSRF** 被同源/Host 围栏挡掉——**围栏确实在生效，不得把这条写成「插件 API 无认证」**。两个不得误解的推论：① **不得把 DSH 会话认证当作插件 API 的兜底**——认证挂在通用 prefix 路由 `/api` 上 + exact 优先的派发顺序是**平台级性质**，任何在 `/api` 下注册 exact 路由的 DSH 插件同理；插件 API 的边界只能是 kit 的 `endpoint()` 围栏。② 若将来要在**共享机器**或**经本机代理/隧道转发**（非回环来源、`trustedHosts`/LAN 绑定）的场景暴露插件 API，**必须**在 kit 里自行对接认证（方向：在 `endpoint()` 注册点统一加一道校验，勿逐路由散写），届时应重新评级本条的残余风险。**复核路径**见 `docs/lessons/known-pitfalls.md`「t93 容量腾挪」§1（含 DSH 源码位置与 `outputs/e2e-w2/run-e2e.ps1 -Strict`）。
+- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**（W2；规则判据见 `AGENTS.md` §🏗️ 架构心智，路由守卫的活文档见 `docs/overview.md` 与 `docs/known-issues/known-gaps.md` G-01/G-02；下面的实测打点出自**只读冻结存档** `docs/archive/2026-10-known-pitfalls.md`）：DSH 的 browser-session cookie 拒绝只挂在 **`kind:'prefix'`、`path:'/api'` 的 RPC 承载路由**上（源码行号见 `docs/archive/2026-10-known-pitfalls.md`「t93 容量腾挪」§1），而 host-webserver 的派发顺序是 **exact 表先命中**。本插件的全部 exact 路由（口径见 parity 快照）都命中 exact 或更长的私有 prefix，**永不进入** DSH 的 `/api` 认证路由——实测打点见 `docs/archive/2026-10-known-pitfalls.md`「t93 容量腾挪」§1。**影响面**：本机任意非浏览器进程（含本机其它本地用户）**无 token/cookie 即可调用全部 exact 路由**（含破坏性路由，清单见 known-pitfalls）；**远程/LAN 来源**被 kit 的 `remoteAddress ∈ {127.0.0.1, ::1, ::ffff:127.0.0.1}` 判定挡掉，**浏览器跨站 CSRF** 被同源/Host 围栏挡掉——**围栏确实在生效，不得把这条写成「插件 API 无认证」**。两个不得误解的推论：① **不得把 DSH 会话认证当作插件 API 的兜底**——认证挂在通用 prefix 路由 `/api` 上 + exact 优先的派发顺序是**平台级性质**，任何在 `/api` 下注册 exact 路由的 DSH 插件同理；插件 API 的边界只能是 kit 的 `endpoint()` 围栏。② 若将来要在**共享机器**或**经本机代理/隧道转发**（非回环来源、`trustedHosts`/LAN 绑定）的场景暴露插件 API，**必须**在 kit 里自行对接认证（方向：在 `endpoint()` 注册点统一加一道校验，勿逐路由散写），届时应重新评级本条的残余风险。**复核路径**见 `docs/archive/2026-10-known-pitfalls.md`「t93 容量腾挪」§1（含 DSH 源码位置与 `outputs/e2e-w2/run-e2e.ps1 -Strict`）。
 
 ## 🚀 自动发布（npm + GitHub Release）
 
@@ -52,13 +52,13 @@ src/
 
 ```bash
 # 1) 先定版本号，再收口 CHANGELOG：[Unreleased] → ## [X.Y.Z] - <今天>，顶部开好下一轮骨架
-#    版本号怎么定（PATCH/MINOR/MAJOR、预发布命名、能不能发）→ docs/maintenance/versioning.md
+#    版本号怎么定（PATCH/MINOR/MAJOR、预发布命名、能不能发）→ docs/contributing/versioning.md
 node .github/scripts/changelog-section.mjs release X.Y.Z
 git add CHANGELOG.md && git commit -m "docs(changelog): X.Y.Z"
 
 # 2) 同步版本号四处并打附注 tag（全自动：typecheck → test → build → 守卫 → pack → npm publish → GitHub Release）
 npm version patch --no-git-tag-version   # 或 minor；预发布 preminor --preid rc
-#    手改 src/index.ts 的 PLUGIN_VERSION 与 docs/spec/compat-matrix.md 顶部的版本声明行
+#    手改 src/index.ts 的 PLUGIN_VERSION 与 docs/contracts/compat-matrix.md 顶部的版本声明行
 git add -A && git commit -m "chore(release): vX.Y.Z"
 git tag -a vX.Y.Z -m vX.Y.Z
 git push origin main --tags
@@ -364,7 +364,7 @@ node --input-type=module -e "for (const r of [['./src/client/locales.ts','zh','e
 > 图标库同理：默认文本符号/emoji；确需图标库时按上述流程评估，优先支持 SVG sprite / icon font 的按需加载形态。
 
 **已落地（2026-09 Visual Polish，按上述 7 步评估通过）**：
-- `lucide-react`（图标）+ `@radix-ui/react-dialog`（弹窗 a11y）——均为**无样式/行为级**原语，视觉仍走 `--dsw-*` token，不引入第二套视觉体系。**devDependencies**（经 `tsdown.config.ts` 的 `deps.alwaysBundle` 打进单文件 cjs，已被内联故非运行时依赖；放 dependencies 会迫使 headless 消费者安装整套 React UI 栈）。bundle +136KB raw / +30KB gzip。封装层 `common/Icon.tsx`、`common/Modal.tsx`；细节与未迁移弹窗清单见 `DESIGN.md §6`。护栏：`src/client/bundle-selfcontained.test.ts`（build 后跑）；消费方式见 `docs/spec/headless-consumption.md`。
+- `lucide-react`（图标）+ `@radix-ui/react-dialog`（弹窗 a11y）——均为**无样式/行为级**原语，视觉仍走 `--dsw-*` token，不引入第二套视觉体系。**devDependencies**（经 `tsdown.config.ts` 的 `deps.alwaysBundle` 打进单文件 cjs，已被内联故非运行时依赖；放 dependencies 会迫使 headless 消费者安装整套 React UI 栈）。bundle +136KB raw / +30KB gzip。封装层 `common/Icon.tsx`、`common/Modal.tsx`；细节与未迁移弹窗清单见 `DESIGN.md §6`。护栏：`src/client/bundle-selfcontained.test.ts`（build 后跑）；消费方式见 `docs/contracts/headless-consumption.md`。
 
 **追加（2026-09 图标形变试点，同样按 7 步评估通过）**：
 - `morphicons`（图标形变运行时）+ vanilla `lucide`（形变图标的 **IconNode 数据**）——MIT / ISC，

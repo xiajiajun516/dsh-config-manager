@@ -162,7 +162,7 @@ export function sanitizePnpmWorkspacePatches(
  *  2. 写回时把**目标机自己原有的**那几行接回去：不搬运来源机的路径，也不清掉本机自己的设置。
  *
  * `.npmrc` 刻意**不进同步面**（见 plugins.ts 的说明）：纳入它会改变 bundle 载荷形态
- * （docs/spec/bundle-format-v1.md + conformance），而本机 .npmrc 从来就不由本插件写 ——
+ * （docs/contracts/bundle-format-v1.md + conformance），而本机 .npmrc 从来就不由本插件写 ——
  * 「不碰 = 本机保留」。
  * ------------------------------------------------------------------ */
 

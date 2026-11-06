@@ -36,7 +36,7 @@
   `main` 同步推到 `origin/main`（此前 8 个未推提交随本版一次性公开）。`publish` 流水线 `41908109199` 全绿（typecheck → typecheck:tests → test 5316 项 pass 5314 / fail 0 / skip 2 → build → bundle 自包含 → AGENTS 预算 → 文档路径 → 文档版本 → Tag guard → pack → 亮点段门禁 → npm publish(OIDC) → GitHub Release），`main` 上的 CI `41908102715` success；
   Release `v0.4.0` 已建（asset `dsh-config-manager-0.4.0.tgz`，双语亮点在位）；registry 侧 `dsh-config-manager@0.4.0` 可查、`dist-tags.latest = 0.4.0`（发布后约 5 分钟才可见，期间 `npm view` 404 属正常）。
   **本版无需回 issue 版本号**：清单里 `awaiting-release` 行 0 条（#109/#115/#116/#119/#120/#121/#122 均 done；#117 仍 open 等报告者接受授权范围说明；#118 dropped）。
-  另修一处发版闸门阻断：`docs/maintenance/tech-debt.md` 第 23 行的「拟新增 `src/core/host-schedulers.ts`」被文档路径守卫判为失效路径（`130f36c` 引入，该文件尚未创建），改成「`src/core/` 下拟新增的 `host-schedulers` 工厂（尚未创建，故此处不写成路径）」——否则 publish 的 Doc path guard 必红。
+  另修一处发版闸门阻断：`docs/known-issues/tech-debt.md` 第 23 行的「拟新增 `src/core/host-schedulers.ts`」被文档路径守卫判为失效路径（`130f36c` 引入，该文件尚未创建），改成「`src/core/` 下拟新增的 `host-schedulers` 工厂（尚未创建，故此处不写成路径）」——否则 publish 的 Doc path guard 必红。
 - `2026-11-02` **#109 第二层修复（待发版）**：提交 `71a93ca`。报告者升到 v0.1.82 后「测试连接」通过但真推报 HTTP 400 `InvalidArgument`
   「A header you provided implies functionality that is not implemented.」（`Header: If-None-Match`，错误码 0017-00000245）——
   签名早已正确，**是条件写头本身**：阿里云 OSS 的 PutObject 不支持 `If-Match`/`If-None-Match`，而我们首推发 `if-none-match: *`（`src/sync/s3/s3-transport.ts` 的 `conditionalHeaders`），索引已存在时还会发 `if-match`。
@@ -66,7 +66,7 @@
   `--filter` 只给 `remote.origin.promisor=true` 的副本（对全量副本加过滤会让后续 checkout 缺 blob）；网络子命令前置 `-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30`；
   `execFile` → `spawn` + 进程树 kill（POSIX `kill(-pid)` / Windows `taskkill /T /F`）+ 5 s 宽限强制收尾，超时文案保持 `timed out after …ms` 让分类器仍判 timeout。
   测试：git-transport 新增 8 例（含真实孙进程 kill 验收），git-probe 的「只发一条 ls-remote」按前置 `-c` 剥离后仍逐字；全量 `npm test` 5207 项 pass 5205 / fail 0 / skip 2，typecheck 与 build 均通过。
-  明确不做：bare 仓库直读、GitHub REST、`--filter=tree:0`、`--depth 1`（理由见 issue 评论与 `docs/lessons/sync-channel.md`）。
+  明确不做：bare 仓库直读、GitHub REST、`--filter=tree:0`、`--depth 1`（理由见 issue 评论与 `docs/evidence/sync-channel.md`）。
 - `2026-11-01` **#122 受理**：回确认评论（comment 6558142935）+ 加 `confirmed` / `sync`，去 `needs-triage`。
   代码核实（`src/sync/git/git-transport.ts`）：clone 无 `--filter`（:587）、fetch 无 filter（`src/utils/git-fast-forward.ts:14`）、超时 `execFile` 只杀 `git.exe`（:208，`DEFAULT_SYNC_TIMEOUT_MS=120_000` @ `src/sync/transport.ts:281` + 3 次重试）。
   并发不是缺 single-flight：`src/utils/workdir-lock.ts` 已跨进程串行，5 份并发 = 孤儿 + 新起。修复方向：clone `--filter=blob:none --no-checkout` + `sparse-checkout set --cone snapshots snapshots-encrypted blobs` + `checkout`（服务端不支持则回落全量）、fetch 仅在 `remote.origin.promisor` 为真时补 filter、超时改杀进程树（Windows `taskkill /T /F`）且以定时器为准不等 stdio 管道、存量副本走「重建工作副本」不静默改造、不采用 `--depth 1`。状态 `open`（未改代码）。

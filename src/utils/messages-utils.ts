@@ -1,7 +1,7 @@
 /**
  * src/utils/** 的领域消息目录（zh 源语言 / en 镜像）——「英文界面零中文」迁移（t5）。
  *
- * 口径（与 src/core/messages.ts 一致，见 docs/design/2026-10-08-i18n-en-hardcoding.md）：
+ * 口径（与 src/core/messages.ts 一致，见 docs/archive/2026-10-08-i18n-en-hardcoding.md）：
  *  - zh 值 = 迁移前的既有中文文案**逐字不变**（既有测试断言依赖它，只允许新增 en）；
  *  - en 值类型为 Record<keyof typeof zh, string> —— 缺键/多键即编译错误；
  *  - 动态明细一律走 {param} 插值传参，不得丢信息；

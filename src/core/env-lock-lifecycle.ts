@@ -12,7 +12,7 @@
  * 为什么不碰 corrupt 残留与「心跳长过期」启发式：`reclaimProvableStaleLock` 只认结构性可证；
  * 其余留给显式回收（`--recover-stale-lock` / GUI 事故恢复），否则在拿不到 OS identity 的机器上会误删活锁。
  *
- * 真机成因与量化数据 → `docs/lessons/recovery-console.md`；规则 → `AGENTS.md`「备份 / 恢复 / 回滚点」。
+ * 真机成因与量化数据 → `docs/evidence/recovery-console.md`；规则 → `AGENTS.md`「备份 / 恢复 / 回滚点」。
  */
 import type { EnvironmentLockManager, LockState } from '../utils/env-lock.ts'
 import { mapLockStateForStartup } from './phase3-host.ts'

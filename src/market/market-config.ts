@@ -4,7 +4,7 @@
  * $DSH_HOME/dsh-config-manager/market/market-config.json（schemaVersion=1，仿 sync-config.json）：
  *   { "schemaVersion": 1, "markets": [ { "url": "...", "addedAt": "..." } ] }
  *
- * 安全纪律（依据 docs/design/2026-08-19-market-publish-design.md §3.6 安全分析：
+ * 安全纪律（依据 docs/archive/2026-08-19-market-publish-design.md §3.6 安全分析：
  * 「不新增任何写路径、不持有凭据」+ validateRepoUrl 拒绝 userinfo）：
  *  - 只存 url（拒绝 userinfo，复用 validateRepoUrl）+ addedAt；无任何凭据；
  *  - url 去重（同 url 再 add 视为幂等，不重复登记）。

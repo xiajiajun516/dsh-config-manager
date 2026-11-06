@@ -1,16 +1,16 @@
 # AGENTS.md
 
-> 只放硬判据：证据与实测 → `docs/lessons/<域>.md`；机制细则 → `DEVELOPERS.md`；UI → `DESIGN.md`；对外契约 → `docs/spec/`。
-> 加规则：先在 `docs/lessons/<域>.md` 写透证据，再回下面对应域补一行判据 + 指针，不另起小节。与代码冲突以代码为准，并当轮修本文件。
+> 只放硬判据：证据与实测 → `docs/evidence/<域>.md`；机制细则 → `DEVELOPERS.md`；UI → `DESIGN.md`；对外契约 → `docs/contracts/`。
+> 加规则：先在 `docs/evidence/<域>.md` 写透证据，再回下面对应域补一行判据 + 指针，不另起小节。与代码冲突以代码为准，并当轮修本文件。
 > 预算：≤28 KiB、单行 ≤400 B —— `node scripts/check-agents-budget.mjs`。
 
 ## Rules
 
 ### 通用（任何改动）
-- **验证顺序**：`npm run typecheck` → `npm test` →（动 client/样式）`npm run build` →（大改）`npm run smoke`；`TEMP`/`TMP` 只给 build/install（→ `.tmp/buildtmp`，`prepare` 也算），`npm test` 用系统 `TEMP`（判据 → `docs/lessons/git-and-release.md`）；无 lint/format，typecheck 兜底。
-- **版本号按 SemVer 判定**：修复 = PATCH、兼容新增 = MINOR、破公开契约 = MAJOR；`0.1.z` 只放修复，功能进 MINOR；判据与历史保留 → `docs/maintenance/versioning.md`。
-- **版本四处同步**：`package.json.version` ≡ `src/index.ts` 的 `PLUGIN_VERSION` ≡ `package-lock.json` 根 version 与 `packages[""].version` ≡ `docs/spec/compat-matrix.md` 顶部版本声明行；`tests/packaging-contract.test.ts` 的 `V-1` 钉前三处，声明行由 `scripts/check-doc-versions.mjs` 钉住（`npm version` 不会改 `PLUGIN_VERSION`）。
-- **发版**：打 `tag v* push` 后全自动（阶段表 → `DEVELOPERS.md`）；前置 = 发布前检查清单（`docs/maintenance/versioning.md` §10）+ `CHANGELOG.md` 顶部亮点段；发布成功后按 `.dsh/issue-ledger.md` 的 `awaiting-release` 行回版本号并标 `fixed`。
+- **验证顺序**：`npm run typecheck` → `npm test` →（动 client/样式）`npm run build` →（大改）`npm run smoke`；`TEMP`/`TMP` 只给 build/install（→ `.tmp/buildtmp`，`prepare` 也算），`npm test` 用系统 `TEMP`（判据 → `docs/evidence/git-and-release.md`）；无 lint/format，typecheck 兜底。
+- **版本号按 SemVer 判定**：修复 = PATCH、兼容新增 = MINOR、破公开契约 = MAJOR；`0.1.z` 只放修复，功能进 MINOR；判据与历史保留 → `docs/contributing/versioning.md`。
+- **版本四处同步**：`package.json.version` ≡ `src/index.ts` 的 `PLUGIN_VERSION` ≡ `package-lock.json` 根 version 与 `packages[""].version` ≡ `docs/contracts/compat-matrix.md` 顶部版本声明行；`tests/packaging-contract.test.ts` 的 `V-1` 钉前三处，声明行由 `scripts/check-doc-versions.mjs` 钉住（`npm version` 不会改 `PLUGIN_VERSION`）。
+- **发版**：打 `tag v* push` 后全自动（阶段表 → `DEVELOPERS.md`）；前置 = 发布前检查清单（`docs/contributing/versioning.md` §10）+ `CHANGELOG.md` 顶部亮点段；发布成功后按 `.dsh/issue-ledger.md` 的 `awaiting-release` 行回版本号并标 `fixed`。
 - **用户可见的功能/行为/修复同轮进 `CHANGELOG.md` 的 `## [Unreleased]`**（落位见 skill `changelog-writing`）。
 - **git**：工作副本 `origin` 每次跟随 `repoUrl`（含 `--push`，不一致即 `set-url`）；同一工作副本操作一律经 `GitTransport.withWorkdir()`；拉取只许 `fetch` + `merge --ff-only`，禁 `git pull`（坏 FETCH_HEAD ⇒ SAFE MODE）。
 - **删源文件前先 `git status --porcelain <路径>`**：见 `??` 必须停下；禁 `git checkout -- <文件>` 回滚，撤销改动用针对性 edit 反向。
@@ -41,14 +41,14 @@
 - **宿主路由只经 kit 的 `endpoint()` + `registerRoutes()`**（围栏与方法白名单在注册点统一包装；未经 kit 的路由注册直接抛错）。
 - 路由源 = `src/index.ts`（窗口守卫**钉住的 7 条**）+ `src/routes/*.ts` 其余 77 条（合计 84 条）；源码级守卫必须扫**全部**路由源。
 - **真实认证边界 = kit 围栏**：回环直接放行；回环之外委托宿主 `connection.requestRejection`（Host/bind 地址 + Origin + dsh web 会话 cookie），拿不到委托（老宿主 / 独立 CLI）退回严格回环。
-- 推论：**不得把 DSH 会话认证单独当唯一判据，也不得写成「插件 API 无认证」**；经代理/隧道暴露仍须在注册点加认证（判据 → `docs/maintenance/known-limits.md` §7）。
+- 推论：**不得把 DSH 会话认证单独当唯一判据，也不得写成「插件 API 无认证」**；经代理/隧道暴露仍须在注册点加认证（判据 → `docs/known-issues/known-limits.md` §7）。
 - **新增一条 API** = 组文件里加 `endpoint({ path, methods }, handler)`；组文件不得 import `../index.ts`，共享工具进 `src/routes/route-support.ts`。
-- **同一 path 只许一条 exact 路由**：一个方法一个 handler 不在注册点表达，靠 handler 内按 `req.method` 分发（真机 webServer 对重复 `(kind, path)` 直接抛错 ⇒ 插件启动失败，只在 `buildRoutes()` 的 `paths.size === routes.length` 断言里才暴露）；判据 → `docs/lessons/known-pitfalls.md`（迁移历史清理一节）。
+- **同一 path 只许一条 exact 路由**：一个方法一个 handler 不在注册点表达，靠 handler 内按 `req.method` 分发（真机 webServer 对重复 `(kind, path)` 直接抛错 ⇒ 插件启动失败，只在 `buildRoutes()` 的 `paths.size === routes.length` 断言里才暴露）；判据 → `docs/archive/2026-10-known-pitfalls.md`（迁移历史清理一节）。
 - 业务逻辑放 `src/ui/`，React 壳只装配；新功能优先 `src/core/`，适配器与 UI 做薄壳。
 - `src/client/**` 不得 import node 模块；跨端共享只能进零依赖模块；`src/profiles/dsh-profile-io.ts` 绝不能被浏览器半 import。
 - **DI 走 Cordis fiber**：client 经 `ctx.slots.inject('settings.section')`；host 可选服务一律 `ctx.get()`，禁 `ctx.<svc>`。
 - **宿主服务与方法抽取**：抽出方法必须 bind 回服务对象；「查看」进右侧栏需 `sidebarRightTabs.register` + 正文位 `sidebar.right.pane.tab`（key = 实现 id）各注册一次；服务惰取、补试幂等、形态不符不注册。
-- **对外契约 → `docs/spec/`**：改格式行为必须同步文档并重跑 `tests/conformance/`。
+- **对外契约 → `docs/contracts/`**：改格式行为必须同步文档并重跑 `tests/conformance/`。
 - **client bundle 护栏**：`src/utils/bundle-scan.ts` + `src/client/bundle-selfcontained.test.ts`，必须 Build 之后单独跑（CI 独立步骤）。
 - **只读预览与导出同口径**：共用 `collect()`；无内容形态不交给 exporter/importer/快照；收窄收集面必须覆写 `listRelPaths()`；归档缓存只在只读入口读，`executeImportPlan` 一律 refresh。
 - **更新检查与自更新**：检查只读、绝不自动安装；`POST /update-apply` 过 mutation gate、钉精确版本、非 registry 与 desktop 档案带码拒绝；成功后必须重启、绝不自动重启。
@@ -84,12 +84,12 @@
 - **「本地有改动」与导出载荷必须同一份字节**：`hasLocalChanges` 比 `hashSection(export())` ⇒ 比对里剔掉的易变字段必须同时从载荷剔除，否则每轮轮询都真推一次；身份字节只有 `src/adapters/file-collection.ts` 的 `comparableContent()` 一处。
 - **会话管理五条**：远端保留接 GFS（刚 push 恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；墓碑不删本机数据。
 - **git 通道只碰同步内容**：clone 走 partial+sparse（sparse 面 = `SYNC_ROOT_DIRS`，与 `ADOPT_ROOT_ALLOW` 同源），老 git 回落全量；`--filter` 只给 promisor 副本。
-- **git 网络命令有界**：稳态靠 `ls-remote` 短路（远端 sha 与本地跟踪引用相同**且** HEAD 已合并才跳过）；网络子命令恒带低速上限；超时 kill 整棵进程树、宽限到点强制收尾（证据 → `docs/lessons/sync-channel.md`）。
+- **git 网络命令有界**：稳态靠 `ls-remote` 短路（远端 sha 与本地跟踪引用相同**且** HEAD 已合并才跳过）；网络子命令恒带低速上限；超时 kill 整棵进程树、宽限到点强制收尾（证据 → `docs/evidence/sync-channel.md`）。
 
 ### 备份 / 恢复 / 回滚点
 - **恢复崩溃后可续跑，但只在逐项可证时**（`judgeRestoreResume`：同快照 + 盘面只等于 beforeFp/afterFp + 不跨入口 + 不重建 WAL；否则 423）。
 - **CLI 与救急台同一道写入门**（SAFE MODE → 环境锁 → DSH 未运行）；`sessions doctor --json` 的 `ok` 必须 `blocking === 0`；`sessions repair` 读不到会话根 exit 1。
-- **残留锁自动回收只认结构性可证**：只走 `reclaimProvableStaleLock()` → `recoverStaleLock({ require: 'provable' })`（owner 确证死亡 / PID 复用）；corrupt 残留、心跳长过期启发式与 `UNKNOWN_STATE`/`RECOVERY_REQUIRED` 仍只走显式回收（成因与判据 → `docs/lessons/recovery-console.md`）。
+- **残留锁自动回收只认结构性可证**：只走 `reclaimProvableStaleLock()` → `recoverStaleLock({ require: 'provable' })`（owner 确证死亡 / PID 复用）；corrupt 残留、心跳长过期启发式与 `UNKNOWN_STATE`/`RECOVERY_REQUIRED` 仍只走显式回收（成因与判据 → `docs/evidence/recovery-console.md`）。
 - **离线救急台（`dcm web`）**：一次性 token → HttpOnly cookie，其余 403；读路径只读、写路径过 CLI 同源门；判定不许重写。
 - **不自建第二条恢复通道**（灾备快照线已下线）；`BOOT_CRITICAL_RELS`/`profileCriticalRels` 在 `core/boot-paths.ts`，不得连带删 `boot-safety.ts`。
 - **救援模式与 `reconcileBundles` 冲突**：`enterRescueMode` 必须同时 `stripDependencies`（退出逐字节还原）；救援激活期 `reconcileBundles` 停手；崩溃残留只放行可自证形状（仅 `backup-schedule`）。
@@ -134,12 +134,12 @@
 
 ## Documentation
 - `docs/index.md` — 文档总索引；不知该读哪份时先看它。
-- `docs/modules/architecture.md` — 分层、目录约定、守卫与脚本；改架构或多个模块时查阅，硬规则回本文件补一行。
-- `docs/maintenance/doc-maintenance.md` — 载体归属表；判断某类内容该写进哪份文档。
-- `docs/lessons/README.md` — 证据库按域索引；查某条规则的实测依据、事故成因与量化数据。
-- `docs/maintenance/known-limits.md` — 已知限制全表；判断某能力是否已支持时查阅。
-- `docs/spec/` — 对外契约（同步通道、bundle 格式等）；改格式或跨版本行为前必读并同步。
-- `docs/design/` — 设计决策记录；改契约、结构或跨模块边界前查阅。
+- `docs/architecture/core.md` — 分层、目录约定、守卫与脚本；改架构或多个模块时查阅，硬规则回本文件补一行。
+- `docs/contributing/doc-maintenance.md` — 载体归属表；判断某类内容该写进哪份文档。
+- `docs/evidence/README.md` — 证据库按域索引；查某条规则的实测依据、事故成因与量化数据。
+- `docs/known-issues/known-limits.md` — 已知限制全表；判断某能力是否已支持时查阅。
+- `docs/contracts/` — 对外契约（同步通道、bundle 格式等）；改格式或跨版本行为前必读并同步。
+- `docs/adr/` — 架构决策记录（为什么当初这么定）；改契约、结构或跨模块边界前查阅；`docs/archive/` 是只读存档。
 - `DEVELOPERS.md` — 机制细则、发版阶段表、字典与适配器口径。
 - `DESIGN.md` — UI/样式唯一权威；动 UI 前必读。
 
@@ -155,5 +155,5 @@ GitHub Issues（`xiajiajun516/dsh-config-manager`，走 `gh` CLI）。See `docs/
 
 ### Domain docs
 
-single-context：根 `GLOSSARY.md` + `docs/decisions/`。See `docs/agents/domain.md`.
+single-context：根 `GLOSSARY.md` + `docs/adr/`。See `docs/agents/domain.md`.
 

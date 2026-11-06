@@ -1,7 +1,7 @@
 /**
  * 客户端渲染层语言运行时（「英文界面零中文」主根因）的跨层单测。
  *
- * 契约：docs/design/2026-10-08-i18n-en-hardcoding.md §4.2 / §4.4（冻结路径归 t3 / impl-ui）。
+ * 契约：docs/archive/2026-10-08-i18n-en-hardcoding.md §4.2 / §4.4（冻结路径归 t3 / impl-ui）。
  * 根因：`src/client/index.ts` 的 uiT 曾是 `makeUiT(ctx.locale.getLocale().active === 'en' ? 'en' : 'zh')`
  * —— **加载期快照**，用户切到 English 后本插件文案恒为中文。修复 = 活翻译器 `makeLiveUiT(read)`。
  *

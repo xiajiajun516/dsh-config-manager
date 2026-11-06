@@ -1,7 +1,7 @@
 /**
  * 「关于（About）」Tab 的客户端纯函数渲染模型（node 可测，无 React / 无 DOM）。
  *
- * 设计依据（docs/design/2026-08-19-about-tab-design.md §5）：
+ * 设计依据（docs/archive/2026-08-19-about-tab-design.md §5）：
  *  - 公开元数据（插件名 / 仓库 / 作者）为**静态常量**，不随运行时变化，可读、可测、可维护；
  *  - 版本 / DSH / 平台等运行时信息由面板经 `api.status()` 获取，本层只负责格式化，
  *    版本号**绝不**在 client 重复维护（AGENTS.md §版本号三处同步教训）；

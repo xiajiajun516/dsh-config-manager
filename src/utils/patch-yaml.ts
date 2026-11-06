@@ -11,7 +11,7 @@
  * 调用方若把它 catch 成「这一层没有 patch 行」，用户手写的整层配置就会在导出/同步/预览里凭空消失；
  * 导入写回时更会把整份文件重写成「只剩本次导入的行」—— 这正是 issue #75 报告的数据丢失。
  *
- * 两个形状与 DSH 逐字对齐（**改这里等于改对外契约**，见 `docs/spec/bundle-format-v1.md`）：
+ * 两个形状与 DSH 逐字对齐（**改这里等于改对外契约**，见 `docs/contracts/bundle-format-v1.md`）：
  *  - 载入：`!!js <源码>` → `{ __jsExpr: <源码> }`
  *  - 写回：`{ __jsExpr: <源码> }` → `!!js <源码>`
  * 判据与 cordis 的 `isJsExpr`（`value instanceof Object && '__jsExpr' in value`）一致，于是 bundle 里

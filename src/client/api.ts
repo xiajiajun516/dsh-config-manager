@@ -6,7 +6,7 @@
  * 客户端控制器（ExportFlow / ImportWizard）把本类实例当作 port 注入即可，
  * 无需任何额外适配层 —— 这是「直接绑定 src/ui，不重复实现」的关键。
  *
- * 端点契约（Host 半 `src/index.ts` 按此实现，见 CLIENT_DEPENDENCIES.md 的接口说明）：
+ * 端点契约（Host 半 `src/index.ts` 按此实现，见 docs/architecture/client-dependencies.md 的接口说明）：
  * ```
  * GET  /api/dsh-config-manager/status             → ServiceStatus        （健康/版本检查）
  * POST /api/dsh-config-manager/export             → ExportResponse       （body: ExportOptions；响应含 runId）

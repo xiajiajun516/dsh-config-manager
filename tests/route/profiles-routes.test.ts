@@ -8,7 +8,7 @@
  *
  * 为什么必须钉：这组路由**物理删目录**、**起进程**、**改 package.json**。错一处守卫 = 删掉用户档案、
  * 同名多开、或把 desktop 档案改坏；错一处 running 合并 = 手动启动的实例对界面不可见（已实测过的真 bug）。
- * docs/maintenance/tech-debt.md #13 记的就是这组「零专用测试」，本文件是它的低成本范式落地。
+ * docs/known-issues/tech-debt.md #13 记的就是这组「零专用测试」，本文件是它的低成本范式落地。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'

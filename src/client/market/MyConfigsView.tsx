@@ -1,5 +1,5 @@
 /**
- * 「我的配置」视图（设计文档 docs/design/2026-08-20-my-configs-design.md §4.6）。
+ * 「我的配置」视图（设计文档 docs/archive/2026-08-20-my-configs-design.md §4.6）。
  *
  * 组装「一键上传 / 查看已上传 / 一键更新 / 装回本地」：
  * - **登录卡**：未登录 → GitHub device flow 登录（复用 SyncApi.githubStart/Poll/Cancel，

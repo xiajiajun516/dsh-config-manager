@@ -29,7 +29,7 @@ export const zh = {
   'list.categoriesAll': '全部类别',
   'list.sectionsAll': '全部分区',
   'list.sectionsUnknown': '另有 {count} 个条目未下载，无法按分区匹配',
-  // 来源筛选 + 排序（2026-08-21 新增，docs/design/2026-08-21-market-star-filter-sort-design.md）
+  // 来源筛选 + 排序（2026-08-21 新增，docs/archive/2026-08-21-market-star-filter-sort-design.md）
   'list.sourceAll': '全部来源',
   'list.sourceOfficial': '官方配置',
   'list.sourcePersonal': '个人配置',

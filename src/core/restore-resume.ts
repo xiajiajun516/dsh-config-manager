@@ -16,7 +16,7 @@
  *    任何 step ⇒ 上次连第一个写都没发生（WAL 预登记在首个写之前）⇒ 可以整笔重跑；
  *    一旦出现 step 却处在这两个状态，说明 journal 被外部改过（不可信）⇒ 拒绝。
  *  - NEEDS_ATTENTION / ROLLING_BACK / RECOVERING 一律拒绝：那些是「需要人决策」的态，
- *    自动续跑会绕过恢复面板的判定（见 docs/decisions/0004）。
+ *    自动续跑会绕过恢复面板的判定（见 docs/adr/0004）。
  *  - pluginRemove 是外部副作用（可能只改了 package.json 还没 prune node_modules），
  *    无指纹可证 ⇒ 含它的恢复**永不自动续跑**，仍交由恢复面板处理。
  */
