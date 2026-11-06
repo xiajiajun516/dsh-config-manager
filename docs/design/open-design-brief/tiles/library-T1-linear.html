@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>library · T1</title>
+<link rel="stylesheet" href="lin.css">
+<style>
+.top{display:flex;align-items:center;gap:var(--sp-4)}
+.top .seg{flex:none}
+.top .input{width:168px;margin-left:auto}
+.warnLine{display:flex;align-items:center;gap:var(--sp-3);font-size:var(--fs-meta);color:var(--warn);
+  background:rgba(242,201,76,.08);border:1px solid rgba(242,201,76,.18);border-radius:var(--r-2);padding:var(--sp-2) var(--sp-4)}
+.warnLine .why{color:var(--fg-3);font-family:var(--font-mono)}
+.warnLine .retry{margin-left:auto;color:var(--fg-2);border:0;background:none;font:inherit;font-size:var(--fs-meta);cursor:pointer;text-decoration:underline}
+.list{flex:1;min-height:0;overflow:hidden}
+.arow{padding:var(--sp-2) var(--sp-4) var(--sp-2) var(--sp-3);border-bottom:1px solid var(--line-2)}
+.arow:hover{background:var(--hover)}
+.arowTop{display:flex;align-items:center;gap:var(--sp-3);height:20px}
+.chev{color:var(--fg-3);font-size:10px;width:8px;transition:transform .12s ease}
+.arow.open .chev{transform:rotate(90deg)}
+.chip{flex:none}
+.fname{flex:1;min-width:0;font-size:var(--fs-table);color:var(--fg-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acts{flex:none;display:flex;align-items:center;gap:var(--sp-1)}
+.acts .btn.ghost{color:var(--fg-2);border-color:transparent}
+.arow:hover .acts .btn.ghost{border-color:var(--line-1)}
+.acts .btn.icon{color:var(--fg-3)}
+.arow.open .acts .btn.ghost{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.arowMeta{display:flex;align-items:center;gap:var(--sp-3);height:16px;padding-left:15px;font-size:var(--fs-meta);color:var(--fg-3)}
+.dot2{color:var(--line-1)}
+.adetail{padding:var(--sp-3) 0 var(--sp-1) 15px;display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-1) var(--sp-6)}
+.kv{display:flex;gap:var(--sp-3);font-size:var(--fs-meta);color:var(--fg-3)}
+.kv b{font-weight:400;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kv b.mono{color:var(--fg-2)}
+.footHint{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style></head>
+<body>
+  <div class="top" data-block="filters">
+    <div class="seg" role="tablist">
+      <button aria-selected="true">全部<span class="n">16</span></button>
+      <button>快照<span class="n">5</span></button>
+      <button>备份文件<span class="n">4</span></button>
+      <button>远端快照<span class="n">4</span></button>
+      <button>市场<span class="n">3</span></button>
+    </div>
+    <div class="input" role="search"><span class="ph">搜索产物</span></div>
+  </div>
+
+  <div class="warnLine" data-block="source-health">
+    快照目录不可读<span class="why">EACCES · ~/.dsh/snapshots</span>
+    <button class="retry">重试</button>
+  </div>
+
+  <div class="list" data-block="artifact-list">
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">本机快照</span>
+        <span class="fname mono" title="snap-2026-11-06-2214">snap-2026-11-06-2214</span>
+        <span class="acts"><button class="btn ghost sm">恢复</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">84 个文件<span class="dot2">·</span>12.4 MB<span class="dot2">·</span>11-06 22:14<span class="dot2">·</span><span class="badge cur">当前</span></div>
+
+    </div>
+    <div class="arow open">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">备份文件</span>
+        <span class="fname mono" title="dcm-backup-2026…2214.zip">dcm-backup-2026…2214.zip</span>
+        <span class="acts"><button class="btn ghost sm">导入</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">12.4 MB<span class="dot2">·</span>11-06 22:14<span class="dot2">·</span><span class="badge enc">加密</span><span class="badge pin">固定</span></div>
+      <div class="adetail">
+        <div class="kv"><span>来源</span><b class="mono">工作目录导出</b></div>
+        <div class="kv"><span>包含分区</span><b>settings · providers · plugins · sessions</b></div>
+        <div class="kv"><span>条目</span><b class="mono">1 204</b></div>
+        <div class="kv"><span>校验</span><b class="mono">sha256 8f3a…c21e</b></div>
+      </div>
+    </div>
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">本机快照</span>
+        <span class="fname mono" title="snap-2026-11-05-0900">snap-2026-11-05-0900</span>
+        <span class="acts"><button class="btn ghost sm">恢复</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">84 个文件<span class="dot2">·</span>12.3 MB<span class="dot2">·</span>11-05 09:00</div>
+
+    </div>
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">远端快照</span>
+        <span class="fname mono" title="config-20261105">config-20261105</span>
+        <span class="acts"><button class="btn ghost sm">拉取</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">gist · main<span class="dot2">·</span>12.3 MB</div>
+
+    </div>
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">备份文件</span>
+        <span class="fname mono" title="cursor-settings…1107.zip">cursor-settings…1107.zip</span>
+        <span class="acts"><button class="btn ghost sm">导入</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">3.1 MB<span class="dot2">·</span>11-07 10:42</div>
+
+    </div>
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">市场</span>
+        <span class="fname mono" title="会话隔离模板">会话隔离模板</span>
+        <span class="acts"><button class="btn ghost sm">安装</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">0.4 MB<span class="dot2">·</span>v2.1.0</div>
+
+    </div>
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">本机快照</span>
+        <span class="fname mono" title="snap-2026-11-03-2102">snap-2026-11-03-2102</span>
+        <span class="acts"><button class="btn ghost sm">恢复</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">81 个文件<span class="dot2">·</span>12.1 MB<span class="dot2">·</span>11-03 21:02</div>
+
+    </div>
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">远端快照</span>
+        <span class="fname mono" title="work-profile">work-profile</span>
+        <span class="acts"><button class="btn ghost sm">拉取</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">git · origin/main<span class="dot2">·</span><span class="badge bad">不可读</span></div>
+
+    </div>
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">备份文件</span>
+        <span class="fname mono" title="claude-mcp-export.zip">claude-mcp-export.zip</span>
+        <span class="acts"><button class="btn ghost sm">导入</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">1.2 MB<span class="dot2">·</span>11-02 18:20</div>
+
+    </div>
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">市场</span>
+        <span class="fname mono" title="MCP 工具集">MCP 工具集</span>
+        <span class="acts"><button class="btn ghost sm">安装</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">0.9 MB<span class="dot2">·</span>v1.4.2</div>
+
+    </div>
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">本机快照</span>
+        <span class="fname mono" title="snap-2026-11-01-2214">snap-2026-11-01-2214</span>
+        <span class="acts"><button class="btn ghost sm">恢复</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">80 个文件<span class="dot2">·</span>12.0 MB<span class="dot2">·</span>11-01 22:14<span class="dot2">·</span><span class="badge pin">固定</span></div>
+
+    </div>
+    <div class="arow">
+      <div class="arowTop">
+        <span class="chev">›</span>
+        <span class="chip">远端快照</span>
+        <span class="fname mono" title="config-20261031">config-20261031</span>
+        <span class="acts"><button class="btn ghost sm">拉取</button><button class="btn icon">⋯</button></span>
+      </div>
+      <div class="arowMeta">gist · main</div>
+
+    </div>
+  </div>
+
+  <div class="foot" data-block="footer">
+    <span class="mono">16 / 16</span>
+    <span class="badge enc">加密 1</span>
+    <span class="footHint">备份文件来自本机导出的 ZIP</span>
+    <span class="btns">
+      <button class="btn primary">导出</button>
+      <button class="btn ghost">导入</button>
+      <button class="btn ghost">市场</button>
+      <button class="btn ghost">发布</button>
+    </span>
+  </div>
+</body></html>

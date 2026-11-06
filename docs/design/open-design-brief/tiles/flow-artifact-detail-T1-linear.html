@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>artifact detail · T1</title>
+<link rel="stylesheet" href="lin.css">
+<style>
+.head2{display:flex;align-items:center;gap:var(--sp-3);flex:none}
+.head2 .nm{font-family:var(--font-mono);font-size:var(--fs-title);color:var(--fg-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.head2 .right{margin-left:auto;display:flex;gap:var(--sp-2)}
+.kv{display:grid;grid-template-columns:72px 1fr;gap:var(--sp-2) var(--sp-4);font-size:var(--fs-table);margin:0}
+.kv dt{color:var(--fg-3);font-size:var(--fs-meta)}
+.kv dd{margin:0;color:var(--fg-1);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sec{display:flex;flex-direction:column;gap:var(--sp-3);flex:none}
+.sectTitle{font-size:var(--fs-meta);color:var(--fg-3);display:flex;align-items:center;gap:var(--sp-3)}
+.chips{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
+.chips .chip{font-size:var(--fs-meta);height:20px}
+.acts{display:flex;gap:var(--sp-2);flex-wrap:wrap;flex:none}
+.list{flex:1;min-height:0;display:flex;flex-direction:column;border:1px solid var(--line-1);border-radius:var(--r-3);background:var(--surface);overflow:hidden}
+.thead,.arow{display:grid;grid-template-columns:1fr 88px 64px;gap:var(--sp-3);align-items:center;padding:0 var(--sp-5)}
+.thead{height:24px;font-size:var(--fs-meta);color:var(--fg-3);border-bottom:1px solid var(--line-1);flex:none}
+.arows{flex:1;min-height:0;overflow:hidden}
+.arow{height:26px;font-size:var(--fs-table);border-bottom:1px solid var(--line-2)}
+.arow .nm{font-family:var(--font-mono);font-size:var(--fs-meta);color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arow .t{font-family:var(--font-mono);font-size:var(--fs-meta);color:var(--fg-3);justify-self:end}
+.arow .r{justify-self:end;font-size:var(--fs-meta);color:var(--fg-2)}
+.dangerRow{display:flex;align-items:center;gap:var(--sp-3);flex:none;font-size:var(--fs-meta);color:var(--fg-3)}
+.dangerRow .right{margin-left:auto}
+</style></head>
+<body>
+  <div class="head2" data-block="head">
+    <span class="nm">snap-2026-11-06-2214</span>
+    <span class="chip" style="font-size:var(--fs-meta)">本机快照</span>
+    <span class="badge cur">当前</span>
+    <span class="right"><button class="btn ghost sm">返回列表</button></span>
+  </div>
+
+  <div class="sec" data-block="meta">
+    <dl class="kv">
+      <dt>创建</dt><dd><span class="mono">2026-11-06 22:14</span> · 12.4 MB · 84 个文件</dd>
+      <dt>校验</dt><dd class="mono">sha256 3f2a…91cd</dd>
+      <dt>保留</dt><dd>固定保留 · 不参与自动清理</dd>
+      <dt>来源</dt><dd><span class="mono">~/.dsh/snapshots/snap-2026-11-06-2214</span></dd>
+    </dl>
+  </div>
+
+  <div class="sec" data-block="sections">
+    <span class="sectTitle">包含分区 <span style="color:var(--fg-2)">5</span></span>
+    <div class="chips">
+      <span class="chip">settings</span><span class="chip">providers</span><span class="chip">plugins</span>
+      <span class="chip">sessions</span><span class="chip">mcp</span>
+    </div>
+  </div>
+
+  <div class="acts" data-block="actions">
+    <button class="btn primary">恢复</button>
+    <button class="btn ghost">导入</button>
+    <button class="btn ghost">下拉</button>
+    <button class="btn ghost">下载</button>
+    <button class="btn ghost">检查</button>
+    <button class="btn ghost">咨询</button>
+  </div>
+
+  <div class="list" data-block="related">
+    <div class="thead"><span>同源产物</span><span style="justify-self:end">时间</span><span style="justify-self:end">大小</span></div>
+    <div class="arows">
+      <div class="arow"><span class="nm">snap-2026-11-05-0900</span><span class="t">11-05 09:00</span><span class="r">12.3 MB</span></div>
+      <div class="arow"><span class="nm">snap-2026-11-03-2102</span><span class="t">11-03 21:02</span><span class="r">12.1 MB</span></div>
+      <div class="arow"><span class="nm">snap-2026-11-01-2214</span><span class="t">11-01 22:14</span><span class="r">12.0 MB</span></div>
+      <div class="arow"><span class="nm">snap-2026-10-30-0812</span><span class="t">10-30 08:12</span><span class="r">11.8 MB</span></div>
+      <div class="arow"><span class="nm">snap-2026-10-28-2301</span><span class="t">10-28 23:01</span><span class="r">11.7 MB</span></div>
+      <div class="arow"><span class="nm">snap-2026-10-26-1140</span><span class="t">10-26 11:40</span><span class="r">11.6 MB</span></div>
+      <div class="arow"><span class="nm">snap-2026-10-24-0955</span><span class="t">10-24 09:55</span><span class="r">11.5 MB</span></div>
+      <div class="arow"><span class="nm">snap-2026-10-22-1830</span><span class="t">10-22 18:30</span><span class="r">11.4 MB</span></div>
+      <div class="arow"><span class="nm">snap-2026-10-20-0714</span><span class="t">10-20 07:14</span><span class="r">11.3 MB</span></div>
+      <div class="arow"><span class="nm">snap-2026-10-18-2100</span><span class="t">10-18 21:00</span><span class="r">11.2 MB</span></div>
+      <div class="arow"><span class="nm">snap-2026-10-16-1230</span><span class="t">10-16 12:30</span><span class="r">11.1 MB</span></div>
+    </div>
+  </div>
+
+  <div class="dangerRow" data-block="footer">
+    <span>删除后不可恢复，固定保留项除外</span>
+    <span class="right"><button class="btn ghost sm" style="color:var(--error)">删除</button></span>
+  </div>
+</body></html>

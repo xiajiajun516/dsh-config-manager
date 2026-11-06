@@ -108,3 +108,13 @@ home  →  library  →  environment  →  sync
 | 风险 | 与现状最像，改进可能被读成「重排」 | 层次全压在亮度上，暗屏下可能糊 | 暖色与宿主冷灰并存要试 |
 
 **待用户选定**（这是唯一的人工决策点）：选定后 Stage C 按该票的视觉语言出 4 页 + 3 流程。
+
+## 8 Stage C 产出（四页 + 三流程）
+
+四页主稿与三份流程稿都在 `tiles/`，画幅统一 564×720，全部实测 `body.scrollHeight === 720`、滚动区 `clientHeight === scrollHeight`：
+
+- `home-T1-linear` `library-T1-linear` `environment-T1-linear` `sync-T1-linear`
+- `flow-sync-confirm-T1-linear` `flow-import-confirm-T1-linear` `flow-artifact-detail-T1-linear`
+- `contact-pages.png`（四页并排）
+
+非数据态（空/加载/错误）与三个流程的走法、以及「稿中元素 → 现有类名」的落地映射见 `07-states-and-flows.md`。

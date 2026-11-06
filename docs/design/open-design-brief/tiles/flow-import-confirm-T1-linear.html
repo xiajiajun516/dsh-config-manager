@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>import confirm · T1</title>
+<link rel="stylesheet" href="lin.css">
+<style>
+.steps{display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-meta);color:var(--fg-3);white-space:nowrap;overflow:hidden}
+.steps i{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.18);flex:none}
+.steps span.on{color:var(--fg-1)}
+.steps span.done{color:var(--fg-2)}
+.steps .line{flex:1;height:1px;background:var(--line-1);min-width:4px}
+.sec{display:flex;flex-direction:column;gap:var(--sp-3);flex:none}
+.sectTitle{font-size:var(--fs-title);font-weight:510;display:flex;align-items:center;gap:var(--sp-3)}
+.sectTitle .hint{font-size:var(--fs-meta);color:var(--fg-3);font-weight:400}
+.kv{display:grid;grid-template-columns:72px 1fr;gap:var(--sp-2) var(--sp-4);font-size:var(--fs-table);margin:0}
+.kv dt{color:var(--fg-3);font-size:var(--fs-meta)}
+.kv dd{margin:0;color:var(--fg-1);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.list{flex:1;min-height:0;display:flex;flex-direction:column;border:1px solid var(--line-1);border-radius:var(--r-3);background:var(--surface);overflow:hidden}
+.thead,.prow{display:grid;grid-template-columns:1fr 88px 76px;gap:var(--sp-3);align-items:center;padding:0 var(--sp-5)}
+.thead{height:24px;font-size:var(--fs-meta);color:var(--fg-3);border-bottom:1px solid var(--line-1);flex:none}
+.prows{flex:1;min-height:0;overflow:hidden}
+.prow{height:24px;font-size:var(--fs-table);border-bottom:1px solid var(--line-2)}
+.prow .nm{font-family:var(--font-mono);color:var(--fg-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prow .sz{font-family:var(--font-mono);font-size:var(--fs-meta);color:var(--fg-3);justify-self:end}
+.prow .act{justify-self:end;font-size:var(--fs-meta);color:var(--fg-2)}
+.prow.off{color:var(--fg-3)}
+.prow.off .nm{color:var(--fg-3)}
+.banner{display:flex;gap:var(--sp-3);align-items:flex-start;font-size:var(--fs-table);line-height:1.5;flex:none;
+  padding:var(--sp-3) var(--sp-4);border-radius:var(--r-2);border:1px solid var(--line-1);background:var(--surface)}
+.banner.warn{border-color:rgba(242,201,76,.28);background:rgba(242,201,76,.06)}
+.banner .ic{flex:none;width:12px;text-align:center;color:var(--warn)}
+.banner.info .ic{color:var(--fg-3)}
+.banner b{font-weight:510;color:var(--fg-1)}
+.chips{display:flex;flex-wrap:wrap;gap:var(--sp-2)}
+</style></head>
+<body>
+  <div class="viewHead" data-block="head">
+    <span class="vhTitle">导入</span><span class="vhHint">第 8 步 · 确认</span>
+    <span class="vhRight"><button class="btn ghost sm">取消</button></span>
+  </div>
+
+  <div class="steps" data-block="steps">
+    <i></i><span class="done">选择文件</span><span class="line"></span>
+    <i></i><span class="done">解锁</span><span class="line"></span>
+    <i></i><span class="done">预览</span><span class="line"></span>
+    <i></i><span class="done">冲突</span><span class="line"></span>
+    <i></i><span class="done">路径</span><span class="line"></span>
+    <i></i><span class="done">凭据</span><span class="line"></span>
+    <i></i><span class="done">会话</span><span class="line"></span>
+    <i></i><span class="on">确认</span>
+  </div>
+
+  <div class="sec" data-block="summary">
+    <dl class="kv">
+      <dt>来源</dt><dd class="mono">dcm-backup-2026-11-04.zip</dd>
+      <dt>内容</dt><dd><span class="mono">sha256 8f3d…c21e</span> · 4.2 MB · 2026-11-04 23:12</dd>
+      <dt>裁决</dt><dd>12 / 16 写入 · 冲突 2 项已用远端 · 路径 3 项重映射</dd>
+    </dl>
+  </div>
+
+  <div class="banner warn" data-block="banner-secrets">
+    <span class="ic">!</span>
+    <span>2 个凭据需要重填：<span class="mono">sync.git.token</span>、<span class="mono">s3.secretKey</span>。导出不含凭据值，写入后到「同步」页补即可。</span>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:var(--sp-3);flex:none">
+    <span class="sectTitle">分区<span class="hint">12 写入 · 4 排除</span></span>
+    <span style="margin-left:auto;font-size:var(--fs-meta);color:var(--fg-3)">导出时未勾选的分区不会出现在这里</span>
+  </div>
+
+  <div class="list" data-block="sections">
+    <div class="thead"><span>分区</span><span style="justify-self:end">大小</span><span style="justify-self:end">处理</span></div>
+    <div class="prows">
+      <div class="prow"><span class="nm">settings</span><span class="sz">12 KB</span><span class="act">写入 · 远端</span></div>
+      <div class="prow"><span class="nm">providers</span><span class="sz">8 KB</span><span class="act">写入 · 远端</span></div>
+      <div class="prow"><span class="nm">plugins</span><span class="sz">1.4 GB</span><span class="act">写入</span></div>
+      <div class="prow"><span class="nm">sessions</span><span class="sz">1.1 GB</span><span class="act">写入</span></div>
+      <div class="prow"><span class="nm">mcp</span><span class="sz">6 KB</span><span class="act">写入</span></div>
+      <div class="prow"><span class="nm">skills</span><span class="sz">24 KB</span><span class="act">写入</span></div>
+      <div class="prow"><span class="nm">ui</span><span class="sz">2 KB</span><span class="act">写入</span></div>
+      <div class="prow"><span class="nm">self</span><span class="sz">4 KB</span><span class="act">写入</span></div>
+      <div class="prow"><span class="nm">tui</span><span class="sz">2 KB</span><span class="act">写入</span></div>
+      <div class="prow"><span class="nm">themes</span><span class="sz">1 KB</span><span class="act">写入</span></div>
+      <div class="prow"><span class="nm">pluginData</span><span class="sz">18 MB</span><span class="act">写入</span></div>
+      <div class="prow"><span class="nm">market</span><span class="sz">3 KB</span><span class="act">写入</span></div>
+      <div class="prow off"><span class="nm">snapshots</span><span class="sz">48 MB</span><span class="act">排除</span></div>
+      <div class="prow off"><span class="nm">sync</span><span class="sz">9 KB</span><span class="act">排除</span></div>
+      <div class="prow off"><span class="nm">credentials</span><span class="sz">—</span><span class="act">排除</span></div>
+      <div class="prow off"><span class="nm">pluginAssets</span><span class="sz">120 MB</span><span class="act">排除</span></div>
+    </div>
+  </div>
+
+  <div class="banner info" data-block="banner-rollback">
+    <span class="ic">·</span>
+    <span><b>导入前自动创建快照</b>；任一分区失败将整体回滚，已写入项一并撤销。</span>
+  </div>
+
+  <div class="footRow" data-block="footer">
+    <span class="hint">预计 12 秒</span>
+    <span class="right"><button class="btn ghost">返回</button><button class="btn primary">开始导入</button></span>
+  </div>
+</body></html>
