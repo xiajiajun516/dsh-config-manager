@@ -5,7 +5,7 @@
  * `HostConnectionService.requestRejection(request)`（dsh-client-connection）先判
  * isTrustedApiRequest（Host 属于 trustedHosts / 回环 + 非 cross-site + Origin 同源），
  * 再判 browserAuth.isAuthenticated（按 authority 命名、HMAC 签名的 dsh-auth cookie）。
- * `--trusted-host`、`--host 0.0.0.0` 的网卡派生、cookie 过期与轮换全在宿主里，
+ * `--host` 绑定的接口字面量、`--trusted-host`、cookie 过期与轮换全在宿主里，
  * 插件复刻一份必然分叉（也拿不到签名密钥）。
  *
  * 只委托、不接管：

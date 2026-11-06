@@ -636,8 +636,8 @@ The panel's API is fenced: every `/api/dsh-config-manager/*` request is accepted
 ssh -L 3080:127.0.0.1:3080 you@server   # then open http://localhost:3080
 ```
 
-- **Why it is fenced:** these endpoints read and write local files, credentials-backed sync settings and snapshots. The fence is the plugin's real authentication boundary — a DSH session cookie alone is not enough.
-- **`dsh web --host <LAN address>`:** the page itself loads from another machine, but the panel then only works if the host trusts that address **and** the browser carries a signed `dsh-auth` session cookie. `--host 0.0.0.0` derives the trusted hosts from your network interfaces; `--trusted-host <authority>` (repeatable, `host` or `host:port`) adds one explicitly.
+- **Why it is fenced:** these endpoints read and write local files, credentials-backed sync settings and snapshots. Loopback requests are let through; anything else is decided by the host itself (Host / bind address, same-origin, and a signed `dsh-auth` session cookie). The plugin never validates sessions on its own, so a proxy or tunnel in front of it still needs its own auth.
+- **`dsh web --host <LAN address>`:** the page itself loads from another machine, but the panel then only works if the host trusts that address **and** the browser carries a signed `dsh-auth` session cookie. `--host` takes one concrete interface address — wildcard addresses such as `0.0.0.0` are rejected by the host. Behind a proxy, add the authority the browser uses with `--trusted-host <authority>` (repeatable, `host` or `host:port`); `--public-url` advertises a URL but grants no trust.
 - **What you see when it is not allowed:** a single **“This page cannot read local data from its current address”** banner with the page's origin and the fix — not a generic “5 requests failed”, and no useless Retry button.
 - **Not affected:** the CLI (`dsh-config-manager …`) and the agent tools (`config_backup`, `config_list_snapshots`, `config_sync_*`) never go through this fence.
 
