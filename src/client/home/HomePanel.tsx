@@ -37,6 +37,7 @@ import { redact } from '../../security/redaction.ts'
 import { runStore } from '../run-store.ts'
 import type { ArtifactKind } from '../../ui/artifact-view.ts'
 import { toast } from '../common/toast-store.ts'
+import { isAccessModeError } from '../common/access-mode.ts'
 import { toRecoveryView } from '../recovery/recovery-view.ts'
 import {
   buildOverviewMetrics,
@@ -60,6 +61,12 @@ const HOME_SYNC_TIMEOUT_MS = 30_000
 /** 首页活动表所需的最近条数（表里只显示 30 条，多取一段留作「同秒多条」时的余量）。
  *  服务端按文件名尾部只读最近 N 个文件 —— 不再把 2360 条历史全量读出来返给首屏。 */
 const HOME_ACTIVITY_LIMIT = 100
+
+/** 当前页面的来源地址（issue #126）：访问方式被拒时必须让用户看到「你是从哪个地址打开的」。
+ *  非浏览器环境（SSR / 单测）没有 location，退回 'unknown' 而不是空串 —— 文案是拼句。 */
+function pageOrigin(): string {
+  return typeof location === 'undefined' ? 'unknown' : location.origin
+}
 
 /** issue #43：立即备份跳过原因 → 文案键（文案统一走 locale 字典；未知 token 走 other）。 */
 const BACKUP_SKIP_KEY: Record<BackupSkipReason, ConfigManagerKey> = {
@@ -161,7 +168,9 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
    *  为什么必须有它：此前 allSettled 把失败一律吞成 null，而健康判定对 null 不降级 ——
    *  宿主接口整体不可达时，用户看到的是绿色「配置健康」+「暂无操作记录」，
    *  读起来像「一切正常只是没操作过」，真实原因与重试入口都不可见。 */
-  const [loadError, setLoadError] = useState<{ count: number; message: string } | null>(null)
+  /** accessMode：这轮失败**全部**是「当前访问方式不受支持」（issue #126）——
+   *  此时横幅必须换成解释 + 下一步，绝不能再给一个点了也没用的「重试」。 */
+  const [loadError, setLoadError] = useState<{ count: number; message: string; accessMode: boolean } | null>(null)
   const [backupRunning, setBackupRunning] = useState(false)
   /** 卸载后不再 setState（异步回调竞态防护） */
   const aliveRef = useRef(true)
@@ -175,6 +184,7 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
     setLoadError(list.length === 0 ? null : {
       count: list.length,
       message: first instanceof Error ? first.message : String(first),
+      accessMode: list.every(isAccessModeError),
     })
   }, [])
 
@@ -389,11 +399,25 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
       {/* 0. 读取失败横幅：必须排在状态条之前 —— 数据没拿到时，绿色健康点是假的。
           重试复用同一条 load()（不新增刷新路径）。 */}
       {loadError !== null && (
-        <Banner kind="error">
-          {t('overview.loadFailed', { count: String(loadError.count), message: redact(loadError.message) })}
-          {' '}
-          <Button size="sm" loading={loading} onClick={() => { void load() }}>{t('common.retry')}</Button>
-        </Banner>
+        loadError.accessMode
+          /* issue #126：访问方式问题不是读取失败 —— 说清「为什么」与「怎么改」，且不给重试
+             （同一个地址重试必然再被拒；换隧道或换 --host 启动都要整页重开）。 */
+          ? (
+            <Banner kind="warn">
+              {t('overview.accessMode.title')}
+              {' '}
+              {t('overview.accessMode.origin', { origin: pageOrigin() })}
+              {' '}
+              {t('overview.accessMode.hint')}
+            </Banner>
+          )
+          : (
+            <Banner kind="error">
+              {t('overview.loadFailed', { count: String(loadError.count), message: redact(loadError.message) })}
+              {' '}
+              <Button size="sm" loading={loading} onClick={() => { void load() }}>{t('common.retry')}</Button>
+            </Banner>
+          )
       )}
       {/* 1. 状态条：健康点 + 指标段（可点击，名词在前） */}
       <div className={css.statStrip} data-tone={health.kind === 'ok' ? undefined : health.kind}>

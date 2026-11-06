@@ -28,6 +28,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🐛 修复 · Fixed
+
+- **从别的机器打开内嵌面板不再是一片「读取失败」**：宿主以局域网地址启动 `dsh web` 后，页面能打开但每条请求都被拒，首页只显示「有 5 项数据读取失败」并给一个点了没用的重试；现在这类请求由宿主自己判断是否可信（已信任地址 + 已登录会话），真被拒时也会直接说明「当前访问方式不被允许」、页面地址与改用隧道或回环启动的办法。（issue #126）
+  **The panel opened from another machine no longer shows a wall of read failures**: with `dsh web --host <LAN address>`, the page loaded but every request was rejected and the home page just said “5 requests failed” with a useless retry; those requests are now judged by the host's own trust rules (trusted address + signed-in session), and a real refusal explains the current address and how to switch to a tunnel or loopback instead. (issue #126)
+
 ## [0.4.2] - 2026-11-04
 
 > **本版主题**：两次「看不见的失败」都不再藏起来 —— 复制档案留下残骸现在会被点名、可一键清掉，恢复中的写操作切走再回来也不再假装卡住。

@@ -23,6 +23,7 @@
  * @deepseek-ai/* 只能出现在 src/index.ts 与 src/client/（见 tests/architecture-boundaries.test.ts）。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { LOOPBACK_ONLY_CODE } from '../core/access-mode.ts'
 import { invalidateEngineLocale } from '../core/engine-locale.ts'
 import { TransactionRecoveryRequiredError } from '../core/phase3-host.ts'
 import { EnvironmentLockUnavailableError } from '../utils/env-lock.ts'
@@ -215,11 +216,65 @@ export function isLoopbackRequest(request: IncomingMessage): boolean {
   }
 }
 
+/* ------------------------------------------------- 访问面（issue #126） */
+
+/**
+ * 一次围栏拒绝：状态码 + 机器码 + 原始消息。
+ *
+ * 401 与 403 必须分开：403 是「这个地址我不认」（换地址 / 换启动参数就能好），
+ * 401 是「地址认了但没登录会话」（重开 dsh web 打印的链接就能好）—— 两者给用户的
+ * 下一步完全不同，客户端要能按 code 分别说清。
+ */
+export interface RequestRejection {
+  status: 401 | 403
+  message: string
+  code: string
+}
+
+/**
+ * **非回环**请求的外部信任判定。
+ *
+ * 只在 isLoopbackRequest() 不成立时才会被调用（见 requestRejection），因此
+ * 本机 curl / 脚本 / 单测的既有行为与改造前逐字一致。
+ */
+export type RequestTrustResolver = (request: IncomingMessage) => RequestRejection | undefined
+
+/** 兜底拒绝（无委托）：与改造前的响应逐字一致，只多一个机器码。 */
+const LOOPBACK_REJECTION: RequestRejection = Object.freeze({
+  status: 403,
+  message: 'forbidden: loopback-only',
+  code: LOOPBACK_ONLY_CODE,
+})
+
+let delegatedTrust: RequestTrustResolver | undefined
+
+/**
+ * 安装宿主信任面委托（issue #126）。
+ *
+ * 背景：宿主以 --host 10.0.0.10 起 dsh web 后，内嵌面板的每条路由都被 loopback 围栏
+ * 拒掉（403 forbidden: loopback-only），而同一份宿主的 /api 对局域网浏览器是放行的
+ * （Host 属于 trustedHosts + 带 dsh-auth 会话 cookie）。
+ *
+ * 规则：**回环永远先放行**（本机行为不变），回环之外的请求才交给宿主判定。
+ * 拿不到委托（老宿主 / 独立 CLI 救急台）就退回严格回环 —— 失败方向是「更严」，不是更松。
+ *
+ * 传 undefined = 卸回严格回环（插件卸载/重载不残留上一实例的信任面）。
+ */
+export function setRequestTrustResolver(resolver: RequestTrustResolver | undefined): void {
+  delegatedTrust = resolver
+}
+
+/** 请求级信任判定（endpoint 的唯一围栏口径）。 */
+function requestRejection(request: IncomingMessage): RequestRejection | undefined {
+  if (isLoopbackRequest(request)) return undefined
+  return delegatedTrust === undefined ? LOOPBACK_REJECTION : delegatedTrust(request)
+}
+
 /* ---------------------------------------------------------------- 唯一入口 */
 
 /**
  * 声明一条端点。这是全部路由的**唯一构造入口**：
- * ① loopback 围栏（非 loopback → 403）；② 方法白名单（不在白名单 → 405）；
+ * ① 访问面围栏（回环放行；其余交宿主信任面，见 requestRejection）；② 方法白名单（不在白名单 → 405）；
  * ③ 顶层 try/catch → writeRouteError（异常绝不再落到 webserver 的空体 400 兜底）。
  */
 export function endpoint(spec: EndpointSpec, handler: EndpointHandler): WebRoute {
@@ -230,8 +285,9 @@ export function endpoint(spec: EndpointSpec, handler: EndpointHandler): WebRoute
       // 「英文界面零中文」（t6）：请求入口强制失效语言缓存 —— 用户切语言后**下一次请求**就必须拿到新语言。
       // 不接也有 LANGUAGE_TTL_MS=1000 的兜底上界；TTL 只给调度器/后台任务这类非请求路径用。
       invalidateEngineLocale()
-      if (!isLoopbackRequest(req)) {
-        writeJsonError(res, 403, 'forbidden: loopback-only')
+      const rejection = requestRejection(req)
+      if (rejection !== undefined) {
+        writeJsonError(res, rejection.status, rejection.message, rejection.code)
         return
       }
       if (!spec.methods.includes(req.method as HttpMethod)) {

@@ -50,6 +50,10 @@ export const zh = {
   'overview.activity.unavailable': '活动记录读取失败（这不是「没有记录」）',
   // 首屏 5 个只读请求有失败时如实说清（此前失败被吞成 null，页面仍显示绿色健康 + 空活动）
   'overview.loadFailed': '有 {count} 项数据读取失败：{message} —— 下面的指标可能不完整',
+  // issue #126：访问方式（宿主 --host 局域网地址 / 反代）不满足围栏时，说清原因与下一步，且不给重试
+  'overview.accessMode.title': '当前访问方式不被允许读取本机数据。',
+  'overview.accessMode.origin': '页面地址：{origin}。',
+  'overview.accessMode.hint': '面板只接受本机回环访问，或宿主已信任的地址与已登录会话。改法：用 ssh -L 3080:127.0.0.1:3080 隧道后从 localhost 打开；或以 dsh web --host 127.0.0.1 启动后在本机访问。',
   'overview.empty.title': '开始保护你的配置',
   'overview.empty.step1': '创建第一份备份',
   'overview.empty.step2': '导出 ZIP 带走',
@@ -120,6 +124,10 @@ export const en: Record<keyof typeof zh, string> = {
   'overview.activity.unavailable': 'The activity log could not be read (this is not \"no activity\")',
   // Say it plainly when some of the five read-only requests failed (failures used to be swallowed into null)
   'overview.loadFailed': '{count} data {count, plural, request|requests} failed: {message} — the metrics below may be incomplete',
+  // issue #126: the host's --host (LAN) address or a reverse proxy sits outside the fence
+  'overview.accessMode.title': 'This page cannot read local data from its current address.',
+  'overview.accessMode.origin': 'Page address: {origin}.',
+  'overview.accessMode.hint': 'The panel only accepts loopback access, or an address and signed-in session the host already trusts. Fix: open it through an ssh -L 3080:127.0.0.1:3080 tunnel via localhost, or start dsh web --host 127.0.0.1 and open it on this machine.',
   'overview.empty.title': 'Start protecting your configuration',
   'overview.empty.step1': 'Create a backup',
   'overview.empty.step2': 'Export the ZIP',

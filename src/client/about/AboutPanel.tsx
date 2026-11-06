@@ -254,6 +254,13 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
         </div>
       </Card>
 
+      {/* issue #126：访问范围（宿主 --host 局域网地址 / 反代 → 页面能开、数据读不到）。
+          放在 CLI 卡之后：两者回答同一个问题「换个入口还能不能用」，用户排查时一起看到。 */}
+      <Card>
+        <span className={css.groupLabel}>{t('about.access.title')}</span>
+        <div className={css.hint}>{t('about.access.hint')}</div>
+      </Card>
+
       {/* 版本更新内容弹窗（支持向下无限滚动加载） */}
       <ReleaseNotesDialog
         open={releaseNotesOpen}

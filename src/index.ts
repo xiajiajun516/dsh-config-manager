@@ -56,6 +56,7 @@ import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 
 import { endpoint, registerRoutes, requireJsonObject, writeJson, readJsonBody, errorMessage, writeMutationError } from './routes/kit.ts'
+import { installHostRequestTrust } from './routes/request-trust.ts'
 import { buildRoutes } from './routes/index.ts'
 import type { RecoveryOrchestrator } from './core/recovery-orchestrator.ts'
 import type { Portability } from './core/types.ts'
@@ -4119,13 +4120,12 @@ export function apply(ctx: Context, config?: Config): void {
   }
   // 端口就绪 → 重新自报一次心跳（其它实例的「运行中」徽章与端口信息靠它；token 永不落盘）。
   webPort.value = webServer.port
-  // F-2：宿主自请求走这个端口（探测/代理 DSH 自己的 /api/session.export）——
-  // 必须在注册路由**之前**赋值，否则首次探测拿到 undefined 会如实降级成「拿不到状态码」。
-  // 注：本插件是 bundle 包、宿主半没有热重载，端口变化只有重启一次才可能发生。
-  // routeEnv 的 sessionExportPort 是**活 getter**（读 host.webPort），因此这里赋值对已构造好的
-  // 路由表同样生效 —— 不需要重建路由。
+  // F-2：宿主自请求走这个端口（探测/代理 DSH 自己的 /api/session.export）；routeEnv 的
+  // sessionExportPort 是**活 getter**（读 host.webPort），所以这里赋值对已构造好的路由表同样生效、
+  // 无需重建；但必须早于注册（否则首次探测拿到 undefined 会如实降级）。端口变化只有重启才会发生。
   host.webPort = webServer.port
   profileRuntime.announce()
+  installHostRequestTrust(ctx, host.log)
   ctx.effect(() => {
     const disposers = registerRoutes(webServer, routes)
     return () => {

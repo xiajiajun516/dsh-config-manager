@@ -49,6 +49,9 @@ export const zh = {
   'about.cli.title': 'CLI 救援工具',
   'about.cli.hint': 'GUI 运行在 DSH 内部——DSH 无法启动时，独立安装的 CLI（dsh-config-manager）是第一救援手段：列快照 / 离线恢复 / 一键重装 DSH，全程无需 DSH 运行。安装一次即可在任何机器上用：',
   'about.cli.docs': 'CLI 使用文档',
+  // issue #126：内嵌面板的访问边界（宿主 --host 局域网地址 / 反代会被围栏拒绝，不是数据坏了）
+  'about.access.title': '访问范围',
+  'about.access.hint': '本面板只接受两种来源：本机回环地址（127.0.0.1 / localhost），或宿主已信任的地址与已登录的 dsh web 会话。用 dsh web --host <局域网地址> 启动后从别的机器打开时，页面能加载但读不到本机数据——改用 ssh -L 3080:127.0.0.1:3080 隧道从 localhost 打开即可。CLI 与 agent 工具不受此限制。',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -94,4 +97,7 @@ export const en: Record<keyof typeof zh, string> = {
   'about.cli.title': 'CLI Rescue Tool',
   'about.cli.hint': 'The GUI lives inside DSH — when DSH cannot start, the separately installed CLI (dsh-config-manager) is your first rescue tool: list snapshots / offline restore / one-click DSH reinstall, no DSH runtime needed. Install once and use it on any machine:',
   'about.cli.docs': 'CLI documentation',
+  // issue #126: the panel's access boundary (host --host LAN address / reverse proxy is fenced)
+  'about.access.title': 'Access scope',
+  'about.access.hint': 'This panel accepts only two sources: loopback on this machine (127.0.0.1 / localhost), or an address and signed-in dsh web session the host already trusts. Started with dsh web --host <LAN address> and opened from another machine, the page loads but cannot read local data — open it through an ssh -L 3080:127.0.0.1:3080 tunnel via localhost instead. The CLI and agent tools are not affected.',
 };

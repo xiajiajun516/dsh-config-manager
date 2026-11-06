@@ -627,6 +627,19 @@ dsh-config-manager web            # starts it and opens your browser (the termin
 - **Safety:** loopback-only binding; a one-time token printed to your terminal is exchanged for an HttpOnly + SameSite=Strict session cookie; the page has no scripts and no external resources. `Ctrl+C` or the idle timeout (30 minutes by default) shuts it down.
 - **Preconditions:** session relocation and restore need DSH stopped; with an unresolved SAFE MODE transaction or a leftover environment lock every write action is refused (the page says why). **Import** (writing a bundle back into this machine) stays on the GUI/CLI — structural sections need live DSH services.
 
+### 🔒 Opening the panel from another machine (LAN / tunnel)
+
+The panel's API is fenced: every `/api/dsh-config-manager/*` request is accepted only from **loopback** (`127.0.0.1` / `localhost`), or from an address and session the host itself already trusts.
+
+```bash
+# recommended: keep the host on loopback and tunnel in
+ssh -L 3080:127.0.0.1:3080 you@server   # then open http://localhost:3080
+```
+
+- **Why it is fenced:** these endpoints read and write local files, credentials-backed sync settings and snapshots. The fence is the plugin's real authentication boundary — a DSH session cookie alone is not enough.
+- **`dsh web --host <LAN address>`:** the page itself loads from another machine, but the panel then only works if the host trusts that address **and** the browser carries a signed `dsh-auth` session cookie. `--host 0.0.0.0` derives the trusted hosts from your network interfaces; `--trusted-host <host>` adds one explicitly.
+- **What you see when it is not allowed:** a single **“This page cannot read local data from its current address”** banner with the page's origin and the fix — not a generic “5 requests failed”, and no useless Retry button.
+- **Not affected:** the CLI (`dsh-config-manager …`) and the agent tools (`config_backup`, `config_list_snapshots`, `config_sync_*`) never go through this fence.
 ### 🌐 Behind a proxy? (GitHub login / sync)
 
 Node's built-in `fetch()` does **not** read `HTTP_PROXY` / `HTTPS_PROXY` by default, so on networks where GitHub is only reachable through a local proxy, "Sign in with GitHub" would previously fail with `请求 GitHub 设备码失败：fetch failed` even though your browser and `git` work fine.
