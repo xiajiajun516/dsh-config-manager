@@ -506,6 +506,9 @@ detail 请求且不同 repoUrl 不共用 / TTL 过期后重跑）、`tests/home-
 守卫：`src/sync/sync-selection.test.ts` 两条 —— 同步/异步在 v2 / v1 / 损坏 / 缺失 四种来源上逐字段一致；
 源码守卫断言 `apply()` 用的是同步读取且**不得**再出现 `void readAllSyncSelections(syncDir).then(`（把旧写法改回去即 FAIL：
 `AssertionError: apply() 必须同步读取分区选择`）。
+第三条守卫钉住另一半：`src/routes/*.ts` 只能在 `endpoint(...)` 的处理函数内构造同步引擎 —— 装配期构造会把勾选冻结在「建路由那一刻」，
+之后保存选择也不生效（同一种病，换个时点）。红证：把 `const earlyEngine = makeSyncEngine({} as never)` 塞进 `syncRoutes` 直接体 →
+FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当前 10 处调用点全在处理函数内，PASS。
 
 ## 即时同步不覆盖历史会话：不支持（2026-11-06 决策，勿反复讨论）
 

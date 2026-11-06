@@ -186,6 +186,40 @@ test('C6 接线守卫：apply() 必须同步种入 selectionCache（异步 fire-
   assert.doesNotMatch(src, /void readAllSyncSelections\(syncDir\)\.then\(/, '不得再用 fire-and-forget 异步种入（窗口内引擎会兜底 defaultSyncSelection）');
 });
 
+test('C6 守卫：路由组只能在请求处理函数内构造同步引擎（装配期构造会冻结分区选择）', async () => {
+  // 用缩进链判「最近的更外层块」：处理函数体缩进 > endpoint( 行 > 工厂函数行。
+  // 装配期构造（挂在 export function xxxRoutes(env) 直接体内）会让引擎拿到建路由那一刻的勾选，
+  // 之后保存分区选择也不生效 —— 这正是 C6 的形状，只是发生在装配期而不是启动期。
+  const dir = path.join(import.meta.dirname, '..', 'routes');
+  const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
+  const offenders: string[] = [];
+  let calls = 0;
+  for (const file of files) {
+    const lines = (await fs.readFile(path.join(dir, file), 'utf8')).split('\n');
+    lines.forEach((line, i) => {
+      if (!/\bmakeSyncEngine\(/.test(line)) return;
+      calls++;
+      let limit = line.length - line.trimStart().length;
+      for (let j = i - 1; j >= 0; j--) {
+        const text = lines[j] ?? '';
+        const trimmed = text.trim();
+        if (trimmed === '' || trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue;
+        const indent = text.length - text.trimStart().length;
+        if (indent >= limit) continue;
+        if (/\bendpoint\(/.test(text)) return;
+        if (indent === 0) {
+          offenders.push(file + ':' + (i + 1));
+          return;
+        }
+        limit = indent;
+      }
+      offenders.push(file + ':' + (i + 1) + '(未找到 endpoint 边界)');
+    });
+  }
+  assert.deepEqual(offenders, [], '同步引擎必须在 endpoint 处理函数内构造: ' + offenders.join(', '));
+  assert.ok(calls >= 10, '至少要扫到路由组里的引擎构造点（防扫描失效）: ' + calls);
+});
+
 /* ---------------- sessions（可选分区）与「最新 N 个」上限 ---------------- */
 
 test('sessionsLimit: 缺省 5、写盘读回一致、非法值回退缺省、超大钳制', async () => {
