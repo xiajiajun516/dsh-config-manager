@@ -24,6 +24,7 @@ import { isPathSafe, normalizePath } from '../utils/paths.ts';
 import { isENOENT } from '../utils/guards.ts';
 import { PLUGIN_PATCH_REF_PREFIX, PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
 import { readEffectivePatchLines, resolveWriteLayer, USER_PATCH_FILE } from '../core/patch-layers.ts';
+import { stripMcpEntries } from './mcp.ts';
 import {
   parsePnpmPatchedDependencies, restorePnpmMachinePaths, sanitizePnpmWorkspacePatches, stripPnpmMachinePaths,
 } from './pnpm-workspace.ts';
@@ -431,7 +432,14 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     // issue #71：patch 有两层（home 层 + profile 层），只读 home 层会漏掉 DSH 工具与 marketplace
     // 写入 profile 层的激活行 —— 导出少了它们，导入到新机就少一批插件加载项。
     const patchRead = await readEffectivePatchLines(ctx.patchFile, ctx.profile);
-    for (const l of patchRead.lines) patch.push({ file: l.file, lineId: l.lineId, raw: l.raw });
+    for (const l of patchRead.lines) {
+      // MCP 行不进 plugins 载荷（2026-11「C8」，用户选择「只带非 MCP 行」）：它是 mcp 分区的
+      // 数据源，随 plugins 整本带走会让「没勾 MCP 连接器」也把服务器定义与本机 cwd 推到远端。
+      // 判定与 mcp 适配器同口径（stripMcpEntries）；勾了 mcp 时这些行仍由 mcp 分区带走。
+      const raw = stripMcpEntries(l.raw);
+      if (raw === undefined) continue;
+      patch.push({ file: l.file, lineId: l.lineId, raw });
+    }
     for (const f of patchRead.failures) {
       warnings.push(msgOf(ctx)('adapter.patchReadFailed', { reason: `${f.file}: ${f.reason}` }));
     }

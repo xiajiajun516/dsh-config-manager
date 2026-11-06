@@ -482,7 +482,9 @@ detail 请求且不同 repoUrl 不共用 / TTL 过期后重跑）、`tests/home-
 
 **不变量**：判定集合 == 载荷集合；被比较字节 == 载荷字节（`src/adapters/file-collection.ts:242-258` 的 `identity` 即导出 `data`；`src/sync/sync-state.ts:128-137` 的 hash 口径）。
 
-**未修（既有语义，需产品决定）**：`src/adapters/plugins.ts:433-434` 的 plugins 分区无条件带走 `cordis.patch.yml` 的**全部** patch 行，包括 mcp 适配器写的 `dsh-mcp-client` 行与其 `cwd`（`src/adapters/mcp.ts:75,111`）⇒ 未勾选 mcp 时该行仍随 plugins 上远端，且 `cwd` 不在 `scanner` 的敏感形状内。
+**C8 已修（2026-11-06，用户选定「只带非 MCP 行」）**：原先 plugins 分区无条件带走 `cordis.patch.yml` 的**全部** patch 行（含 mcp 适配器写的 `dsh-mcp-client` 行与其 `cwd`），未勾选 mcp 时这些行仍随 plugins 上远端。现在 `src/adapters/mcp.ts` 导出 `stripMcpEntries(raw)`（判定与 `extractMcpServers` 同口径：`config.serverName` 为非空字符串），`src/adapters/plugins.ts` 导出时逐行剔除；`insert` 块只剔 MCP 条目、其余保留，整行只剩 MCP 时丢弃。勾了 mcp 时这些行仍由 mcp 分区完整带走（剔除的是重复来源，不是数据）。
+验收：`src/adapters/plugins.test.ts` 的 `C8: 未勾选 MCP 时 plugins 载荷不带 MCP patch 行…`（关掉剔除时 FAIL：`MCP 行不得进 plugins 载荷: skill-badge,mixed,mcp-citra`；开启后 PASS，并断言 mcp 分区仍导出 `citra`/`mixed`）。
+副作用（预期，一次性）：升级后首轮同步会把 plugins 判为有改动（载荷少了 MCP 行）→ 真推一次；旧快照里的 MCP 行仍可正常导入（导入侧未改）。
 
 ## 即时同步不覆盖历史会话：不支持（2026-11-06 决策，勿反复讨论）
 

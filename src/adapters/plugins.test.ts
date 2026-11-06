@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PluginsAdapter } from './plugins.ts';
+import { McpAdapter } from './mcp.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
 import { PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
 import type { PluginsSection } from '../schema/types.ts';
@@ -214,6 +215,53 @@ test('issue #71: plugins 导出同时收集两层 patch 行（此前只读 home 
   assert.equal(r.ok, true);
   assert.equal(dst.patchFile.bucket('profiles/web/cordis.patch.yml').has('mnemon-strategy-a'), true, '写回目标机的 profile 层');
   assert.equal(dst.patchFile.lines.has('mnemon-strategy-a'), false, '不得搬到 home 层');
+});
+
+/**
+ * C8（2026-11）：`cordis.patch.yml` 是一本清单，plugins 导出曾整本带走 —— 没勾「MCP 连接器」时
+ * dsh-mcp-client 行（command/args/env + 本机 cwd）照样上远端。用户选定语义：只带非 MCP 行，
+ * MCP 行由 mcp 分区负责（勾了才走）。判定必须与 mcp 适配器同口径，否则两边漂。
+ */
+test('C8: 未勾选 MCP 时 plugins 载荷不带 MCP patch 行；勾了仍由 mcp 分区带走', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice', 'web');
+  src.patchFile.lines.set('skill-badge', { lineId: 'skill-badge', raw: { id: 'skill-badge', disabled: true } });
+  // 真机形态：MCP 行由 DSH 的 MCP 工具写进 profile 层，config 里带本机 cwd
+  src.patchFile.bucket('profiles/web/cordis.patch.yml').set('mcp-citra', {
+    lineId: 'mcp-citra',
+    raw: {
+      id: 'mcp-citra',
+      name: 'dsh-mcp-client',
+      config: { serverName: 'citra', command: 'npx', args: ['-y', '@sylphx/citra'], cwd: 'C:\\Users\\alice\\proj' },
+    },
+  });
+  // 块形态混排：只剔 MCP 条目，绝不整块丢（否则连带丢掉同块里的用户行）
+  src.patchFile.lines.set('mixed', {
+    lineId: 'mixed',
+    raw: {
+      insert: [
+        { id: 'mcp-mixed', name: 'dsh-mcp-client', config: { serverName: 'mixed', command: 'node' } },
+        { id: 'plain-row', name: '@x/y', disabled: true },
+      ],
+    },
+  });
+
+  const pluginsOut = await new PluginsAdapter().export(src, { includeSecrets: false });
+  const ids = pluginsOut.data.patch.map((p) => p.lineId);
+  assert.ok(!ids.includes('mcp-citra'), 'MCP 行不得进 plugins 载荷: ' + ids.join(','));
+  assert.ok(ids.includes('skill-badge'), '非 MCP 行必须保留: ' + ids.join(','));
+  const mixed = pluginsOut.data.patch.find((p) => p.lineId === 'mixed');
+  const keptInsert = (mixed?.raw as { insert: { id: string }[] }).insert.map((e) => e.id);
+  assert.deepEqual(keptInsert, ['plain-row'], '块里只剔 MCP 条目，其余原样保留');
+  const payload = JSON.stringify(pluginsOut.data);
+  assert.ok(!payload.includes('serverName'), 'MCP 服务器定义不得出现在 plugins 载荷里');
+  assert.ok(!payload.includes('alice'), '本机 cwd 不得出现在 plugins 载荷里');
+
+  // 勾了 mcp：同样的行仍由 mcp 分区带走（剔的是重复来源，不是数据）
+  const mcpOut = await new McpAdapter().export(src, { includeSecrets: false });
+  assert.deepEqual(
+    mcpOut.data.servers.map((s) => s.serverName).sort(), ['citra', 'mixed'],
+    'mcp 分区仍完整导出这些服务器: ' + mcpOut.data.servers.map((s) => s.serverName).join(','),
+  );
 });
 
 test('plugins: 导出携带 pnpm-workspace.yaml；analyze 目标无文件 → Create', async () => {

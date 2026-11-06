@@ -83,6 +83,39 @@ export function extractMcpServers(lines: { lineId: string; raw: unknown; file?: 
   return servers;
 }
 
+/**
+ * 反向操作：从一行 patch 里剔除 MCP 服务器条目（plugins 分区导出时用，2026-11「C8」）。
+ *
+ * 为什么需要：`cordis.patch.yml` 是一本**清单**，plugins 分区导出整本带走，于是「没勾 MCP
+ * 连接器」也会把 dsh-mcp-client 行（command/args/env + 本机 cwd）推到远端 —— 违反
+ * 「未勾选分区的数据不进推送」。判定必须与 extractMcpServers 完全同口径（config.serverName
+ * 为非空字符串），否则两边会漂。返回 undefined = 该行只剩 MCP 条目，整行丢弃。
+ */
+export function stripMcpEntries(raw: unknown): unknown | undefined {
+  if (raw === null || typeof raw !== 'object') return raw;
+  const obj = raw as Record<string, unknown>;
+  if (Array.isArray(obj['insert'])) {
+    const before = obj['insert'] as unknown[];
+    const kept = before.filter((e) => !isMcpEntry(e));
+    if (kept.length === before.length) return raw;
+    if (kept.length === 0) return undefined;
+    return { ...obj, insert: kept };
+  }
+  // 非 entry 形态（插件配置行 / 禁用行等）原样保留：只有 entriesOf 认得的行才可能是 MCP 行
+  const single = entriesOf(raw);
+  if (single.length === 0) return raw;
+  return isMcpEntry(single[0]) ? undefined : raw;
+}
+
+/** 单个 patch entry 是否是 MCP 服务器行（与 extractMcpServers 的判定同口径） */
+function isMcpEntry(entry: unknown): boolean {
+  if (entry === null || typeof entry !== 'object') return false;
+  const config = (entry as Record<string, unknown>)['config'];
+  if (config === null || typeof config !== 'object') return false;
+  const serverName = (config as Record<string, unknown>)['serverName'];
+  return typeof serverName === 'string' && serverName !== '';
+}
+
 /** patch 行 → 可枚举的 entry 列表（兼容单行与 insert 块） */
 function entriesOf(raw: unknown): { id?: unknown; name?: unknown; config?: unknown }[] {
   if (raw === null || typeof raw !== 'object') return [];
