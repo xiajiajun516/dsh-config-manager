@@ -804,8 +804,6 @@ Found a bug, a misaligned panel, a button that does nothing — or just have an 
   </picture>
 </a>
 
-*Real stargazer timestamps, drawn by `npm run readme:stars` — a weekly workflow refreshes it, and the date in the corner is the newest star, so a stale chart shows itself.*
-
 ---
 
 **Product principles**: better to migrate one config less than to break your existing config. Every import follows `Analyze → Preview → Backup → Apply → Validate → Rollback(if needed)`; every secret follows `never export by default / never log / never expose / never silently transfer`.
