@@ -26,7 +26,8 @@ import { createAdapters } from '../adapters/index.ts';
 import { makeContext, MemSnapshotStore } from '../adapters/test-helpers.ts';
 import { Importer } from '../core/importer.ts';
 import type { SectionId } from '../schema/types.ts';
-import type { SectionData } from '../schema/types.ts';
+import type { SectionData, WorkspacesSection } from '../schema/types.ts';
+import { AUTO_SYNC_OPT_IN_SECTION_IDS } from '../schema/section-registry.ts';
 import { Phase3Recovery, readSafeModeMarkerSync } from '../core/phase3-host.ts';
 import type { JournalRunContext } from '../core/phase3-host.ts';
 import type { MutationLockContext } from '../utils/env-lock.ts';
@@ -3186,3 +3187,140 @@ test('F3/②：手动删快照但没有放弃码（通道无该字段 / 非非�
 });
 
 
+
+/* ------------------------------------------- issue #127：workspaces 成为手动可选同步分区 */
+
+/** 播种一条工作区记录（workspaces adapter 的数据源）。 */
+function seedWorkspace(
+  ctx: ReturnType<typeof makeContext>,
+  rec: { id: string; path: string; sessionIds: string[]; title?: string },
+): void {
+  ctx.workspace.records.set(rec.id, { ...rec });
+}
+
+/** 造一份「另一台设备推的」远端快照（只有 workspaces 分区），模拟 #127 的跨机场景。 */
+function remoteWorkspaceSnapshot(id: string, sessionIds: string[]): SyncSnapshot {
+  return {
+    id,
+    createdAt: '2026-08-16T12:00:00.000Z',
+    manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['workspaces'], containsSecrets: false },
+    sections: {
+      workspaces: {
+        version: 1,
+        workspaces: [{ id: 'w1', path: 'C:/Users/alice/proj', sessionIds }],
+      },
+    },
+  };
+}
+
+test('issue #127: workspaces 为手动可选分区 —— 未放行不进快照（跳过可见）；放行后才随 push 上行；自动档不含它', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-ws-push-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    seedWorkspace(ctx, { id: 'w1', path: 'C:/Users/alice/proj', sessionIds: ['s1'] });
+    const transport = new MemSyncTransport();
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const importer = new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() });
+    const now = () => new Date('2026-08-16T12:00:00.000Z');
+
+    assert.ok(
+      !AUTO_SYNC_OPT_IN_SECTION_IDS.includes('workspaces'),
+      'workspaces 必须是 manual 档：自动同步绝不带它（路径与本机绑定）',
+    );
+
+    const plain = new SyncEngine({
+      ctx, transport, stateDir: path.join(tmp, 'plain'), adapters, importer, now,
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+    const skipped = await plain.push({ snapshotId: 'sync-ws-off', sections: ['settings', 'workspaces'] });
+    assert.ok(!skipped.sections.includes('workspaces'), '未放行时 workspaces 不得进入快照');
+    assert.ok(
+      skipped.warnings.some((w) => w.includes('workspaces')),
+      '跳过必须可见（不静默）: ' + skipped.warnings.join(' | '),
+    );
+
+    const optIn = new SyncEngine({
+      ctx, transport, stateDir: path.join(tmp, 'optin'), adapters, importer, now, optInSections: ['workspaces'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+    const pushed = await optIn.push({ snapshotId: 'sync-ws-on', sections: ['workspaces'] });
+    assert.deepEqual(pushed.sections, ['workspaces'], '放行后必须能单独上行 workspaces');
+    const records = (plainSections(transport.snapshots.get('sync-ws-on')!.sections)['workspaces'] as WorkspacesSection).workspaces;
+    assert.deepEqual(records.map((r) => r.id), ['w1'], '工作区记录必须完整进入快照');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #127: 拉取侧两侧各自挂过会话 → sessionIds 取并集（不冲突、不丢本地归属）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-ws-merge-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    seedWorkspace(ctx, { id: 'w1', path: 'C:/Users/alice/proj', sessionIds: ['s-local'] });
+    const transport = new MemSyncTransport();
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const importer = new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() });
+    seedRemoteSnapshot(transport, remoteWorkspaceSnapshot('remote-ws-1', ['s-remote']));
+
+    const engine = new SyncEngine({
+      ctx, transport, stateDir: tmp, adapters, importer,
+      now: () => new Date('2026-08-16T12:00:00.000Z'), optInSections: ['workspaces'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    const plan = await engine.merge();
+    const section = plan.sections.find((s) => s.id === 'workspaces');
+    assert.ok(section, '放行后 workspaces 必须进合并计划');
+    assert.equal(section!.decision, 'merge', '两侧各挂会话应能自动合并（改造前是 no-ancestor 整分区冲突）');
+    const merged = (section!.merged as WorkspacesSection).workspaces;
+    assert.deepEqual(merged[0]?.sessionIds, ['s-local', 's-remote'], '本地在前、远端追加，两侧都不丢');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #127: apply 阶段会话必须伴随工作区落地 —— 只应用 sessions 时自动补 workspaces 计划项', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-ws-companion-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    // 本机已有同名工作区（只挂了本地会话）→ 远端那条挂了另一台机器的会话
+    seedWorkspace(ctx, { id: 'w1', path: 'C:/Users/alice/proj', sessionIds: ['s-local'] });
+    const transport = new MemSyncTransport();
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const importer = new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() });
+    const engine = new SyncEngine({
+      ctx, transport, stateDir: tmp, adapters, importer,
+      now: () => new Date('2026-08-16T12:00:00.000Z'), optInSections: ['sessions', 'workspaces'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    // 用户只确认了「会话」这一行：workspaces 留在 review 里（它的合并值随计划一起给出）
+    const apply: SyncApplyPlan = {
+      autoApply: [{ id: 'sessions', decision: 'useRemote', conflicts: [], merged: { version: 1, files: [] } }],
+      review: [{
+        id: 'workspaces',
+        decision: 'useRemote',
+        conflicts: [],
+        merged: {
+          version: 1,
+          workspaces: [{ id: 'w1', path: 'C:/Users/alice/proj', sessionIds: ['s-remote'] }],
+        },
+      }],
+      skipped: [],
+    };
+    const report = await engine.applyMergePlan(apply, { remoteSnapshotId: 'remote-ws-1' });
+    assert.equal(report.ok, true, '整体应用必须成功: ' + report.warnings.join(' | '));
+    assert.ok(
+      report.applied.includes('workspaces'),
+      '伴随分区必须计入 applied（否则基线不记它、下一轮又当成新变化）: ' + report.applied.join(','),
+    );
+    const landed = ctx.workspace.records.get('w1');
+    assert.ok(landed, '工作区记录必须落到本机');
+    assert.deepEqual(
+      landed!.sessionIds,
+      ['s-local', 's-remote'],
+      '本机既有会话归属不得被覆盖，远端会话也要挂上（否则导入的会话在目标机完全不显示）',
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});

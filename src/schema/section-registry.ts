@@ -144,7 +144,8 @@ export interface SectionMeta {
    * 同步准入档位（非 portable 分区的显式准入；portable 分区恒为 'off'，走默认通道）。
    *  - 'off'    = 永不进入同步通道；
    *  - 'manual' = 必须用户在同步分区弹窗里显式勾选，且**只跟随用户驱动的手动 push/pull**；
-   *               自动同步永不带（内容隐私 / 设备相关，例如 sessions）；
+   *               自动同步永不带（内容隐私 / 设备相关，例如 sessions；路径与本机绑定的
+   *               workspaces 同属 manual —— 它要随会话一起走，但绝不悄悄上下行）；
    *  - 'auto'   = 用户显式勾选后，手动与自动同步都带（内容可跨机，只是命令 / 路径可能与
    *               目标机不同，例如 mcp）。
    * **必填**（Record<SectionId, SectionMeta> 强制）：新增分区漏填即 tsc 报错。
@@ -180,7 +181,7 @@ export const SECTION_DATA_VERSION = 1 as const;
  *  - `portability` / `defaultIncluded` ← 各 adapter 的 `portability` / `defaultIncluded`，
  *    以及 `ui/export-flow.ts` 的内置目录、`market/prepare.ts` 的 SECTION_PORTABILITY
  *    （三者此前必须人工保持一致，现以本表为源）；
- *  - `syncOptIn` ← **本表声明**（mcp='auto' / sessions='manual' / 其余 'off'），
+ *  - `syncOptIn` ← **本表声明**（mcp='auto' / workspaces='manual' / sessions='manual' / 其余 'off'），
  *    `sync/sync-selection.ts` 的 OPT_IN_SYNC_SECTIONS 与 `AUTO_SYNC_OPT_IN_SECTION_IDS` 都是它的派生视图
  *    （此前是两份手写字面量、零护栏 —— issue #78 收敛为单一事实源）；
  *  - `applyOrder` ← 历史 SECTION_IDS 数组顺序（1 起，连续）。
@@ -318,7 +319,10 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 10,
     riskTier: 'medium',
     portability: 'platformSpecific',
-    syncOptIn: 'off',
+    // issue #127：工作区改为**手动可选**同步分区 —— 会话要能在目标机的工作区里显示出来，
+    // 包内就必须有指向它 cwd 的工作区记录（DSH 按 realpath(cwd) == workspace.path 归组）。
+    // 仍是 platformSpecific（路径与机器绑定，靠 PathMapping 重定基），故只能手动放行、绝不进自动同步。
+    syncOptIn: 'manual',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -478,7 +482,8 @@ export const PORTABLE_SECTION_IDS: readonly SectionId[] = SECTION_IDS.filter(
 
 /**
  * 同步「可选分区」：非 portable、必须推/拉两侧显式放行的分区（syncOptIn !== 'off'）。
- * 当前 = ['mcp', 'sessions']。**顺序按 applyOrder**（mcp=5 在 sessions=14 之前）。
+ * 当前 = ['mcp', 'workspaces', 'sessions']。**顺序按 applyOrder**
+ * （mcp=5 → workspaces=10 → sessions=14）。
  */
 export const OPT_IN_SYNC_SECTION_IDS: readonly SectionId[] = SECTION_IDS.filter(
   (id) => SECTION_REGISTRY[id].syncOptIn !== 'off',

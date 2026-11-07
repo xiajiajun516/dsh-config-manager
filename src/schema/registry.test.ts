@@ -101,7 +101,7 @@ test('registry: 派生的可移植性 / 可选分区 / 默认勾选与既有声�
     'settings', 'ui', 'providers', 'plugins', 'prompts', 'skills',
     'agentPresets', 'agentInstructions', 'self',
   ]);
-  assert.deepEqual([...OPT_IN_SYNC_SECTION_IDS], ['mcp', 'sessions'], '可选分区 = syncOptIn !== off（issue #78）');
+  assert.deepEqual([...OPT_IN_SYNC_SECTION_IDS], ['mcp', 'workspaces', 'sessions'], '可选分区 = syncOptIn !== off（issue #78；#127 起 workspaces 手动可选）');
   assert.deepEqual([...DEFAULT_INCLUDED_SECTION_IDS], [
     'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts', 'skills',
     'agentPresets', 'agentInstructions', 'workspaces', 'credentialsStatus', 'self',

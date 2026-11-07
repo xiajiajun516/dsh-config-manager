@@ -24,6 +24,7 @@ import { OWNERSHIP_FILE, type LockState, type MutationLockContext } from '../uti
 import { sha256Hex } from '../utils/hashing.ts';
 import type { JournalStepRecord } from './types.ts';
 import { engineMsg } from './messages-core.ts';
+import { isLocalOnlyExternalFailure } from './external-failure.ts';
 
 /** 存在未收敛的 active transaction → 拒绝创建第二个（active≤1）。 */
 export class TransactionRecoveryRequiredError extends Error {
@@ -649,8 +650,15 @@ export class Phase3Recovery {
       await this.store.moveToCompleted(opId).catch(() => undefined);
       return { operationId: opId, result };
     } catch (err) {
-      this.safeModeActive = true;
-      await this.store.writeSafeMode(true).catch(() => undefined);
+      // 本地可修的配置类失败（如本机没设 git 身份）不升全局阻断：它由本机配置直接修好，
+      // 也不会让磁盘停在半写状态。无条件升 durable SAFE MODE 会把「本机缺一个 git 用户名」
+      // 放大成「全部写入 423，直到手动解除阻断」，而界面还说是「环境锁被占用」——
+      // 真机 issue 的链路就是这样（locks 目录为空却报锁，见 core/external-failure.ts）。
+      // 除该判据之外的一切失败保持 fail-closed（照旧 durable SAFE MODE，跨重启生效）。
+      if (!isLocalOnlyExternalFailure(err)) {
+        this.safeModeActive = true;
+        await this.store.writeSafeMode(true).catch(() => undefined);
+      }
       const rolledBack = rollbackOutcome.value;
       if (rolledBack !== null) {
         // 引擎已就地回滚但随后抛错：终态仍是 ROLLED_BACK —— 不把「已知结论：已回滚」误报成

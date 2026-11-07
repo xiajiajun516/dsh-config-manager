@@ -63,6 +63,9 @@ export const DEFAULT_LONG_EXPIRED_AFTER_MS = 30 * 60_000
 /** acquire 中「EEXIST 但 ownership 读不到」的竞态重试上限（issue #79）：文件在两次读取之间
  *  被释放时重试 open('wx') 即可拿到锁，不在锁间隙里空等 acquireTimeoutMs。 */
 const MAX_FREE_RETRIES = 5
+/** 长持有告警阈值（缺省 2 分钟）：正常 mutation（导出/合并/推送）远短于此，超过即视为可疑，
+ *  但**只告警不解锁** —— 活持有者可能真的在跑长任务，强拆会造出双持有（比卡死更难查）。 */
+export const DEFAULT_HOLD_WARN_AFTER_MS = 120_000
 
 // ---------- 类型 ----------
 
@@ -372,6 +375,13 @@ export interface EnvLockManagerOptions {
   onReleaseFailure?: (b: { err: unknown; quarantined: boolean }) => void
   /** heartbeat 定时器（测试可注入手动 tick 的假定时器；缺省用全局定时器） */
   timers?: LockTimerApi
+  /** 单次持有超过该时长只**告警**（缺省 120 s；0 = 关闭看门狗）。
+   *  真机 issue：autosync 成功后 ownership 与 heartbeat 都没释放、seq 一直涨，recover-stale-lock
+   *  判定「持有者还活着」拒绝回收，用户只能删 locks 目录或重启桌面端 —— 期间**没有任何线索**
+   *  说明是哪个 op 卡住了。看门狗只补这一层可观测性，绝不强拆活持有者（那会造出双持有）。 */
+  holdWarnAfterMs?: number
+  /** 长持有告警回调（留痕/上报；异常被吞，绝不影响锁状态） */
+  onHoldExceeded?: (info: { op: string; heldMs: number; tokenId: string }) => void
 }
 
 /** 默认 io 实现 */
@@ -601,6 +611,13 @@ export class EnvironmentLockManager {
   private readonly lockVersion: string
   private readonly onHeartbeatWriteFailure: (err: unknown) => void
   private readonly onReleaseFailure: (b: { err: unknown; quarantined: boolean }) => void
+  /** 长持有看门狗阈值/回调（见 EnvLockManagerOptions.holdWarnAfterMs） */
+  private readonly holdWarnAfterMs: number
+  private readonly onHoldExceeded: (info: { op: string; heldMs: number; tokenId: string }) => void
+  /** 看门狗定时器句柄（与 heartbeatTimer 分开：一个是续期，一个是「该不该还没释放」） */
+  private holdWatchdogTimer: unknown = null
+  private holdStartedAt = 0
+  private holdOp = ''
   /** 诊断用（acquire 时写 ownership.op/target） */
   private readonly defaultOp: string
   private readonly defaultTarget: string
@@ -649,6 +666,8 @@ export class EnvironmentLockManager {
     this.lockVersion = opts.lockVersion ?? '0.1.0'
     this.onHeartbeatWriteFailure = opts.onHeartbeatWriteFailure ?? (() => {})
     this.onReleaseFailure = opts.onReleaseFailure ?? (() => {})
+    this.holdWarnAfterMs = opts.holdWarnAfterMs ?? DEFAULT_HOLD_WARN_AFTER_MS
+    this.onHoldExceeded = opts.onHoldExceeded ?? (() => {})
     this.timers = opts.timers ?? defaultTimers
     this.defaultOp = opts.op ?? 'mutation'
     this.defaultTarget = opts.target ?? 'unknown'
@@ -798,6 +817,8 @@ export class EnvironmentLockManager {
       this.activeToken = token
       this.heartbeatSeq = 0
       this.startHeartbeat()
+      // 与 heartbeat 同期启动看门狗：它回答的是另一个问题 ——「这次持有是不是早该释放了」
+      this.startHoldWatchdog(op, token.tokenId)
       return { state: 'ACQUIRED', token, detail: `op=${op}` }
     }
     } finally {
@@ -836,6 +857,8 @@ export class EnvironmentLockManager {
       throw new EnvironmentLockOwnedByAnotherError(utilsMsg('utils.envLock.releaseForeignToken'))
     }
     const instanceId = this.activeInstanceId
+    // 每一条 release 出口都经过这里（含下面全部抛错分支）→ 看门狗在此统一停掉，不留悬空定时器
+    this.stopHoldWatchdog()
     this.stopHeartbeat()
     // —— release 前校验磁盘 ownership record 仍属于自己（防异常恢复/人工修改）——
     const st = await this.readOwnershipState()
@@ -989,6 +1012,55 @@ export class EnvironmentLockManager {
   }
 
   /**
+   * 长持有看门狗：持有时间超过阈值时**告警一次**，然后自行停掉。
+   *
+   * 只做观察，不做解锁。真机 issue（Windows 桌面端）：「autosync 成功后 ownership 与 heartbeat
+   * 都没释放、heartbeat seq 一直在涨，recover-stale-lock 判定持有者还活着拒绝回收，只能手动删
+   * locks 目录或重启桌面端」。那种状态下心跳是「活着」的，任何结构性 stale 判据都不会命中 ——
+   * 所以最需要的是**一条能定位到 op 的日志**，而不是又一个自动回收器（强拆活持有者会造出双持有）。
+   *
+   * 定时器沿用注入面（LockTimerApi 只有 setInterval）：命中一次即 clearInterval，等价于一次性。
+   */
+  private startHoldWatchdog(op: string, tokenId: string): void {
+    this.stopHoldWatchdog()
+    if (!(this.holdWarnAfterMs > 0)) return
+    this.holdStartedAt = this.now()
+    this.holdOp = op
+    const timer = this.timers.setInterval(() => {
+      // token 已换人/已释放 → 这次持有已结束，看门狗无事可做
+      if (this.activeToken === null || this.activeToken.tokenId !== tokenId) {
+        this.stopHoldWatchdog()
+        return
+      }
+      const heldMs = Math.max(this.now() - this.holdStartedAt, 0)
+      this.stopHoldWatchdog()
+      try {
+        this.onHoldExceeded({ op, heldMs, tokenId })
+      } catch {
+        /* 观察者异常绝不影响锁状态（看门狗是观察面，不是控制面） */
+      }
+    }, Math.max(this.holdWarnAfterMs, 50))
+    this.holdWatchdogTimer = timer
+    const handle = timer as { unref?: () => void } | null | undefined
+    if (handle !== null && handle !== undefined && typeof handle.unref === 'function') handle.unref()
+  }
+
+  private stopHoldWatchdog(): void {
+    if (this.holdWatchdogTimer !== null) {
+      this.timers.clearInterval(this.holdWatchdogTimer)
+      this.holdWatchdogTimer = null
+    }
+    this.holdStartedAt = 0
+    this.holdOp = ''
+  }
+
+  /** 当前持有的操作与已持有时长（诊断用；未持有 → null）。持有超过阈值时它给出「是哪个 op」。 */
+  get holdInfo(): { op: string; heldMs: number } | null {
+    if (this.activeToken === null) return null
+    return { op: this.holdOp, heldMs: Math.max(this.now() - this.holdStartedAt, 0) }
+  }
+
+  /**
    * 等待**当前在途**的 heartbeat 写完成（不改变持有状态、不停定时器）。
    * 首写在 startHeartbeat() 中**同步**入链，故 acquire() 之后调用本方法必然等到首写落盘。
    *
@@ -1008,6 +1080,7 @@ export class EnvironmentLockManager {
    * 锁的持有状态与磁盘内容由调用方的 release 决定。
    */
   async stopHeartbeatAndDrain(): Promise<void> {
+    this.stopHoldWatchdog()
     this.stopHeartbeat()
     await this.drainHeartbeat()
   }
@@ -1515,6 +1588,27 @@ export const LOCK_BLOCK_BRIEF: Record<LockBlockReason, string> = {
   // stale 必须点出「残留」——否则用户会像 issue #31 那样等 9 天（57 次静默跳过）。
   get stale() { return utilsMsg('utils.envLock.brief.stale') },
   get 'stale-degraded'() { return utilsMsg('utils.envLock.brief.staleDegraded') },
+}
+
+/**
+ * 锁分类 → 落进结果对象/历史记录的**机器token**（客户端据此本地化；不许再把所有被挡拍平成一个词）。
+ *
+ * issue：真机现场 SAFE MODE 被拒时 locks 目录是空的，界面却说「环境锁被占用」——
+ * 因为宿主所有被挡路径都写死 'mutation-locked'，客户端只能照最坏情况解释，排查方向被带偏。
+ * 现在按分类发 token：**只有真被另一项活任务占着（LOCKED）才叫 locked**。
+ * - 'mutation-safe-mode'：被 SAFE MODE 阻断（锁目录通常为空，处置入口是事故恢复）
+ * - 'mutation-lock-stale'：残留锁（含心跳降级形态）——重试/重启都不会自愈，必须显式回收
+ * - 'mutation-lock-unavailable'：锁不可用（目录 IO/权限/未知，或 acquire 直接抛错）
+ * 旧 token 'mutation-locked' 仍表示「被活跃任务持有」，客户端必须继续认它。
+ */
+export function lockSkipToken(reason: LockBlockReason | undefined): string {
+  switch (reason) {
+    case 'blocked': return 'mutation-safe-mode'
+    case 'locked': return 'mutation-locked'
+    case 'stale':
+    case 'stale-degraded': return 'mutation-lock-stale'
+    default: return 'mutation-lock-unavailable'
+  }
 }
 
 /** destructive 必须成功获取 Environment Lock；否则抛此错（被另一进程/操作持有，或锁不可用）。

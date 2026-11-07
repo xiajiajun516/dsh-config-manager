@@ -63,6 +63,7 @@ import type { MsgFunc } from '../core/messages.ts';
 import { DEFAULT_ANCESTOR_KEEP, pruneAncestors, tryLoadAncestor, writeAncestor, writeEncryptedAncestor } from './ancestor.ts';
 import type { MergeConflictReason, MergePlan, MergeSectionResult } from './merge.ts';
 import { merge as mergeSections } from './merge.ts';
+import { prepareApplyBundle } from './apply-bundle.ts';
 import { previewTextOf } from './merge-preview-text.ts';
 import { gcSkipWarning, readGcSkipCode, reportGcSkipOnce } from './gc-skip.ts';
 import { classifyMergePlan } from './risk.ts';
@@ -1893,32 +1894,30 @@ export class SyncEngine {
     if (!this.importer) {
       throw new Error(this.msg('sync.applyMergePlanNoImporter'));
     }
-    const appliedIds = apply.autoApply.map((r) => r.id);
+    const appliedIds: SectionId[] = apply.autoApply.map((r) => r.id);
     // 0) 空 autoApply：无物可应用，直接短路（不构造 ZIP、不调 Importer）
     if (appliedIds.length === 0) {
       return { ok: true, applied: [], restoreId: '', rolledBack: false, review: [], warnings: [] };
     }
-    // 1) 构造临时 ZIP（仅含 autoApply 项的 merged payload）+ 分析 + 计划
-    const portableIds = this.pullSectionIds();
-    // issue #45：临时 ZIP 带上远端快照的 sourceHome → Importer 自动重定基（跨机时才有实际作用）
-    const effectiveSourceHome = opts.sourceHome ?? this.lastMergedRemoteSourceHome;
-    const tempSnapshot: SyncSnapshot = {
-      id: this.snapshotIdFn(),
+    // 0'/1) issue #127：会话落地必须伴随工作区（口径见 apply-bundle.ts）；临时 ZIP 只装 autoApply 的 merged 载荷
+    const bundle = await prepareApplyBundle({
+      autoApply: apply.autoApply,
+      baseIds: appliedIds,
+      pullAllowsWorkspaces: this.pullSectionIds().has('workspaces'),
+      planEntries: [...apply.review, ...apply.skipped],
+      remote: this.lastMergeInputs?.remote['workspaces'],
+      ancestor: this.lastMergeInputs?.ancestor['workspaces'],
+      adapter: this.adapters.find((a) => a.id === 'workspaces'),
+      ctx: this.ctx,
+      snapshotId: this.snapshotIdFn(),
       createdAt: this.now().toISOString(),
-      manifest: {
-        schemaVersion: CURRENT_SCHEMA_VERSION,
-        dshVersion: this.ctx.dshVersion,
-        platform: this.ctx.platform as Platform,
-        sectionIds: apply.autoApply.map((r) => r.id) as SectionId[],
-        containsSecrets: false,
-        ...(effectiveSourceHome !== '' ? { sourceHome: effectiveSourceHome } : {}),
-      },
-      sections: apply.autoApply.reduce<Record<string, SectionData>>((acc, r) => {
-        if (r.merged !== undefined) acc[r.id] = r.merged as SectionData;
-        return acc;
-      }, {}),
-    };
-    const zipPath = await this.snapshotToZip(tempSnapshot, portableIds);
+      dshVersion: this.ctx.dshVersion,
+      platform: this.ctx.platform as Platform,
+      sourceHome: opts.sourceHome ?? this.lastMergedRemoteSourceHome,
+    });
+    if (bundle.companion !== undefined) appliedIds.push('workspaces');
+    const tempSnapshot = bundle.tempSnapshot;
+    const zipPath = await this.snapshotToZip(tempSnapshot, this.pullSectionIds());
     try {
       const plan = await this.importer.createImportPlan(zipPath, {
         strategy: 'replace', // auto 路径：冲突已在外部分流；这里 replace = 接受导入值

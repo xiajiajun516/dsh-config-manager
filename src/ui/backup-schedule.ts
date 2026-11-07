@@ -167,8 +167,24 @@ export function backupRunSummary(run: BackupRunResult): {
 
 /* ---------------- issue #43：立即备份结果的提示语义（不得假报成功） ---------------- */
 
-/** 宿主 BackupRunResult.skipReason 的结构化投影；未知 token 落 'other'（不静默当成功）。 */
-export type BackupSkipReason = 'disabled' | 'running' | 'conflict' | 'locked' | 'other'
+/**
+ * 宿主 BackupRunResult.skipReason 的结构化投影；未知 token 落 'other'（不静默当成功）。
+ *
+ * 锁相关四种分开：宿主按 lockSkipToken() 分档发 token（issue：locks 目录为空也说「锁被占用」）。
+ * 'locked' 只表示「真被另一项活任务持有」，残留锁与 SAFE MODE 各有自己的处置方向。
+ */
+export type BackupSkipReason =
+  | 'disabled'
+  | 'running'
+  | 'conflict'
+  | 'locked'
+  /** 残留锁（含心跳降级）：重试/重启都不会自愈，必须去事故恢复回收 */
+  | 'lock-stale'
+  /** 锁不可用（目录 IO/权限/未知状态）：稍后重试 */
+  | 'lock-unavailable'
+  /** SAFE MODE 阻断写入：锁目录通常是空的，处置入口是事故恢复 */
+  | 'safe-mode'
+  | 'other'
 
 /** 立即备份结果 → 客户端提示通道（壳据 kind 选 toast，据 reason 选文案键）。 */
 export type BackupRunOutcome =
@@ -197,6 +213,9 @@ export function backupRunOutcome(run: BackupRunResult): BackupRunOutcome {
         case 'running': return { kind: 'skipped', reason: 'running' }
         case 'conflict': return { kind: 'skipped', reason: 'conflict' }
         case 'mutation-locked': return { kind: 'skipped', reason: 'locked' }
+        case 'mutation-lock-stale': return { kind: 'skipped', reason: 'lock-stale' }
+        case 'mutation-lock-unavailable': return { kind: 'skipped', reason: 'lock-unavailable' }
+        case 'mutation-safe-mode': return { kind: 'skipped', reason: 'safe-mode' }
         default: return { kind: 'skipped', reason: 'other' }
       }
     }

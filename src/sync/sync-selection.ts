@@ -72,7 +72,9 @@ export type SyncSelectionByChannel = Record<SyncTransportType, SyncSelection>;
  * \`['sessions']\`，与 \`section-registry.ts\` 的同名字段是**两份字面量、零护栏**
  * （改一处漏一处不会报错）—— issue #78 收敛为派生视图，并在测试里钉住。
  *
- * 当前 = mcp（'auto'，命令 / 路径可能机器相关）+ sessions（'manual'，内容敏感 + 设备相关）。
+ * 当前 = mcp（'auto'，命令 / 路径可能机器相关）
+ *      + workspaces（'manual'，路径与机器绑定，但会话要显示在工作区里就必须随行）
+ *      + sessions（'manual'，内容敏感 + 设备相关）。
  * 凭据 / 密钥分区不在此列（结构性拒绝，永不进同步）。
  */
 export const OPT_IN_SYNC_SECTIONS: readonly SectionId[] = OPT_IN_SYNC_SECTION_IDS;
@@ -80,9 +82,9 @@ export const OPT_IN_SYNC_SECTIONS: readonly SectionId[] = OPT_IN_SYNC_SECTION_ID
 /**
  * 「可选分区」里**允许参与自动同步**的子集（当前 = mcp）。
  *
- * 手动与自动的差别只在这里：sessions 是内容隐私 / 设备相关，自动同步绝不带
- * （「会话绝不悄悄下行」从注释变成可测断言）；mcp 只是命令 / 路径可能与目标机不同，
- * 用户显式勾选后手动与自动都带。
+ * 手动与自动的差别只在这里：sessions 是内容隐私 / 设备相关、workspaces 与本机路径绑定，
+ * 两者自动同步绝不带（「会话绝不悄悄下行」从注释变成可测断言）；mcp 只是命令 / 路径可能与
+ * 目标机不同，用户显式勾选后手动与自动都带。
  */
 export const AUTO_SYNC_OPT_IN_SECTIONS: readonly SectionId[] = AUTO_SYNC_OPT_IN_SECTION_IDS;
 

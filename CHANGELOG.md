@@ -44,6 +44,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **同步到另一台机器后，会话现在会出现在对应的工作区里**：以前同步弹窗里能勾「历史对话」但没有「工作区」，于是对话过去了、目标机的目录没建、工作区列表里也看不到它们；现在「工作区」是可勾选的同步分区（只在手动同步/一键同步里出现，自动同步仍不带它），勾上后目标机会建好目录、把对话挂进工作区，两边各自使用过的对话归属会合并保留、不会互相覆盖，那条「建议一并勾选工作区」的提示也随之删掉。（issue #127）
+  **Sessions now show up under their workspaces on the other machine**: sync used to offer “session history” without “workspaces”, so conversations arrived but no folder was created and the workspace list stayed empty; “workspaces” is now an opt-in sync section (manual sync and one-click sync only — auto-sync still never carries it), and enabling it creates the folders on the target machine and attaches the conversations to their workspaces, merging each side's session assignments instead of overwriting them; the “consider also enabling workspaces” hint is gone with it.（issue #127）
 - **删除档案不再卡在「另一个任务正在运行」**：上一次自动同步没能把锁文件清干净时，这个残留锁会一直占着写操作，连档案删除都被永久挡住；现在释放失败会自己把残留锁让开并写进日志，遇到真正删不掉的锁也会提示你去「事故恢复」里回收，而不是让你反复重试。
   **Deleting a profile no longer gets stuck on “another task is running”**: when a previous auto-sync could not clear its lock file, that leftover lock kept blocking every write, including profile deletion; a failed release now steps aside and logs it, and a lock that truly cannot be removed tells you to reclaim it under “Incident recovery” instead of asking you to retry forever.
 - **勾了「MCP 连接器」同步后，只改连接器列表也会自动上行**：以前这类改动在自动同步里一律判成「没有本地改动」，必须顺带改一个普通配置才会被捎带上去；现在它自己就会被识别并上传，且没改动的轮次不会空推一次快照。

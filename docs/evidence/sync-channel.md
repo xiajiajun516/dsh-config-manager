@@ -5,7 +5,18 @@
 
 ## 同步分区目录含显式可选项（issue #78 起是「逐分区放行」而不是布尔）
 
-- **同步分区目录含显式可选项（issue #78 起是「逐分区放行」而不是布尔）**：`syncSectionCatalog` = portable + `OPT_IN_SYNC_SECTIONS`（**注册表派生** = `SectionMeta.syncOptIn !== 'off'`，当前 `mcp` / `sessions`）。可选分区**永不默认进入同步通道**，放行只看引擎构造期的 `optInSections: readonly SectionId[]`（`pullSectionIds()` 决定远端快照里哪些分区进临时 ZIP；`pushTargets()` 决定哪些能上榜）——**绝不用布尔**：布尔会退化成「勾了 mcp 连带放行 sessions」（`sync-engine.test.ts` 有推/拉两条回归）。宿主按驱动方决定传什么：**手动** push/pull / 一键同步传「持久化选择 ∩ OPT_IN_SYNC_SECTIONS」，**自动同步**与 model-tools 只传 `'auto'` 档（`AUTO_SYNC_OPT_IN_SECTIONS`，当前 = mcp）—— sessions（`'manual'`）绝不悄悄上行/下行。`opts.sessions = { limit }` 只是 sessions 的**导出参数**（带哪几个对话），不再兼任开关。
+- **同步分区目录含显式可选项（issue #78 起是「逐分区放行」而不是布尔）**：`syncSectionCatalog` = portable + `OPT_IN_SYNC_SECTIONS`（**注册表派生** = `SectionMeta.syncOptIn !== 'off'`，当前 `mcp` / `workspaces` / `sessions`）。可选分区**永不默认进入同步通道**，放行只看引擎构造期的 `optInSections: readonly SectionId[]`（`pullSectionIds()` 决定远端快照里哪些分区进临时 ZIP；`pushTargets()` 决定哪些能上榜）——**绝不用布尔**：布尔会退化成「勾了 mcp 连带放行 sessions」（`sync-engine.test.ts` 有推/拉两条回归）。宿主按驱动方决定传什么：**手动** push/pull / 一键同步传「持久化选择 ∩ OPT_IN_SYNC_SECTIONS」，**自动同步**与 model-tools 只传 `'auto'` 档（`AUTO_SYNC_OPT_IN_SECTIONS`，当前 = mcp）—— sessions（`'manual'`）绝不悄悄上行/下行。`opts.sessions = { limit }` 只是 sessions 的**导出参数**（带哪几个对话），不再兼任开关。
+
+## workspaces 为什么是「手动可选分区」而不是固定可选/自动（issue #127）
+
+- **现象**：A 机推送时勾了「工作区」，B 机一键同步后会话写进去了，但工作区列表里一条都看不到、目标目录也没建。
+- **机制**：DSH 把会话显示在工作区里靠「首帧 cwd 的 realpath == `workspace.path` 且会话 id 在该记录的 `sessionIds` 里」（`src/adapters/sessions.ts` 的可见性判据）；而这条挂接只在导入计划的 workspaces 分区**有执行项**时才发生 —— `analyzer` 对零计划项的 adapter 直接跳过 `finalizeImport`（`src/core/analyzer.ts:1099-1124`），`workspaces.finalizeImport` 又是唯一登记会话的地方（`src/adapters/workspaces.ts:246-265`）。改造前 workspaces 是 `syncOptIn='off'`（platformSpecific）→ 同步弹窗里压根没有勾选项、同步引擎三处闸门（`syncSectionCatalog` / 保存选择校验 / `pullSectionIds`+`pushTargets`）都不放行 ⇒ 「勾了会话」本身就是一句做不到的承诺（弹窗里那条 `mode.sessionsWorkspaceWarn` 文案正是为此写的，但它建议勾的东西不存在）。
+- **结论**：workspaces 改 `syncOptIn='manual'`。仍然**不进自动同步**（路径与本机绑定，自动落盘会跨机瞎建目录），但手动一键同步/预览差异时必须能整分区勾选；档位口径与 mcp/sessions 一致，靠 `optInSections` 逐分区放行。
+- **三条配套（缺一条就还是「会话不显示」）**：
+  ① **apply 阶段伴随**：`SyncEngine.applyMergePlan` 只应用 sessions 时，把「本机现值 ∪ 远端（或本次 merged）记录」按记录级合并成一份 workspaces 载荷塞进临时 ZIP，并把 `workspaces` 计入 `appliedIds`（否则基线不记它，下一轮又当成新变化）。缺这一步 = 用户只确认「会话」那一行时，`finalizeImport` 永不触发。
+  ② **合并必须取并集**：workspaces 的 `sessionIds` 两侧各自增长，通用 JSON 合并对数组一律判冲突（`src/sync/merge.ts` 文件头「数组绝不按索引合并」），且裁决任一侧都会丢掉另一侧的会话归属 → `src/sync/workspace-merge.ts` 按记录 id 做三方合并（sessionIds 并集、其它字段单侧取值/双侧冲突），并且**在 ancestor 闸门之前**调用（首轮两方同步也要能并集）。
+  ③ **跨机路径**：`analyzeImport` 对绝对路径恒产出一条 `PathMapping` 计划项、`applyItem` 对可安全创建的路径调 `ensureDir` 建目录（issue #45 既有实现，本票不改）。
+- **回归**：`src/sync/workspace-merge.test.ts`（并集/去重/单侧改/双侧冲突/删除语义/畸形形状）+ `sync-engine.test.ts` 的 issue #127 三例（未放行跳过可见、放行后 push 带上、拉取并集、apply 伴随落地）。
 
 ## 同步通道的「会话管理」五条语义（m-sync-management，2026-09 落地）
 

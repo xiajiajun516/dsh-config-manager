@@ -19,6 +19,7 @@ import type { SyncSnapshot } from '../transport.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 import { sha256Hex } from '../../utils/hashing.ts';
 import { resetWorkdirLockChainsForTest, workdirLockPath } from '../../utils/workdir-lock.ts';
+import { isLocalOnlyExternalFailure, localOnlyFailureReason } from '../../core/external-failure.ts';
 
 /* ---------------- helpers ---------------- */
 

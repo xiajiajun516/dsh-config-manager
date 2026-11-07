@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeSnapshotMeta, manifestSummaryFrom } from './transport.ts';
+import { classifyNetworkErrorText, computeSnapshotMeta, manifestSummaryFrom } from './transport.ts';
 import { hashSection } from './sync-state.ts';
 import type { ManifestSummary, SyncSnapshot, SyncTransport } from './transport.ts';
 import type { Manifest, SectionData, SectionId } from '../schema/types.ts';
@@ -97,6 +97,26 @@ test('SyncTransport 契约形状：实现对象必须具备 list/upload/download
   assert.equal((await fake.download('x')).id, 'x');
   assert.equal((await fake.upload(snap)).id, meta.id);
   assert.doesNotThrow(() => fake.delete('x'));
+});
+
+test('本机 git 身份缺失（unable to auto-detect email / empty ident name）→ config，不是 auth/notfound', () => {
+  // 真机 issue：commit exit 128 只因本机没配 user.name/user.email，却被当成普通 git 失败
+  // （→ 交易 NEEDS_ATTENTION → durable SAFE MODE → 全部写入 423）。分类必须先认出它。
+  const cases = [
+    "fatal: unable to auto-detect email address (got 'runner@BUILD.(none)')",
+    '*** Please tell me who you are.\nfatal: empty ident name (for <>) not allowed',
+    'Author identity unknown',
+    'fatal: no name was given and auto-detection is disabled',
+  ];
+  for (const text of cases) {
+    const c = classifyNetworkErrorText(text);
+    assert.equal(c.kind, 'config', text);
+    assert.equal(c.retryable, false, '本机配置问题重试无意义: ' + text);
+  }
+  // 回归：新分支不得吃掉既有分类（身份文案里常混着 'permission denied' 之外的宽泛词）
+  assert.equal(classifyNetworkErrorText('fatal: Authentication failed for https://x/y.git').kind, 'auth');
+  assert.equal(classifyNetworkErrorText('fatal: repository https://x/y.git not found').kind, 'notfound');
+  assert.equal(classifyNetworkErrorText('fatal: Could not resolve host: github.com').kind, 'network');
 });
 
 test('ManifestSummary 类型形状（编译期保证 + 运行期检查）', () => {

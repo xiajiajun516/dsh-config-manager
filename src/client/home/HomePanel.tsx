@@ -74,6 +74,9 @@ const BACKUP_SKIP_KEY: Record<BackupSkipReason, ConfigManagerKey> = {
   running: 'overview.quick.backupSkippedRunning',
   conflict: 'overview.quick.backupSkippedConflict',
   locked: 'overview.quick.backupSkippedLocked',
+  'lock-stale': 'overview.quick.backupSkippedLockStale',
+  'lock-unavailable': 'overview.quick.backupSkippedLockUnavailable',
+  'safe-mode': 'overview.quick.backupSkippedSafeMode',
   other: 'overview.quick.backupSkippedOther',
 }
 

@@ -36,6 +36,7 @@ import {
   classifyNetworkErrorText, computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS, isEncryptedSections,
   SyncTransportError, withSyncRetry,
 } from '../transport.ts';
+import { markLocalOnlyExternalFailure } from '../../core/external-failure.ts';
 import type {
   SyncProbeResult, SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
 } from '../transport.ts';
@@ -698,6 +699,11 @@ export class GitTransport implements SyncTransport {
       // 而失败面表现为旧地址的网络超时（真机：局域网地址 → Tailscale 地址后同步长期失败），
       // 用户会误判成网络/凭据问题。
       await this.reconcileOrigin();
+      // 真机 issue：仓库级提交身份此前**只在首次 clone 时**写过（见本方法末尾），已有 .git 的分支
+      // 直接 return —— 换机器/换工作副本/用户清过本地配置之后，每次 commit 都以 exit 128 失败
+      // （"unable to auto-detect email address"），交易停在 NEEDS_ATTENTION，用户只看到
+      // 「备份已跳过：环境锁被占用」。这里在每次进入工作副本时 best-effort 补齐身份。
+      await this.ensureCommitIdentity();
       this.repoReady = true;
       return;
     }
@@ -719,6 +725,34 @@ export class GitTransport implements SyncTransport {
     await this.runGit(['config', 'user.name', this.o.author.name]);
     await this.runGit(['config', 'user.email', this.o.author.email]);
     this.repoReady = true;
+  }
+
+  /**
+   * 补写工作副本的提交身份（best-effort；只补**缺失**的键，绝不覆盖用户自己配的值）。
+   *
+   * 为什么需要：git 的提交身份是「仓库级 or 全局」二选一，本插件只写仓库级（不改用户全局配置）。
+   * 一旦这个工作副本被别人重建、被 relink、或在没配全局身份的机器上首次同步，仓库级键就没了 ——
+   * 之后每次 commit 都 exit 128，而错误面在用户那里只剩一句「备份已跳过」。
+   *
+   * 纪律：探测（git config --get）失败 → 当作「不知道」而不写（不拿猜测覆盖用户配置）；
+   * 写入失败 → 静默放过（不是同步失败）。真缺身份时下一条 commit 仍会以 kind='config'
+   * 的可操作文案失败，并且**不再升级 SAFE MODE**（见 raiseGitFailure 的 localOnly 标记）。
+   */
+  private async ensureCommitIdentity(): Promise<void> {
+    const isMissing = async (key: string): Promise<boolean> => {
+      try {
+        const r = await this.runGit(['config', '--get', key], { allowNonZero: true });
+        return r.code !== 0 || r.stdout.trim() === '';
+      } catch {
+        return false;
+      }
+    };
+    try {
+      if (await isMissing('user.name')) await this.runGit(['config', 'user.name', this.o.author.name]);
+      if (await isMissing('user.email')) await this.runGit(['config', 'user.email', this.o.author.email]);
+    } catch {
+      /* best-effort：写入失败留给后续 commit 以 config 分类暴露，不在这里阻断同步 */
+    }
   }
 
   /**
@@ -1208,11 +1242,16 @@ export class GitTransport implements SyncTransport {
       if (err instanceof GitTransportError) throw err;
       // 注入的 exec 实现可能直接抛错（默认实现只返回非零 code）——同样归一为带分类的传输层错误
       const detail = err instanceof Error ? err.message : String(err);
-      throw new GitTransportError(
+      const classified = classifyNetworkErrorText(detail);
+      const failure = new GitTransportError(
         // argv 里含 repoUrl 原文（clone/ls-remote/remote set-url -- <url>）→ 必须经 mask 才进文案
-        this.msg('sync.git.cmdFailed', { args: this.mask(args.join(' '), token), code: 'exec', err: this.mask(detail, token) }),
-        { ...classifyNetworkErrorText(detail), cause: err },
+        classified.kind === 'config'
+          ? this.msg('sync.git.identityMissing', { err: this.mask(detail, token) })
+          : this.msg('sync.git.cmdFailed', { args: this.mask(args.join(' '), token), code: 'exec', err: this.mask(detail, token) }),
+        { ...classified, cause: err },
       );
+      // 与 raiseGitFailure 同口径：本机身份缺失不升级全局阻断（localOnly 标记）
+      throw classified.kind === 'config' ? markLocalOnlyExternalFailure(failure, 'git-identity') : failure;
     } finally {
       if (cleanup) await cleanup();
     }
@@ -1229,6 +1268,18 @@ export class GitTransport implements SyncTransport {
     // issue #79：SSH 主机密钥校验失败 → 换成「怎么信任该主机」的可操作说明（绝不自动信任）
     if (SSH_HOST_KEY_RE.test(combined)) {
       throw new GitTransportError(this.hostKeyMessage(), { kind: 'auth', retryable: false });
+    }
+    // 本机提交身份缺失（kind='config'）：与网络/远端/令牌无关，本机一步配置就能修好。
+    // 文案点名 git config，并打 localOnly 标记 —— phase3 据此不升 durable SAFE MODE
+    // （真机 issue：一个缺 user.email 的 commit 把插件变成「全部写入 423」）。
+    if (classified.kind === 'config') {
+      throw markLocalOnlyExternalFailure(
+        new GitTransportError(
+          this.msg('sync.git.identityMissing', { err: this.mask(result.stderr, token) }),
+          classified,
+        ),
+        'git-identity',
+      );
     }
     // 推送 + 鉴权失败：git 原文只说「认证失败」——换成能照做的说明（令牌失效 / 无写权限 / 远端禁用了密码推送）
     // issue #115：clone 的鉴权失败原文（remote: Write access to repository not granted / 403）读不出「缺哪种权限」，

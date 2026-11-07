@@ -78,11 +78,6 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
           trailing={<InfoHint text={t('mode.sessionsPickHint')} label={t('common.infoHint')} />}
         />
         <Modal.Body scroll style={{ maxHeight: '66vh' }}>
-          {/* 会话要在目标机的 DSH 工作区里可见，包内必须有指向它 cwd 的工作区记录。
-              同步通道的「工作区」是分区级开关，所以这里只能提示用户一并勾上。 */}
-          {sections.includes('sessions') && !sections.includes('workspaces') && (
-            <Banner kind="warn">{t('mode.sessionsWorkspaceWarn')}</Banner>
-          )}
           {sessionFailed && <span className={css.hint}>{cmT('picker.unitsUnavailable')}</span>}
           {!sessionFailed && sessionNodes.length === 0 && sessionPending && (
             <Skeleton count={4} label={t('common.loading')} />

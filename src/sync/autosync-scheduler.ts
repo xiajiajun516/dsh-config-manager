@@ -54,7 +54,7 @@ import type { JournalRunContext } from '../core/phase3-host.ts';
 import type { SyncEngine } from './sync-engine.ts';
 import type { SyncSnapshotMeta } from './transport.ts';
 import type { MutationLockPort, MutationLockContext } from '../utils/env-lock.ts';
-import { withMutationLock, LOCK_BLOCK_MESSAGE } from '../utils/env-lock.ts';
+import { withMutationLock, LOCK_BLOCK_MESSAGE, lockSkipToken } from '../utils/env-lock.ts';
 import { engineMsg } from './messages.ts';
 import {
   readAutosyncConfig, writeAutosyncConfig, clampRemoteCheckMs,
@@ -599,13 +599,13 @@ export class AutoSyncScheduler {
           await this.appendHistory(channel, {
             direction: 'both',
             status: 'skipped',
-            skipReason: 'mutation-locked',
+            skipReason: lockSkipToken(lk.reason),
             createdAt: nowIso,
             failureCountAtRun: 0,
           });
           finishRun();
           return {
-            status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId,
+            status: 'skipped', direction: 'none', skipReason: lockSkipToken(lk.reason), historyId,
             consecutiveFailures: 0,
           };
         }
@@ -618,12 +618,13 @@ export class AutoSyncScheduler {
         await this.appendHistory(channel, {
           direction: 'both',
           status: 'skipped',
-          skipReason: 'mutation-locked',
+          // acquire 本身抛错（锁目录 IO/权限）：既不是「被占」也不是「残留」，如实报不可用。
+          skipReason: lockSkipToken('unavailable'),
           createdAt: nowIso,
           failureCountAtRun: 0,
         });
         finishRun();
-        return { status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId, consecutiveFailures: 0 };
+        return { status: 'skipped', direction: 'none', skipReason: lockSkipToken('unavailable'), historyId, consecutiveFailures: 0 };
       }
     }
 

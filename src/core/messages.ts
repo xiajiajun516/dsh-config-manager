@@ -439,6 +439,9 @@ export const zh = {
   'sync.workdirModeInvalidFull': '重建工作副本的模式非法: {mode}（只允许 relink（重指向地址）、adopt（采纳远端历史）或 reclone（重新克隆））',
 
   'sync.git.cmdFailed': 'git {args} 失败 (exit {code}): {err}',
+  // 本机提交身份缺失（真机 issue：commit exit 128 ⇒ 交易 NEEDS_ATTENTION ⇒ 被误升 SAFE MODE）。
+  // 文案必须点名「本机配置」，并把「远端/网络/令牌」这三种常见误判方向明确排除。
+  'sync.git.identityMissing': 'git 在这台机器上没有可用的提交身份（user.name / user.email 未配置），本次操作被本机 git 拒绝（exit 128，与网络和远端无关）。插件会为同步工作副本自动补写仓库级身份；若仍失败，请在本机执行 git config --global user.name "<名字>" 与 git config --global user.email "<邮箱>" 后重试。原始错误：{err}',
   // 推送认证（真机：公开仓库拉取可匿名成功、推送必失败，git 原文只说「Invalid username or token」）
   'sync.git.pushTokenRequired': '推送需要访问令牌：远端是 http(s) 仓库，但本机没有可用的令牌（拉取公开仓库可以匿名完成，推送必须认证）。请在「同步 → 通道配置」里登录 GitHub 或填入访问令牌后重试。',
   'sync.git.pushAuthFailed': '推送认证失败：{err}。请确认令牌有效且对该仓库有写权限（账号密码推送已被远端禁用）；拉取成功不代表令牌可用 —— 公开仓库匿名即可拉取。可在「同步 → 通道配置」里重新登录或更换令牌。',
@@ -948,6 +951,9 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.workdirModeInvalidFull': 'Invalid working-copy rebuild mode: {mode} (only relink (re-point the address), adopt (merge the remote history) or reclone (clone again) are allowed).',
 
   'sync.git.cmdFailed': 'git {args} failed (exit {code}): {err}',
+  // Missing local commit identity (real-world issue: commit exit 128 → NEEDS_ATTENTION → wrongly escalated to SAFE MODE).
+  // Name the local config and rule out the three usual suspects (remote, network, token).
+  'sync.git.identityMissing': 'git has no usable commit identity on this machine (user.name / user.email is unset), so local git refused the operation (exit 128 — unrelated to the network or the remote). The plugin writes a repository-level identity into the sync working copy automatically; if that still fails, run git config --global user.name "<name>" and git config --global user.email "<email>" on this machine and retry. Original error: {err}',
   'sync.git.pushTokenRequired': 'Push requires an access token, but none is available on this machine (public repositories can be fetched anonymously; pushing always needs authentication). Sign in to GitHub or paste an access token under Sync → Channel configuration, then retry.',
   'sync.git.pushAuthFailed': 'Push authentication failed: {err}. Check that the token is valid and has write access to this repository (password authentication is disabled by the remote); a successful pull does not prove the token works — public repositories can be fetched anonymously. Sign in again or replace the token under Sync → Channel configuration.',
   'sync.git.credentialHelperBlocked': 'git cannot run the credential helper on this machine (it needs a shell, and this platform does not allow executing scripts/binaries from the app directory), and retrying with an HTTP authorization header did not work either. Make sure git is 2.31 or newer (injecting config through environment variables needs it) or switch the repository address to ssh. Original error: {err}',

@@ -12,6 +12,8 @@
  *   5. remoteHash == ancestorHash → keepLocal（仅本地改）
  *   6. 双侧相对祖先都改           → 精细合并：
  *        - JSON 分区：递归对象合并（mergeJsonValues），冲突路径精确到叶子（'namespaces.general.value.theme'）
+ *        - 分区专属钩子（GRANULAR_MERGES，当前 = workspaces）：按记录 id 做并集（sessionIds 取并集、
+ *          其它字段逐键三方取舍），见 workspace-merge.ts —— 通用 JSON 合并对数组只会判冲突
  *        - FilesSection：逐 relativePath 合并，两侧都改的文本文件再走行级三方合并（mergeBytesThreeWay）
  *        - 无残留冲突 → decision='merge'（merged + autoMerged 计数）
  *        - 有残留冲突 → decision='conflict'（merged 为 undefined：绝不把半成品当结果）
@@ -30,6 +32,8 @@
 import type { FilesSection, SectionData, SectionId } from '../schema/types.ts';
 import { hashSection } from './sync-state.ts';
 import { mergeBytesThreeWay, mergeJsonValues, type TextMergeConflict } from './text-merge.ts';
+import { mergeWorkspacesSection } from './workspace-merge.ts';
+import type { GranularMerger } from './workspace-merge.ts';
 
 /**
  * 分区级决胜结果（三方合并，2026-10 收口）：
@@ -285,6 +289,17 @@ function mergeFilesSectionGranular(
   return { merged: { version: 1, files: mergedFiles }, conflicts, mergePoints };
 }
 
+/**
+ * 分区专属的记录级合并钩子（issue #127）。
+ *
+ * 缺省 = 走下面的通用 JSON / 文件合并。当前只有 workspaces：它的 `sessionIds` 必须取并集
+ * （通用 JSON 合并对数组一律判冲突 —— 两侧各自挂过会话就永远冲突，且裁决任一侧都会丢另一侧的
+ * 会话归属）。钩子返回 undefined = 形状不认识，仍交回通用路径（畸形数据由形状闸门拒绝）。
+ */
+const GRANULAR_MERGES: Partial<Record<SectionId, GranularMerger>> = {
+  workspaces: mergeWorkspacesSection,
+};
+
 /** 单分区三方合并（决策链见文件头注释）。 */
 function mergeSectionTriple(
   id: SectionId,
@@ -346,6 +361,20 @@ function mergeSectionTriple(
       decision: 'conflict',
       conflicts: [{ path: '$', kind: 'key', reason: 'section', autoMergeAttempted: false, local, remote, ancestor: aData }],
     };
+  }
+  // ③' 分区专属记录级合并（**早于 ancestor 闸门**）：workspaces 的 sessionIds 是并集语义 ——
+  //    没有祖先时也应并集（否则首轮同步就整分区冲突），字段取值分歧由钩子逐键如实报冲突。
+  const granular = GRANULAR_MERGES[id];
+  if (granular !== undefined) {
+    const res = granular(local, remote, aData);
+    if (res !== undefined) {
+      if (res.conflicts.length > 0) return { id, decision: 'conflict', conflicts: res.conflicts };
+      const merged = res.merged;
+      const mh = hashSection(merged);
+      if (mh === h.remote) return { id, decision: 'useRemote', merged, conflicts: [] };
+      if (mh === h.local) return { id, decision: 'keepLocal', merged, conflicts: [] };
+      return { id, decision: 'merge', merged, conflicts: [], autoMerged: res.mergePoints };
+    }
   }
   if (h.ancestor === undefined) {
     return {

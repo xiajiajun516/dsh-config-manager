@@ -96,13 +96,30 @@ test('describeSkipReason：七类已知原因全部走字典（F1 收口：不�
   assert.equal(describeSkipReason('weird', zhT), 'weird');
 });
 
-// issue #31：宿主统一以 'mutation-locked' 落历史（不细分 LOCKED/STALE）→ 界面不得透出裸 token。
-test('describeSkipReason：mutation-locked 必须有可读中文且不再回退原串', () => {
-  const text = describeSkipReason('mutation-locked', zhT);
-  assert.notEqual(text, 'mutation-locked', '绝不透出裸机器 token');
-  assert.match(text, /环境锁/);
-  assert.match(text, /残留锁/);
-  assert.match(text, /另一项任务/);
+// issue：锁相关四类分档（宿主 lockSkipToken）—— 此前全部落成 'mutation-locked'，
+// 一句文案要同时覆盖「活锁占用」与「残留锁需回收」，真机上 locks 目录为空时把排查方向带偏。
+test('describeSkipReason：锁相关四类各有可读文案，且都不得回退裸 token', () => {
+  const tokens = ['mutation-locked', 'mutation-lock-stale', 'mutation-lock-unavailable', 'mutation-safe-mode'];
+  for (const token of tokens) {
+    assert.notEqual(describeSkipReason(token, zhT), token, '绝不透出裸机器 token: ' + token);
+    assert.notEqual(describeSkipReason(token, enT), token, 'en 界面同样不得透出裸 token: ' + token);
+  }
+  const locked = describeSkipReason('mutation-locked', zhT);
+  assert.match(locked, /环境锁/);
+  assert.match(locked, /另一个任务/);
+  // 分档后 locked 只表示「真被另一项活任务持有」，不得再暗示残留锁（那正是误导的来源）
+  assert.doesNotMatch(locked, /残留/);
+  // 残留锁：必须点名「重试/重启都不会自愈」并给出显式回收入口
+  const stale = describeSkipReason('mutation-lock-stale', zhT);
+  assert.match(stale, /残留/);
+  assert.match(stale, /事故恢复/);
+  // 不可用：既不是「被占」也不是「残留」——只能说暂时无法执行
+  const unavailable = describeSkipReason('mutation-lock-unavailable', zhT);
+  assert.match(unavailable, /不可用/);
+  // SAFE MODE：锁目录通常是空的，处置入口是事故恢复
+  const safeMode = describeSkipReason('mutation-safe-mode', zhT);
+  assert.match(safeMode, /SAFE MODE/);
+  assert.match(safeMode, /事故恢复/);
 });
 
 test('projectAutosyncEntry：摘要行 + 可展开明细（冲突分区 / 应用分区 / 错误）', () => {
@@ -255,6 +272,10 @@ test('issue #79：skipReasonKey —— 新旧码都映射到字典键，未知�
   assert.equal(skipReasonKey('upToDate'), 'history.autosyncReasonUpToDate');
   assert.equal(skipReasonKey('unchanged'), 'history.autosyncReasonUnchanged');
   assert.equal(skipReasonKey('mutation-locked'), 'history.autosyncReasonMutationLocked');
+  // 锁分档（宿主 lockSkipToken）：一类一个键，处置方向各不相同
+  assert.equal(skipReasonKey('mutation-lock-stale'), 'history.autosyncReasonLockStale');
+  assert.equal(skipReasonKey('mutation-lock-unavailable'), 'history.autosyncReasonLockUnavailable');
+  assert.equal(skipReasonKey('mutation-safe-mode'), 'history.autosyncReasonSafeMode');
   assert.equal(skipReasonKey('future-code-from-newer-host'), null, '未知码不猜');
   assert.equal(skipReasonKey(undefined), null);
 });

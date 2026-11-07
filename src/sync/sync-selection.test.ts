@@ -304,7 +304,7 @@ test('normalizeSessionsLimit: 只有非负整数被接受', () => {
 
 test('OPT_IN_SYNC_SECTIONS: 只含需要用户显式勾选的可选分区，凭据类分区永不入选', () => {
   // 单一事实源 = 分区注册表（issue #78：此前是本文件手写的 ['sessions']，与注册表字段两份字面量、零护栏）
-  assert.deepEqual([...OPT_IN_SYNC_SECTIONS], ['mcp', 'sessions']);
+  assert.deepEqual([...OPT_IN_SYNC_SECTIONS], ['mcp', 'workspaces', 'sessions']);
   assert.deepEqual([...OPT_IN_SYNC_SECTIONS], [...OPT_IN_SYNC_SECTION_IDS], '必须与注册表派生视图逐项一致');
   for (const forbidden of ['credentialsStatus', 'secrets', 'settings'] as const) {
     assert.ok(!OPT_IN_SYNC_SECTIONS.includes(forbidden), '可选分区白名单不得含 ' + forbidden);

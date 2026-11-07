@@ -148,6 +148,9 @@ export interface SyncTransport {
  *  - auth：认证 / 授权失败 —— 重试无意义；
  *  - notfound：远端实体不存在 —— 重试无意义；
  *  - conflict：并发 / 非快进 / 锁冲突 —— 需人工决策；
+ *  - config：**本机配置缺失**（如 git 没配 user.name/user.email 导致 commit exit 128）——
+ *    重试无意义、但**本机一步就能修好**，且不代表环境进入半写状态；上层据此收窄处置
+ *    （标记为 localOnly，不升全局 SAFE MODE，见 core/external-failure.ts）；
  *  - client：其它 4xx（请求本身有问题）—— 重试无意义；
  *  - protocol：响应或载荷不符合契约（解析失败、目录缺 manifest、重定向超限）；
  *  - unknown：无法归类（宁可当不可重试）。 */
@@ -156,6 +159,7 @@ export type SyncTransportErrorKind =
   | 'timeout'
   | 'server'
   | 'auth'
+  | 'config'
   | 'notfound'
   | 'conflict'
   | 'client'
@@ -320,6 +324,14 @@ export function classifyNetworkErrorText(text: string): { kind: SyncTransportErr
     'invalid username or token', 'password authentication is not supported',
     'support for password authentication was removed')) {
     return { kind: 'auth', retryable: false };
+  }
+  // 本机 git 身份缺失（真机 issue：commit exit 128 ⇒ 交易 NEEDS_ATTENTION ⇒ 误升 SAFE MODE）。
+  // 放在 auth/notfound 之前：这类 stderr 里也可能带 'permission denied' 之外的宽泛词，
+  // 但它与远端鉴权无关 —— 远端根本没被访问到，唯一修法是本机 git config。
+  if (has('unable to auto-detect email address', 'empty ident name', 'tell me who you are',
+    'author identity unknown', 'committer identity unknown', 'please configure your identity',
+    'no name was given and auto-detection is disabled')) {
+    return { kind: 'config', retryable: false };
   }
   if (status(404) || has('not found', 'does not exist', 'no such file')) {
     return { kind: 'notfound', retryable: false };

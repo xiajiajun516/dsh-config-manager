@@ -30,7 +30,7 @@ import type { RunRegistry } from '../core/run-registry.ts';
 import type { ConfigAdapter, HostContext, SecretScanner } from '../core/types.ts';
 import type { MutationLockPort } from '../utils/env-lock.ts';
 import type { LockBlockReason } from '../utils/env-lock.ts';
-import { runWithMutationLock, EnvironmentLockUnavailableError, LOCK_BLOCK_MESSAGE, LOCK_BLOCK_BRIEF } from '../utils/env-lock.ts';
+import { runWithMutationLock, EnvironmentLockUnavailableError, LOCK_BLOCK_MESSAGE, LOCK_BLOCK_BRIEF, lockSkipToken } from '../utils/env-lock.ts';
 import { Exporter } from '../core/exporter.ts';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
@@ -347,7 +347,7 @@ export class BackupScheduler {
         } else {
           this.log.info(`${trigger}跳过：${LOCK_BLOCK_MESSAGE[err.reason]}`);
         }
-        const skipped: BackupRunResult = { status: 'skipped', skipReason: 'mutation-locked', consecutiveFailures: cfg.consecutiveFailures };
+        const skipped: BackupRunResult = { status: 'skipped', skipReason: lockSkipToken(err.reason), consecutiveFailures: cfg.consecutiveFailures };
         // skipReason 保持稳定的机器 token（客户端据此本地化）；历史摘要用同源**短**文案，
         // 不留裸 token（issue #31 ②：中文前缀 + 英文 token 的历史行）。
         await this.appendHistory(skipped, err.reason, manual);

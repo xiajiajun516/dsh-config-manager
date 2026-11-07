@@ -101,10 +101,13 @@ export function skipReasonKey(reason: string | undefined): SyncKey | null {
     // issue #79：状态行新增两类（无变化 / 已是最新）——此前会落到 default 渲染裸码
     case 'upToDate': return 'history.autosyncReasonUpToDate';
     case 'unchanged': return 'history.autosyncReasonUnchanged';
-    // issue #31：宿主侧的分类锁判定（LOCKED/STALE/UNKNOWN）统一以 'mutation-locked' 落历史，
-    // 客户端拿不到细分 reason → 文案必须同时覆盖「活锁占用」与「残留锁需回收」两种可能，
-    // 并给出可操作方向（否则界面只显示裸 token，用户无从判断要不要处理）。
+    // issue：宿主此前把分类锁判定（LOCKED/STALE/UNKNOWN/SAFE MODE）一律落成 'mutation-locked'，
+    // 客户端只能写一句「被占用或残留」——真机上 locks 目录是空的，这句把排查方向带偏（用户实测反馈）。
+    // 现在宿主按 lockSkipToken() 分档发 token，一类一个文案 + 一个处置方向；旧 token 仍认。
     case 'mutation-locked': return 'history.autosyncReasonMutationLocked';
+    case 'mutation-lock-stale': return 'history.autosyncReasonLockStale';
+    case 'mutation-lock-unavailable': return 'history.autosyncReasonLockUnavailable';
+    case 'mutation-safe-mode': return 'history.autosyncReasonSafeMode';
     // 真·自动同步（conflictPolicy='local'）：冲突已按策略「保留本机并推上去」消解，
     // 远端那一版被覆盖（仍在远端历史快照里，可回滚）—— 必须与「冲突待裁决」分开说。
     case 'conflict-kept-local': return 'history.autosyncReasonConflictKeptLocal';

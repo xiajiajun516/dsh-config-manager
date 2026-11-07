@@ -201,6 +201,11 @@ test('issue #43：已知 skipReason token 各自映射（running / conflict / lo
     ['running', 'running'],
     ['conflict', 'conflict'],
     ['mutation-locked', 'locked'],
+    // 锁相关四类分档（宿主 lockSkipToken）：此前全部落成 'mutation-locked'，
+    // 于是 locks 目录为空时界面也说「环境锁被占用」，把排查方向带偏（真机 issue）。
+    ['mutation-lock-stale', 'lock-stale'],
+    ['mutation-lock-unavailable', 'lock-unavailable'],
+    ['mutation-safe-mode', 'safe-mode'],
   ]
   for (const [token, expected] of cases) {
     assert.deepEqual(
