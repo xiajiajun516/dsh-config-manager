@@ -53,25 +53,33 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
         : repoUrl
   return (
     <Card>
-      <div className={css.cardTitleRow}>
-        <span className={css.groupLabel}>{t('channel.title')} <InfoHint text={t('channel.openHint')} label={t('common.infoHint')} /></span>
-        {/* 上次同步是单条事实，贴标题行右端（见 .cardTitleRow 注释） */}
-        <span className={css.statusSpacer} />
-        <span className={css.factInline}>
-          {t('syncStatus.lastSync')}{' '}
-          {formatSyncStatusTimestamp(statusInfo?.lastSyncAt)}
-        </span>
-      </div>
-      <div className={css.statRow}>
-        <Badge kind="info">{t(SYNC_CHANNEL_LABEL_KEY[channel])}</Badge>
+      {/* 单行通道头（2026-11-07，OpenDesign T1）：原先是「标题行 + 徽章行 + 远端事实格 +
+          动作行」四段叠在一张卡里，四个通道占掉近半屏；通道头本身只需要回答三件事 ——
+          这是哪条通道、配没配、指向哪个远端。三件事排一行，动作收到右端。 */}
+      <div className={css.channelRow}>
+        {onToggleExpanded !== undefined && (
+          <button
+            type="button"
+            className={css.iconBtn}
+            data-size="sm"
+            aria-expanded={expanded === true}
+            aria-controls={contentId}
+            aria-label={expanded === true ? t('channel.collapse') : t('channel.expand')}
+            title={expanded === true ? t('channel.collapse') : t('channel.expand')}
+            onClick={onToggleExpanded}
+          >
+            <ExpandChevron open={expanded === true} size={14} />
+          </button>
+        )}
+        <span className={css.channelName}>{t(SYNC_CHANNEL_LABEL_KEY[channel])}</span>
+        <InfoHint text={t('channel.openHint')} label={t('common.infoHint')} />
         <Badge kind={remoteReady ? 'ok' : 'warn'}>
           {remoteReady ? t('channel.configured') : t('channel.notConfigured')}
         </Badge>
+        {/* 凭据类徽章：只有「已保存」时才挂（未配置令牌那条 ⚠ 保留，因为推送必失败） */}
         {channel === 'git' && statusInfo?.credentialConfigured === true && (
           <Badge kind="ok">{t('config.tokenSaved')}</Badge>
         )}
-        {/* 未配置令牌：拉取公开仓库仍可匿名成功，推送必失败（真机 128「Invalid username or token」）——
-            在点推送之前就说清楚，别让用户先把错误撞一遍。仅 http(s) 远端提示（本地/ssh 不需要令牌）。 */}
         {channel === 'git' && statusInfo?.credentialConfigured !== true
           && needsGitToken(statusInfo?.repoUrl ?? '') && (
           <Badge kind="warn">{t('config.tokenMissing')}</Badge>
@@ -79,66 +87,36 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
         {channel === 'webdav' && statusInfo?.webdav?.passwordConfigured === true && (
           <Badge kind="ok">{t('webdav.passwordSaved')}</Badge>
         )}
-        {/* 云端点通道：只回 secretStored 布尔（密钥值永不回传），据此显示「已保存」徽章 */}
         {channel === 's3' && statusInfo?.s3?.secretStored === true && (
           <Badge kind="ok">{t('cloud.secretSaved')}</Badge>
         )}
         {channel === 'gist' && statusInfo?.gist?.secretStored === true && (
           <Badge kind="ok">{t('cloud.tokenSaved')}</Badge>
         )}
-        {/* issue #79：改仓库地址后工作副本仍指旧地址（下一轮同步会自动重指向）—— 在卡上直接可见 */}
         {showWorkdirBadge && workdirKey !== null && workdirKind !== null && (
           <Badge kind={workdirKind}>{t(workdirKey)}</Badge>
         )}
-      </div>
-      {/* 远端地址（Workbench：未配置时也要给硬事实）。
-          配置状态只由上面那排徽章表达：同一张卡里用「徽章 + 事实行」两处说同一件事，
-          用户得比对两遍才知道是不是同一状态。 */}
-      {remoteReady && (
-        <div className={css.factGrid} style={{ marginTop: 8 }}>
-          <div className={css.factCell}>
-            <span className={css.factLabel}>{t('channel.currentUrl')}</span>
-            <span className={css.factValue}>
-              <span className={css.mono}>
-                {formatSyncUrlPreview(previewRemote)}
-              </span>
-            </span>
-          </div>
-        </div>
-      )}
-      <div className={css.actionRowTop}>
-        {/* ghost 而不是 primary（2026-11-01）：本页唯一的主行动是「把本地改动推上去 /
-            把远端拉下来」，而那是下方 pickSyncPrimary 决定的那颗按钮。
-            配置入口与它并列同填充时，用户在首屏看到两个「主按钮」，谁也不会先按。 */}
-        <Button variant="ghost" onClick={onOpen}>
+        {/* 远端预览：未配置时留空位（不写「未配置」第二遍），已配置时中段省略。
+            title 给全文 —— 行内只够放下 20 来个字符。 */}
+        {remoteReady && (
+          <span className={`${css.channelRemote} ${css.mono}`} title={previewRemote}>
+            {formatSyncUrlPreview(previewRemote)}
+          </span>
+        )}
+        <span className={css.statusSpacer} />
+        {remoteReady && (
+          <span className={css.channelLastSync}>
+            {t('syncStatus.lastSync')} {formatSyncStatusTimestamp(statusInfo?.lastSyncAt)}
+          </span>
+        )}
+        <Button size="sm" variant="ghost" onClick={onOpen}>
           {t('channel.open')}
         </Button>
-        {/* 断开出口：只有**配置过**的通道才渲染（未配置时这个按钮没有意义，也不该存在）。
-            危险操作用 danger 变体 + ConfirmDialog 二次确认（DESIGN.md §8.11）。 */}
+        {/* 断开出口：只有**配置过**的通道才渲染（未配置时这个按钮没有意义，也不该存在）。 */}
         {remoteReady && (
-          <Button variant="danger" onClick={onClear}>
+          <Button size="sm" variant="ghost" onClick={onClear}>
             {t('channel.clear')}
           </Button>
-        )}
-        {onToggleExpanded !== undefined && (
-          <>
-            <span className={css.statusSpacer} />
-            {/* 展开/收起该通道的详情（内容区 / 加密 / 解密 / 自动同步）。
-                形态与 ContentPicker 的展开控件一致：原生 button + aria-expanded + aria-controls，
-                图标走 ExpandChevron 形变（折叠展开是它的合法用途）。 */}
-            <button
-              type="button"
-              className={css.iconBtn}
-              data-size="sm"
-              aria-expanded={expanded === true}
-              aria-controls={contentId}
-              aria-label={expanded === true ? t('channel.collapse') : t('channel.expand')}
-              title={expanded === true ? t('channel.collapse') : t('channel.expand')}
-              onClick={onToggleExpanded}
-            >
-              <ExpandChevron open={expanded === true} size={14} />
-            </button>
-          </>
         )}
       </div>
     </Card>
