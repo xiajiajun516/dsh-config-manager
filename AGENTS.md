@@ -148,11 +148,11 @@
 
 ### Issue tracker
 
-GitHub Issues（`xiajiajun516/dsh-config-manager`，走 `gh` CLI）。See `docs/agents/issue-tracker.md`.
+GitHub Issues（`xiajiajun516/dsh-config-manager`，走 `gh` CLI；原生子 issue 与原生依赖）。票分六个位置 `map` / `map-ticket` / `spec` / `spec-ticket` / `bug` / `issue`。See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-五角色沿用默认名：`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`。See `docs/agents/triage-labels.md`.
+每条 open issue 带**一个分类**（`bug` / `enhancement`）+ **一个状态**（`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`）；`wayfinder:*` 永不与 triage 同现；`confirmed` / `fixed` 只是进度标记，`needs-repro` 退役。See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 

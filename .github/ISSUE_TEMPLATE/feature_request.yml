@@ -1,7 +1,7 @@
 name: ✨ 功能建议（中文）
 description: 想要的新功能、改进点，或使用体验上的建议
 title: "[Feature] "
-labels: ["enhancement"]
+labels: ["enhancement", "needs-triage"]
 body:
   - type: markdown
     attributes:

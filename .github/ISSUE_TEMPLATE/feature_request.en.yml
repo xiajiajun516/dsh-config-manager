@@ -1,7 +1,7 @@
 name: ✨ Feature request (English)
 description: A new feature, an improvement, or a suggestion about the experience
 title: "[Feature] "
-labels: ["enhancement"]
+labels: ["enhancement", "needs-triage"]
 body:
   - type: markdown
     attributes:

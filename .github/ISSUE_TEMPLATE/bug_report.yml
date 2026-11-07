@@ -1,7 +1,7 @@
 name: 🐛 Bug 报告（中文）
 description: 功能出错、报错、数据不对、行为不符合预期
 title: "[Bug] "
-labels: ["bug"]
+labels: ["bug", "needs-triage"]
 body:
   - type: markdown
     attributes:

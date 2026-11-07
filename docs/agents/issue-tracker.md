@@ -1,20 +1,90 @@
 # Issue tracker: GitHub
 
-本仓库的 issue 与 spec 都放在 GitHub Issues：`xiajiajun516/dsh-config-manager`。所有操作走 `gh` CLI（仓库内执行，`gh` 自动推断 repo）。
+本仓库的 issue、spec 与 wayfinder 地图都放在 GitHub Issues：`xiajiajun516/dsh-config-manager`。所有操作走 `gh` CLI（仓库内执行，`gh` 自动推断 repo；本机 2.96，原生子 issue 与原生依赖都可用，不再写老版本回落）。
 
 ## Conventions
 
-- **建 issue**：`gh issue create --title "..." --body "..."`；多行 body 用 heredoc。优先套用 `.github/ISSUE_TEMPLATE/` 下的模板（`bug_report.yml` / `feature_request.yml` / `ui_bug.yml`）。
-- **读 issue**：`gh issue view <number> --json number,title,body,labels,comments`。
-- **列 issue**：`gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'`，配 `--label` / `--state` 过滤。
-- **子 issue**：`gh issue create --parent <parent> ...`，或事后 `gh issue edit <parent> --add-sub-issue <child>`（`gh` 2.94+；本机 2.96）。老版本回落 `gh api --method POST repos/<owner>/<repo>/issues/<parent>/sub_issues -F sub_issue_id=<child-db-id>`；没有子 issue 能力时在子 issue 正文首行写 `Part of #<parent>`。
-- **阻塞**：用 GitHub 原生 issue 依赖。`gh issue create --blocked-by <n>,<n> ...` 或 `gh issue edit <child> --add-blocked-by <blocker>`（2.94+）。老版本：`gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`，其中 `<blocker-db-id>` 是阻塞者的**数据库 id**（`gh api repos/<owner>/<repo>/issues/<n> --jq .id`），不是 `#number` 或 `node_id`。不支持依赖时在子 issue 正文首行写 `Blocked by: #<n>, #<n>`。所有阻塞者关闭才算解除。
-- **数未关闭阻塞**：`gh api repos/<owner>/<repo>/issues/<n> --jq .issue_dependencies_summary.blocked_by`（只算 open，0 = 可开工）。`gh issue view <n> --json blockedBy` 会把已关闭的也列出来，要自己过滤：`--jq '[.blockedBy.nodes[] | select(.state == "OPEN")] | length'`。
-- **评论**：`gh issue comment <number> --body "..."`。
-- **打/摘标签**：`gh issue edit <number> --add-label "..."` / `--remove-label "..."`。标签词汇见 `docs/agents/triage-labels.md`。
-- **关闭**：先 `gh issue comment <number> --body "..."` 写原因，再 `gh issue close <number>`。已关闭的 issue 用 `gh issue close --comment` 会丢评论但仍退出 0，别用。
+- **建 issue**：优先用 deck 的 `deck_issue_create`（按 kind 自动补标签、正文标记与 `## 进度`）。手写时 `gh issue create --title "..." --body-file <文件>` —— 多行正文走文件，不要用 `gh api -f body=@file`（它不读文件）。
+- **读 issue**：`gh issue view <n> --json number,title,body,labels,assignees,comments`，或 `deck_issue_get`。
+- **列 issue**：`gh issue list --state open --json number,title,labels --jq '[.[] | {number, title, labels: [.labels[].name]}]'`，配 `--label` / `--state` 过滤。
+- **子 issue**：`gh issue create --parent <parent> ...`，或 `gh issue edit <parent> --add-sub-issue <child>`。
+- **阻塞**：`gh issue create --blocked-by <n>,<n> ...` / `gh issue edit <child> --add-blocked-by <blocker>`。所有阻塞者关闭才算解除。
+- **数未关闭阻塞**：`gh api repos/{owner}/{repo}/issues/<n> --jq .issue_dependencies_summary.blocked_by`（只算 open，0 = 可开工）；`gh issue view --json blockedBy` 含已关闭项，要自己过滤。
+- **评论**：`gh issue comment <n> --body-file <文件>`。
+- **打/摘标签**：`gh issue edit <n> --add-label "..."` / `--remove-label "..."`。词汇见 `docs/agents/triage-labels.md`。
+- **关闭**：先评论写原因，再 `gh issue close <n>`。`gh issue close --comment` 会吞评论但仍然退出 0，别用。
 
-只往本仓库自己的 issue 里写。一个 session 第一次 `gh issue create` 前，用 `gh repo view --json nameWithOwner` 确认目标是 `xiajiajun516/dsh-config-manager`（fork 场景 `gh` 可能默认指向上游）。
+只往本仓库自己的 issue 里写：第一次 `gh issue create` 前用 `gh repo view --json nameWithOwner` 确认目标是 `xiajiajun516/dsh-config-manager`（fork 场景 `gh` 可能默认指向上游）。
+
+## 六个位置（kind）
+
+工具按**位置**说话，位置决定标签与正文形状。建票必须说清 kind；旧名 `task` / `ticket` 一律拒绝（改成 `map-ticket` + 四选一的 label，或 `spec-ticket`）。
+
+| kind | 类型标签 | triage 标签 | 正文标记 | 父票 |
+|---|---|---|---|---|
+| `map` | `wayfinder:map` | — | — | 顶层 |
+| `map-ticket` | `wayfinder:research` / `prototype` / `grilling` / `task`（必选其一） | — | — | 地图 |
+| `spec` | — | `ready-for-agent` | `<!-- DSH-ISSUE-KIND: spec -->`（首行） | 顶层 |
+| `spec-ticket` | — | `ready-for-agent` | `<!-- DSH-ISSUE-KIND: ticket -->`（首行） | 规格 |
+| `bug` | `bug` | `needs-triage` | — | 可选 |
+| `issue` | — | — | — | 可选 |
+
+- `kind=issue` 是普通票（一次性任务、元 issue）：不在地图/规格里、也不需要分类时用它。
+- `labels` 参数只放 triage 标签；类型标签由 kind/label 决定，重复放会被拒。
+- `map` 与 `spec` 是顶层容器，不收 parentKey；`map-ticket` 必须挂地图、`spec-ticket` 必须挂规格。
+
+## 正文形状
+
+### 地图：五节 + `## 进度`
+
+五个小标题**逐字英文**、顺序固定（读回只认这五个），`## 进度` 排在最后：
+
+```
+## Destination
+## Notes
+## Decisions so far
+## Not yet specified
+## Out of scope
+
+## 进度
+```
+
+`deck_issue_create` 会自动补缺失的小节与 `## 进度`；手写 `gh issue create` 时要自己补齐，否则地图读不出来。
+
+### 规格：标记行 + 七节
+
+首行必须是 `<!-- DSH-ISSUE-KIND: spec -->`，其后七节（中英文标题都认，本仓库用中文）：
+
+```
+## 问题陈述
+## 解决方案
+## 用户故事
+## 实现决策
+## 测试决策
+## 不在范围内
+## 补充说明
+```
+
+### 工单与实施票
+
+- **地图工单**：正文一段能回答的问题，结题时补 `## Answer`；顶部可留 `Type:` / `Status:` 字段行。
+- **实施票**（`to-tickets` 生成）：`## What to build` / `## Acceptance criteria`（`- [ ]`）/ `## Blocked by`，另带 `## 进度`。
+
+### `## 进度`
+
+- 最新一条在最上面，条目 = 百分比 + 一句话；`deck_issue_patch` 的 `progress` 自动盖时间，不要手写时间戳。
+- 正文总上限 60 KiB：超了工具拒绝写，先把旧条目挪进评论或 `docs/` 再写。
+- 细粒度进展写这里，**不要**为「改到一半」加标签。
+
+## 评论、关闭与归档
+
+- **AI 写的评论首行固定** `> *This was generated by AI during triage.*`（逐字英文；正文用中文）—— 人和工具都靠这一行认出来源。
+- **关闭前先评论结论**：已实现 → 指出代码位置；不修的 bug → 写为什么不修；不修的功能请求 → 先写 `.out-of-scope/<concept>.md` 再引用它关闭。
+- **已实现的 `wontfix` 不写 `.out-of-scope/`**：那是内建功能，写进去会污染去重。
+
+## `.out-of-scope/`
+
+被拒的**功能请求**（不是 bug）在这里留一条概念文件：一个概念一份、kebab-case 命名，含决策、理由与 `## Prior requests` 列表。下次同类请求先读它，避免重复讨论。格式与写法见 `.out-of-scope/README.md`。
 
 ## Pull requests as a triage surface
 
@@ -30,7 +100,7 @@ GitHub 的 issue 与 PR 共用一套编号，裸 `#42` 可能是任意一种：�
 
 ## When a skill says "publish to the issue tracker"
 
-建一条 GitHub issue。
+建一条 GitHub issue —— 用 `deck_issue_create` 选对 kind，别手写标签。
 
 ## When a skill says "fetch the relevant ticket"
 
@@ -38,16 +108,17 @@ GitHub 的 issue 与 PR 共用一套编号，裸 `#42` 可能是任意一种：�
 
 ## Wayfinding operations
 
-`/wayfinder` 用。**地图**是一条 issue，**工单**是它的子 issue。
+`/wayfinder` 用。**地图**是一条 `wayfinder:map` issue，**工单**是它的原生子 issue。
 
-- **地图**：一条打了 `wayfinder:map` 的 issue，正文放 Notes / Decisions-so-far / Fog。`gh issue create --label wayfinder:map`。
-- **子工单**：挂成地图的 GitHub 子 issue（见 **子 issue**）。不支持子 issue 时，把子工单加进地图正文的 task list，并在子工单正文首行写 `Part of #<map>`。标签 `wayfinder:<type>`（`research`/`prototype`/`grilling`/`task`）。认领后 assign 给执行的人。
+- **地图**：`deck_issue_create` 的 `kind=map`；手写时 `gh issue create --label wayfinder:map` 并按五节补齐正文。
+- **工单**：挂成地图的子 issue，只带 `wayfinder:<type>` 一个类型标签，**绝不带 triage 标签**。认领 = assignee。
 - **阻塞**：见 **Conventions** 的 **阻塞**。
-- **Frontier 查询**：列出地图的 open 子工单（`gh issue list --state open`，范围限地图的子 issue / task list），剔掉有未关闭阻塞者（见 **数未关闭阻塞**）或已有 assignee 的；地图顺序最靠前的先做。
+- **Frontier 查询**：地图的 open 子票，剔掉有未关闭阻塞者（见 **数未关闭阻塞**）或已有 assignee 的；地图顺序最靠前的先做。
 - **认领**：`gh issue edit <n> --add-assignee @me`，这是本 session 第一次写操作。
-- **结题**：`gh issue comment <n> --body "<结论>"` → `gh issue close <n>` → 往地图的 Decisions-so-far 追加一行上下文指针（gist + 链接）。
+- **结题**：`gh issue comment <n> --body-file <结论>` → `gh issue close <n>` → 往地图 `## Decisions so far` 追加一行（gist + `#<n>` 链接）。
 
 ## 本仓库附加约定
 
-- **issue 台账**：收到的 issue 记进 `.dsh/issue-ledger.md`（`issue-intake-response` 技能）；发版后按台账逐条回「已在 vX.Y.Z 修复」并标 `fixed`。
-- **用户可见的修复要进 `CHANGELOG.md` 的 `## [Unreleased]`**，否则发版门禁会失败。
+- **回复队列 `.dsh/issue-ledger.md`** 只记「谁还欠一条回复」；状态机交给标签（`needs-info` = 等报告者，`fixed` = 已发版等确认）。流程见 `issue-intake-response` 技能。
+- **用户可见的修复同轮进 `CHANGELOG.md` 的 `## [Unreleased]`**，否则发版门禁失败。
+- **中文优先**：issue 回复用中文，代码 / 命令 / 错误串保留原文。

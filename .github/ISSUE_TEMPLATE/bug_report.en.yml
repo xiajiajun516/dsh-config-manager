@@ -1,7 +1,7 @@
 name: 🐛 Bug report (English)
 description: Something is broken, erroring, showing wrong data, or not behaving as expected
 title: "[Bug] "
-labels: ["bug"]
+labels: ["bug", "needs-triage"]
 body:
   - type: markdown
     attributes:

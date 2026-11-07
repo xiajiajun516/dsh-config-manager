@@ -1,7 +1,7 @@
 name: 🎨 UI issue (English)
 description: Misaligned layout, broken styling, dark mode or scaling problems, a control that does nothing
 title: "[UI] "
-labels: ["bug", "ui"]
+labels: ["bug", "ui", "needs-triage"]
 body:
   - type: markdown
     attributes:

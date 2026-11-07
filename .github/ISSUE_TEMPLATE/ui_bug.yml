@@ -1,7 +1,7 @@
 name: 🎨 UI 问题（中文）
 description: 界面错位、样式异常、深色模式或缩放下异常、按钮点了没反应
 title: "[UI] "
-labels: ["bug", "ui"]
+labels: ["bug", "ui", "needs-triage"]
 body:
   - type: markdown
     attributes:

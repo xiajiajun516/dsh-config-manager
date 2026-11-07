@@ -4,8 +4,8 @@
 
 | 文档 | 内容 |
 |---|---|
-| `issue-tracker.md` | issue tracker 选型（GitHub Issues）、`gh` 子 issue 与原生依赖写法的差异、wayfinder 地图/子票/阻塞/frontier/认领操作、本仓附加约定（台账与 CHANGELOG） |
-| `triage-labels.md` | 五个 triage 标签角色与默认名、与既有 `needs-repro`/`confirmed`/`fixed` 的分工、`wayfinder:*` 不与 triage 标签同现 |
+| `issue-tracker.md` | issue tracker 选型（GitHub Issues）、六个位置（kind）与各自标签/正文形状、地图五节与 `## 进度`、评论免责声明与关闭三类、`gh` 子 issue/依赖/frontier 操作、本仓附加约定（回复队列与 CHANGELOG） |
+| `triage-labels.md` | 分类（`bug`/`enhancement`）与状态（`needs-triage`/`needs-info`/`ready-for-*`/`wontfix`）两层角色、`confirmed`/`fixed` 只作进度标记、`needs-repro` 退役、`wayfinder:*` 不与 triage 同现 |
 | `domain.md` | 领域文档布局（single-context：根 `GLOSSARY.md` + `docs/adr/`）、什么时候写词条、什么时候开 ADR |
 
 ## 加一条
