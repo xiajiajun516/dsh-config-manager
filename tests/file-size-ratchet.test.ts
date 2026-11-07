@@ -27,7 +27,9 @@ const CEILINGS: Record<string, number> = {
   'src/core/rollback-point.ts': 5980,
   // 4389 → 4135（2026-11-04）：调度/心跳/缓存清理下沉到 src/core/host-schedulers/，
   // parseSyncBody 家族下沉 route-support.ts；理由与残留见 tech-debt #23。
-  'src/index.ts': 4135,
+  // 4135 → 4128（2026-11-07）：环境锁装配（含失败留痕回调）下沉到 core/env-lock-lifecycle.ts 的
+  // createHostMutationLock()，降回棘轮之内，不占新额度。
+  'src/index.ts': 4128,
   'src/sync/sync-engine.ts': 2213,
   // 2166 → 2221（2026-11-04）：恢复面板「写盘进行中」瞬态切片 + begin/endRecoveryWrite
   // （不落盘，PersistedRecoveryState 显式 Omit 'write'），是 tech-debt #7 的修法本体。

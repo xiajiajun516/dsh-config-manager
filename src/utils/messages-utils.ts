@@ -73,6 +73,7 @@ export const zh = {
   'utils.envLock.heartbeatExpiredNoIdentity': 'heartbeat 过期且 pid={pid} 存活，但无法可靠取得 OS process identity，保守拒绝删除',
   'utils.envLock.pidReuse': 'pid reuse：pid={pid} identity 与 recorded 不同',
   'utils.envLock.ownerAliveDegraded': 'owner 进程存活（heartbeat 可能 degraded），非 stale',
+  'utils.envLock.ownerAliveHeartbeatStopped': 'owner pid={pid} 进程存活且进程身份一致，但 heartbeat {longExpired} → 判定为残留锁（写方已停摆），可显式回收',
   'utils.envLock.notStaleRefuseRecovery': '非 stale，拒绝 recovery',
   'utils.envLock.ownershipGone': 'ownership 已消失（被他人接管/清除），停止 recovery',
   'utils.envLock.captureRenameFailed': '捕获 rename 失败（可能被他人接管），停止',
@@ -91,6 +92,9 @@ export const zh = {
   'utils.envLock.durationMinutes': '{value} 分钟',
   'utils.envLock.durationSeconds': '{value} 秒',
   'utils.envLock.ioPermissionNotLock': '{what}: 权限/ACL 错误 ({code})，非锁占用',
+  'utils.envLock.heartbeatWriteFailed': '环境锁心跳写入失败: {reason}',
+  'utils.envLock.releaseFailedQuarantined': '环境锁释放失败，已把 ownership 挪到 recovering 解除阻塞: {reason}',
+  'utils.envLock.releaseFailedStuck': '环境锁释放失败，且无法挪走 ownership（后续操作会被判为锁被占用）: {reason}',
 
   // ---------- utils/env-lock.ts：锁被挡时给用户的分类文案（长 / 短两套，同源同分类） ----------
   'utils.envLock.block.locked': '另一个任务正在运行，请稍后重试。',
@@ -99,10 +103,14 @@ export const zh = {
   'utils.envLock.block.stale': '检测到上次异常退出残留的配置锁（其持有进程已不存在），操作已被阻止。'
     + '该锁不会自动清除，重试或重启 DSH 均无效：请在「事故恢复」中点击「回收残留锁」，'
     + '或运行 dsh-config-manager recover-stale-lock 回收后再重试。',
+  'utils.envLock.block.staleDegraded': '检测到残留的配置锁：其记录中的进程仍在运行，但心跳已长期停止，说明上次释放没有完成。'
+    + '操作已被阻止，重试或重启 DSH 都不会自愈：请在「事故恢复」中点击「回收残留锁」，'
+    + '或运行 dsh-config-manager recover-stale-lock 回收后再重试。',
   'utils.envLock.brief.locked': '环境锁被另一项任务占用',
   'utils.envLock.brief.blocked': '配置修改已被保护，需先处理恢复事项',
   'utils.envLock.brief.unavailable': '环境锁暂时不可用',
   'utils.envLock.brief.stale': '残留配置锁（持有进程已不存在），需先回收',
+  'utils.envLock.brief.staleDegraded': '残留配置锁（心跳已长期停止），需先回收',
 
   // ---------- utils/proxy.ts：代理隧道（保留原文的双语形态，zh 逐字不变） ----------
   'utils.proxy.connectTimeout': '代理连接超时 / proxy connect timed out ({ms}ms)',
@@ -179,6 +187,7 @@ export const en: Record<keyof typeof zh, string> = {
   'utils.envLock.heartbeatExpiredNoIdentity': 'heartbeat expired and pid={pid} is alive, but the OS process identity cannot be obtained reliably — conservatively refusing to delete',
   'utils.envLock.pidReuse': 'pid reuse: pid={pid} identity differs from the recorded one',
   'utils.envLock.ownerAliveDegraded': 'owner process is alive (heartbeat may be degraded), not stale',
+  'utils.envLock.ownerAliveHeartbeatStopped': 'owner pid={pid} is alive and its process identity matches, but heartbeat {longExpired} → judged a stale lock (the writer stopped), explicit reclaim allowed',
   'utils.envLock.notStaleRefuseRecovery': 'not stale — refusing recovery',
   'utils.envLock.ownershipGone': 'ownership has disappeared (taken over/cleared by someone else) — stopping recovery',
   'utils.envLock.captureRenameFailed': 'capture rename failed (possibly taken over by someone else) — stopping',
@@ -197,6 +206,9 @@ export const en: Record<keyof typeof zh, string> = {
   'utils.envLock.durationMinutes': '{value} minutes',
   'utils.envLock.durationSeconds': '{value} seconds',
   'utils.envLock.ioPermissionNotLock': '{what}: permission/ACL error ({code}), not lock contention',
+  'utils.envLock.heartbeatWriteFailed': 'Environment lock heartbeat write failed: {reason}',
+  'utils.envLock.releaseFailedQuarantined': 'Environment lock release failed; the ownership file was moved to recovering so writes are no longer blocked: {reason}',
+  'utils.envLock.releaseFailedStuck': 'Environment lock release failed and the ownership file could not be moved aside (later operations will look lock-blocked): {reason}',
 
   'utils.envLock.block.locked': 'Another task is running, please retry later.',
   'utils.envLock.block.blocked': 'Configuration changes are protected — resolve the recovery items before continuing.',
@@ -204,10 +216,14 @@ export const en: Record<keyof typeof zh, string> = {
   'utils.envLock.block.stale': 'A configuration lock left behind by a previous abnormal exit was detected (its owning process no longer exists), so the operation was blocked.'
     + 'This lock will not clear itself — retrying or restarting DSH will not help: click "Reclaim stale lock" under "Incident recovery",'
     + 'or run dsh-config-manager recover-stale-lock and then retry.',
+  'utils.envLock.block.staleDegraded': 'A leftover configuration lock was detected: its recorded process is still running, but its heartbeat stopped long ago, so the last release never finished.'
+    + 'The operation was blocked, and retrying or restarting DSH will not clear it: click "Reclaim stale lock" under "Incident recovery",'
+    + 'or run dsh-config-manager recover-stale-lock and then retry.',
   'utils.envLock.brief.locked': 'Environment lock held by another task',
   'utils.envLock.brief.blocked': 'Configuration changes are protected; resolve recovery items first',
   'utils.envLock.brief.unavailable': 'Environment lock temporarily unavailable',
   'utils.envLock.brief.stale': 'Stale configuration lock (owning process is gone); reclaim it first',
+  'utils.envLock.brief.staleDegraded': 'Stale configuration lock (heartbeat stopped long ago); reclaim it first',
 
   // ---------- utils/proxy.ts ----------
   'utils.proxy.connectTimeout': 'Proxy connection timed out ({ms}ms)',

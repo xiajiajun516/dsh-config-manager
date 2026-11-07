@@ -588,8 +588,9 @@ export class AutoSyncScheduler {
           // issue #31：与 backup-scheduler 对齐——非 stale 分类也留一行（不再只对 stale 说话）；
           // 更重要的是**补写历史**：此前该分支 return 前不写 sync-history，用户看历史面板
           // 只能发现「自动同步不再更新」，却看不到任何一条「为什么跳过」（实测 9 天 0 条记录）。
-          if (lk.reason === 'stale') {
-            this.host.log.warn(`自动同步已跳过（${channel}）：${LOCK_BLOCK_MESSAGE.stale}`);
+          // stale 与 stale-degraded 同属「重试不会自愈」，都走 warn（都带显式回收指引）。
+          if (lk.reason === 'stale' || lk.reason === 'stale-degraded') {
+            this.host.log.warn(`自动同步已跳过（${channel}）：${LOCK_BLOCK_MESSAGE[lk.reason]}`);
           } else if (lk.reason !== undefined) {
             this.host.log.info(`自动同步已跳过（${channel}）：${LOCK_BLOCK_MESSAGE[lk.reason]}`);
           }

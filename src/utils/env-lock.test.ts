@@ -36,6 +36,7 @@ import {
   OWNERSHIP_FILE,
   HEARTBEAT_PREFIX,
   RECOVERING_PREFIX,
+  LOCK_BLOCK_MESSAGE,
   type LockOwnershipRecord,
   type ProcessIdentityProbe,
   type EnvLockManagerOptions,
@@ -113,12 +114,15 @@ function makeIo(): {
   failOpenWhen(p: (p: string) => boolean, code?: string): void;
   failUnlinkWhen(p: (p: string) => boolean): void;
   failReadWhen(p: (p: string) => boolean): void;
+  /** 注入 rename 故障（quarantine / recover 的捕获 rename 都在这里） */
+  failRenameWhen(p: (p: string) => boolean): void;
   hookRename(fn: (a: string, b: string) => void | Promise<void>): void;
   clear(): void;
 } {
   const openFaults: Array<{ p: (p: string) => boolean; code?: string }> = [];
   const unlinkFaults: Array<(p: string) => boolean> = [];
   const readFaults: Array<(p: string) => boolean> = [];
+  const renameFaults: Array<(p: string) => boolean> = [];
   const renameHooks: Array<(a: string, b: string) => void | Promise<void>> = [];
   const io: import('./env-lock.ts').EnvLockIo = {
     async mkdir(d, o) { await fs.mkdir(d, o); },
@@ -130,7 +134,15 @@ function makeIo(): {
       }
       return fs.open(p, flag as never, mode) as never;
     },
-    async rename(a, b) { await fs.rename(a, b); for (const h of renameHooks) await h(a, b); },
+    async rename(a, b) {
+      for (const f of renameFaults) if (f(a)) {
+        const e = new Error('injected rename fault') as NodeJS.ErrnoException;
+        e.code = 'EPERM';
+        throw e;
+      }
+      await fs.rename(a, b);
+      for (const h of renameHooks) await h(a, b);
+    },
     async unlink(p) {
       for (const f of unlinkFaults) if (f(p)) {
         const e = new Error('injected unlink fault') as NodeJS.ErrnoException;
@@ -152,8 +164,9 @@ function makeIo(): {
     failOpenWhen(p, code) { openFaults.push({ p, code }); },
     failUnlinkWhen(p) { unlinkFaults.push(p); },
     failReadWhen(p) { readFaults.push(p); },
+    failRenameWhen(p) { renameFaults.push(p); },
     hookRename(fn) { renameHooks.push(fn); },
-    clear() { openFaults.length = 0; unlinkFaults.length = 0; readFaults.length = 0; },
+    clear() { openFaults.length = 0; unlinkFaults.length = 0; readFaults.length = 0; renameFaults.length = 0; },
   };
 }
 
@@ -335,24 +348,32 @@ process.exit(1); // 期望被拒：非 0 指示「未获得锁」；父进程根
   await parent.release(pres.token!);
 });
 
-test('§11.1-c4 release：close→unlink；unlink 失败抛 EnvironmentLockIOError 且保留 activeToken（可重试）', async (t) => {
+test('§11.1-c4 release：unlink 失败先 quarantine 腾空正式路径（不抛）；rename 也失败才抛错并保留 activeToken', async (t) => {
   const locksDir = tmp(t);
   const ctl = makeIo();
-  const mgr = lockManager(t, { locksDir, io: ctl.io });
+  const mgr = lockManager(t, { locksDir, io: ctl.io, heartbeatIntervalMs: 40 });
   const res = await mgr.acquire({ op: 'u' });
   assert.equal(res.state, 'ACQUIRED');
-  const token = res.token!;
-  // 注入 unlink(environment.lock) 失败
+  // ① 只有 unlink 失败（rename 可用）→ 把记录挪走：正式路径腾空，release 不抛。
+  //    真机事故正是「unlink 失败 + 调用方吞错」把锁永久留在盘上，所以这条路径不允许再把锁留在原地。
   ctl.failUnlinkWhen((p) => p === mgr.ownershipPath);
+  await mgr.release(res.token!);
+  assert.equal(mgr.isHolding, false, 'quarantine 成功即视为已释放');
+  assert.equal(fssync.existsSync(mgr.ownershipPath), false, '正式路径必须腾空（否则下一个 acquire 只是继承僵尸锁）');
+
+  // ② unlink + rename 双失败 → 抛错并保留 activeToken（仍持有该 inode，可重试）
+  const res2 = await mgr.acquire({ op: 'u' });
+  assert.equal(res2.state, 'ACQUIRED');
+  ctl.failRenameWhen((p) => p === mgr.ownershipPath);
   await assert.rejects(
-    () => mgr.release(token),
+    () => mgr.release(res2.token!),
     (e) => e instanceof EnvironmentLockIOError,
   );
-  assert.equal(mgr.isHolding, true, 'unlink 失败后必须保留 activeToken（可重试，不卡死磁盘锁）');
+  assert.equal(mgr.isHolding, true, '双失败后必须保留 activeToken（可重试，不卡死磁盘锁）');
   assert.ok(fssync.existsSync(mgr.ownershipPath), '锁文件仍在磁盘（未被误删）');
   // 恢复后重试 release 成功
   ctl.clear();
-  await mgr.release(token);
+  await mgr.release(res2.token!);
   assert.equal(mgr.isHolding, false);
   assert.equal(fssync.existsSync(mgr.ownershipPath), false, 'release 后 ownership 被删除');
 });
@@ -1412,6 +1433,111 @@ test('§11.7-g 孤儿心跳清理：只删「非持有者且心跳过期」的 s
   const left = fssync.readdirSync(locksDir).sort();
   assert.deepEqual(left, [OWNERSHIP_FILE, heartbeatFile('bad1'), heartbeatFile('hold1')].sort());
   assert.ok(fssync.existsSync(path.join(locksDir, heartbeatFile('hold1'))), '持有者的 heartbeat 是活锁判据，不许删');
+});
+
+
+/* ------------------------------------------------- §11.8 release 失败留痕与自愈（真机 423 卡死态） */
+
+/*
+ * 真机现场（v0.4.3）：autosync 取锁后 release 的 unlink 失败（Windows 句柄冲突），调用方
+ * `release().catch(() => {})` 把错误吞掉 → ownership 留在盘上、心跳停在 seq=3，而进程仍活
+ * ⇒ inspectLockState 判 LOCKED(owner alive degraded) ⇒ 永不 STALE、显式回收也拒
+ * ⇒ 档案删除等 destructive 操作**永久** 423「另一个任务正在运行」。
+ * 这一组锁定修法的三条边：① 自己删不掉时把记录挪走（quarantine）而不是留原地；
+ * ② 盘上是自己的残留时 acquire 能结构可证地自愈；③ 进程存活但心跳长过期要能被显式回收。
+ */
+
+test('§11.8-a release 的 unlink 反复失败 → quarantine 腾空正式路径（不抛），随后 acquire 仍可用', async (t) => {
+  const locksDir = tmp(t);
+  const io = makeIo();
+  const m = lockManager(t, { locksDir, io: io.io, heartbeatIntervalMs: 40 });
+  const acq = await m.acquire({ op: 'import' });
+  assert.equal(acq.state, 'ACQUIRED');
+  await waitHeartbeat(m);
+
+  // 模拟「unlink 怎么都删不掉」：只有正式 ownership 路径失败，recovering 副本可删
+  io.failUnlinkWhen((p) => path.basename(p) === OWNERSHIP_FILE);
+  await m.release(acq.token!);
+  assert.equal(m.isHolding, false, 'quarantine 成功即视为已释放');
+  assert.equal(
+    fssync.existsSync(path.join(locksDir, OWNERSHIP_FILE)),
+    false,
+    '正式路径必须腾空 —— 否则下一次 acquire 只会继承同一个僵尸锁',
+  );
+
+  const again = await m.acquire({ op: 'import' });
+  assert.equal(again.state, 'ACQUIRED', '释放失败不得让这个 manager 永久失去写能力');
+  await m.release(again.token!);
+});
+
+test('§11.8-b unlink 与 rename 双失败 → release 抛错并保留 token，故障消失后 acquire 自愈回收自己的残留', async (t) => {
+  const locksDir = tmp(t);
+  const io = makeIo();
+  const reports: Array<{ quarantined: boolean }> = [];
+  const m = lockManager(t, {
+    locksDir,
+    io: io.io,
+    heartbeatIntervalMs: 40,
+    onReleaseFailure: (b) => { reports.push({ quarantined: b.quarantined }); },
+  });
+  const acq = await m.acquire({ op: 'import' });
+  assert.equal(acq.state, 'ACQUIRED');
+  await waitHeartbeat(m);
+
+  io.failUnlinkWhen((p) => path.basename(p) === OWNERSHIP_FILE);
+  io.failRenameWhen((p) => path.basename(p) === OWNERSHIP_FILE); // quarantine 的 source 就是它
+  await assert.rejects(() => m.release(acq.token!), (e: unknown) => e instanceof EnvironmentLockIOError);
+  assert.equal(m.isHolding, true, 'unlink/quarantine 全失败 → 保留 token（调用方可重试 release）');
+  assert.deepEqual(reports, [{ quarantined: false }], '失败必须留痕，不许静默');
+
+  // 故障消失：同一个 manager 的下一次 acquire 必须结构可证地回收自己的残留（盘上 instanceId === 自己）
+  io.clear();
+  const again = await m.acquire({ op: 'import' });
+  assert.equal(again.state, 'ACQUIRED', '自己的残留必须自愈，否则每轮 destructive 都是 423');
+  await m.release(again.token!);
+  assert.equal(fssync.existsSync(path.join(locksDir, OWNERSHIP_FILE)), false);
+  assert.equal(m.isHolding, false);
+});
+
+test('§11.8-c 进程存活且身份一致但心跳长过期 → 判 stale(heartbeat-stopped)，显式回收可用', async (t) => {
+  const locksDir = tmp(t);
+  const clk = makeClock();
+  const p = makeProbe();
+  p.respond(() => ({ alive: true, osProcessStartIdentity: 'identity-A' }));
+  await seedOwnership(locksDir, { instanceId: 'zomb1', pid: 999_010, osIdentity: 'identity-A', op: 'autosync' });
+  await seedHeartbeat(locksDir, 'zomb1', clk.clock() - 120_000);
+  const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000, longExpiredAfterMs: 5_000 });
+
+  const insp = await m.inspectLockState();
+  assert.equal(insp.state, 'STALE_LOCK_DETECTED', '心跳长过期 = 写方已停摆，不能永远说「另一个任务在运行」');
+  assert.equal(insp.staleKind, 'heartbeat-stopped');
+
+  const blocked = await withMutationLock(m, { op: 'profile-delete' });
+  assert.equal(blocked.context, null);
+  assert.equal(blocked.reason, 'stale-degraded', '文案必须区别于「持有进程已不存在」');
+  assert.notEqual(LOCK_BLOCK_MESSAGE['stale-degraded'], LOCK_BLOCK_MESSAGE.stale);
+  assert.match(LOCK_BLOCK_MESSAGE['stale-degraded'], /回收/);
+
+  const rec = await m.recoverStaleLock();
+  assert.equal(rec.ok, true, '二次验证必须与 inspect 同判据，否则用户点「回收残留锁」只会拿到「失败」');
+  assert.deepEqual(fssync.readdirSync(locksDir), []);
+});
+
+test('§11.8-d 心跳未达长过期 + 进程存活 → 仍 LOCKED，acquire 与 recover 都不放行（不放开误删）', async (t) => {
+  const locksDir = tmp(t);
+  const clk = makeClock();
+  const p = makeProbe();
+  p.respond(() => ({ alive: true, osProcessStartIdentity: 'identity-A' }));
+  await seedOwnership(locksDir, { instanceId: 'live1', pid: 999_011, osIdentity: 'identity-A' });
+  await seedHeartbeat(locksDir, 'live1', clk.clock() - 2_000);
+  const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000, longExpiredAfterMs: 60_000 });
+
+  const insp = await m.inspectLockState();
+  assert.equal(insp.state, 'LOCKED', '活锁就是活锁：心跳过期但没长过期，不能判残留');
+  assert.equal(insp.staleKind, undefined);
+  assert.equal((await withMutationLock(m, { op: 'profile-delete' })).reason, 'locked');
+  assert.equal((await m.recoverStaleLock()).ok, false);
+  assert.ok(fssync.existsSync(path.join(locksDir, OWNERSHIP_FILE)), '拒绝后现场必须原样保留');
 });
 
 

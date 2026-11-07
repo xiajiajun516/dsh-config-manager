@@ -84,7 +84,7 @@ import { JournalStore } from './core/journal.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
 import { msgOf, zhMsg, type MsgFunc } from './core/messages.ts'
-import { createExitLockReleaser, reclaimStaleLockAtStartup } from './core/env-lock-lifecycle.ts'
+import { createExitLockReleaser, createHostMutationLock, reclaimStaleLockAtStartup } from './core/env-lock-lifecycle.ts'
 import { engineMsg, getEngineLocale, setEngineLanguageSource, setEngineLocale } from './core/engine-locale.ts'
 import { RollbackAutoTracker, RollbackPointEngine, ROLLBACK_POINTS_DIR_NAME, rollbackSessionBindingOf, rollbackTrackedEventOf, type RollbackForkCarrier, type RollbackRewindResult } from './core/rollback-point.ts'
 import { ROLLBACK_ATTRIBUTION_FILE_NAME, RollbackWriteAttribution } from './core/rollback-attribution.ts'
@@ -2471,7 +2471,7 @@ function makeRoutes(deps: RoutesDeps): {
   /** 已知 adapter id 集合（push 请求体 sections 校验用）。 */
   const knownSyncSectionIds = new Set(adapters.map((a) => a.id))
   /** 可同步分区目录（status 回填 UI「同步分区」勾选列表）。
-   *  只含 portable + 显式可选项（OPT_IN_SYNC_SECTIONS，当前 mcp / sessions）——
+   *  只含 portable + 显式可选项（OPT_IN_SYNC_SECTIONS，当前 mcp / workspaces / sessions）——
    *  后者是 deviceSpecific，UI 必须显示设备相关徽章，且只有用户主动勾选才进同步通道。 */
   const syncSectionCatalog = adapters
     .filter((a) => a.portability === 'portable' || OPT_IN_SYNC_SECTIONS.includes(a.id))
@@ -3661,12 +3661,8 @@ export function apply(ctx: Context, config?: Config): void {
   // Phase 2 跨进程环境锁：全局唯一 GLOBAL EXCLUSIVE MUTATION LOCK（<dataDir>/locks/environment.lock）。
   // 所有 destructive mutation 入口经 runWithMutationLock(host.mutationLock, …) 获取；跨进程/跨 kind 互斥。
   // 随插件生命周期停止：停止 heartbeat 并清除本进程持有（release 由各入口 finally 保证；这里无需额外清理）。
-  host.mutationLock = new EnvironmentLockManager({
-    dataDir,
-    op: 'config-manager',
-    target: 'global-mutation',
-    lockVersion: PLUGIN_VERSION,
-  })
+  // 装配（含「心跳写失败 / 释放失败」留痕）在 core/env-lock-lifecycle.ts：此处只传依赖。
+  host.mutationLock = createHostMutationLock({ dataDir, lockVersion: PLUGIN_VERSION, log: host.log })
   const envLockManager = host.mutationLock as EnvironmentLockManager
   // Phase 3：启动 reconcile（只读）+ SAFE MODE。宿主 apply() 为同步 →
   // ① 先同步探测 durable SAFE MODE 标记（scheduler.start() 前即被阻断），

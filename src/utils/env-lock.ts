@@ -8,7 +8,9 @@
  * 关键不变量（NON-NEGOTIABLE，违反即破坏正确性）：
  *  - 所有权获取 **必须** `open(lockPath, 'wx')` 独占创建语义；**禁止** exists→write、rm→recreate、
  *    用 Phase 1 `atomicWriteFile(environment.lock)` 获取所有权。
- *  - `environment.lock` 是 **immutable ownership record**：创建后直到 release 不被 rename/replace。
+ *  - `environment.lock` 是 **immutable ownership record**：创建后直到 release 不被 rename/replace
+ *    （唯一例外：release 的 unlink 失败 / acquire 发现自己的残留时，按 instanceId 校验后
+ *     rename 到 `environment.recovering.*` ——「quarantine 自己」，见 quarantineOwnership）。
  *  - heartbeat 走 **独立 sidecar** `environment.heartbeat.<instanceId>`，可安全用 Phase 1 `atomicWriteFile` 更新。
  *  - **operation-scoped** `MutationLockToken`：禁止 process-level reentrant（instanceId/handle/reenterCount 判嵌套）。
  *  - stale 检测只分类（LOCKED / STALE_LOCK_DETECTED / UNKNOWN_STATE）；**acquire 侧绝不自动 unlink/takeover**。
@@ -159,6 +161,10 @@ export interface AcquireResult {
   token: MutationLockToken | null
   /** 诊断信息（非敏感）：占用方 op/hostname、或错误描述 */
   detail?: string
+  /** STALE_LOCK_DETECTED 的细分（只用于给用户的分类文案）：
+   *  owner-gone = 结构可证（进程已死 / PID 复用 / 无 identity 能力但心跳长过期）；
+   *  heartbeat-stopped = 进程仍活、identity 相同，但心跳长期停止（典型：release 失败留痕）。 */
+  staleKind?: 'owner-gone' | 'heartbeat-stopped'
 }
 
 /** operation-scoped lock token：accepted 后只属于当前 mutation 调用链 */
@@ -254,7 +260,9 @@ export async function withMutationLock(
     const reason: LockBlockReason = res.state === 'LOCKED'
       ? 'locked'
       : res.state === 'STALE_LOCK_DETECTED'
-        ? 'stale'
+        // 残留锁再分两类（issue：真机 release 失败留痕）：结构可证（进程已死/PID 复用）与
+        // 「进程还活着但心跳长期停止」。后者不能谎称「持有进程已不存在」，必须给出不同的处置指引。
+        ? (res.staleKind === 'heartbeat-stopped' ? 'stale-degraded' : 'stale')
         : 'unavailable'
     return { context: null, release: async () => {}, reason, detail: res.detail }
   }
@@ -359,6 +367,9 @@ export interface EnvLockManagerOptions {
   lockVersion?: string
   /** heartbeat 续期写失败回调（留痕；不中断 mutation） */
   onHeartbeatWriteFailure?: (err: unknown) => void
+  /** release 无法把 ownership 从盘上摘掉时留痕（unlink 反复失败 → 已 quarantine 解除阻塞；或彻底失败）。
+   *  以前这条路径完全静默：调用方 `release().catch(() => {})` 把错误吞掉，锁留在盘上无人知道。 */
+  onReleaseFailure?: (b: { err: unknown; quarantined: boolean }) => void
   /** heartbeat 定时器（测试可注入手动 tick 的假定时器；缺省用全局定时器） */
   timers?: LockTimerApi
 }
@@ -589,6 +600,7 @@ export class EnvironmentLockManager {
   private readonly acquireTimeoutMs: number
   private readonly lockVersion: string
   private readonly onHeartbeatWriteFailure: (err: unknown) => void
+  private readonly onReleaseFailure: (b: { err: unknown; quarantined: boolean }) => void
   /** 诊断用（acquire 时写 ownership.op/target） */
   private readonly defaultOp: string
   private readonly defaultTarget: string
@@ -601,6 +613,10 @@ export class EnvironmentLockManager {
   /** heartbeat 定时器句柄（注入面返回值，类型未知 → 用 null 判「未启动」） */
   private heartbeatTimer: unknown = null
   private heartbeatSeq = 0
+  /** 在飞 acquire 计数：reclaimOwnLeftover 只在「本 manager 此刻没有别的 acquire 在飞」时动手。
+   *  否则 A 刚 open('wx') 成功、还没写上 activeToken 的那一瞬，并发 B 会把 A 的**新锁**当成自己的
+   *  残留挪走 —— §11.1-c23 实测会出现两个 ACQUIRED（双持有），那是比卡死更难查的错。 */
+  private acquireInFlight = 0
   private readonly activeInstanceId: string
   /** 串行化的 heartbeat 写链（**最后一次写**的 promise）；release 前用于 drain，见 drainHeartbeat */
   private pendingHeartbeat: Promise<void> = Promise.resolve()
@@ -632,6 +648,7 @@ export class EnvironmentLockManager {
     this.acquireTimeoutMs = opts.acquireTimeoutMs ?? DEFAULT_ACQUIRE_TIMEOUT_MS
     this.lockVersion = opts.lockVersion ?? '0.1.0'
     this.onHeartbeatWriteFailure = opts.onHeartbeatWriteFailure ?? (() => {})
+    this.onReleaseFailure = opts.onReleaseFailure ?? (() => {})
     this.timers = opts.timers ?? defaultTimers
     this.defaultOp = opts.op ?? 'mutation'
     this.defaultTarget = opts.target ?? 'unknown'
@@ -667,6 +684,8 @@ export class EnvironmentLockManager {
       : null
     /** 「EEXIST/EPERM 说文件在，inspect 却读不到」= 文件在两次读取之间被释放的竞态（issue #79） */
     let freeRetries = 0
+    this.acquireInFlight += 1
+    try {
     for (;;) {
       // —— 先确保 locks 目录存在（mkdir 递归；EPERM 在下面归类为 PERMISSION_ERROR）——
       try {
@@ -693,6 +712,9 @@ export class EnvironmentLockManager {
           // issue #79：EEXIST 与「ownership 读不到」同时出现 = 上一次占用的释放竞态。
           // 此前直接判 LOCKED，一次无害的竞态就变成「另一个任务正在运行」并可能被记成
           // mutation-locked（真机：连续 16 次跳过，用户侧看不出原因）。重试 open('wx') 即可。
+          // 盘上这份 ownership 是本 manager 自己的残留（上一次 release 失败留在盘上）→ 结构可证地
+          // 自愈后重试；否则它会以「owner alive degraded」永久占住锁，所有 destructive 操作恒 423。
+          if (await this.reclaimOwnLeftover(inspect)) continue
           if (inspect.state === 'FREE' && freeRetries < MAX_FREE_RETRIES) {
             freeRetries += 1
             continue
@@ -706,7 +728,7 @@ export class EnvironmentLockManager {
             return { state: 'LOCKED', token: null, detail: inspect.detail }
           }
           // STALE/UNKNOWN/IO 直接返回（不自动删除；destructive 不执行）
-          return { state: inspect.state, token: null, detail: inspect.detail }
+          return { state: inspect.state, token: null, detail: inspect.detail, staleKind: inspect.staleKind }
         }
         // EPERM/EACCES 等（Windows open('wx') 对存在文件常抛 EPERM 而非 EEXIST）：
         // 按 §8.1 分类 —— 先检查 environment.lock 是否确实存在且可读取；
@@ -716,6 +738,8 @@ export class EnvironmentLockManager {
           const exists = await this.statLockExists()
           if (exists === true) {
             const inspect = await this.inspectLockState()
+            // 同 EEXIST 分支：自己的残留 → 自愈后重试
+            if (await this.reclaimOwnLeftover(inspect)) continue
             // 同 EEXIST 分支：文件刚被释放的竞态 → 重试独占创建（不是「被占用」）
             if (inspect.state === 'FREE' && freeRetries < MAX_FREE_RETRIES) {
               freeRetries += 1
@@ -725,7 +749,7 @@ export class EnvironmentLockManager {
               await sleep(this.heartbeatIntervalMs / 2)
               continue
             }
-            return { state: inspect.state, token: null, detail: inspect.detail }
+            return { state: inspect.state, token: null, detail: inspect.detail, staleKind: inspect.staleKind }
           }
           // 无既有锁 → 权限/ACL/文件系统错误（可能目录不可写 / ACL 拒绝），非锁占用
           return exists === false
@@ -775,6 +799,9 @@ export class EnvironmentLockManager {
       this.heartbeatSeq = 0
       this.startHeartbeat()
       return { state: 'ACQUIRED', token, detail: `op=${op}` }
+    }
+    } finally {
+      this.acquireInFlight -= 1
     }
   }
 
@@ -839,15 +866,42 @@ export class EnvironmentLockManager {
       )
     }
     // —— matching：unlink ——（acquire 成功后句柄已 close，此处只有 unlink）
-    try {
-      await this.io.unlink(this.ownershipPath)
-    } catch (e) {
-      // unlink 失败：**保留 activeToken**（仍持有该磁盘 inode），调用方可重试 release；
-      // 绝不在此清空 token（否则锁卡死在磁盘而令牌失效）。
+    // 有界瞬时重试（Windows 上杀软/索引器/搜索服务会短暂持有句柄 → EBUSY/EPERM 自行消失）。
+    let unlinkErr: unknown = null
+    this.transientRetries = 0
+    for (;;) {
+      try {
+        await this.io.unlink(this.ownershipPath)
+        unlinkErr = null
+        break
+      } catch (e) {
+        // ENOENT：正式路径已经没了 → 释放目的已达成（不是失败）
+        if (isENOENT(e)) { unlinkErr = null; break }
+        unlinkErr = e
+        if (await this.tryTransientRetry('unlink')) continue
+        break
+      }
+    }
+    if (unlinkErr !== null) {
+      // 仍删不掉（真机卡死态的起点）：以前这里直接抛错，而调用方普遍 `release().catch(() => {})`
+      // → ownership 留在盘上、心跳已停、进程仍活 ⇒ inspectLockState 判「owner alive degraded」
+      // ⇒ 永不 STALE ⇒ 所有 destructive 操作恒 423，用户只能手工删锁文件。
+      // 现在先把 ownership 挪出正式路径（quarantine）解除阻塞，再如实留痕。
+      const quarantined = await this.quarantineOwnership(instanceId)
+      if (quarantined) {
+        this.activeToken = null
+        await this.drainHeartbeat()
+        await this.cleanupHeartbeat(instanceId).catch(() => {})
+        this.onReleaseFailure({ err: unlinkErr, quarantined: true })
+        return
+      }
+      // quarantine 也失败（rename 与 unlink 双双被拒）：**保留 activeToken**（仍持有该磁盘 inode），
+      // 调用方可重试 release；绝不在此清空 token（否则锁卡死在磁盘而令牌失效）。
       // 同 ownership-lost 分支：抛错前 drain 在途写（定时器已停 → drain 有界），
       // 否则调用方随后的目录清理会与已启动的 tmp→rename 竞争。
       await this.drainHeartbeat()
-      throw new EnvironmentLockIOError(utilsMsg('utils.envLock.releaseUnlinkFailed', { path: this.ownershipPath, reason: e instanceof Error ? e.message : String(e) }), e)
+      this.onReleaseFailure({ err: unlinkErr, quarantined: false })
+      throw new EnvironmentLockIOError(utilsMsg('utils.envLock.releaseUnlinkFailed', { path: this.ownershipPath, reason: unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr) }), unlinkErr)
     }
     // unlink 成功 → 释放完成：**先清 token 再 drain**，最后清自己的 heartbeat sidecar。
     // 顺序关键：activeToken=null 必须早于 drain —— 否则 interval 可能在 drain 返回之后、cleanup 之前
@@ -856,6 +910,60 @@ export class EnvironmentLockManager {
     this.activeToken = null
     await this.drainHeartbeat()
     await this.cleanupHeartbeat(instanceId).catch(() => {})
+  }
+
+  /**
+   * 把正式路径上的 ownership 记录挪到 `environment.recovering.*`（quarantine）。
+   * 只用于**确证属于本 manager** 的路径：release 的 unlink 失败、acquire 发现盘上是自己的 instanceId。
+   *
+   * 为什么用 rename 而不是继续 unlink：unlink 删不掉说明「这个目录项删不动」（Windows 共享冲突 /
+   * 杀软句柄），重复同一操作不会变好；rename 只移动目录项、不删 inode，能立刻把正式路径腾空，
+   * 让后续 acquire 继续。挪走后二次读校验 captured 的 instanceId 仍是自己的才删副本；
+   * 不符（异常：被他人写入）就保留副本可查 —— 阻塞已解除，这是本方法与「直接抛错」的关键区别。
+   */
+  private async quarantineOwnership(instanceId: string): Promise<boolean> {
+    const capturedPath = path.join(this.locksDir, `${RECOVERING_PREFIX}${randomHex(8)}`)
+    try {
+      await this.io.rename(this.ownershipPath, capturedPath)
+    } catch (e) {
+      // ENOENT：正式路径已经空了 → 目的达成（没有可 quarantine 的对象）
+      return isENOENT(e)
+    }
+    let own = false
+    try {
+      const captured = readLockJsonSafe(await this.io.readFileText(capturedPath)) as LockOwnershipRecord | null
+      own = captured !== null && typeof captured === 'object' && captured.owner?.instanceId === instanceId
+    } catch { own = false }
+    // 只删确证是自己的副本；否则保留（不删他人数据）
+    if (own) await this.io.unlink(capturedPath).catch(() => {})
+    return true
+  }
+
+  /**
+   * 回收「本 manager 自己上一次释放留下的残留」。
+   *
+   * 真机卡死态：release 的 unlink 失败被调用方 `release().catch(() => {})` 静默吞掉 →
+   * ownership 留在盘上、心跳已停，而本进程仍活 ⇒ inspectLockState 判 LOCKED(owner alive degraded)
+   * ⇒ 永不 STALE、显式回收也拒 ⇒ 所有 destructive 操作永久 423。
+   *
+   * 判据必须结构可证（否则就成了跨实例误删）：盘上 instanceId === 本 manager 的 activeInstanceId
+   * （随机 16 字节、只有本 manager 会产生 ⇒ 宿主内不可能是别人的锁），并且本 manager 此刻
+   * 没有在途临界区（activeToken === null），或 release 已进入但没走完（heartbeatTimer === null，
+   * 即 stopHeartbeat() 已执行）。两者都不成立时一律返回 false。
+   */
+  private async reclaimOwnLeftover(insp: { ownerInstanceId?: string }): Promise<boolean> {
+    if (insp.ownerInstanceId !== this.activeInstanceId) return false
+    // 有别的 acquire 在飞 = 盘上这份可能是它刚拿到的**新锁**（open 与 token 赋值之间有 await 窗口）
+    if (this.acquireInFlight > 1) return false
+    if (this.activeToken !== null && this.heartbeatTimer !== null) return false
+    this.stopHeartbeat()
+    const ok = await this.quarantineOwnership(this.activeInstanceId)
+    if (!ok) return false
+    this.activeToken = null
+    this.heartbeatSeq = 0
+    await this.drainHeartbeat()
+    await this.cleanupHeartbeat(this.activeInstanceId).catch(() => {})
+    return true
   }
 
   /* ------------------------------------------------------------ heartbeat */
@@ -1000,7 +1108,14 @@ export class EnvironmentLockManager {
    *  heartbeat expired + PID alive + identity 相同 → LOCKED (owner alive / heartbeat degraded)
    *  probe 无法可靠确定                 → UNKNOWN_STATE
    */
-  async inspectLockState(): Promise<{ state: LockState; detail?: string; corruptOwnership?: boolean; ownerInstanceId?: string }> {
+  async inspectLockState(): Promise<{
+    state: LockState
+    detail?: string
+    corruptOwnership?: boolean
+    ownerInstanceId?: string
+    /** STALE_LOCK_DETECTED 的细分（供用户文案分类；见 AcquireResult.staleKind） */
+    staleKind?: 'owner-gone' | 'heartbeat-stopped'
+  }> {
     const st = await this.readOwnershipState()
     if (st.kind === 'missing') {
       // 无所有权文件：可能在创建中、也已被清除 —— **报告**层如实说「没有锁」（issue #79）。
@@ -1068,6 +1183,19 @@ export class EnvironmentLockManager {
       return { state: 'STALE_LOCK_DETECTED', ownerInstanceId: rec.owner.instanceId, detail: utilsMsg('utils.envLock.pidReuse', { pid: rec.owner.pid }) }
     }
     // alive 且 identity 相同 → owner alive（heartbeat degraded 保护）
+    // issue #36 对称性（本例 = 真机卡死态）：identity 相同只证明「这个 pid 还活着」，不证明它仍在持有锁。
+    // 心跳**长过期**（远超窗口，见 longExpiredAfterMs）说明写方早已停摆（典型：release 的 unlink 失败 +
+    // 调用方静默吞错）——此时判 STALE，让「回收残留锁」可用；acquire 侧依旧不自动摘锁
+    // （isProvablyStale 不变），所以放宽分类不会变成跨实例误删许可。
+    const longExpiredSame = this.longExpiredReason(heartbeat, now)
+    if (longExpiredSame !== null) {
+      return {
+        state: 'STALE_LOCK_DETECTED',
+        ownerInstanceId: rec.owner.instanceId,
+        staleKind: 'heartbeat-stopped',
+        detail: utilsMsg('utils.envLock.ownerAliveHeartbeatStopped', { pid: rec.owner.pid, longExpired: longExpiredSame }),
+      }
+    }
     return { state: 'LOCKED', ownerInstanceId: rec.owner.instanceId, detail: utilsMsg('utils.envLock.ownerAliveDegraded') }
   }
 
@@ -1214,8 +1342,11 @@ export class EnvironmentLockManager {
     }
     // recorded identity 与探测不同 → PID reuse → 原 owner 已死 → stale 成立
     if (rec.owner.osProcessStartIdentity !== ident.osProcessStartIdentity) return true
-    // 同一进程仍存活 → 非 stale
-    return false
+    // 同一进程仍存活：常规判定非 stale，但必须与 inspectLockState 用**同一**判据（同 issue #36 的理由，
+    // 见上方无 identity 能力分支）：心跳长过期 ⇒ 写方已停摆，显式回收要放行；否则用户点「回收残留锁」
+    // 只会拿到「二次验证失败」，等于没修。
+    const hbSamePid = await this.readHeartbeat(rec.owner.instanceId).catch(() => null)
+    return this.longExpiredReason(hbSamePid, this.now()) !== null
   }
 
   /** 心跳「长过期」判据（issue #36）：达到阈值 → 返回可读原因，否则 null。
@@ -1348,6 +1479,12 @@ export type LockBlockReason =
    * 必须显式回收（GUI「事故恢复」/ CLI `recover-stale-lock`）。见 issue #27。
    */
   | 'stale'
+  /**
+   * 残留锁的**降级形态**：记录里的进程仍活着、OS 身份也一致，但心跳已长期停止（远超窗口）。
+   * 只有一种真实成因：持有者的 release 没能把 ownership 从盘上摘掉（Windows 句柄冲突），
+   * 而调用方又把 release 的错误吞了。文案不能谎称「持有进程已不存在」，也不用「稍后重试」骗人。
+   */
+  | 'stale-degraded'
   /** 锁不可用/IO/权限/UNKNOWN（→ 「操作暂时无法执行，请稍后重试」） */
   | 'unavailable'
 
@@ -1363,6 +1500,8 @@ export const LOCK_BLOCK_MESSAGE: Record<LockBlockReason, string> = {
   // issue #31：文案承诺的「事故恢复」入口必须真的能回收残留锁——GUI 已接线
   // （GET /recovery/status 的 lock 字段 + POST /recovery/lock/recover），两处入口都真实可达。
   get stale() { return utilsMsg('utils.envLock.block.stale') },
+  // 降级形态：不谎称进程已退出，也不说「稍后重试」——处置路径与 stale 相同（显式回收）。
+  get 'stale-degraded'() { return utilsMsg('utils.envLock.block.staleDegraded') },
 }
 
 /** 分类的**简短**文案（单行、可用于表格单元格/迁移历史摘要/日志前缀）。
@@ -1375,6 +1514,7 @@ export const LOCK_BLOCK_BRIEF: Record<LockBlockReason, string> = {
   get unavailable() { return utilsMsg('utils.envLock.brief.unavailable') },
   // stale 必须点出「残留」——否则用户会像 issue #31 那样等 9 天（57 次静默跳过）。
   get stale() { return utilsMsg('utils.envLock.brief.stale') },
+  get 'stale-degraded'() { return utilsMsg('utils.envLock.brief.staleDegraded') },
 }
 
 /** destructive 必须成功获取 Environment Lock；否则抛此错（被另一进程/操作持有，或锁不可用）。

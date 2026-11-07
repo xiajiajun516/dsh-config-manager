@@ -341,8 +341,9 @@ export class BackupScheduler {
       // （LOCK_BLOCK_MESSAGE），避免同一句指引在多条路径上再次漂移（#27 只接了 autosync，
       // 本路径漏接 → 实测 9 天内 57 次静默跳过，用户无从知道要回收残留锁）。
       if (err instanceof EnvironmentLockUnavailableError) {
-        if (err.reason === 'stale') {
-          this.log.warn(`${trigger}跳过：${LOCK_BLOCK_MESSAGE.stale}`);
+        // stale 与 stale-degraded 同属「重试不会自愈」，都走 warn（都带显式回收指引）。
+        if (err.reason === 'stale' || err.reason === 'stale-degraded') {
+          this.log.warn(`${trigger}跳过：${LOCK_BLOCK_MESSAGE[err.reason]}`);
         } else {
           this.log.info(`${trigger}跳过：${LOCK_BLOCK_MESSAGE[err.reason]}`);
         }
