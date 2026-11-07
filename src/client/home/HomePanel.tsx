@@ -422,7 +422,6 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
       )}
       {/* 1. 状态条：健康点 + 指标段（可点击，名词在前） */}
       <div className={css.statStrip} data-tone={health.kind === 'ok' ? undefined : health.kind}>
-        <div className={css.statTop}>
         {recoveryRequired ? (
           /* 有待处理恢复事项：健康段本身即入口，直达备份页「事故恢复」 */
           <button
@@ -440,31 +439,22 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
             {t(`overview.${health.textKey}`)}
           </span>
         )}
-        </div>
-
-        {/* 指标行独占一行（2026-11-07，OpenDesign T1）：单行塞「名词 + 值 + 补充」时，
-            中文标签被挤到 11px、值与补充值混成一行，扫视时要逐段读；改成「标签在上、
-            值+补充在下」的两行式后，四列等宽、值统一 13px，一眼对得齐。 */}
-        <div className={css.statMetrics}>
-          {segModels.map((seg) => (
-            <button
-              key={seg.key}
-              type="button"
-              className={css.statSeg}
-              onClick={() => { navMetric(seg.key) }}
-            >
-              <span className={css.statSegLabel}>{seg.label}</span>
-              <span className={css.statSegValue}>
-                {/* 首屏数值未到货时用骨架占位（不再在整条右端挂一颗转圈）：
-                    段本身的位置与宽度保持不变，数据到货只换「值」这一块。 */}
-                {segLoading(seg.key)
-                  ? <span className={css.skeletonBar + ' ' + css.statValueSkeleton} aria-hidden="true" />
-                  : <b>{seg.value}</b>}
-                {!segLoading(seg.key) && seg.dim !== null && <span className={css.statSegDim}>· {seg.dim}</span>}
-              </span>
-            </button>
-          ))}
-        </div>
+        {segModels.map((seg) => (
+          <button
+            key={seg.key}
+            type="button"
+            className={css.statSeg}
+            onClick={() => { navMetric(seg.key) }}
+          >
+            <span>{seg.label}</span>
+            {/* 首屏数值未到货时用骨架占位（不再在整条右端挂一颗转圈）：
+                段本身的位置与宽度保持不变，数据到货只换「值」这一块。 */}
+            {segLoading(seg.key)
+              ? <span className={css.skeletonBar + ' ' + css.statValueSkeleton} aria-hidden="true" />
+              : <b>{seg.value}</b>}
+            {!segLoading(seg.key) && seg.dim !== null && <span className={css.statSegDim}>· {seg.dim}</span>}
+          </button>
+        ))}
       </div>
 
       {/* 2. 动作工具栏：立即备份 + 三张「任务域」入口（带走 / 装进 / 回去）。

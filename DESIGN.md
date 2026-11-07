@@ -525,10 +525,8 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     （`src/ui/disk-usage-view.ts`），不直接用接口的聚合字段；否则宿主聚合与明细一旦漂移，
     用户会按「可释放 600 B」点下去却只释放 0。清理是写操作：只清可重建区，导出产物必须显式勾选
     （`Checkbox`）且确认框转 `danger`；**快照与同步数据永不在候选集内**。
-- **状态条**（Overview）：`.statStrip`（两行式，2026-11-07 OpenDesign T1 改）：上行 `.statTop` 只放健康点 + 健康文案，下行 `.statMetrics` 是**四列等宽**的可点指标段（`.statSeg`：`.statSegLabel` 11px 三级色在上、`.statSegValue` 内 `b` 13px 一级色 + `.statSegDim` 11px 补充值在下，基线对齐）。
-  改判据的原因：单行式把「名词 + 值 + 补充值」挤在一行，中文标签只能吃 11px、值与补充值混读，且中英文宽度差会把整条压成折行（旧口径要求「健康段 + 4 段 ≤ 527px」，英文直译 688px 必然折行）。两行式下**指标段等宽、行高恒定**，标签过长单行省略（`text-overflow: ellipsis`），语言切换不再改变条的几何。
-  **必须带 `flex: none`** —— 它是页头行，绝不参与纵向收缩（`.viewBody` 是 column flex 容器，默认 `flex-shrink:1` 会把它压扁，内容溢出到工具栏底下被按钮盖住；2026-10-08 真机两轮回归）。
-  列的等宽用 `flex: 1 1 0` + `.statMetrics > .statSeg:first-child` 去左线、`:last-child` 补右内边距（避免与容器边框叠成双线、末值被右缘裁切）。
+- **状态条**（Overview）：`.statStrip`（健康点 + 可点指标段，名词在前值加粗）。**单行 32px**；**必须带 `flex: none`** —— 它是页头行，绝不参与纵向收缩（`.viewBody` 是 column flex 容器，默认 `flex-shrink:1` 会把它压回 32px，折行的第二行就溢出到工具栏底下被按钮盖住；2026-10-08 真机两轮回归）。放不下时**折行**（不隐藏、不横向滚动）：折行靠 `row-gap: 6px` + 段内 `padding: 4px 8px` 保证两行不贴边框。
+  **中英文都必须按 564px 画布实测收窄**：健康段 + 4 个指标段合计须 ≤ 527px（现测 en 441px / zh 491px；英文直译 688px、中文原文配 12px 内边距 547px ⇒ 都会折行）。复核口径：用 Segoe UI / Microsoft YaHei 11/12px 量文本宽度（与截图像素实测误差 2%）。
 - **事实网格**：`.factGrid/.factCell/.factLabel/.factValue`（四列 label/value）。
 - **键值行** `.kvRow`、**分区构成** `.sectionGrid/.sectionRow`（共享组件
   `common/SectionComposition.tsx`，总览卡的「分区构成」与**导出页的「本次将导出」数据块**共用；

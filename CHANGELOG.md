@@ -35,9 +35,6 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
-- **首页与同步页更省眼力**：首页顶部状态条改成两行 —— 上行只说健不健康，下行四个指标等宽排列、标签在上数值在下，中英文切换不再把整条挤成折行；同步页每条通道压成一行，名称、状态、远端、上次同步与「配置 / 解除连接」并排，通道多了也不用翻。
-  **The home and sync pages are easier to scan**: the status strip on Home is now two rows — health on top, four equal-width metrics below with label over value, so switching language no longer wraps it — and each sync channel collapses to a single row with name, state, remote, last sync and its actions side by side.
-
 - **让助手做恢复时也必须先预览**：助手执行恢复现在必须带上它预览时拿到的凭据，否则不会动手；预览之后快照或磁盘状态有变，同样会被拒绝并要求重新预览。
   **Assistant-driven restore now requires a preview first**: an execution must carry the handle from its own preview; a snapshot or disk state that changed after previewing is refused with a request to preview again.
 - **助手推送到远端时只用你保存的加密密码**：它不能再把密码当参数递进来（那条路已弃用），没保存时会直接提示你先在同步设置里保存密码。
