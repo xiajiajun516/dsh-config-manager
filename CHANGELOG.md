@@ -32,7 +32,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.6.0] - 2026-11-08
+
+> **说完就真的做到**：删除档案、恢复与撤销、中止安装这三处以前会「报告成功、东西还在」，现在要么删净、要么如实报错；GitHub 登录与配置保存当场给出反馈，自动同步也不再每分钟往活动列表塞一条「成功」。
+>
+> **Theme**: deletions that really delete, visible feedback when a sign-in or a save lands, and an activity list no longer flooded by silent sync checks.
+
 ### 🐛 修复 · Fixed
+
+- **GitHub 登录完成后不再悄无声息**：以前扫码授权成功，界面上没有任何提示，仓库列表还得自己点开下拉才出现；现在成功即弹一条通知，私有仓库列表同时自动拉出来。
+  **Signing in with GitHub is no longer silent**: a successful authorization used to leave the screen unchanged and the repository list only appeared after you opened the picker yourself; now a notice pops up on success and the private repositories load automatically.
 
 - **删除档案现在真的会删掉**：以前点了删除、回执也是成功，档案却还留在磁盘上；现在目录会被删净，确实删不掉时直接报错并说明原因，不再假装成功。
   **Deleting a profile now actually deletes it**: deletion used to report success while the folder stayed on disk; the directory is now removed for real, and a failed removal reports the reason instead of claiming success.
@@ -42,6 +51,14 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 - **恢复与撤销里该删的文件现在真的会删掉**：删除动作遇到悬空链接时以前什么都不删却照样报告「已还原」，磁盘上文件还在；现在要么删净，要么如实报错。
   **Files that restores and rollbacks delete are now really deleted**: a delete action used to remove nothing when the tree contained dangling links yet still report "restored"; it now either removes them for real or reports the failure.
+
+- **同步不再每分钟刷一条「成功」**：以前只要开着自动同步，首页「最近活动」每分钟就会多一条「自动同步 both（git）· 成功」，真正的推送反而被挤出保留额度；现在每分钟的远端检查若没有变化就不再进活动列表，只有真的上传、下载、冲突或失败才留痕，方向也写成「上传 / 下载 / 双向」。
+  **Syncing no longer floods the activity list**: with auto-sync on, the home activity list used to gain one "success" row every minute and squeeze real pushes out of the retained window; unchanged remote checks are no longer listed, only actual uploads, downloads, conflicts and failures are, with plain-language direction labels.
+
+### 🔧 变更 · Changed
+
+- **改完配置能看见「已保存」**：通道配置的表单改动原本就自动保存，但成功后毫无反馈；现在每次保存落地，弹窗底部会闪一次「已保存」，刷新仓库列表也给出刷新成功或失败的明确提示。
+  **You can see your edits get saved**: form changes in a channel's settings were already saved automatically but gave no feedback; each save now flashes a "Saved" badge at the bottom of the dialog, and refreshing the repository list reports success or failure.
 
 ## [0.5.0] - 2026-11-08
 
