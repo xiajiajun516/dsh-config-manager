@@ -8,13 +8,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  isBundlesOnlyEntry, listInstalledPlugins, mergeBundleDeclaration, readInstalled, readInstalledVersion,
-  reconcileBundles, reconcileBundlesAfterInstall, resolveProfileDir,
+  cleanupAbortedInstall, isBundlesOnlyEntry, listInstalledPlugins, mergeBundleDeclaration, readInstalled,
+  readInstalledVersion, reconcileBundles, reconcileBundlesAfterInstall, resolveProfileDir,
 } from './plugin-cli.ts';
 import { enterRescueMode } from './boot-rescue.ts';
 import type { PluginInfo } from './types.ts';
@@ -365,4 +365,31 @@ test('issue #95: mergeBundleDeclaration 只追加一个名字；形状不符一�
     null,
     'bundles 字段缺省 → null（非空 bundles 会替换默认插件栈，绝不凭空造）',
   );
+});
+
+test('中止安装清理：包目录是悬空 junction 时也必须删净（fs.rmSync 静默空转的回归）', () => {
+  const { profileDir, cleanup } = makeTempProfile({ 'pkg-b': '1.0.0' }, ['pkg-b']);
+  try {
+    const pkgDir = join(profileDir, 'node_modules', 'pkg-b');
+    mkdirSync(join(profileDir, 'node_modules'), { recursive: true });
+    // DSH 真实形态：node_modules/<pkg> 直接链到 .dsh-module-fallback；fallback 被宿主升级清掉后即成悬空链接。
+    symlinkSync(
+      join(profileDir, '.dsh-module-fallback', 'node_modules', 'pkg-b'),
+      pkgDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    assert.ok(lstatSync(pkgDir).isSymbolicLink(), '链接条目本身在（existsSync 对悬空链接返回 false，不能当判据）');
+
+    cleanupAbortedInstall(profileDir, 'pkg-b');
+
+    assert.throws(() => lstatSync(pkgDir), /ENOENT/, '悬空链接必须被真的删掉，否则「跳过当前插件」留半装残留');
+    const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8')) as {
+      dependencies: Record<string, string>;
+      dsh: { profile: { bundles: string[] } };
+    };
+    assert.equal('pkg-b' in manifest.dependencies, false, '依赖行同步摘掉（下次安装不再撞缺包）');
+    assert.ok(Array.isArray(manifest.dsh.profile.bundles), 'bundles 形状不变');
+  } finally {
+    cleanup();
+  }
 });

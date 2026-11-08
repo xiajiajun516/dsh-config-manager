@@ -1833,13 +1833,8 @@ export class DshFileSystemFacade implements FileSystemFacade {
   }
 
   /**
-   * 递归删除（home 内；缺失目标视为成功，与 force 语义一致）。
-   *
-   * **不用 fs.rm(recursive)**：目录里只要有悬空链接（junction 的重指向目标已被删掉），
-   * rm 会静默空转——不抛错、一个字节都不删。这里的消费点是「恢复计划删文件」与
-   * 「回滚补偿删目录」，静默空转会让报告写「已还原/已删除」，而磁盘上原样存在。
-   * removeTree 逐条删、链接只删链接本身（绝不跟进 $DSH_HOME 之外的链接目标），
-   * 删不净就抛错（调用方逐项 try/catch，如实记失败）。
+   * 递归删除（home 内，缺失目标视为成功）。**不用 fs.rm(recursive)**：目录里有悬空链接时它静默
+   * 空转（报告写「已还原」而磁盘原样在）。removeTree 逐条删、只删链接本身、删不净就抛错。
    */
   async remove(relPath: string): Promise<void> {
     await removeTree(this.abs(relPath))

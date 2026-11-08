@@ -32,6 +32,17 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+- **删除档案现在真的会删掉**：以前点了删除、回执也是成功，档案却还留在磁盘上；现在目录会被删净，确实删不掉时直接报错并说明原因，不再假装成功。
+  **Deleting a profile now actually deletes it**: deletion used to report success while the folder stayed on disk; the directory is now removed for real, and a failed removal reports the reason instead of claiming success.
+
+- **中止安装后不再留下半装残留**：装插件时选「跳过当前插件」，若包目录是链接、而链接指向的模块目录已被宿主升级清掉，目录会原地留着，下次装同一个插件仍撞缺包；现在会真的删净，依赖声明也一并摘掉。
+  **Skipping a plugin mid-install no longer leaves a half-installed folder**: when the package folder had become a link whose target was cleared by a host upgrade, skipping the plugin used to leave the folder behind and the next install hit a missing package; it is now removed for real, together with its dependency declaration.
+
+- **恢复与撤销里该删的文件现在真的会删掉**：删除动作遇到悬空链接时以前什么都不删却照样报告「已还原」，磁盘上文件还在；现在要么删净，要么如实报错。
+  **Files that restores and rollbacks delete are now really deleted**: a delete action used to remove nothing when the tree contained dangling links yet still report "restored"; it now either removes them for real or reports the failure.
+
 ## [0.5.0] - 2026-11-08
 
 > **每个档案各管各的，助手只能先预览再动手**：web、desktop 等档案各自保存同步目标与登录，插件数据目录里也能一眼看出快照来自哪个档案；聊天里的助手要改配置或恢复，必须先预览拿到凭据才能执行。

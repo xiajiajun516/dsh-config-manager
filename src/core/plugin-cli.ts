@@ -19,10 +19,11 @@ import { engineMsg } from './messages-core.ts'
 import { isConcreteVersion } from './validator.ts';
 import { spawn } from 'node:child_process'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
-import { readFileSync, rmSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 
 import { atomicWriteFileSync } from '../utils/atomic-write.ts'
+import { removeTreeSync } from '../utils/remove-tree.ts'
 import { isDesktopProfile, resolveDesktopCarrier } from '../utils/desktop-carrier.ts'
 import { isRescueActiveSync } from './boot-rescue.ts'
 import type { PluginInfo } from './types.ts'
@@ -301,6 +302,11 @@ function isRescueActiveForProfileDir(profileDir: string): boolean {
  * 直接启动 DSH 会因缺包而失败。本函数把 manifest 恢复为「该插件未安装」的一致状态，
  * 消除「声明了依赖但没装全」的启动风险。pnpm-lock.yaml 不触碰（运行时不被读取，
  * 下次安装 pnpm 自行对齐）。尽力而为：任何失败不抛错，由调用方记录告警。
+ *
+ * 删包目录必须走 removeTreeSync 而不是 fs.rmSync(recursive)：包目录常是**链接**（DSH 把
+ * node_modules/<pkg> 链到 .dsh-module-fallback），链接目标消失后就是悬空链接，rmSync 遇到
+ * 这种树会静默空转（不抛错、一个都不删），于是「跳过当前插件」留下半装残留，下次安装撞缺包。
+ * removeTreeSync 只删链接本身（绝不跟进去删 fallback 里的实体）并在删不净时抛错。
  */
 export function cleanupAbortedInstall(profileDir: string, pkg: string): void {
   const manifest = readProfileManifest(profileDir)
@@ -315,9 +321,11 @@ export function cleanupAbortedInstall(profileDir: string, pkg: string): void {
     reconcileBundles(profileDir)
   }
   try {
-    rmSync(join(profileDir, 'node_modules', pkg), { recursive: true, force: true })
+    removeTreeSync(join(profileDir, 'node_modules', pkg))
   } catch {
-    // 尽力而为：目录可能不存在或正被占用，忽略
+    // 尽力而为：目录可能本来就不存在（正常情况下 removeTreeSync 对缺失目标是不抛的），
+    // 剩下的失败只有「真被占用 / 权限不足」——这里仍不打断「用户跳过」的流程，
+    // 但绝不再让悬空链接这种可修的形态走到这里。
   }
 }
 
