@@ -255,12 +255,33 @@ export interface PackedLocalPlugin {
   data: Uint8Array;
 }
 
+/**
+ * 因体积上限被**丢弃**的本地插件（tarball 大于 maxTarballBytes）。
+ *
+ * 单独带出来（而不是只留一条 warning）是为了让宿主侧做**超限负缓存**：
+ * 真机实测单个 210MB 的本地插件一次 npm pack 44.7s，而结果每次都被上限丢掉 ——
+ * 每 60s 一轮的自动同步于是每分钟白烧 45s CPU 与磁盘。宿主拿到这条事实后，
+ * 在源没变的前提下可以不再重复打包（见 core/local-plugin-host.ts 的负缓存）。
+ */
+export interface OversizeLocalPlugin {
+  packageName: string;
+  /** 解析后的源路径（目录，或 file: 直接指向的 .tgz）—— 负缓存以它为键 */
+  sourcePath: string;
+  /** 超限形态：'archive' = file: 指向的归档本身太大；'dir' = 打包后太大 */
+  source: 'archive' | 'dir';
+  /** 实测字节数与上限（用于告警文案与缓存命中时复述） */
+  size: number;
+  maxBytes: number;
+}
+
 export interface PackLocalPluginsResult {
   packed: PackedLocalPlugin[];
   /** packageName → 重写后的 spec */
   rewritten: Record<string, string>;
   /** 非致命告警（跳过原因等；调用方并入分区 warnings） */
   warnings: string[];
+  /** 被体积上限丢弃的插件（见 OversizeLocalPlugin；调用方做完负缓存后无需再管） */
+  oversize: OversizeLocalPlugin[];
 }
 
 /**
@@ -314,17 +335,18 @@ export async function packLocalPlugins(
   const packed: PackedLocalPlugin[] = [];
   const rewritten: Record<string, string> = {};
   const warnings: string[] = [];
+  const oversize: OversizeLocalPlugin[] = [];
   const maxBytes = opts.maxTarballBytes ?? MAX_LOCAL_TARBALL_BYTES;
   const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000;
 
   const candidates = opts.plugins.filter((p) => isLocalPluginSpec(p.spec));
-  if (candidates.length === 0) return { packed, rewritten, warnings };
+  if (candidates.length === 0) return { packed, rewritten, warnings, oversize };
 
   try {
     await opts.mkdir(opts.packDir);
   } catch (err) {
     warnings.push(engineMsg('core.localPluginPack.dirCreateFailed', { reason: reasonOf(err) }));
-    return { packed, rewritten, warnings };
+    return { packed, rewritten, warnings, oversize };
   }
 
   for (const plugin of candidates) {
@@ -345,6 +367,13 @@ export async function packLocalPlugins(
           warnings.push(
             engineMsg('core.localPluginPack.tarballTooLarge', { name: plugin.name, size: data.byteLength, max: maxBytes }),
           );
+          oversize.push({
+            packageName: plugin.name,
+            sourcePath,
+            source: 'archive',
+            size: data.byteLength,
+            maxBytes,
+          });
           continue;
         }
         const relativePath = `${LOCAL_PLUGIN_DIR}/${safeTarballFileNameFor(plugin.name, sourcePath)}`;
@@ -388,6 +417,13 @@ export async function packLocalPlugins(
         warnings.push(
           engineMsg('core.localPluginPack.tarballTooLarge', { name: plugin.name, size: data.byteLength, max: maxBytes }),
         );
+        oversize.push({
+          packageName: plugin.name,
+          sourcePath,
+          source: 'dir',
+          size: data.byteLength,
+          maxBytes,
+        });
         continue;
       }
 
@@ -406,7 +442,7 @@ export async function packLocalPlugins(
     }
   }
 
-  return { packed, rewritten, warnings };
+  return { packed, rewritten, warnings, oversize };
 }
 
 function reasonOf(err: unknown): string {

@@ -172,6 +172,11 @@ export interface WatcherFactoryOptions {
   onFlush: (changed: readonly string[]) => void;
 }
 
+/** Phase 1（只读预检）的产出：要么本轮无事可做（skip），要么带回给 Phase A/B/C 的检测结论。 */
+type AutosyncDetectOutcome =
+  | { kind: 'skip'; result: AutosyncRunResult }
+  | { kind: 'work'; engine: SyncEngine; remoteNew: boolean; localDirty: boolean; firstRun: boolean };
+
 export interface AutoSyncSchedulerOptions {
   syncDir: string;
   host: { log: Logger };
@@ -571,9 +576,21 @@ export class AutoSyncScheduler {
       }
     };
 
-    // Phase 2 锁：autosync 的 apply（写本地配置）与 push（写远端+本地散文件）属 GLOBAL mutation。
-    // 获取失败（另一项 DSH 任务进行中）→ skipped(mutation-locked)；成功则在整个 runOnce 持锁并在 finally 释放。
-    // 无锁环境（测试未注入 mutationLock）→ 不锁定，直接执行（与旧行为一致）。
+
+    // Phase 1：无锁预检（只读：读配置 + 列远端 + 检测两端变化）。
+    //
+    // 为什么先检测再取锁（2026-11-07 真机事故）：检测里的 plugins 分区导出会为本机源插件跑 npm pack
+    // （实测单个 210MB 插件 44.7s/次、每轮重算）。旧实现把这段整个放进 GLOBAL mutation 锁内，60s 一轮的
+    // 轮询于是让锁几乎全程被占（45s/60s），用户任何 destructive 操作（删除档案…）都撞 423「另一个任务正在运行」。
+    // 现在稳态（upToDate）根本不取锁；命中「有活干」才取，并在锁内重跑检测再写。
+    const preflight = await this.detectPhase(channel, cfg, nowIso, historyId);
+    if (preflight.kind === 'skip') {
+      this.running = false;
+      this.watcher?.resume();
+      finishRun();
+      return preflight.result;
+    }
+
     let releaseLock: (() => Promise<void>) | null = null;
     if (this.mutationLock !== undefined) {
       try {
@@ -627,89 +644,12 @@ export class AutoSyncScheduler {
         return { status: 'skipped', direction: 'none', skipReason: lockSkipToken('unavailable'), historyId, consecutiveFailures: 0 };
       }
     }
-
     try {
-      // 读该通道 sync-config：按通道判定「已配置」——git 看 git.repoUrl、webdav 看 webdav.url。
-      // SEC-03：「未配置」有两种成因 —— 真的没配，或存过的地址被白名单拒掉（读侧丢弃）。
-      // 必须区分：后者如果说成前者的「尚未配置」，用户会一遍遍重填同一个被拒地址。
-      const configIssues: SyncConfigIssue[] = [];
-      const syncCfg = await this.readSyncConfigFn(channel, configIssues);
-      if (!syncIsConfigured(syncCfg)) {
-        const configIssue = describeConfigIssue(configIssues, channel);
-        if (configIssue !== undefined) this.reportConfigIssue(channel, configIssue);
-        const result: AutosyncRunResult = {
-          status: 'skipped', direction: 'none', skipReason: 'unconfigured', historyId,
-          consecutiveFailures: 0,
-          ...(configIssue === undefined ? {} : { configIssue }),
-        };
-        await this.appendHistory(channel, {
-          direction: 'both',
-          status: 'skipped',
-          skipReason: 'unconfigured',
-          createdAt: nowIso,
-          failureCountAtRun: 0,
-          ...(configIssue === undefined ? {} : { configIssue }),
-        });
-        await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
-        return result;
-      }
-
-      const engine = this.makeSyncEngine(syncCfg!);
-
-      // 加密快照检测：远端最新快照为加密 → 自动同步无密码无法解密 → 整体跳过，
-      // 同步历史记录 skipReason='encrypted'（提示需手动输入密码同步）。
-      // 加密快照只通过手动推送/拉取产生与消费；自动同步仅处理普通快照。
-      // list 失败宽容处理：视为无加密快照，继续正常流程（网络问题由后续链路暴露为 failed）。
-      let encryptedRemote = false;
-      // 本轮远端列表：加密快照检查与「远端是否有新快照」共用同一次 list。
-      // 每次 list 都是一次真实网络往返（git = `pull --ff-only`，webdav = PROPFIND/GET），
-      // 缺省 60s 轮询下多 list 一次 = 一天白跑 1440 次往返。
-      let remoteMetas: readonly SyncSnapshotMeta[] | null = null;
-      try {
-        const metas = await engine.listSnapshots();
-        remoteMetas = metas;
-        const latestMeta = metas.length > 0 ? metas[metas.length - 1]! : null;
-        encryptedRemote = latestMeta !== null && latestMeta.manifest.encrypted === true;
-      } catch {
-        encryptedRemote = false;
-      }
-      if (encryptedRemote) {
-        const result: AutosyncRunResult = {
-          status: 'skipped', direction: 'pull', skipReason: 'encrypted', historyId,
-          consecutiveFailures: 0,
-        };
-        await this.appendHistory(channel, {
-          direction: 'pull', status: 'skipped', skipReason: 'encrypted',
-          createdAt: nowIso, failureCountAtRun: 0,
-        });
-        await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
-        return result;
-      }
-
-      // 事件驱动触发（§3.1/§3.2/§3.3 看变化不看时间）：
-      // - remoteNew：远端是否出现比本地祖先更新的快照 → 决定是否做下载合并（Phase A）；
-      // - localDirty：本地 portable 配置相对基线是否真的变了 → 决定是否上传（Phase C）。
-      // 定时器只是兜底轮询；真正驱动是这两个「变化」信号。
-      // 列表拿不到（网络失败）时 remoteMetas 为 null → 检测自己再 list 一次，行为与改造前一致
-      const remoteNew = await this.detectRemoteNew(engine, remoteMetas ?? undefined);
-      const localDirty = await this.detectLocalChange(engine);
-      // SYN-05：首轮（从未跑过）与「远端有新快照」是覆盖风险最高的两个时刻 —— 由
-      // resolveConflictPushPolicy 统一把这两处的 ask 标成 forced。
-      const firstRun = cfg.lastRunAt === undefined || cfg.lastRunAt === '';
-
-      // 两端都无变化 → 什么都不做，记为 upToDate（不重复拉取/不空转）。
-      if (!remoteNew && !localDirty) {
-        const result: AutosyncRunResult = {
-          status: 'success', direction: 'none', skipReason: 'upToDate', historyId,
-          consecutiveFailures: 0,
-        };
-        await this.appendHistory(channel, {
-          direction: 'both', status: 'success', skipReason: 'upToDate',
-          createdAt: nowIso, failureCountAtRun: 0,
-        });
-        await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
-        return result;
-      }
+      // 锁内重跑一次检测：预检到写入之间可能被别的进程推进（远端新快照 / 本机配置改动），
+      // 拿过期结论去写等于覆盖别人的成果。无锁环境（测试）直接用预检结果 —— 同一份数据，没有竞态。
+      const phase = releaseLock === null ? preflight : await this.detectPhase(channel, cfg, nowIso, historyId);
+      if (phase.kind === 'skip') return phase.result;
+      const { engine, remoteNew, localDirty, firstRun } = phase;
 
       let appliedSections: SectionId[] = [];
       // audit-sync sync-F5：被风险分级扣下、需人工确认的分区（medium/high）。在 Phase A 赋值、
@@ -994,6 +934,104 @@ export class AutoSyncScheduler {
    * 现在：失败写错误原文；跳过写**结构化原因码**（界面按码取字典，语言在渲染那刻解析）；
    * 成功清空两者（空串/undefined 不进文件，见 autosync-config.toChannelPayload）。
    */
+  /**
+   * Phase 1：只读预检 —— 读该通道配置、列远端快照、判断「远端有新 / 本地有改动」。
+   *
+   * 为什么不持锁：这些步骤全是只读，但 plugins 分区的导出会为本机源（link: / file:）插件跑 npm pack
+   * （真机实测 210MB 插件 44.7s/次、每轮重算）。放进 GLOBAL mutation 锁内，60s 一轮的轮询就让锁几乎
+   * 全程被占，用户任何 destructive 操作都撞 423（2026-11-07 真机事故的根因）。
+   * 结论**不具权威性**：调用方取到锁之后必须重跑一次（见 runOnceInternal 的 Phase 2）。
+   */
+  private async detectPhase(
+    channel: SyncTransportType,
+    cfg: AutosyncConfig,
+    nowIso: string,
+    historyId: string,
+  ): Promise<AutosyncDetectOutcome> {
+    // 读该通道 sync-config：按通道判定「已配置」——git 看 git.repoUrl、webdav 看 webdav.url。
+    // SEC-03：「未配置」有两种成因 —— 真的没配，或存过的地址被白名单拒掉（读侧丢弃）。
+    // 必须区分：后者如果说成前者的「尚未配置」，用户会一遍遍重填同一个被拒地址。
+    const configIssues: SyncConfigIssue[] = [];
+    const syncCfg = await this.readSyncConfigFn(channel, configIssues);
+    if (!syncIsConfigured(syncCfg)) {
+      const configIssue = describeConfigIssue(configIssues, channel);
+      if (configIssue !== undefined) this.reportConfigIssue(channel, configIssue);
+      const result: AutosyncRunResult = {
+        status: 'skipped', direction: 'none', skipReason: 'unconfigured', historyId,
+        consecutiveFailures: 0,
+        ...(configIssue === undefined ? {} : { configIssue }),
+      };
+      await this.appendHistory(channel, {
+        direction: 'both',
+        status: 'skipped',
+        skipReason: 'unconfigured',
+        createdAt: nowIso,
+        failureCountAtRun: 0,
+        ...(configIssue === undefined ? {} : { configIssue }),
+      });
+      await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
+      return { kind: 'skip', result };
+    }
+
+    const engine = this.makeSyncEngine(syncCfg!);
+
+    // 加密快照检测：远端最新快照为加密 → 自动同步无密码无法解密 → 整体跳过，
+    // 同步历史记录 skipReason='encrypted'（提示需手动输入密码同步）。
+    // 加密快照只通过手动推送/拉取产生与消费；自动同步仅处理普通快照。
+    // list 失败宽容处理：视为无加密快照，继续正常流程（网络问题由后续链路暴露为 failed）。
+    let encryptedRemote = false;
+    // 本轮远端列表：加密快照检查与「远端是否有新快照」共用同一次 list。
+    // 每次 list 都是一次真实网络往返（git = `pull --ff-only`，webdav = PROPFIND/GET），
+    // 缺省 60s 轮询下多 list 一次 = 一天白跑 1440 次往返。
+    let remoteMetas: readonly SyncSnapshotMeta[] | null = null;
+    try {
+      const metas = await engine.listSnapshots();
+      remoteMetas = metas;
+      const latestMeta = metas.length > 0 ? metas[metas.length - 1]! : null;
+      encryptedRemote = latestMeta !== null && latestMeta.manifest.encrypted === true;
+    } catch {
+      encryptedRemote = false;
+    }
+    if (encryptedRemote) {
+      const result: AutosyncRunResult = {
+        status: 'skipped', direction: 'pull', skipReason: 'encrypted', historyId,
+        consecutiveFailures: 0,
+      };
+      await this.appendHistory(channel, {
+        direction: 'pull', status: 'skipped', skipReason: 'encrypted',
+        createdAt: nowIso, failureCountAtRun: 0,
+      });
+      await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
+      return { kind: 'skip', result };
+    }
+
+    // 事件驱动触发（§3.1/§3.2/§3.3 看变化不看时间）：
+    // - remoteNew：远端是否出现比本地祖先更新的快照 → 决定是否做下载合并（Phase A）；
+    // - localDirty：本地 portable 配置相对基线是否真的变了 → 决定是否上传（Phase C）。
+    // 定时器只是兜底轮询；真正驱动是这两个「变化」信号。
+    // 列表拿不到（网络失败）时 remoteMetas 为 null → 检测自己再 list 一次，行为与改造前一致
+    const remoteNew = await this.detectRemoteNew(engine, remoteMetas ?? undefined);
+    const localDirty = await this.detectLocalChange(engine);
+    // SYN-05：首轮（从未跑过）与「远端有新快照」是覆盖风险最高的两个时刻 —— 由
+    // resolveConflictPushPolicy 统一把这两处的 ask 标成 forced。
+    const firstRun = cfg.lastRunAt === undefined || cfg.lastRunAt === '';
+
+    // 两端都无变化 → 什么都不做，记为 upToDate（不重复拉取/不空转）。
+    if (!remoteNew && !localDirty) {
+      const result: AutosyncRunResult = {
+        status: 'success', direction: 'none', skipReason: 'upToDate', historyId,
+        consecutiveFailures: 0,
+      };
+      await this.appendHistory(channel, {
+        direction: 'both', status: 'success', skipReason: 'upToDate',
+        createdAt: nowIso, failureCountAtRun: 0,
+      });
+      await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
+      return { kind: 'skip', result };
+    }
+    return { kind: 'work', engine, remoteNew, localDirty, firstRun };
+  }
+
   private async writeFinalConfig(
     base: AutosyncConfig,
     result: AutosyncRunResult,

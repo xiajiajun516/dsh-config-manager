@@ -470,6 +470,7 @@ test('plugins: preview 不调用打包钩子，但条目/白名单/告警与 exp
       }],
       rewritten: { 'local-pkg': packedSpec },
       warnings: [],
+      oversize: [],
     };
   });
 

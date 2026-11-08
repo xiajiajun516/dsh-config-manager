@@ -58,7 +58,7 @@ function makePackSpy(withLocal: boolean): { hook: LocalPluginPackHook; calls: ()
     typeof spec === 'string' && (spec.startsWith('file:') || spec.startsWith('link:'));
   const hook: LocalPluginPackHook = async (plugins) => {
     calls += 1;
-    if (!withLocal) return { packed: [], rewritten: {}, warnings: [] };
+    if (!withLocal) return { packed: [], rewritten: {}, warnings: [], oversize: [] };
     const locals = plugins.filter((p) => isLocal(p.spec));
     return {
       packed: locals.map((p) => ({
@@ -70,6 +70,7 @@ function makePackSpy(withLocal: boolean): { hook: LocalPluginPackHook; calls: ()
       })),
       rewritten: Object.fromEntries(locals.map((p) => [p.name, 'file:local-plugins/' + p.name + '-1.0.0.tgz'])),
       warnings: [],
+      oversize: [],
     };
   };
   return { hook, calls: () => calls };
