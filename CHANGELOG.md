@@ -28,6 +28,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+> **{{本版主题}}**：{{一句话中文主题}}
+>
+> **Theme**: {{one-line English theme}}
+
+## [0.5.0] - 2026-11-08
+
+> **每个档案各管各的，助手只能先预览再动手**：web、desktop 等档案各自保存同步目标与登录，插件数据目录里也能一眼看出快照来自哪个档案；聊天里的助手要改配置或恢复，必须先预览拿到凭据才能执行。
+>
+> **Theme**: per-profile sync and sign-in, assistant actions gated behind a preview handle, and a sync pipeline that no longer stalls on locks.
+
 ### 🆕 新增 · Added
 
 - **助手能先预演再动手**：聊天里的 AI 现在可以先把「同步合并」与「导入配置」走一遍预览、拿到一次性凭据再执行；预览过后内容有变化，这次执行会被拒绝并要求重新预览，改错的余地留在动手之前。
