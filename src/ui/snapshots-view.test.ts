@@ -13,22 +13,16 @@ import type { SnapshotMeta } from '../core/restore.ts'
 import type { BackupFileMeta } from '../sync/backup-files.ts'
 import {
   INITIAL_SNAPSHOTS_PANEL_STATE,
-  SNAPSHOT_ORIGIN_ALL,
-  SNAPSHOT_ORIGIN_UNLABELED,
   backupIntervalLabelKey,
   backupRunStatusLabelKey,
   filterBackupFiles,
-  filterSnapshotsByOrigin,
   formatBackupFileTime,
   formatRunTime,
-  hasUnlabeledOrigin,
   isUnreadableNote,
   midEllipsis,
   planHasExecutableActions,
   scheduleIntervalFact,
-  snapshotOriginFilterValue,
   snapshotOriginOf,
-  snapshotOriginProfiles,
   snapshotOriginState,
   snapshotStatusBadgeKind,
   snapshotStatusLabelKey,
@@ -247,39 +241,6 @@ const metaOf = (id: string, originProfile?: string): SnapshotMeta => ({
   ...(originProfile !== undefined ? { originProfile } : {}),
 })
 
-test('filterSnapshotsByOrigin：全部 / 单个档案 / 未标注 三档互不串味', () => {
-  const metas = [metaOf('a', 'web'), metaOf('b', 'Test1'), metaOf('c'), metaOf('d', 'web')]
-
-  const all = filterSnapshotsByOrigin(metas, SNAPSHOT_ORIGIN_ALL)
-  assert.deepEqual(all.map((m) => m.id), ['a', 'b', 'c', 'd'])
-  assert.notEqual(all, metas, '「全部」要返回副本：调用方可能再筛，改坏入参会污染缓存')
-
-  assert.deepEqual(
-    filterSnapshotsByOrigin(metas, snapshotOriginFilterValue('web')).map((m) => m.id),
-    ['a', 'd'],
-    '按档案筛选 = 精确匹配档案名',
-  )
-
-  assert.deepEqual(
-    filterSnapshotsByOrigin(metas, SNAPSHOT_ORIGIN_UNLABELED).map((m) => m.id),
-    ['c'],
-    '没有来源的旧快照归入「未标注」',
-  )
-
-  assert.deepEqual(filterSnapshotsByOrigin(metas, 'profile:gone'), [], '档案已被删光 ⇒ 空列表（不是全部）')
-  assert.deepEqual(filterSnapshotsByOrigin(metas, 'garbage'), [], '不认识的筛选值不得静默退化成「全部」')
-})
-
-test('snapshotOriginFilterValue：真实档案名不会和「全部」的哨兵值撞车', () => {
-  assert.equal(SNAPSHOT_ORIGIN_ALL, '')
-  assert.notEqual(snapshotOriginFilterValue('all'), SNAPSHOT_ORIGIN_ALL)
-  assert.notEqual(snapshotOriginFilterValue(SNAPSHOT_ORIGIN_UNLABELED), SNAPSHOT_ORIGIN_UNLABELED)
-  assert.deepEqual(
-    filterSnapshotsByOrigin([metaOf('x', 'all'), metaOf('y')], snapshotOriginFilterValue('all')).map((m) => m.id),
-    ['x'],
-    '名字叫 all 的档案也要能单独筛出来',
-  )
-})
 
 test('snapshotOriginState：只有「已知当前档案且不同」才敢说来自他人档案', () => {
   assert.equal(snapshotOriginState(metaOf('a')), 'unlabeled')
@@ -291,14 +252,6 @@ test('snapshotOriginState：只有「已知当前档案且不同」才敢说来�
   assert.equal(snapshotOriginState(metaOf('a', 'Test1'), '  '), 'unknownCurrent', '空白当前档案不等于已知')
 })
 
-test('snapshotOriginProfiles：去重、当前档案在前、跳过未标注', () => {
-  const metas = [metaOf('a', 'Test1'), metaOf('b'), metaOf('c', 'web'), metaOf('d', ' Test1 '), metaOf('e', 'desktop')]
-  assert.deepEqual(snapshotOriginProfiles(metas, 'web'), ['web', 'Test1', 'desktop'])
-  assert.deepEqual(snapshotOriginProfiles(metas), ['Test1', 'web', 'desktop'], '不知道当前档案时按出现顺序')
-  assert.deepEqual(snapshotOriginProfiles([]), [])
-  assert.equal(hasUnlabeledOrigin(metas), true)
-  assert.equal(hasUnlabeledOrigin([metaOf('a', 'web')]), false, '全都有来源 ⇒ 不该出现「未标注」这一项')
-})
 
 test('snapshotOriginOf：trim 后转交，空白视为没有', () => {
   assert.equal(snapshotOriginOf({ originProfile: ' web ' }), 'web')

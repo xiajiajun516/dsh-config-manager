@@ -33,8 +33,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **助手能先预演再动手**：聊天里的 AI 现在可以先把「同步合并」与「导入配置」走一遍预览、拿到一次性凭据再执行；预览过后内容有变化，这次执行会被拒绝并要求重新预览，改错的余地留在动手之前。
   **The assistant can rehearse before it acts**: in chat, the AI can preview a sync merge or a config import, then execute with a one-shot handle; if anything changed after the preview, execution is refused and a fresh preview is required — mistakes are caught before anything is written.
 
-- **快照列表能看出每条快照来自哪个档案**：插件数据目录被所有档案共用，快照库里混着 web、desktop 等档案拍下的条目，以前看不出区别；现在拍快照时会记下来源档案，列表每行显示档案徽章（不是当前档案时点明「来自他人档案」），也能按档案筛选、看哪些旧快照没标注来源。
-  **You can see which profile each snapshot came from**: the plugin data folder is shared by every profile, so the snapshot list mixed entries taken under web, desktop and others with no way to tell them apart; snapshots now record their origin profile, each row shows a profile badge (marked “from another profile” when it is not the current one), and the list can be filtered by profile, including which older snapshots have no origin recorded.
+- **快照列表能看出每条快照来自哪个档案**：插件数据目录被所有档案共用，快照库里混着 web、desktop 等档案拍下的条目，以前看不出区别；现在拍快照时会记下来源档案，列表每行显示档案徽章，不是当前档案时点明「来自他人档案」。
+  **You can see which profile each snapshot came from**: the plugin data folder is shared by every profile, so the snapshot list mixed entries taken under web, desktop and others with no way to tell them apart; snapshots now record their origin profile and each row shows a profile badge, marked “from another profile” when it is not the current one.
 
 ### 🔧 变更 · Changed
 
