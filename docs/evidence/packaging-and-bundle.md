@@ -25,3 +25,10 @@
 ## client bundle 自包含护栏
 
 - **client bundle 自包含护栏**：`src/utils/bundle-scan.ts`（零依赖扫描内核，**多趟并集**避免注释内反引号导致的状态失衡假阴性）+ `src/client/bundle-selfcontained.test.ts`（产物护栏，白名单仅 react/react-dom/react-dom/client/react/jsx-runtime）。**必须 Build 之后单独跑**——`npm test` 在 Build 前执行，此时 `lib/client.js` 不存在，测试会跳过；故 `ci.yml`/`publish.yml` 各有一独立步骤。注释里的同名字符串会造成假阳性（本仓库实测过）。
+
+## tsdown 升级实测（0.23.4 → 0.23.5，2026-11-08 · PR #130）
+
+- **0.23.5 的两处变化对我们都不适用**：一是 `dts.tsc.*` 迁移（本仓 `tsdown.config.ts` 没有 `dts` 键，声明文件由 tsdown 因 `package.json.types` 自动生成）；二是新增 `css: false` 开关（未使用）。实测升级后 `lib/client.d.ts` 与 0.23.4 **逐字节相同**（sha256 `73ba3db2…`），rolldown-plugin-dts 0.27 → 0.29 未改变我们的声明产物。
+- **产物等价可量化**：两版 `lib/client.js` 同为 2,490,148 B；1205 行 diff 全落在 CSS 类名映射对象内部，排序后只剩「键序 + 尾逗号」差异——**键序在同版本重跑之间也不稳定**，跨版本对比别用 `sha256` 判等价，用「排序后比对 + 长度」。`src/client/bundle-selfcontained.test.ts` 在 0.23.5 产物上通过，require 白名单（react / react-dom / react/jsx-runtime / @deepseek-ai/dsh-client-ui-primitives）不变。
+- **新增警告是未来动作，不是本次缺陷**：`tsgo generator on TypeScript 7.0 is deprecated … Upgrade to TypeScript 7.1+`（本仓 typescript 7.0.2 ⇒ 下一个 tsdown minor 前须升 TS）；`inlineDynamicImports` 弃用警告在 0.23.4 就存在（0.23.4 时期 PR CI 日志可查），后续改 `codeSplitting: false`，单文件 bundle 这条硬约束不变。
+- **本机复核姿势**：`npx tsdown` 的 TEMP/TMP 必须给 **Windows 风格路径**（如 `.tmp/buildtmp`）；给 MSYS 风格 `/d/...` 会让 rolldown-plugin-dts 的 tsgo 子进程报 `mkdir … Access is denied`（exit 2），看起来像依赖崩了。复核命令：`npx tsdown` → `node --test src/client/bundle-selfcontained.test.ts`。
