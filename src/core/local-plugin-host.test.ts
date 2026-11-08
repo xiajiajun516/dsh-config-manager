@@ -84,7 +84,8 @@ test('超限负缓存：源没变 → 第二轮不再 npm pack，但告警照旧
   assert.equal(fx.calls(), 1, '第二次必须走缓存，不再白跑 npm pack');
   assert.equal(second.packed.length, 0, '缓存命中同样不得产出 tarball（否则会带一个超限的大包）');
   assert.deepEqual(second.warnings, first.warnings, '缓存命中的告警与实测超限逐字一致');
-  assert.equal(second.oversize.length, 0, '本轮没实测，不重复记账');
+  assert.equal(second.oversize.length, 1, '缓存命中也要原样回出超限项：调用方/界面不区分「刚发现」与「上轮已记」');
+  assert.deepEqual(second.oversize, first.oversize, '超限项字段与首次发现逐字一致');
 });
 
 test('超限负缓存：源变了（package.json mtime 变化）→ 重新打包', async (t) => {

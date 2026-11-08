@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 
 import { packLocalPlugins, parsePackOutput, resolveLocalPluginPath } from './local-plugin-pack.ts';
 import { quoteCmdArg } from './plugin-cli.ts';
-import type { PackExec, PackExecResult, PackLocalPluginsResult } from './local-plugin-pack.ts';
+import type { OversizeLocalPlugin, PackExec, PackExecResult, PackLocalPluginsResult } from './local-plugin-pack.ts';
 import type { HostContext } from './types.ts';
 import { engineMsg } from './messages-core.ts';
 
@@ -150,7 +150,7 @@ export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): Loc
    * 存**结论**而不是 tarball：超限的 tarball 本来就不会进备份，缓存它没有意义；
    * 要省的只是那几十秒的 npm pack。键用绝对源路径（同一插件在 link:/file: 两种写法下同键）。
    */
-  const oversizeCache = new Map<string, { fingerprint: string; at: number; size: number; maxBytes: number }>();
+  const oversizeCache = new Map<string, { fingerprint: string; at: number; oversize: OversizeLocalPlugin }>();
 
   const hasLocalSpec = (p: { spec?: string }): boolean =>
     p.spec !== undefined && /^\s*(link|file):/i.test(p.spec);
@@ -173,6 +173,8 @@ export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): Loc
     // —— 超限负缓存：源没变就别再白跑一遍 npm pack ——
     const kept: { name: string; version: string; spec?: string }[] = [];
     const cacheWarnings: string[] = [];
+    // 缓存命中的超限项也要原样回给调用方：与首次发现同形，界面不必区分「这轮刚发现」还是「上轮已记」
+    const cacheOversize: OversizeLocalPlugin[] = [];
     if (oversizeTtlMs > 0 && oversizeCache.size > 0) {
       const now = Date.now();
       for (const p of plugins) {
@@ -196,14 +198,15 @@ export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): Loc
         }
         // 命中：与「打包后发现超限」用同一条文案，用户与调用方都看不出区别
         cacheWarnings.push(
-          engineMsg('core.localPluginPack.tarballTooLarge', { name: p.name, size: hit.size, max: hit.maxBytes }),
+          engineMsg('core.localPluginPack.tarballTooLarge', { name: p.name, size: hit.oversize.size, max: hit.oversize.maxBytes }),
         );
+        cacheOversize.push(hit.oversize);
       }
     } else {
       kept.push(...plugins);
     }
     if (!kept.some(hasLocalSpec)) {
-      return { packed: [], rewritten: {}, warnings: cacheWarnings, oversize: [] };
+      return { packed: [], rewritten: {}, warnings: cacheWarnings, oversize: cacheOversize };
     }
 
     const tmpRoot = path.join(opts.dataDir, 'tmp');
@@ -219,7 +222,7 @@ export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): Loc
           ...cacheWarnings,
           engineMsg('core.localPluginHost.tmpDirCreateFailed', { reason: err instanceof Error ? err.message : String(err) }),
         ],
-        oversize: [],
+        oversize: cacheOversize,
       };
     }
 
@@ -250,11 +253,15 @@ export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): Loc
         for (const o of result.oversize) {
           const fp = await fingerprintOf(o.sourcePath).catch(() => null);
           if (fp !== null) {
-            oversizeCache.set(o.sourcePath, { fingerprint: fp, at: Date.now(), size: o.size, maxBytes: o.maxBytes });
+            oversizeCache.set(o.sourcePath, { fingerprint: fp, at: Date.now(), oversize: o });
           }
         }
       }
-      return { ...result, warnings: [...cacheWarnings, ...result.warnings] };
+      return {
+        ...result,
+        oversize: [...cacheOversize, ...result.oversize],
+        warnings: [...cacheWarnings, ...result.warnings],
+      };
     } finally {
       // 无论成败都清掉临时目录：tarball 字节已读进内存并随备份走，无需留盘
       await fsp.rm(packDir, { recursive: true, force: true }).catch(() => undefined);
