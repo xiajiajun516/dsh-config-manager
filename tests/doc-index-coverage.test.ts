@@ -139,8 +139,9 @@ test('第二跳：分区 README 自身不计入成员；缺 README → missingIn
 
 test('walkMarkdown 递归收集且跳过不存在目录', () => {
   withFixture({ 'docs/archive/2026-10/a.md': '# a\n', 'docs/archive/b.md': '# b\n' }, (root) => {
-    const files = mod.walkMarkdown(join(root, 'docs/archive')).map((f) => f.slice(root.length + 1));
-    assert.deepEqual(files.sort(), ['docs\\archive\\2026-10\\a.md', 'docs\\archive\\b.md']);
+    // 路径分隔符随平台（Windows 反斜杠 / Linux 正斜杠），断言前统一归一化
+    const files = mod.walkMarkdown(join(root, 'docs/archive')).map((f) => f.slice(root.length + 1).split(/[\\/]/).join('/'));
+    assert.deepEqual(files.sort(), ['docs/archive/2026-10/a.md', 'docs/archive/b.md']);
     assert.deepEqual(mod.walkMarkdown(join(root, 'docs/nope')), []);
   });
 });
