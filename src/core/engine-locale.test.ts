@@ -173,6 +173,10 @@ test('t2 新增的 host.* 键：zh 逐字保留既有文案、en 非空且无 CJ
     ['host.snapshotPruneSummary', '自动保留清理删除 {count} 个旧快照'],
     ['host.autosyncSummary', '自动同步 {direction}{transportSuffix}'],
     ['host.autosyncTransportSuffix', '（{transport}）'],
+    ['host.autosyncDirectionPush', '上传'],
+    ['host.autosyncDirectionPull', '下载'],
+    ['host.autosyncDirectionBoth', '双向'],
+    ['host.autosyncDirectionNone', '检查'],
   ];
   const zhDict = zh as Readonly<Record<string, string>>;
   const enDict = en as Readonly<Record<string, string>>;

@@ -31,6 +31,7 @@ import { maskHighEntropy, redact } from '../security/redaction.ts';
 import { scanAndRedact } from '../security/secret-scanner.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import { coreText, engineMsg } from './messages-core.ts';
+import type { MsgFunc } from './msg-types.ts';
 
 // ---------- 常量 ----------
 
@@ -101,6 +102,75 @@ export function historyResultFromAutosyncStatus(status: 'success' | 'skipped' | 
   if (status === 'success') return 'success';
   if (status === 'skipped') return 'skipped';
   return status === 'partial' ? 'pending' : 'failed';
+}
+
+/**
+ * 自动同步「空检查轮」判定：这一轮既没上传也没下行、更没应用任何分区（sections 恒空），
+ * 它只是 realtime 通道缺省每 60s 一次（remoteCheckMs）的远端探测 —— 是**轮询**，不是活动。
+ *
+ * 为什么必须挡在统一历史之外（2026-11-08 真机实测，desktop 档案）：
+ *  ① 1 条/分钟把首页「最近活动」刷成与真推**完全同形**的 success 行（用户据此报告
+ *     「每隔 1 分钟都在推送」，而同期 git 工作副本只有 4 次真实 add/deletes）；
+ *  ② 统一历史保留额度（缺省 1000 条）被空轮吃满：实测 1009 条里 934 条是 autosync，
+ *     其中 688 条正是 upToDate 空轮，真实事件（备份 22 / 档案操作 40）被最旧淘汰；
+ *  ③ /history 是目录全量扫描（条目越多首页越慢），空轮只会让它线性变慢。
+ *
+ * 不丢诊断：sync-history.json 仍逐轮记录（含 upToDate），同步页「上次运行 / 跳过原因」照常显示。
+ */
+export function isAutosyncIdleRound(entry: { status: string; skipReason?: string }): boolean {
+  return entry.status === 'success' && entry.skipReason === 'upToDate';
+}
+
+/**
+ * 自动同步方向 → 字典键（`both`/`push`/`pull`/`none` 是机器 token，不得直接铺到界面上）。
+ * 未知方向返回 null，由调用方原样回显（不猜、不吞）。
+ */
+export function autosyncDirectionMessageKey(direction: unknown): string | null {
+  switch (direction) {
+    case 'push': return 'host.autosyncDirectionPush';
+    case 'pull': return 'host.autosyncDirectionPull';
+    case 'both': return 'host.autosyncDirectionBoth';
+    case 'none': return 'host.autosyncDirectionNone';
+    default: return null;
+  }
+}
+
+/** 自动同步一轮 → 统一历史条目的载荷（不写则为 null）。 */
+export type AutosyncHistoryInput = Pick<MigrationHistoryEntry, 'result' | 'sections' | 'source' | 'summary' | 'error'>;
+
+/**
+ * 自动同步一轮 → 统一历史条目；空检查轮返回 null（调用方直接 return，不写）。
+ *
+ * 规则落在 core 而不是宿主闭包里：宿主 src/index.ts 有体量棘轮（tests/file-size-ratchet.test.ts），
+ * 且这几条判断本身要能单测（空轮不写 / 方向本地化 / failed 带原因）。
+ * msg 由调用方注入（宿主传 engineMsg），本模块只管查表不引入新状态。
+ */
+export function autosyncUnifiedHistoryInput(
+  entry: {
+    status: 'success' | 'skipped' | 'partial' | 'failed';
+    direction?: unknown;
+    skipReason?: string;
+    transport?: string;
+    error?: string;
+    appliedSections?: string[];
+  },
+  msg: MsgFunc = engineMsg,
+): AutosyncHistoryInput | null {
+  if (isAutosyncIdleRound(entry)) return null;
+  const directionKey = autosyncDirectionMessageKey(entry.direction);
+  const transport = entry.transport;
+  const input: AutosyncHistoryInput = {
+    result: historyResultFromAutosyncStatus(entry.status),
+    sections: entry.appliedSections === undefined ? [] : [...entry.appliedSections],
+    source: 'autosync',
+    summary: msg('host.autosyncSummary', {
+      direction: directionKey === null ? String(entry.direction ?? '') : msg(directionKey),
+      transportSuffix: transport === undefined || transport === '' ? '' : msg('host.autosyncTransportSuffix', { transport }),
+    }),
+  };
+  const error = entry.status === 'failed' ? (entry.error ?? entry.skipReason) : undefined;
+  if (error !== undefined) input.error = error;
+  return input;
 }
 
 /** 触发来源（常量）。 */

@@ -23,6 +23,7 @@ import {
   makeHistoryFilename, isHistoryBasename,
   isValidHistoryRetention, resolveHistoryRetention,
   HISTORY_RETENTION_MIN, HISTORY_RETENTION_MAX, DEFAULT_MIGRATION_RETENTION,
+  isAutosyncIdleRound, autosyncDirectionMessageKey, autosyncUnifiedHistoryInput,
   type StoredMigrationHistoryEntry, type MigrationIo,
 } from './migration-history.ts';
 
@@ -403,6 +404,70 @@ test('best-effort：read 目录不存在 → 空结果不 throw', async (t) => {
   const res = await store.read();
   assert.equal(res.entries.length, 0);
   assert.equal(res.corrupted.length, 0);
+});
+
+// ---------- 自动同步：空检查轮与方向本地化（2026-11-08 实测） ----------
+
+test('AUTOSYNC：60s 远端探测的空检查轮（upToDate）不构成活动，其余轮次照记', () => {
+  // 真机证据（desktop 档案）：sync-history.json 每 60s 一条 upToDate，同期 git 工作副本只有 4 次真实 add。
+  assert.equal(isAutosyncIdleRound({ status: 'success', skipReason: 'upToDate' }), true, '命中 upToDate = 什么都没传，是轮询');
+  assert.equal(isAutosyncIdleRound({ status: 'success', skipReason: 'unchanged' }), false, 'unchanged 走了下行比对，仍要留痕');
+  assert.equal(isAutosyncIdleRound({ status: 'success' }), false, '无 skipReason 的 success = 真的推/拉了');
+  assert.equal(isAutosyncIdleRound({ status: 'skipped', skipReason: 'conflict' }), false, '冲突必须留在历史里等用户处理');
+  assert.equal(isAutosyncIdleRound({ status: 'failed' }), false, '失败永不静默');
+  assert.equal(isAutosyncIdleRound({ status: 'partial', skipReason: 'conflict-kept-local' }), false, '待裁决同属真实事件');
+});
+
+test('AUTOSYNC：方向枚举走字典键（两侧同键），未知方向不猜', () => {
+  assert.equal(autosyncDirectionMessageKey('push'), 'host.autosyncDirectionPush');
+  assert.equal(autosyncDirectionMessageKey('pull'), 'host.autosyncDirectionPull');
+  assert.equal(autosyncDirectionMessageKey('both'), 'host.autosyncDirectionBoth');
+  assert.equal(autosyncDirectionMessageKey('none'), 'host.autosyncDirectionNone');
+  assert.equal(autosyncDirectionMessageKey('bogus'), null, '未知方向返回 null，由调用方原样回显');
+  assert.equal(autosyncDirectionMessageKey(undefined), null);
+
+  // 字典词条本身（zh 逐字 + en 无 CJK）由 engine-locale.test.ts 的 t2 清单钉住，这里只管映射。
+});
+
+test('AUTOSYNC：统一历史载荷 —— 空轮不写、方向走字典、失败带原因', () => {
+  // 与宿主同口径的桩翻译器（字典词条本身由 engine-locale.test.ts 钉住）。
+  const dict: Record<string, string> = {
+    'host.autosyncDirectionPush': '上传',
+    'host.autosyncDirectionPull': '下载',
+    'host.autosyncDirectionBoth': '双向',
+    'host.autosyncDirectionNone': '检查',
+  };
+  const msg = (key: string, params?: Record<string, string | number>): string => {
+    if (key === 'host.autosyncSummary') return `自动同步 ${String(params?.direction ?? '')}${String(params?.transportSuffix ?? '')}`;
+    if (key === 'host.autosyncTransportSuffix') return `（${String(params?.transport ?? '')}）`;
+    return dict[key] ?? key;
+  };
+
+  assert.equal(autosyncUnifiedHistoryInput({ status: 'success', skipReason: 'upToDate', direction: 'both' }, msg), null, '空检查轮不产生历史条目');
+
+  const push = autosyncUnifiedHistoryInput({ status: 'success', direction: 'push', transport: 'git', appliedSections: ['settings'] }, msg);
+  assert.ok(push);
+  assert.equal(push.result, 'success');
+  assert.equal(push.source, 'autosync');
+  assert.deepEqual(push.sections, ['settings']);
+  assert.equal(push.summary, '自动同步 上传（git）');
+  assert.equal(push.error, undefined);
+
+  // sections 必须是副本：历史条目不得与调用方共享可变数组。
+  const owned = ['ui'];
+  const shared = autosyncUnifiedHistoryInput({ status: 'skipped', direction: 'both', appliedSections: owned }, msg);
+  assert.ok(shared);
+  assert.notEqual(shared.sections, owned);
+
+  const failed = autosyncUnifiedHistoryInput({ status: 'failed', direction: 'pull', error: '鉴权失败' }, msg);
+  assert.equal(failed?.result, 'failed');
+  assert.equal(failed?.error, '鉴权失败', 'failed 必须带原因（sync-history 的 error 优先）');
+  assert.equal(autosyncUnifiedHistoryInput({ status: 'failed', direction: 'pull', skipReason: 'network' }, msg)?.error, 'network');
+
+  assert.equal(autosyncUnifiedHistoryInput({ status: 'partial', direction: 'both' }, msg)?.result, 'pending', '待裁决不是失败');
+
+  // 未知方向原样回显，不猜、不吞。
+  assert.equal(autosyncUnifiedHistoryInput({ status: 'success', direction: 'weird' }, msg)?.summary, '自动同步 weird');
 });
 
 test('BOUND：sanitizeEntry 保留合法 UUID operationId/snapshotId/runId', () => {

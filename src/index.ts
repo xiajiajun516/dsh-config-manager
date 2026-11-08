@@ -107,6 +107,7 @@ import { PROJECT_KEY_RE, readLogCwdFromBytes, rewriteSessionLogDir } from './uti
 import { probeSessionFormats, resolveSessionFormatVersion } from './utils/session-format.ts'
 import { describePatchYamlError, dumpPatchDocument, loadPatchDocument } from './utils/patch-yaml.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
+import { removeTree } from './utils/remove-tree.ts'
 import { isENOENT } from './utils/guards.ts'
 import { EnvironmentLockManager, runWithMutationLock, type MutationLockContext, type MutationLockPort } from './utils/env-lock.ts'
 import { activeProxySummary } from './utils/proxy.ts'
@@ -131,7 +132,7 @@ import type { RetentionPolicy } from './sync/retention-policy.ts'
 import type { PruneSelector } from './core/backup.ts'
 import { selectPruneCandidates } from './core/backup.ts'
 import { appendAutosyncEntry } from './sync/sync-history.ts'
-import { MigrationStore, type MigrationKind, type MigrationResult, historyResultFromAutosyncStatus, MIGRATION_HISTORY_DIR } from './core/migration-history.ts'
+import { MigrationStore, type MigrationKind, type MigrationResult, autosyncUnifiedHistoryInput, MIGRATION_HISTORY_DIR } from './core/migration-history.ts'
 import { createHistoryPruner } from './core/history-prune.ts'
 import { isWebDavConfig, isS3Config, isGistConfig, channelOf, SYNC_CHANNELS, GIST_PROVIDER, cloudSecretRef } from './sync/sync-config.ts'
 import {
@@ -1831,8 +1832,17 @@ export class DshFileSystemFacade implements FileSystemFacade {
     await atomicCopyFile(this.abs(from), this.abs(to))
   }
 
+  /**
+   * 递归删除（home 内；缺失目标视为成功，与 force 语义一致）。
+   *
+   * **不用 fs.rm(recursive)**：目录里只要有悬空链接（junction 的重指向目标已被删掉），
+   * rm 会静默空转——不抛错、一个字节都不删。这里的消费点是「恢复计划删文件」与
+   * 「回滚补偿删目录」，静默空转会让报告写「已还原/已删除」，而磁盘上原样存在。
+   * removeTree 逐条删、链接只删链接本身（绝不跟进 $DSH_HOME 之外的链接目标），
+   * 删不净就抛错（调用方逐项 try/catch，如实记失败）。
+   */
   async remove(relPath: string): Promise<void> {
-    await fs.rm(this.abs(relPath), { recursive: true, force: true })
+    await removeTree(this.abs(relPath))
   }
 
   /** 仅路径列表（既有契约）：委托 listRecursiveDetailed，丢弃诊断。 */
@@ -2792,17 +2802,10 @@ function makeRoutes(deps: RoutesDeps): {
     // Phase 6：autosync 既写 sync-history.json（既有语义），也写统一迁移历史（COMPLETE 不变量）。
     appendHistoryFn: async (entry) => {
       await appendAutosyncEntry(syncDir, entry).catch(() => undefined)
-      await history.append({
-        kind: 'autosync',
-        result: historyResultFromAutosyncStatus(entry.status),
-        sections: entry.appliedSections ?? [],
-        source: 'autosync',
-        summary: engineMsg('host.autosyncSummary', {
-          direction: entry.direction,
-          transportSuffix: entry.transport !== undefined ? engineMsg('host.autosyncTransportSuffix', { transport: entry.transport }) : '',
-        }),
-        error: entry.status === 'failed' ? (entry.error ?? entry.skipReason) : undefined,
-      }).catch(() => undefined)
+      // 空检查轮（每 60s 一次的远端探测，什么都没传）不进统一历史；payload 组装与判据见 core。
+      const input = autosyncUnifiedHistoryInput(entry, engineMsg)
+      if (input === null) return
+      await history.append({ kind: 'autosync', ...input }).catch(() => undefined)
     },
   })
   // P1-B：调度器不再在 makeRoutes 内同步 start —— 由 apply() 在「启动 recovery 分类完成后、仅 NORMAL」时启动。

@@ -531,4 +531,19 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 
 **用户实际看到什么**：勾了「历史会话」后，会话只在手动「立即同步」里上行；聊完天不会自动上传，定时轮次也不会（`onlyAuto=true`）。替代路径：按回合自动留点的回滚点（`src/core/rollback-point.ts`，只在本机）+ 手动一键同步。
 
+## 第二种「每分钟都在推」：真实链路是 60 s 远端探测，噪音在活动历史（2026-11-08 真机）
+
+现象：首页「最近活动」每分钟一条「自动同步 both（git）· 成功」，用户据此判断同步在不停推送。
+
+**真实链路（实测，profile 级 `sync-profiles/desktop/`）**：
+- `sync-history.json` 每 60 s 一条 `{"direction":"both","status":"success","skipReason":"upToDate"}`，与 realtime 通道的 `remoteCheckMs` 缺省 60000 对齐（`src/sync/autosync-config.ts:132`、`src/routes/route-support.ts:468/497`）—— 这是**探测**，`upToDate` 时零读写。
+- 同期 git 工作副本 `work/` 的 log 只有 4 次真实 `add snapshot`（每次 8 s 后跟一条 `delete snapshot` 保留淘汰），时间点都对应真实内容变化（档案创建/删除、启用 mcp 分区）。
+- 噪音只发生在**统一迁移历史**：`src/index.ts` 的 `appendHistoryFn` 把每一轮（含空检查轮）都 `history.append({kind:'autosync'})` 写进 `migration-history/`。实测该目录 1009 条里 autosync 934 条，其中 688 条正是 `upToDate` 空轮；1000 条保留额度（`src/core/migration-history.ts` 的 `DEFAULT_MIGRATION_RETENTION`）被空轮吃满，备份（22 条）与档案操作（39 条）被最旧淘汰，而 `/history` 是目录全量扫描 ⇒ 首页首屏随空轮线性变慢。
+
+**修法**（`src/core/migration-history.ts`）：`isAutosyncIdleRound(status==='success' && skipReason==='upToDate')` 为真即不写统一历史；`autosyncUnifiedHistoryInput(entry, msg)` 一次组装载荷（方向走字典键 `host.autosyncDirection*`，不再铺裸枚举；`failed` 带 `error`；`partial` → `pending`）。`sync-history.json` 仍逐轮记录，同步页「上次运行 / 跳过原因」不受影响。
+
+**守卫**：`src/core/migration-history.test.ts` 三条（空轮 → `null`；`unchanged`/`conflict`/`failed`/无 `skipReason` 的 success 都要写；未知方向原样回显不猜）+ `src/core/engine-locale.test.ts` 的 t2 清单钉住四个方向键的 zh 逐字与 en 无 CJK。红证：把 `isAutosyncIdleRound` 改成恒 `false` → 空轮用例 FAIL。
+
+**未做（需用户决定）**：历史目录里 934 条旧 autosync 条目属破坏性清理，未自动删除，等 `retention` 自然淘汰。
+
 
