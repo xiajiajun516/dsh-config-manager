@@ -178,3 +178,27 @@ export function formatRepoUpdatedAt(iso: string, locale?: string): string {
   const date = new Date(ms)
   return locale === undefined ? date.toLocaleString() : date.toLocaleString(locale)
 }
+/**
+ * 仓库列表是否该**自动加载**（不要求用户先点开下拉）。
+ *
+ * 用户反馈（2026-11-08）：GitHub 登录成功后界面没有任何提示，列表也不会自己出现 ——
+ * 必须手动点一下「从我的仓库中选择」才知道成功了。这里把「该拉列表」的判定收成一条纯函数，
+ * 三个触发点共用：弹窗打开、登录状态由「未登录」变「已登录」、表单里已经有地址。
+ *
+ * 规则：
+ * - 弹窗没打开 / 已加载过 / 正在加载 → 不重复发请求；
+ * - `failed` 为真 → 不自动重试（否则每次重渲染都会打一次必然失败的请求；重试由「刷新列表」或
+ *   登录状态变化后的复位负责）。
+ * - 未登录且地址为空 → 保持惰性（此时拉列表必然 401，白跑一次网络）。
+ */
+export function shouldAutoLoadRepos(input: {
+  open: boolean
+  signedIn: boolean | null
+  loaded: boolean
+  loading: boolean
+  failed: boolean
+  repoUrl: string
+}): boolean {
+  if (!input.open || input.loaded || input.loading || input.failed) return false
+  return input.signedIn === true || input.repoUrl.trim() !== ''
+}

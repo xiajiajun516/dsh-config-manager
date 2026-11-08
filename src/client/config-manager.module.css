@@ -1581,6 +1581,25 @@ body {
   align-items: center;
 }
 
+/* —— 静默自动保存的「已保存」回执（ChannelConfigDialog footer） ——
+   四通道共用的输入防抖自动保存成功后闪一次：入场 180ms 淡入 + 轻微上浮，2.4s 后由组件隐藏。
+   本类**只管动画**，盒模型完全由里面的 .badge 提供（不在此重复字号/间距，避免第二套徽章）。 */
+.savedTick {
+  display: inline-flex;
+  animation: savedTickIn var(--cm-motion-base) var(--cm-motion-ease-out);
+}
+
+@keyframes savedTickIn {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* —— 中性分类片（Chip，tech-debt #10 / 2026-11） ——
    职责划分：**Badge = 状态语义**（四态只由 src/ui/badge-tone.ts 的 BadgeKind 定义）；
    **Chip = 中性分类**（来源 / 形态 / 适配器 / 分区数 —— 没有轻重缓急，也不该有颜色）。
@@ -5802,7 +5821,8 @@ button.profileRowMain:hover {
   .pickerOverlay,
   .pickerUnit,
   .banner,
-  .empty {
+  .empty,
+  .savedTick {
     animation: none;
   }
   .statusDot,

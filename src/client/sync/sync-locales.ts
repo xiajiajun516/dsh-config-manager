@@ -22,6 +22,7 @@ export const zh = {
   // 配置保存（自动保存 + 显式保存按钮）
   'config.save': '立即保存',
   'config.saveHint': '表单改动会自动保存：密码/token 安全写入 DSH credentials，不会写入同步文件或日志。',
+  'config.savedTick': '已保存',
   // 通道选择器
   'channel.title': '同步通道',
   'channel.git': 'Git 私有仓库',
@@ -102,6 +103,7 @@ export const zh = {
   'repoPicker.hint': '列出你 GitHub 账号下已有的私有仓库（按最近更新排序），选中即填入下方仓库地址；也可以直接在下方手填地址（ssh / 本地路径 / 不在列表里的仓库）。列表需要先登录 GitHub；新建的仓库一律为私有 —— 公开仓库会公开你的配置内容。',
   'repoPicker.placeholder': '手动填写地址（或从上方选择）',
   'repoPicker.refresh': '刷新列表',
+  'repoPicker.refreshed': '已刷新：{count} 个私有仓库',
   'repoPicker.forkBadge': 'Fork',
   'repoPicker.empty': '没有可用的私有仓库',
   'repoPicker.loadFailed': '仓库列表加载失败，可重试或直接手填地址。',
@@ -482,6 +484,7 @@ export const en: Record<keyof typeof zh, string> = {
   // Config save (auto-save + explicit save button)
   'config.save': 'Save now',
   'config.saveHint': 'Form changes are saved automatically: password/token goes securely into DSH credentials, never into sync files or logs.',
+  'config.savedTick': 'Saved',
   'channel.title': 'Sync Channel',
   'channel.git': 'Git private repo',
   'channel.webdav': 'WebDAV server',
@@ -559,6 +562,7 @@ export const en: Record<keyof typeof zh, string> = {
   'repoPicker.hint': 'Lists the existing private repositories in your GitHub account (most recently updated first); picking one fills the repository URL below. You can still type an address by hand (ssh / local path / repositories not in the list). The list requires GitHub sign-in. Newly created repositories are always private — a public repository would expose your config contents.',
   'repoPicker.placeholder': 'Type an address (or pick above)',
   'repoPicker.refresh': 'Refresh list',
+  'repoPicker.refreshed': 'Refreshed: {count} private repositories',
   'repoPicker.forkBadge': 'Fork',
   'repoPicker.empty': 'No private repository available',
   'repoPicker.loadFailed': 'Could not load the repository list — retry, or type the address below.',

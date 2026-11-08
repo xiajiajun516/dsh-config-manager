@@ -4,6 +4,7 @@
  * 约定：只接收「渲染所需的数据 + 回调」；React 状态、副作用与网络调用仍由
  * SyncPanel 持有（单一状态源）；可测纯逻辑在 src/ui/sync-settings-view.ts。
  */
+import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { UiT } from '../../ui/i18n.ts'
@@ -23,6 +24,12 @@ import type { GithubLoginView } from './sync-view.ts'
 import { S3_PROVIDERS } from '../../ui/sync-settings-view.ts'
 import type { CloudFormIssue, SyncFormSnapshot } from '../../ui/sync-settings-view.ts'
 import css from '../config-manager.module.css'
+
+/**
+ * 静默自动保存的「已保存」徽章在弹窗里停留多久（ms）。
+ * 入场 180ms 淡入（--cm-motion-base），2.4s 是「够看清、又不碍着继续输入」的停留长度。
+ */
+const SAVED_TICK_MS = 2400
 
 /** 通道配置弹窗的表单字段补丁（onFormChange 入参：git/webdav + 云端点两组）。 */
 export type ChannelFormPatch = {
@@ -51,7 +58,7 @@ export type ChannelFormPatch = {
  * 拆出的职责单元只接收「渲染所需数据 + 回调」：`onFormChange` 由父组件实现为
  * 「patch 表单 + 防抖自动保存」—— 防抖定时器与卸载 flush 仍归父组件（单一状态源）。
  */
-export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIssues, busy, savingConfig, remoteReady, statusInfo, githubSignedIn, githubView, onFormChange, onGithubStart, onGithubCancel, onSave }: {
+export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIssues, busy, savingConfig, remoteReady, statusInfo, githubSignedIn, saveTick, githubView, onFormChange, onGithubStart, onGithubCancel, onSave }: {
   open: boolean
   onClose: () => void
   api: SyncApi
@@ -70,6 +77,12 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
   remoteReady: boolean
   statusInfo: SyncStatusResponse | null
   githubSignedIn: boolean | null
+  /**
+   * 静默自动保存的成功计数（父组件每次保存成功 +1）。
+   * 为什么用计数而不是布尔：连续改字段会连着保存多次，每次都要重新闪一次徽章；
+   * 布尔在「已经显示」的状态下无法区分第二次保存。
+   */
+  saveTick: number
   githubView: GithubLoginView
   onFormChange: (patch: ChannelFormPatch) => void
   onGithubStart: () => void
@@ -84,6 +97,20 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
   } = form
   /** 密钥槽位引用名（与宿主 cloudSecretRef 同构；只用于提示文案，值从不经过前端） */
   const cloudSecretRef = cloudSecretRefName(channel)
+
+  /**
+   * 静默自动保存的可见回执（四通道共用）：每来一个新的 saveTick 就闪一次「已保存」，SAVED_TICK_MS 后淡出。
+   * 用 ref 记住已消费的 tick —— 弹窗关着时到达的 tick 不会在下次打开时误闪，窗口内重复保存只重置计时。
+   */
+  const [savedVisible, setSavedVisible] = useState(false)
+  const consumedTickRef = useRef(0)
+  useEffect(() => {
+    if (saveTick <= 0 || saveTick === consumedTickRef.current) return
+    consumedTickRef.current = saveTick
+    setSavedVisible(true)
+    const timer = setTimeout(() => { setSavedVisible(false) }, SAVED_TICK_MS)
+    return () => { clearTimeout(timer) }
+  }, [saveTick])
   return (
     <Modal
       open={open}
@@ -117,6 +144,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
             api={api}
             t={t}
             repoUrl={repoUrl}
+            signedIn={githubSignedIn}
             busy={busy}
             onPick={(cloneUrl) => { onFormChange({ repoUrl: cloneUrl }) }}
           />
@@ -450,6 +478,8 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
         >
           {t('config.save')}
         </Button>
+        {/* 自动保存的可见回执：改动即存这件事此前完全静默，用户改完字段没有任何反馈 */}
+        {savedVisible && <span className={css.savedTick}><Badge kind="ok">{t('config.savedTick')}</Badge></span>}
         <InfoHint text={t('config.saveHint')} label={t('common.infoHint')} />
       </div>
       </Modal.Body>

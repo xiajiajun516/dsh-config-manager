@@ -61,6 +61,7 @@ import type {
 } from './sync-api.ts'
 import { resolveSmartSync } from './sync-entry.ts'
 import { reportPreviewFailure } from './preview-failure.ts'
+import { savedConfigState } from './config-save-state.ts'
 import {
   channelMapOf, channelStateMap, computeGithubLoginView, computeSyncButtons, defaultChannelSyncState,
   githubPollMessage, isClientChannel, pushReportView, readStoredChannel,
@@ -320,6 +321,9 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const mountedRef = useRef(true)
   /** 通道配置弹窗开关（瞬态 UI：切 tab/刷新不持久化，弹窗不自动重开；DESIGN.md §8.12 约定） */
   const [channelOpen, setChannelOpen] = useState(false)
+  /** 静默自动保存的成功计数（不进 SyncUiState 契约）：>0 时弹窗内闪一次「已保存」徽章 ——
+   *  四通道共用的输入防抖自动保存此前成功后完全静默，用户无从判断存没存上。 */
+  const [saveTick, setSaveTick] = useState(0)
   /** 待确认断开的通道（null = 未打开确认弹窗）——用户要求：配置过的通道必须能删掉 */
   const [clearTarget, setClearTarget] = useState<SyncChannel | null>(null)
   /**
@@ -647,38 +651,12 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       // 基于 stateRef 计算（同步权威），经 commit 落库：即使保存完成时组件已卸载
       // （切走 tab），savingConfig 复位与凭据清空仍会镜像进 store，切回后一致
       const s = stateRef.current
-      const next: SyncUiState = { ...s, savingConfig: false }
-      // 只清空「本次已写入的」password/token：若保存期间用户已改输入则保留新值
-      next.webdavPassword = s.webdavPassword !== '' && s.webdavPassword !== payloadToSave.password
-        ? s.webdavPassword
-        : ''
-      next.token = s.token !== '' && s.token !== payloadToSave.token ? s.token : ''
-      // 云端点密钥同一口径：只清「本次确实写出去的」那个；保存期间用户又改了输入则保留新值
-      next.s3Secret = s.s3Secret !== '' && s.s3Secret !== payloadToSave.secret ? s.s3Secret : ''
-      next.gistToken = s.gistToken !== '' && s.gistToken !== payloadToSave.secret ? s.gistToken : ''
-      // 凭据徽章合并（响应只含布尔，无 secret 值）
-      if (s.statusInfo !== null) {
-        const info: SyncStatusResponse = {
-          ...s.statusInfo,
-          configured: true,
-          credentialConfigured: saved.credentialConfigured,
-        }
-        if (saved.webdav !== undefined) {
-          info.webdav = {
-            url: s.statusInfo.webdav?.url,
-            username: s.statusInfo.webdav?.username,
-            usernameConfigured: saved.webdav.usernameConfigured,
-            passwordConfigured: saved.webdav.passwordConfigured,
-          }
-        }
-        // 云端点：响应只回非密视图 + secretStored 布尔（值永不回传），直接合并供徽章刷新
-        if (saved.s3 !== undefined) info.s3 = saved.s3
-        if (saved.gist !== undefined) info.gist = saved.gist
-        next.statusInfo = info
-      }
+      // 凭据清空 + 徽章合并的自包含演算下沉到 ./config-save-state.ts（本文件有行数棘轮）
+      const next: SyncUiState = { ...s, ...savedConfigState(s, saved, payloadToSave) }
       commit(next)
-      // M-17：手动保存成功给出回执（自动保存静默，避免输入防抖刷屏）
+      // M-17：手动保存给出 toast 回执；自动保存不弹 toast（防抖会刷屏），改为计数 +1 → 弹窗内的「已保存」徽章
       if (announce) toast.ok(t('toast.configSaved'))
+      else setSaveTick((n) => n + 1)
       // 手动填入的 git token 保存成功 → 校验有效性（有效则隐藏 GitHub 登录块）。
       // 只有 git 通道用 SYNC_CREDENTIAL_REF：云端点通道的密钥走各自的槽位，与 GitHub 登录无关。
       if (payloadToSave.transport === 'git' && saved.credentialConfigured) {
@@ -809,6 +787,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       if (poll.status === 'success') {
         // token 已由宿主写入 DSH credentials：标记已登录（隐藏登录块）+ 刷新状态/凭据徽章
         patch({ githubSignedIn: true, github: { ...stateRef.current.github, phase: 'success', error: null } })
+        // 登录成功必须当场可见（用户反馈：成功后界面无任何提示，只能靠猜）；文案复用 githubPollMessage 的 success 分支
+        toast.ok(message)
         void loadStatus()
       } else {
         patchGithub({ phase: 'error', error: message })
@@ -1411,6 +1391,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             remoteReady={remoteReady}
             statusInfo={state.statusInfo}
             githubSignedIn={state.githubSignedIn}
+            saveTick={saveTick}
             githubView={githubView}
             onClose={closeChannelDialog}
             onFormChange={(p) => { patch(p); scheduleConfigSave() }}

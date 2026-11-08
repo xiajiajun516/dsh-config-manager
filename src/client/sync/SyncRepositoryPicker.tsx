@@ -15,7 +15,7 @@
  * - 失败**绝不静默，也绝不把拒绝抛出去**（调用点在 void 上下文里）：错误同时进 toast 与内联红字
  *   （toast 会被后续提示挤掉，内联红字留在原地），宿主下发的文本一律先过 `redact()` 再渲染。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 
 import type { TranslateNS } from '../client-types.ts'
@@ -27,7 +27,7 @@ import { toast } from '../common/toast-store.ts'
 import type { SyncApi } from './sync-api.ts'
 import {
   formatRepoUpdatedAt, repoCreateBody, repoNameError, repoPickerOptions, repoPickerRepos,
-  repoPickerValueFor, REPO_PICKER_CREATE_VALUE, type RepoNameError, type RepoPickerRepo,
+  repoPickerValueFor, shouldAutoLoadRepos, REPO_PICKER_CREATE_VALUE, type RepoNameError, type RepoPickerRepo,
 } from '../../ui/sync-repository-picker.ts'
 import css from '../config-manager.module.css'
 
@@ -39,6 +39,11 @@ export interface SyncRepositoryPickerProps {
   t: TranslateNS<'config-manager-sync'>
   /** 表单里当前的仓库地址（用于回显「当前选中的是哪一个」） */
   repoUrl: string
+  /**
+   * GitHub 登录态（null = 未知）。登录成功那一刻由父组件变 true ⇒ 本组件**自动**拉列表，
+   * 用户不必再点开下拉才知道列表出来了（2026-11-08 用户反馈）。
+   */
+  signedIn: boolean | null
   /** 表单繁忙（保存中 / 同步中）时禁用选择与新建 */
   busy: boolean
   /** 选中仓库（或新建成功）后把地址交回父组件 */
@@ -46,7 +51,7 @@ export interface SyncRepositoryPickerProps {
 }
 
 /** 打开下拉时才拉列表（Select 的 onOpen）—— 弹窗一打开就请求会白跑一次网络。 */
-export function SyncRepositoryPicker({ open, api, t, repoUrl, busy, onPick }: SyncRepositoryPickerProps) {
+export function SyncRepositoryPicker({ open, api, t, repoUrl, signedIn, busy, onPick }: SyncRepositoryPickerProps) {
   const [repos, setRepos] = useState<RepoPickerRepo[]>([])
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -58,20 +63,26 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, busy, onPick }: Sy
   const [nameError, setNameError] = useState<RepoNameError>(null)
   const [createError, setCreateError] = useState<string | null>(null)
 
-  /** 拉取仓库列表。**绝不抛出**（调用点在 void 上下文里，抛出的拒绝会变成 unhandled rejection）。 */
-  const load = useCallback(async (): Promise<void> => {
+  /** 拉取仓库列表。**绝不抛出**（调用点在 void 上下文里，抛出的拒绝会变成 unhandled rejection）。
+   *  announce：手动点「刷新列表」为 true —— 列表就在眼前，但用户需要知道那一次点击真的跑了；
+   *  自动加载（打开弹窗 / 登录成功）保持静默，否则一进弹窗就弹一条没人要求的通知。
+   *  失败**始终**进 toast（内联红字会随滚动离开视野，密码/token 相关的 401 尤其要当刻可见）。 */
+  const load = useCallback(async (announce = false): Promise<void> => {
     setLoading(true)
     setLoadError(null)
     try {
       const res = await api.githubListRepositories()
       setRepos(res.repos)
       setLoaded(true)
+      if (announce) toast.ok(t('repoPicker.refreshed', { count: repoPickerRepos(res.repos).length }))
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err))
+      const detail = err instanceof Error ? err.message : String(err)
+      setLoadError(detail)
+      toast.error(t('repoPicker.loadFailed') + t('common.labelSeparator') + redact(detail))
     } finally {
       setLoading(false)
     }
-  }, [api])
+  }, [api, t])
 
   // 关闭时收起新建表单（下次打开从「选择」开始，不留上一次的半截输入）
   useEffect(() => {
@@ -83,13 +94,23 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, busy, onPick }: Sy
     setCreateError(null)
   }, [open])
 
-  // 表单里已经有地址（例如上次选过）→ 进弹窗就把列表拉出来，让用户直接看到「当前选中的是哪一个」；
-  // 空地址则等 onOpen 惰性加载。失败过就不自动重试（避免每开一次弹窗打一次必然失败的请求）。
+  // 自动加载的三个触发（弹窗打开 / 登录成功瞬间 / 表单里已有地址）由 ui 层的 shouldAutoLoadRepos 判定：
+  // 父组件在轮询到 success 时把 signedIn 变 true，这里就会**自动**把列表拉出来 —— 用户不再需要
+  // 自己去点开下拉（2026-11-08 用户反馈：登录成功后界面没有任何提示，看不出到底成了没有）。
+  // 失败过不自动重试（避免每开一次弹窗打一次必然失败的请求），重试走「刷新列表」或登录态复位。
   useEffect(() => {
-    if (!open || loaded || loading || loadError !== null) return
-    if (repoUrl.trim() === '') return
+    if (!shouldAutoLoadRepos({ open, signedIn, loaded, loading, failed: loadError !== null, repoUrl })) return
     void load()
-  }, [open, loaded, loading, loadError, repoUrl, load])
+  }, [open, signedIn, loaded, loading, loadError, repoUrl, load])
+
+  // 登录状态由「未登录/未知」变「已登录」→ 清掉上一次的失败态（多半是未登录时的 401），让上面那条
+  // effect 立刻重试一次；否则用户登录完仍旧只看到「加载失败，可重试」。
+  const prevSignedInRef = useRef(signedIn)
+  useEffect(() => {
+    const prev = prevSignedInRef.current
+    prevSignedInRef.current = signedIn
+    if (prev !== true && signedIn === true && loadError !== null) setLoadError(null)
+  }, [signedIn, loadError])
 
   const pick = (value: string): void => {
     if (value === REPO_PICKER_CREATE_VALUE) {
@@ -159,7 +180,7 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, busy, onPick }: Sy
             onOpen={() => { if (!loaded && !loading) void load() }}
             onChange={pick}
           />
-          <Button size="sm" loading={loading} disabled={busy} onClick={() => { void load() }}>
+          <Button size="sm" loading={loading} disabled={busy} onClick={() => { void load(true) }}>
             {t('repoPicker.refresh')}
           </Button>
         </div>

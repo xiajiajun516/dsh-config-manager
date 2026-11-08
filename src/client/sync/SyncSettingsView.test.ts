@@ -170,3 +170,35 @@ test('t42: 未新增硬编码颜色（DESIGN.md：颜色/阴影走 --dsw-* token
   assert.doesNotMatch(viewSource, /#[0-9a-fA-F]{3,8}\b/, '不得出现硬编码颜色值')
   assert.doesNotMatch(viewSource, /rgba?\(/, '不得出现硬编码 rgb/rgba 颜色')
 })
+
+/* ------------------------------- 用户感知：登录回执 / 列表自动加载 / 自动保存回执 */
+
+test('GitHub 登录成功必须立刻给出 toast（用户报告：成功后界面没有任何提示，只能靠猜）', () => {
+  // 成功分支原本只 patch 状态 + loadStatus：登录块在 githubSignedIn===true 时整块隐藏，
+  // 「成功」这件事在界面上完全消失，用户看不出到底成了没有。文案必须复用 githubPollMessage
+  // 的 success 分支（同一句话不在字典与 toast 里各写一遍）。
+  const start = viewSource.indexOf("if (poll.status === 'success')")
+  assert.ok(start > 0, 'success 分支必须存在')
+  const branch = viewSource.slice(start, start + 400)
+  assert.match(branch, /toast\.ok\(message\)/, '登录成功必须弹 toast（复用 githubPollMessage 的成功文案）')
+})
+
+test('仓库列表在登录成功那一刻自动加载，不必用户先点开下拉（2026-11-08 用户反馈）', () => {
+  // 判定收在 ui 纯逻辑里（可单测），组件只负责调用 —— 组件里不得再出现「地址为空就 return」这类内联规则。
+  const picker = readSource(fileURLToPath(new URL('./SyncRepositoryPicker.tsx', import.meta.url)))
+  assert.match(picker, /shouldAutoLoadRepos\(\{ open, signedIn, loaded, loading, failed: loadError !== null, repoUrl \}\)/, '自动加载必须经 ui/sync-repository-picker.ts 的 shouldAutoLoadRepos 判定')
+  assert.doesNotMatch(picker, /if \(repoUrl\.trim\(\) === ''\) return/, '旧的「地址为空就不加载」内联规则必须撤掉（登录成功也要能拉列表）')
+  assert.match(picker, /signedIn: boolean \| null/, '选择器必须接收登录态')
+  const dialog = readSource(fileURLToPath(new URL('./ChannelConfigDialog.tsx', import.meta.url)))
+  assert.match(dialog, /signedIn=\{githubSignedIn\}/, '弹窗必须把登录态传给仓库选择器（登录成功后翻 true ⇒ 自动加载）')
+})
+
+test('静默自动保存必须有可见回执（四通道共用：输入防抖保存此前成功后完全静默）', () => {
+  // 主文件：自动保存成功（announce=false）→ 计数 +1；弹窗据此闪一次「已保存」徽章。
+  assert.match(viewSource, /else setSaveTick\(\(n\) => n \+ 1\)/, '自动保存成功后必须递增 saveTick（不进 SyncUiState 契约）')
+  assert.match(viewSource, /<ChannelConfigDialog[\s\S]*?saveTick=\{saveTick\}/, 'saveTick 必须传给配置弹窗')
+  const dialog = readSource(fileURLToPath(new URL('./ChannelConfigDialog.tsx', import.meta.url)))
+  assert.match(dialog, /\{savedVisible && <span className=\{css\.savedTick\}>/, '弹窗必须渲染「已保存」回执')
+  assert.match(dialog, /t\('config\.savedTick'\)/, '回执文案必须走字典（i18n 禁硬编码）')
+  assert.match(dialog, /SAVED_TICK_MS = 2400/, '回执是瞬时提示（2.4s 后隐藏），不得常驻')
+})

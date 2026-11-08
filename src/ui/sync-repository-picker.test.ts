@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 
 import {
   formatRepoUpdatedAt, normalizeRepoUrl, repoCreateBody, repoNameError, repoPickerOptions,
-  repoPickerRepos, repoPickerValueFor, repoShortName, REPO_NAME_MAX_LENGTH,
+  repoPickerRepos, repoPickerValueFor, repoShortName, shouldAutoLoadRepos, REPO_NAME_MAX_LENGTH,
   REPO_PICKER_CREATE_VALUE, type RepoPickerRepo,
 } from './sync-repository-picker.ts'
 
@@ -127,4 +127,37 @@ test('formatRepoUpdatedAt：空串→空串，非法→原样，合法→本地�
   const shown = formatRepoUpdatedAt('2026-09-30T10:00:00Z', 'en-US')
   assert.ok(shown.includes('2026'), '应包含年份，实际：' + shown)
   assert.ok(!shown.includes('Invalid'), '绝不显示 Invalid Date，实际：' + shown)
+})
+
+/* ---------- 仓库列表的自动加载判定（2026-11-08 用户反馈：登录成功后列表不出现、必须手点下拉） */
+
+/** 基线：弹窗打开、未登录、地址为空、什么都没加载过 */
+const autoBase = {
+  open: true,
+  signedIn: null as boolean | null,
+  loaded: false,
+  loading: false,
+  failed: false,
+  repoUrl: '',
+}
+
+test('shouldAutoLoadRepos：登录成功（signedIn true）即自动加载 —— 用户不必再点开下拉', () => {
+  assert.equal(shouldAutoLoadRepos({ ...autoBase, signedIn: true }), true)
+  // 已登录 + 表单里已有地址同样自动加载（保持既有行为）
+  assert.equal(shouldAutoLoadRepos({ ...autoBase, signedIn: true, repoUrl: 'https://github.com/u/r.git' }), true)
+})
+
+test('shouldAutoLoadRepos：未登录且地址为空 → 不加载（必然 401，白跑网络）', () => {
+  assert.equal(shouldAutoLoadRepos({ ...autoBase, signedIn: null }), false)
+  assert.equal(shouldAutoLoadRepos({ ...autoBase, signedIn: false }), false)
+  // 未登录但地址已填：照旧自动拉（既有行为，可能与手填的 token 一起生效）
+  assert.equal(shouldAutoLoadRepos({ ...autoBase, signedIn: false, repoUrl: '  https://github.com/u/r.git ' }), true)
+})
+
+test('shouldAutoLoadRepos：弹窗关闭 / 已加载 / 加载中 / 失败后 → 一律不重复发请求', () => {
+  assert.equal(shouldAutoLoadRepos({ ...autoBase, signedIn: true, open: false }), false)
+  assert.equal(shouldAutoLoadRepos({ ...autoBase, signedIn: true, loaded: true }), false)
+  assert.equal(shouldAutoLoadRepos({ ...autoBase, signedIn: true, loading: true }), false)
+  // 失败不自动重试：否则每次重渲染都会打一次必然失败的请求（重试走「刷新列表」或登录态复位）
+  assert.equal(shouldAutoLoadRepos({ ...autoBase, signedIn: true, failed: true }), false)
 })

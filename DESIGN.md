@@ -250,7 +250,10 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   **折叠 180ms**（`.collapse`：`grid-template-rows` 0fr ⇄ 1fr，**展开与收起两端都有动画**；
   用法见 §6 的 `Collapse`）、**视图切换入场**（`.viewEnter`：`ViewSwitch` 的 key 重放）、
   **列表/条目入场**（`.snapshotList > *`、`.dataTable tbody tr`、`.pickerUnit`、`.restorePlan`、
-  `.banner`、`.empty`，前 4 项各递进 24ms）、**骨架 shimmer 1.3s**（`.skeletonBar`）。
+  `.banner`、`.empty`，前 4 项各递进 24ms）、**骨架 shimmer 1.3s**（`.skeletonBar`）、
+  **自动保存回执 180ms**（`.savedTick`：`savedTickIn` 只写 opacity + 2px 上浮，2.4s 后由组件隐藏 ——
+  四通道共用的「输入防抖自动保存」此前成功后完全静默，这枚徽章是它唯一的可见证据；本类只管动画，
+  盒模型由里面的 `.badge` 提供，不得在此另写字号/间距）。
   图标形变仅限 `ExpandChevron`（折叠展开/收起；临界阻尼、无过冲，见 §6 第三方原语）。
 - **按压回弹（2026-11-04 用户要求）**：全部按钮与链接按钮按下时缩到 **96%**，松手用弹簧动画
   先放大到**略超原尺寸**再回 100%。实现 = `--cm-press-spring`（`linear(0, 0.26 22%, 0.62 42%, 0.88 58%,
@@ -271,7 +274,7 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   （前 60ms 画完八成，仍像瞬间出现），`ease-in-out` 是 6%/13%/50%/87%（像先卡住再猛跳），
   `ease-draw` 是 13%/23%/64%/91%（起笔立刻动、中段推进、收笔收敛）。**两者都只给 checkStroke 用**，
   别扩散到其它过渡。
-  **`prefers-reduced-motion: reduce` 下关掉装饰性动效**（页面/弹窗/面板/通知入场、状态点脉冲、
+  **`prefers-reduced-motion: reduce` 下关掉装饰性动效**（页面/弹窗/面板/通知入场、状态点脉冲、自动保存回执、
   骨架 shimmer —— 骨架退化为静态占位块，信息不丢；**按压回弹退化成无缩放**：`:active` 的
   `transform: none`；**勾形描边退化成直接显示**：`animation: none` **且必须补终态**
   `clip-path: inset(0 0 0 0)` —— 只关动画会把勾形永远裁在 0 宽度里）——
