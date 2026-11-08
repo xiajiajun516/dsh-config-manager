@@ -99,11 +99,12 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
   const cloudSecretRef = cloudSecretRefName(channel)
 
   /**
-   * 静默自动保存的可见回执（四通道共用）：每来一个新的 saveTick 就闪一次「已保存」，SAVED_TICK_MS 后淡出。
+   * 静默自动保存的可见回执（四通道共用）：每来一个新的 saveTick 就闪一次「已保存」，SAVED_TICK_MS 后隐藏。
    * 用 ref 记住已消费的 tick —— 弹窗关着时到达的 tick 不会在下次打开时误闪，窗口内重复保存只重置计时。
    */
   const [savedVisible, setSavedVisible] = useState(false)
-  const consumedTickRef = useRef(0)
+  // 初始值取挂载瞬间的 tick：弹窗关着时到达的保存不会在下次打开时误闪
+  const consumedTickRef = useRef(saveTick)
   useEffect(() => {
     if (saveTick <= 0 || saveTick === consumedTickRef.current) return
     consumedTickRef.current = saveTick
