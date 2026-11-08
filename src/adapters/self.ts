@@ -85,6 +85,24 @@ export const SELF_IMPORT_BLOCKED_RELS: readonly string[] = [
 ];
 
 /**
+ * 分档案作用域（`sync-profiles/<profile>/`）里**同一类**文件：SEC-01 必须按模式挡。
+ *
+ * 档案名是运行时集合（用户随时能建新档案），无法列举成数组；而这些文件与 `sync/` 下那两份
+ * 语义完全相同 —— 都是「同步目标 / 自动同步开关」，导入一个指向攻击者仓库的包后，用户下次
+ * 同步就会把该档案的配置推过去。`SELF_CONFIG_FILES` 白名单本就不含 `sync-profiles/`（导出侧
+ * 从不搬别人的档案作用域），这里补的是导入侧的纵深防御。
+ */
+const SELF_IMPORT_BLOCKED_PATTERNS: readonly RegExp[] = [
+  /^sync-profiles\/[A-Za-z0-9][A-Za-z0-9._-]*\/sync-config\.json$/,
+  /^sync-profiles\/[A-Za-z0-9][A-Za-z0-9._-]*\/sync-autosync\.json$/,
+];
+
+/** SEC-01 判据（单一入口）：精确 rel 或分档案作用域里的同语义文件，一律不落地。 */
+export function isSelfImportBlocked(rel: string): boolean {
+  return SELF_IMPORT_BLOCKED_RELS.includes(rel) || SELF_IMPORT_BLOCKED_PATTERNS.some((pattern) => pattern.test(rel))
+}
+
+/**
  * 拦截报告项里的**稳定机器码**前缀（`self-import-blocked:<rel>`）。
  *
  * 为什么要有码而不是只给文案：文案随语言/措辞变，调用方（报告、日志、将来的自动判定）需要
@@ -265,7 +283,7 @@ export class SelfAdapter extends FileCollectionAdapter {
     const items = await super.analyzeImport(data, ctx);
     return items.map((item) => {
       const rel = item.target?.ref;
-      if (rel === undefined || !SELF_IMPORT_BLOCKED_RELS.includes(rel)) return item;
+      if (rel === undefined || !isSelfImportBlocked(rel)) return item;
       const blocked: PlanItem = {
         id: item.id,
         kind: 'Warning',
@@ -285,7 +303,7 @@ export class SelfAdapter extends FileCollectionAdapter {
    */
   override async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
     const ref = item.target?.ref;
-    if (ref !== undefined && SELF_IMPORT_BLOCKED_RELS.includes(ref)) {
+    if (ref !== undefined && isSelfImportBlocked(ref)) {
       return { ok: false, message: ctx.msg('adapter.selfImportBlocked', { path: ref }), warning: true };
     }
     return super.applyItem(item, ctx);

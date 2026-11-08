@@ -1043,6 +1043,18 @@ export interface Snapshot {
    *     绝不写 'unknown' 之类的占位值，否则恢复时会拿占位值当「已知版本」误报版本不同。
    */
   dshVersion?: string;
+  /**
+   * 拍这份快照时**所属档案名**（originProfile；可选）。
+   *
+   * 为什么需要：插件数据目录 `$DSH_HOME/dsh-config-manager` 被所有 DSH profile 共用，
+   * 快照库会混进 web / desktop / Test1 等多个档案的条目 —— 不记来源就分不清哪条属于谁。
+   * 三条硬边界（与 dshVersion 同口径）：
+   *  ① **必须可选**：旧快照没有这个字段是常态，旧快照的列表与恢复路径一字不变；
+   *  ② 值只写**能证明的真实档案名**（宿主 `HostContext.profile`）；取不到时**不写** ——
+   *     绝不写 'unknown' 之类的占位值，否则界面会把「不知道」当成一个真实档案去分组与筛选；
+   *  ③ 只用于**标注与筛选**，绝不参与恢复/保留判定（来自他人档案的快照照样可恢复）。
+   */
+  originProfile?: string;
   /** 置顶标记（P1-⑧）：置顶快照在保留清理（自动删最旧）中豁免，需用户手动删除 */
   pinned?: boolean;
   // ---- Phase 4 新增（F1：operation-bound + integrity + readiness）----

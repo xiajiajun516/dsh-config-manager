@@ -11,7 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAdapters } from './index.ts';
-import { SelfAdapter, SELF_CONFIG_FILES, SELF_IMPORT_BLOCKED_RELS, SELF_IMPORT_BLOCKED_CODE } from './self.ts';
+import { SelfAdapter, SELF_CONFIG_FILES, SELF_IMPORT_BLOCKED_RELS, SELF_IMPORT_BLOCKED_CODE, isSelfImportBlocked } from './self.ts';
 import { hashSection } from '../sync/sync-state.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
@@ -129,6 +129,44 @@ test('SEC-01：包内含 sync-config.json / sync-autosync.json → 报告级 war
     '本机既有的同步目标不得被包内地址覆盖',
   );
   assert.equal(await dst.fs.exists('dsh-config-manager/sync/sync-autosync.json'), false, '不得凭空创建同步调度配置');
+});
+
+test('SEC-01：分档案作用域 sync-profiles/<p>/ 的同步目标同样拦截（按模式，不按清单）', async () => {
+  // 判据：档案名是运行时集合，列举不出来 —— 所以按目录模式判，两种形态必须一致
+  for (const rel of [
+    'sync-profiles/Test1/sync-config.json',
+    'sync-profiles/Test1/sync-autosync.json',
+    'sync-profiles/open-design/sync-config.json',
+    'sync/sync-config.json',
+    'sync/sync-autosync.json',
+  ]) {
+    assert.equal(isSelfImportBlocked(rel), true, '必须拦下: ' + rel);
+  }
+  // 不误伤：同目录里的选择/偏好/运行态不是「同步目标」，白名单外也不该被本判据报成安全事件
+  for (const rel of [
+    'sync-profiles/Test1/sync-selection.json',
+    'sync-profiles/Test1/ui-prefs.json',
+    'sync-profiles/Test1/sync-state.json',
+    'sync-profiles/nested/deep/sync-config.json',
+    'sync/sync-selection.json',
+  ]) {
+    assert.equal(isSelfImportBlocked(rel), false, '不该拦: ' + rel);
+  }
+
+  // 计划阶段：包内带分档案同步目标 → 改判 Warning（去掉 target ⇒ 引擎不写盘、不进快照范围）
+  const adapter = new SelfAdapter();
+  const evil = '{"schemaVersion":3,"transport":"git","git":{"repoUrl":"https://attacker.example/collect.git"}}';
+  const relativePath = 'sync-profiles/Test1/sync-config.json';
+  const section = {
+    version: 1 as const,
+    files: [{ relativePath, data: Buffer.from(evil, 'utf8'), contentHash: sha256Hex(Buffer.from(evil, 'utf8')) }],
+  };
+  const dst = makeContext('linux', '/home/bob');
+  const items = await adapter.analyzeImport(section, makeImportContext(dst, new Map([['self', section]])));
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.kind, 'Warning');
+  assert.ok(String(items[0]?.detail ?? '').startsWith(SELF_IMPORT_BLOCKED_CODE));
+  assert.equal(await dst.fs.exists('dsh-config-manager/' + relativePath), false, '包内地址不得落地');
 });
 
 test('createAdapters: selfDir 缺省挂载 dsh-config-manager；空串不挂载', () => {

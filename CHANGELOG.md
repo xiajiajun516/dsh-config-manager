@@ -33,7 +33,13 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **助手能先预演再动手**：聊天里的 AI 现在可以先把「同步合并」与「导入配置」走一遍预览、拿到一次性凭据再执行；预览过后内容有变化，这次执行会被拒绝并要求重新预览，改错的余地留在动手之前。
   **The assistant can rehearse before it acts**: in chat, the AI can preview a sync merge or a config import, then execute with a one-shot handle; if anything changed after the preview, execution is refused and a fresh preview is required — mistakes are caught before anything is written.
 
+- **快照列表能看出每条快照来自哪个档案**：插件数据目录被所有档案共用，快照库里混着 web、desktop 等档案拍下的条目，以前看不出区别；现在拍快照时会记下来源档案，列表每行显示档案徽章（不是当前档案时点明「来自他人档案」），也能按档案筛选、看哪些旧快照没标注来源。
+  **You can see which profile each snapshot came from**: the plugin data folder is shared by every profile, so the snapshot list mixed entries taken under web, desktop and others with no way to tell them apart; snapshots now record their origin profile, each row shows a profile badge (marked “from another profile” when it is not the current one), and the list can be filtered by profile, including which older snapshots have no origin recorded.
+
 ### 🔧 变更 · Changed
+
+- **每个档案的同步设置与 GitHub 登录现在各自独立**：以前 web、desktop 等档案共用一份同步目标与登录状态，在一个档案里配好的仓库会连另一个档案一起推；现在非默认档案各自保存同步目标、勾选分区、自动同步开关与登录凭据（默认档案沿用原位置不动），两个档案可以分别绑不同账号与仓库而互不覆盖。定时备份的排期与保留策略仍是全机一份；新档案第一次启动会先继承原来的那份设置，不会突然显示「未配置」。
+  **Sync settings and GitHub sign-in are now per profile**: profiles used to share one sync target and one login, so a repository configured under one profile pushed for all of them; each non-default profile now keeps its own target, section selection, auto-sync switch and credentials (the default profile stays where it always was), so two profiles can use different accounts and repositories without overwriting each other. The scheduled-backup schedule and retention stay machine-wide, and a profile's first start inherits the previous settings instead of showing up unconfigured.
 
 - **让助手做恢复时也必须先预览**：助手执行恢复现在必须带上它预览时拿到的凭据，否则不会动手；预览之后快照或磁盘状态有变，同样会被拒绝并要求重新预览。
   **Assistant-driven restore now requires a preview first**: an execution must carry the handle from its own preview; a snapshot or disk state that changed after previewing is refused with a request to preview again.

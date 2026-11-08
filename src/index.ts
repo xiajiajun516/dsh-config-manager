@@ -166,7 +166,10 @@ import { createLogger, parseLogLevel, type Logger } from './utils/logger.ts'
 import { sessionActiveDenied, sessionActiveGateApplies } from './routes/recovery.ts'
 
 // P4：路由组共享的纯工具已下沉到 routes/route-support.ts —— 组文件不再反向 import 本文件。
-import { ROUTE_TIMEOUT_MS, SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF, credentialRef, decryptErrorText, executeRestorePlan, isControlledPath, makeRestoreExecutor, safeCredentialRef, syncPasswordRef, tryDecryptCredentials, withTimeout } from './routes/route-support.ts'
+import { ROUTE_TIMEOUT_MS, credentialRef, decryptErrorText, executeRestorePlan, isControlledPath, makeRestoreExecutor, safeCredentialRef, syncPasswordRef, tryDecryptCredentials, withTimeout } from './routes/route-support.ts'
+// per-profile 同步作用域：单一实现见 src/sync/sync-scope.ts
+import { syncScopeFor, type SyncScope } from './sync/sync-scope.ts'
+import { bootSyncScope, makeSyncCredentialViews } from './sync/sync-scope-boot.ts'
 export { ROUTE_TIMEOUT_MS, REVIEW_KINDS, SYNC_CREDENTIAL_REF, SYNC_ENCRYPT_PASSWORD_REF_PREFIX, SYNC_DECRYPT_PASSWORD_REF_PREFIX, SYNC_WEBDAV_CREDENTIAL_REF, SyncRouteError, buildAutosyncStatus, buildAutosyncStatusByChannel, buildFileDiffBody, buildRestoreBody, credentialRef, decryptErrorText, executeRestorePlan, extractSyncSections, extractSyncSessions, isAutosyncInterval, isControlledPath, isGitHubAuthMissing, isToolchainChangeItem, makeRestoreExecutor, parseMeForm, planToConfirmItems, safeCredentialRef, sessionHealthNextSteps, syncPasswordRef, tryDecryptCredentials, withTimeout, writeProfileError, writeRequestBodyToFile, writeSyncRouteError } from './routes/route-support.ts'
 export type { AutosyncStatusResponse, BuildFileDiffBodyResult, BuildRestoreBodyResult, RestoreExecutor, SyncConfirmItem } from './routes/route-support.ts'
 
@@ -2168,7 +2171,7 @@ const WEBDAV_TIMEOUT_MS = 120_000
  * （见 W1 报告的重测配方），把结果落到这里；makeRoutes 里的 const routeEnv: RouteEnvInferred =
  * 注解保证两侧不漂移（新增依赖漏登记会在构造点报错）。
  */
-export type RouteEnvInferred = { sessionExportFetch: ((input: string, init: RequestInit) => Promise<Response>) | undefined; sessionExportPort: number | undefined; adapters: ConfigAdapter<unknown>[]; sessionHealth: { homeDir: string; targetFormatVersion: () => number | undefined; workspaceKeys: () => Promise<ReadonlySet<string>>; knownSessionIds: () => Promise<ReadonlySet<string>>; sessionMeta: (ids: readonly string[]) => Promise<SessionMetaIndex>; }; backupScheduler: BackupScheduler; bootSafetyAudit: () => Promise<BootSafetyReport>; cancelDecisionTimeoutMs: number; buildMarketSummary: (e: { url: string; addedAt: string; }) => Promise<MarketSummary>; credentials: CredentialProvider; dataDir: string; exportsDir: string; githubAuth: GitHubAuthClient; githubClientId: string | undefined; githubClientSecret: string | undefined; githubFlows: DeviceFlowStore; history: MigrationStore; host: ConfigManagerHostContext; itemCached: (url: string, itemId: string) => Promise<boolean>; knownSyncSectionIds: Set<SectionId>; makeImporter: () => Importer; makeMarketReader: () => GitMarketReader; makeRecoveryExecutors: (runId: string) => RecoveryExecutorFns; makeSyncEngine: (cfg: SyncConfig, engineOpts?: { optInSections?: readonly SectionId[]; }) => SyncEngine; marketBootAutoRefreshed: { value: boolean; }; marketCacheIndex: (url: string) => string; marketDir: string; marketCacheItemDir: (url: string) => string; marketStarCache: StarCache; marketWorkDir: (url: string) => string; meGitHubRest: GitHubAuthRest; meService: MyRepoService; meTokenProvider: () => Promise<string>; msg: MsgFunc; prepareSync: (body: Record<string, unknown>) => Promise<SyncConfig>; pluginVersion: string; profileLauncher: DshProfileLauncher; profileRuntime: DshProfileRuntimeRegistry; profiles: DshProfileManager; pruneStagedMarketZips: () => Promise<void>; readCachedIndexObj: (url: string) => Promise<MarketIndex | null>; recoveryOrchestrator: RecoveryOrchestrator; resolveSyncPassword: (ref: string) => Promise<string | undefined>; roots: string[]; runAbortControllers: Map<string, AbortController>; runCancels: Map<string, { signal: AbortController; settle: (d: 'rollback' | 'keep') => void; decided: boolean }>; runs: RunRegistry; scheduler: AutoSyncScheduler; selectionCache: Partial<Record<SyncTransportType, SyncSelection>>; selectionOptInSections: (channel: SyncTransportType, onlyAuto?: boolean) => SectionId[]; selectionView: (channel: SyncTransportType) => Promise<SelectionView>; selectionViewByChannel: () => Promise<Record<SyncTransportType, SelectionView>>; snapshotEntrySections: (snapshotDir: string) => Promise<string[]>; snapshotsDir: string; starPromptRepoUrl: string; syncCredentialsByChannelView: () => Promise<Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean; }>>; syncDir: string; syncPasswordConfigured: (ref: string) => Promise<boolean>; syncWorkDir: { inspect: (repoUrl: string, opts?: { detail?: boolean; }) => Promise<{ facts: GitWorkDirFacts; } | { error: string; }>; rebuild: (repoUrl: string, mode: 'relink' | 'adopt' | 'reclone') => Promise<GitWorkDirFacts>; }; syncSectionCatalog: { id: SectionId; displayName: string; portability: Portability; defaultIncluded: boolean; }[]; syncSessions: SyncSessionStore; tmpDir: string; tryAppendHistory: (raw: { kind: MigrationKind; result: MigrationResult; sections: string[]; operationId?: string; snapshotId?: string; runId?: string; source: 'api' | 'autosync' | 'backup-scheduler' | 'recovery' | 'cli' | 'internal'; summary: string; error?: string; }) => Promise<string | undefined>; withMutationGate: (op: string, handler: (req: IncomingMessage, res: ServerResponse, lockCtx?: MutationLockContext, journalCtx?: JournalRunContext) => Promise<void>, opts?: { journaled?: boolean; deferredSnapshot?: boolean; }) => ((req: IncomingMessage, res: ServerResponse) => Promise<void>); selfUpdate: (targetVersion: string) => Promise<SelfUpdateOutcome>; writeItemCache: (url: string, itemId: string, manifestRaw: string, zipBytes: Uint8Array) => Promise<void>; }
+export type RouteEnvInferred = { sessionExportFetch: ((input: string, init: RequestInit) => Promise<Response>) | undefined; sessionExportPort: number | undefined; adapters: ConfigAdapter<unknown>[]; sessionHealth: { homeDir: string; targetFormatVersion: () => number | undefined; workspaceKeys: () => Promise<ReadonlySet<string>>; knownSessionIds: () => Promise<ReadonlySet<string>>; sessionMeta: (ids: readonly string[]) => Promise<SessionMetaIndex>; }; backupScheduler: BackupScheduler; bootSafetyAudit: () => Promise<BootSafetyReport>; cancelDecisionTimeoutMs: number; buildMarketSummary: (e: { url: string; addedAt: string; }) => Promise<MarketSummary>; credentials: CredentialProvider; dataDir: string; exportsDir: string; syncRootDir: string; syncScope: SyncScope; githubAuth: GitHubAuthClient; githubClientId: string | undefined; githubClientSecret: string | undefined; githubFlows: DeviceFlowStore; history: MigrationStore; host: ConfigManagerHostContext; itemCached: (url: string, itemId: string) => Promise<boolean>; knownSyncSectionIds: Set<SectionId>; makeImporter: () => Importer; makeMarketReader: () => GitMarketReader; makeRecoveryExecutors: (runId: string) => RecoveryExecutorFns; makeSyncEngine: (cfg: SyncConfig, engineOpts?: { optInSections?: readonly SectionId[]; }) => SyncEngine; marketBootAutoRefreshed: { value: boolean; }; marketCacheIndex: (url: string) => string; marketDir: string; marketCacheItemDir: (url: string) => string; marketStarCache: StarCache; marketWorkDir: (url: string) => string; meGitHubRest: GitHubAuthRest; meService: MyRepoService; meTokenProvider: () => Promise<string>; msg: MsgFunc; prepareSync: (body: Record<string, unknown>) => Promise<SyncConfig>; pluginVersion: string; profileLauncher: DshProfileLauncher; profileRuntime: DshProfileRuntimeRegistry; profiles: DshProfileManager; pruneStagedMarketZips: () => Promise<void>; readCachedIndexObj: (url: string) => Promise<MarketIndex | null>; recoveryOrchestrator: RecoveryOrchestrator; resolveSyncPassword: (ref: string) => Promise<string | undefined>; roots: string[]; runAbortControllers: Map<string, AbortController>; runCancels: Map<string, { signal: AbortController; settle: (d: 'rollback' | 'keep') => void; decided: boolean }>; runs: RunRegistry; scheduler: AutoSyncScheduler; selectionCache: Partial<Record<SyncTransportType, SyncSelection>>; selectionOptInSections: (channel: SyncTransportType, onlyAuto?: boolean) => SectionId[]; selectionView: (channel: SyncTransportType) => Promise<SelectionView>; selectionViewByChannel: () => Promise<Record<SyncTransportType, SelectionView>>; snapshotEntrySections: (snapshotDir: string) => Promise<string[]>; snapshotsDir: string; starPromptRepoUrl: string; syncCredentialsByChannelView: () => Promise<Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean; }>>; syncDir: string; syncPasswordConfigured: (ref: string) => Promise<boolean>; syncWorkDir: { inspect: (repoUrl: string, opts?: { detail?: boolean; }) => Promise<{ facts: GitWorkDirFacts; } | { error: string; }>; rebuild: (repoUrl: string, mode: 'relink' | 'adopt' | 'reclone') => Promise<GitWorkDirFacts>; }; syncSectionCatalog: { id: SectionId; displayName: string; portability: Portability; defaultIncluded: boolean; }[]; syncSessions: SyncSessionStore; tmpDir: string; tryAppendHistory: (raw: { kind: MigrationKind; result: MigrationResult; sections: string[]; operationId?: string; snapshotId?: string; runId?: string; source: 'api' | 'autosync' | 'backup-scheduler' | 'recovery' | 'cli' | 'internal'; summary: string; error?: string; }) => Promise<string | undefined>; withMutationGate: (op: string, handler: (req: IncomingMessage, res: ServerResponse, lockCtx?: MutationLockContext, journalCtx?: JournalRunContext) => Promise<void>, opts?: { journaled?: boolean; deferredSnapshot?: boolean; }) => ((req: IncomingMessage, res: ServerResponse) => Promise<void>); selfUpdate: (targetVersion: string) => Promise<SelfUpdateOutcome>; writeItemCache: (url: string, itemId: string, manifestRaw: string, zipBytes: Uint8Array) => Promise<void>; }
 
 
 interface RoutesDeps {
@@ -2179,8 +2182,12 @@ interface RoutesDeps {
   snapshotsDir: string
   /** m1：导出/导入 run 注册表（跨请求共享，/progress 与 /runs 的单一事实源） */
   runs: RunRegistry
-  /** m-sync-ui：同步状态/配置目录（$DSH_HOME/dsh-config-manager/sync） */
+  /** m-sync-ui：本档案的同步作用域目录（默认档案 = 历史 sync/，其它 = sync-profiles/<profile>；见 sync-scope.ts） */
   syncDir: string
+  /** 全机一份的同步根：只承载 backup-schedule.json（定时备份是宿主行为，不随档案分开） */
+  syncRootDir: string
+  /** 本档案的凭据槽位与作用域助手（token / WebDAV 口令 / 加解密密码 / 云端点密钥） */
+  syncScope: SyncScope
   /** m-market：市场目录（$DSH_HOME/dsh-config-manager/market；其下 config/ 与 cache/） */
   marketDir: string
   /** 插件数据根目录（$DSH_HOME/dsh-config-manager；F1 vault 镜像目录 = <dataDir>/vault） */
@@ -2328,14 +2335,14 @@ function makeRoutes(deps: RoutesDeps): {
   /** agent 工具面（D3/D5/D6）：装配见 routes/model-tools-deps.ts，与路由同一批依赖来源。 */
   agentToolDeps: ReturnType<typeof createAgentToolDeps>
 } {
-  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, dataDir, credentials, githubClientId, githubClientSecret, backupScheduler, history } = deps
+  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, syncRootDir, syncScope, marketDir, dataDir, credentials, githubClientId, githubClientSecret, backupScheduler, history } = deps
   const roots = [exportsDir, tmpDir]
   /**
    * m-retention：快照保留策略提供者（缺省 = 从 sync/backup-schedule.json 实时读取）。
    * 用户改完策略即时生效（每次 prune 都重读）；读取失败 → 缺省策略（引擎侧兜底）。
    */
   const retentionPolicyProvider = deps.retentionPolicy
-    ?? (async () => (await readBackupSchedule(syncDir)).retention ?? DEFAULT_RETENTION_POLICY)
+    ?? (async () => (await readBackupSchedule(syncRootDir)).retention ?? DEFAULT_RETENTION_POLICY)
   /**
    * m-retention：GFS 分层选择器（sync 层实现）+ 旧路径快速路径绑定。
    * 为什么由宿主注入：架构边界禁止 core → sync 反向依赖；core 只声明 PruneSelector 契约。
@@ -2583,7 +2590,8 @@ function makeRoutes(deps: RoutesDeps): {
   // 这里只做装配：宿主只提供 credentials、日志出口与配置目录。
   const prepareSync = createPrepareSync({
     syncDir,
-    parseBody: (body) => parseSyncBody(body, { credentials }),
+    // scope：git/webdav 的 token/口令、s3/gist 的密钥槽位都按档案取（默认档案 = 历史槽位名）。
+    parseBody: (body) => parseSyncBody(body, { credentials, scope: syncScope }),
     mergeWebDavUsername: mergePersistedWebDavUsername,
     log: (line) => host.log.warn(line),
   })
@@ -2621,26 +2629,8 @@ function makeRoutes(deps: RoutesDeps): {
     }
   }
 
-  /** 某个同步密码槽位是否已配置（只回布尔，永不回值）。 */
-  const syncPasswordConfigured = async (ref: string): Promise<boolean> => {
-    try {
-      const info = await credentials.describe(credentialRef(ref))
-      return info.configured
-    } catch {
-      return false
-    }
-  }
-
-  /** 全部通道的「同步密码是否已保存」视图（只回布尔；密码值永不进任何响应）。 */
-  const syncCredentialsByChannelView = async (): Promise<Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean }>> => {
-    const describe = async (channel: SyncTransportType): Promise<{ encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean }> => ({
-      encryptPasswordConfigured: await syncPasswordConfigured(syncPasswordRef('ENCRYPT', channel)),
-      decryptPasswordConfigured: await syncPasswordConfigured(syncPasswordRef('DECRYPT', channel)),
-    })
-    // t32/B7：通道集合来自唯一枚举（保持 Promise.all 并发语义）
-    const pairs = await Promise.all(SYNC_CHANNELS.map(async (channel) => [channel, await describe(channel)] as const))
-    return Object.fromEntries(pairs) as Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean }>
-  }
+  // 同步密码槽位的「是否已保存」视图（按本档案取槽位；实现见 src/sync/sync-scope-boot.ts）
+  const { syncPasswordConfigured, syncCredentialsByChannelView } = makeSyncCredentialViews(credentials, syncScope.profile)
 
   /** 分区选择视图形状（无 schemaVersion；密码值永不进视图）。 */
 
@@ -2698,7 +2688,7 @@ function makeRoutes(deps: RoutesDeps): {
     workDir: gitWorkDir,
     credentials: {
       getToken: async () => {
-        const resolved = await credentials.resolve(credentialRef(SYNC_CREDENTIAL_REF))
+        const resolved = await credentials.resolve(credentialRef(syncScope.tokenRef))
         return resolved?.value ?? ''
       },
     },
@@ -2713,7 +2703,7 @@ function makeRoutes(deps: RoutesDeps): {
         username: cfg.webdav.username ?? '',
         credentials: {
           getPassword: async () => {
-            const resolved = await credentials.resolve(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF))
+            const resolved = await credentials.resolve(credentialRef(syncScope.webdavPasswordRef))
             return resolved?.value ?? ''
           },
         },
@@ -2731,7 +2721,7 @@ function makeRoutes(deps: RoutesDeps): {
         accessKeyId: cfg.s3.accessKeyId,
         credentials: {
           getSecretAccessKey: async () => {
-            const resolved = await credentials.resolve(credentialRef(cloudSecretRef(provider)))
+            const resolved = await credentials.resolve(credentialRef(syncScope.scopeRef(cloudSecretRef(provider))))
             return resolved?.value ?? ''
           },
         },
@@ -2748,7 +2738,7 @@ function makeRoutes(deps: RoutesDeps): {
         gistId: cfg.gist.gistId,
         credentials: {
           getToken: async () => {
-            const resolved = await credentials.resolve(credentialRef(cloudSecretRef(GIST_PROVIDER)))
+            const resolved = await credentials.resolve(credentialRef(syncScope.scopeRef(cloudSecretRef(GIST_PROVIDER))))
             return resolved?.value ?? ''
           },
         },
@@ -2892,7 +2882,7 @@ function makeRoutes(deps: RoutesDeps): {
   // 同一凭据槽），值绝不落盘 / 进日志 / 回传浏览器；gitWriter 写用户仓库与 fork 分支，
   // 安全模式与 GitTransport 一致（credential helper store 临时文件 0600 用后即删）。
   const meTokenProvider = async (): Promise<string> => {
-    const resolved = await credentials.resolve(credentialRef(SYNC_CREDENTIAL_REF))
+    const resolved = await credentials.resolve(credentialRef(syncScope.tokenRef))
     return resolved?.value ?? ''
   }
   const meGitHubRest = new GitHubAuthRest({ tokenProvider: meTokenProvider })
@@ -3059,6 +3049,8 @@ function makeRoutes(deps: RoutesDeps): {
       starPromptRepoUrl: STAR_PROMPT_REPO_URL,
       syncCredentialsByChannelView,
       syncDir,
+      syncRootDir,
+      syncScope,
       // issue #79：工作副本自检（只读，挂在 /sync/status）与显式重建（写动作，走 mutation gate）。
       // 路由只传 repoUrl/mode —— 路径、凭据与 git 调用口径都留在宿主这一处。
       syncWorkDir: {
@@ -3601,7 +3593,10 @@ export function apply(ctx: Context, config?: Config): void {
   const exportsDir = join(dataDir, 'exports')
   const tmpDir = join(dataDir, 'tmp')
   const snapshotsDir = join(dataDir, 'snapshots')
-  const syncDir = join(dataDir, 'sync')
+  // 同步作用域按档案分（dataDir 不拆：写锁 / SAFE MODE / 事务日志都长在那棵树上）—— src/sync/sync-scope.ts
+  const syncScope = syncScopeFor(dataDir, resolveProfileName(config, ctx))
+  const syncDir = syncScope.dir
+  const syncRootDir = syncScope.rootDir
   /**
    * issue #88 / #89：回合自动留点（回滚点）**缺省关闭**。
    *
@@ -3650,6 +3645,8 @@ export function apply(ctx: Context, config?: Config): void {
   mkdirSync(historyDir, { recursive: true })
 
   const host = new ConfigManagerHostContext(ctx, homeDir, resolveProfileName(config, ctx))
+  // 非默认档案首次启动继承历史同步根（配置 + 凭据值，best-effort；见 src/sync/sync-scope-boot.ts）
+  bootSyncScope(syncScope, ctx.credentials, (line) => host.log.warn(line))
   // issue #30：出站代理（插件私有，不改全局）。仅在检测到 HTTP(S)_PROXY 时生效；未配置则完全直连。
   // 打一条脱敏日志，便于用户确认「插件当前到底走没走代理」（凭据不进日志）。
   const proxySummary = activeProxySummary()
@@ -3834,7 +3831,8 @@ export function apply(ctx: Context, config?: Config): void {
   const secretScanner = createConfiguredSecretScanner(config?.personalPatterns)
   const runs = new RunRegistry({ msg: host.msg })
   const backupScheduler = new BackupScheduler({
-    syncDir,
+    // 定时备份配置是全机一份（不是某个档案的同步态）：喂全机根，不喂档案作用域
+    syncDir: syncRootDir,
     exportsDir,
     host,
     adapters,
@@ -3868,10 +3866,12 @@ export function apply(ctx: Context, config?: Config): void {
     snapshotsDir,
     runs,
     syncDir,
+    syncRootDir,
+    syncScope,
     marketDir,
     dataDir,
     runtimePort: () => webPort.value,
-    retentionPolicy: async () => (await readBackupSchedule(syncDir)).retention ?? DEFAULT_RETENTION_POLICY,
+    retentionPolicy: async () => (await readBackupSchedule(syncRootDir)).retention ?? DEFAULT_RETENTION_POLICY,
     // F2：部署者 personalPatterns → 强化 secret 扫描器（未配置 = 默认行为）。
     // 该扫描器实现了 scanText（文件类分区文本级扫描，G-09 只告警不改写）——
     // 换成任何没有 scanText 的扫描器都会静默关闭 G-09，改这里务必先看 exporter.ts 的 scanFileSectionText。

@@ -25,7 +25,7 @@ import fssync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { normalizeDshVersion, resolveFileTarget, verifySnapshot } from './backup.ts';
+import { normalizeDshVersion, normalizeOriginProfile, resolveFileTarget, verifySnapshot } from './backup.ts';
 import { isPatchLayerRel } from './patch-layers.ts';
 import { expectedSessionRefs, sweepGhostSessions } from './ghost-sweep.ts';
 import { zhMsg } from './messages.ts';
@@ -191,6 +191,11 @@ export interface SnapshotMeta {
   entryCount: number;
   hostFileBackupCount: number;
   beforePluginCount: number;
+  /**
+   * 来源档案（originProfile）：拍这份快照的进程所属 profile 名。
+   * 旧快照 / 宿主不暴露 profile 时缺省 —— 界面按「未标注」展示，绝不写 'unknown' 占位。
+   */
+  originProfile?: string;
   /** 置顶标记（P1-⑧）：置顶快照不参与自动保留清理（最多保留 N 个时的淘汰豁免） */
   pinned?: boolean;
 }
@@ -1108,6 +1113,8 @@ export async function listSnapshots(
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
       const snapshot = parsed as Snapshot;
       if (typeof snapshot.id !== 'string' || snapshot.id === '') continue;
+      // 来源档案：旧快照没有该字段是常态 → 缺省（不写占位值，列表照常可读）。
+      const originProfile = normalizeOriginProfile(snapshot.originProfile);
       metas.push({
         id: snapshot.id,
         createdAt: snapshot.createdAt,
@@ -1116,6 +1123,7 @@ export async function listSnapshots(
         entryCount: snapshot.entries?.length ?? 0,
         hostFileBackupCount: snapshot.hostFileBackups?.length ?? 0,
         beforePluginCount: snapshot.beforePlugins?.length ?? 0,
+        ...(originProfile !== undefined ? { originProfile } : {}),
         pinned: snapshot.pinned === true,
       });
     } catch {

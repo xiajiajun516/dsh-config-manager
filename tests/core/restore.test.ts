@@ -515,3 +515,33 @@ test('R-host-unreadable: 快照里 existed=true + unreadable 的宿主文件 →
     assert.match(skips[0]!.description, /读不出来/, '说明必须点出「拍快照时读不出来」，而不是含糊的「缺少 blob 副本」');
   });
 });
+
+test('R-05b listSnapshots：originProfile 透传；旧快照（无该字段）照常可读', async () => {
+  await withTmp(async (tmp) => {
+    const snapshotsDir = path.join(tmp, 'snapshots');
+    const mk = async (id: string, createdAt: string, originProfile?: unknown) => {
+      const dir = path.join(snapshotsDir, id);
+      await fs.mkdir(dir, { recursive: true });
+      const body: Record<string, unknown> = {
+        id, createdAt, sourceZip: `${id}.zip`,
+        entries: [{ kind: 'file', adapter: 'skills', ref: 'a.md' }],
+        hostFileBackups: [], beforePlugins: [],
+      };
+      if (originProfile !== undefined) body.originProfile = originProfile;
+      await fs.writeFile(path.join(dir, 'snapshot.json'), JSON.stringify(body), 'utf8');
+    };
+    await mk('labeled', '2026-08-12T00:00:00.000Z', 'Test1');
+    // 旧快照：该字段上线前落的盘，JSON 里根本没有 originProfile
+    await mk('legacy', '2026-08-11T00:00:00.000Z');
+    // 脏值：手工编辑或异常宿主写进来的空白名 —— 按缺省处理，不往 meta 上抛
+    await mk('junk', '2026-08-10T00:00:00.000Z', '   ');
+
+    const metas = await listSnapshots(snapshotsDir);
+    const byId = new Map(metas.map((m) => [m.id, m]));
+    assert.equal(metas.length, 3, '三种快照都要读出来（不得因来源字段可疑而跳过整份快照）');
+    assert.equal(byId.get('labeled')!.originProfile, 'Test1', '有来源的快照要把档案名透传到 meta');
+    assert.equal('originProfile' in byId.get('legacy')!, false, '旧快照没有该字段 ⇒ meta 上也不写（不留 undefined 键）');
+    assert.equal('originProfile' in byId.get('junk')!, false, '不可信的档案名按缺省处理，绝不写占位值');
+    assert.equal(byId.get('legacy')!.entryCount, 1, '旧快照其余字段照常可读');
+  });
+});

@@ -1841,7 +1841,9 @@ test('issue #107 源码守卫：/sync/apply-items 的祖先副本按会话加密
   assert.ok(/ancestorPassword: applyDecryptPassword/.test(source), '有密码 → ancestorPassword 必须透传（写密文副本）');
   assert.ok(/suppressAncestor: true/.test(source), '没密码 → 必须 suppressAncestor（宁可不落，也绝不落明文）');
   assert.ok(/\.\.\.ancestorOpts/.test(options), 'applyItems 调用必须展开 ancestorOpts（否则上面两处判定全是死代码）');
-  assert.ok(/resolveSyncPassword\(syncPasswordRef\('DECRYPT'/.test(source), '密码来源必须回落到已存凭据（客户端不持有密码）');
+  // 按档案分槽位后，路由用本地 `passwordRef`（= syncScope.passwordRef）而不是直接调 syncPasswordRef；
+  // 守卫的意图不变：密码来源必须是已存凭据（客户端不持有密码），不接受字面量密码。
+  assert.ok(/resolveSyncPassword\(\s*(?:syncPasswordRef|passwordRef)\('DECRYPT'/.test(source), '密码来源必须回落到已存凭据（客户端不持有密码）');
   assert.ok(source.includes('encrypted: preview.encrypted === true,'), '同步会话必须登记「远端快照是否加密」（只存布尔，不存密码）');
   assert.equal(/ancestorPassword:\s*session\./.test(source), false, '会话里绝不存密码字段');
 });

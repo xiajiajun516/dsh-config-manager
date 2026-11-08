@@ -231,3 +231,87 @@ export function isUnreadableNote(note: string): boolean {
 export function planHasExecutableActions(plan: RestorePlan | null): boolean {
   return plan !== null && plan.actions.some((a) => a.kind !== 'skip')
 }
+
+/* ------------------------------------------------------------ 来源档案（originProfile） */
+
+/**
+ * 「来源档案」筛选值。三态各占一个值，且**形态不同**，避免与真实档案名撞车：
+ *  - `SNAPSHOT_ORIGIN_ALL`（空串）= 不筛；
+ *  - `SNAPSHOT_ORIGIN_UNLABELED` = 只看没有来源的旧快照；
+ *  - 具体档案 = `profile:<档案名>`（由 `snapshotOriginFilterValue` 生成）。
+ *
+ * 为什么不用「档案名裸值」：档案名是用户可起的（'all' 之类完全合法），裸值会让「名为 all 的档案」
+ * 与「全部」共用同一个值 —— 筛选结果会莫名其妙地混进别的档案。前缀把两个空间分开。
+ */
+export const SNAPSHOT_ORIGIN_ALL = ''
+export const SNAPSHOT_ORIGIN_UNLABELED = '__unlabeled__'
+const ORIGIN_PROFILE_PREFIX = 'profile:'
+
+/** 指定档案的筛选值（Select 的 option value）。 */
+export function snapshotOriginFilterValue(profile: string): string {
+  return `${ORIGIN_PROFILE_PREFIX}${profile}`
+}
+
+/** 取来源档案名：非空字符串（去首尾空白）才算「能证明的来源」；缺失/空 → undefined（按「未标注」处理）。 */
+export function snapshotOriginOf(meta: { originProfile?: string }): string | undefined {
+  const value = meta.originProfile
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+/**
+ * 行首来源徽章的呈现状态：
+ *  - `unlabeled`：没有来源（旧快照）→ **不显示徽章**（绝不拿占位值凑一个「未知档案」）；
+ *  - `local`：与当前档案相同 → 只显示档案名，中性；
+ *  - `foreign`：与当前档案不同 → 显示档案名 + 强调「来自他人档案」；
+ *  - `unknownCurrent`：宿主没给当前档案 → 只显示档案名 —— 不知道自己在哪个档案时
+ *    声称「来自他人档案」是无法证明的结论。
+ */
+export type SnapshotOriginState = 'unlabeled' | 'local' | 'foreign' | 'unknownCurrent'
+
+export function snapshotOriginState(meta: { originProfile?: string }, currentProfile?: string): SnapshotOriginState {
+  const profile = snapshotOriginOf(meta)
+  if (profile === undefined) return 'unlabeled'
+  const current = typeof currentProfile === 'string' ? currentProfile.trim() : ''
+  if (current === '') return 'unknownCurrent'
+  return current === profile ? 'local' : 'foreign'
+}
+
+/** 列表里出现过的来源档案（去重、保持首次出现顺序；当前档案提到最前，方便对照自己）。 */
+export function snapshotOriginProfiles(
+  metas: readonly { originProfile?: string }[],
+  currentProfile?: string,
+): string[] {
+  const seen: string[] = []
+  for (const meta of metas) {
+    const profile = snapshotOriginOf(meta)
+    if (profile !== undefined && !seen.includes(profile)) seen.push(profile)
+  }
+  const current = typeof currentProfile === 'string' ? currentProfile.trim() : ''
+  if (current === '') return seen
+  return [current, ...seen.filter((profile) => profile !== current)]
+}
+
+/** 是否有「没有来源」的快照（决定要不要给「未标注」一个筛选项；全是新快照时不给）。 */
+export function hasUnlabeledOrigin(metas: readonly { originProfile?: string }[]): boolean {
+  return metas.some((meta) => snapshotOriginOf(meta) === undefined)
+}
+
+/**
+ * 按来源档案筛选（纯函数，不修改入参、返回新数组）。
+ * 全部 → 原样拷贝；未标注 → 只留没有来源的；`profile:<名>` → 只留该档案；
+ * 其余（宿主/存档来的脏值）→ 空结果 —— 坏筛选值不静默退化成「全部」，免得用户以为筛过了。
+ */
+export function filterSnapshotsByOrigin<T extends { originProfile?: string }>(
+  metas: readonly T[],
+  filter: string,
+): T[] {
+  if (filter === SNAPSHOT_ORIGIN_ALL) return [...metas]
+  if (filter === SNAPSHOT_ORIGIN_UNLABELED) return metas.filter((meta) => snapshotOriginOf(meta) === undefined)
+  if (filter.startsWith(ORIGIN_PROFILE_PREFIX)) {
+    const profile = filter.slice(ORIGIN_PROFILE_PREFIX.length)
+    return metas.filter((meta) => snapshotOriginOf(meta) === profile)
+  }
+  return []
+}

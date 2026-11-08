@@ -41,7 +41,7 @@ function extractPathMappings(body: Record<string, unknown>): PathMapping[] {
   }
   return out
 }
-import { REVIEW_KINDS, ROUTE_TIMEOUT_MS, SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF, SyncRouteError, buildAutosyncStatus, buildAutosyncStatusByChannel, credentialRef, extractSyncSections, extractSyncSessions, isAutosyncInterval, isGitHubAuthMissing, isToolchainChangeItem, planToConfirmItems, syncPasswordRef, withTimeout, writeSyncRouteError } from './route-support.ts'
+import { REVIEW_KINDS, ROUTE_TIMEOUT_MS, SyncRouteError, buildAutosyncStatus, buildAutosyncStatusByChannel, credentialRef, extractSyncSections, extractSyncSessions, isAutosyncInterval, isGitHubAuthMissing, isToolchainChangeItem, planToConfirmItems, syncScopeOrDefault, withTimeout, writeSyncRouteError } from './route-support.ts'
 import { GitHubApiError } from '../market/github-repos.ts'
 import type { SectionId } from '../schema/types.ts'
 import { redact } from '../security/redaction.ts'
@@ -81,14 +81,16 @@ interface CredentialDescriber {
 async function cloudChannelViews(
   full: FullSyncConfig | null,
   credentials: CredentialDescriber,
+  /** 通道密钥槽位（已按档案作用域；默认档案 = 历史槽位名）。 */
+  cloudSecret: (provider: Parameters<typeof cloudSecretRef>[0]) => string,
 ): Promise<{ s3?: CloudS3ChannelView; gist?: CloudGistChannelView }> {
   const out: { s3?: CloudS3ChannelView; gist?: CloudGistChannelView } = {}
   if (full?.s3 !== undefined) {
-    const info = await credentials.describe(credentialRef(cloudSecretRef(full.s3.provider)))
+    const info = await credentials.describe(credentialRef(cloudSecret(full.s3.provider)))
     out.s3 = s3ChannelView(full.s3.provider, full.s3, info.configured)
   }
   if (full?.gist !== undefined) {
-    const info = await credentials.describe(credentialRef(cloudSecretRef(GIST_PROVIDER)))
+    const info = await credentials.describe(credentialRef(cloudSecret(GIST_PROVIDER)))
     out.gist = gistChannelView(full.gist, info.configured)
   }
   return out
@@ -133,6 +135,16 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     tryAppendHistory,
     withMutationGate,
   } = env
+  /**
+   * 凭据槽位一律按**档案作用域**取（见 src/sync/sync-scope.ts）：
+   * 默认档案（web）沿用历史槽位名，零迁移；其它档案追加 `__<PROFILE>` 后缀 ——
+   * 于是不同 profile 可以各自绑定不同的 GitHub 账号 / 仓库而不互相覆盖。
+   */
+  const syncScope = syncScopeOrDefault(syncDir, env.syncScope)
+  const tokenRef = syncScope.tokenRef
+  const webdavPasswordRef = syncScope.webdavPasswordRef
+  const passwordRef = (kind: 'ENCRYPT' | 'DECRYPT', channel: string): string => syncScope.passwordRef(kind, channel)
+  const cloudSecret = (provider: Parameters<typeof cloudSecretRef>[0]): string => syncScope.scopeRef(cloudSecretRef(provider))
   /** 云端点密钥「只写」端口：值只进 DSH credentials，绝不落盘 / 日志 / 回传（cloudSecretRef 槽位）。 */
   const cloudSecrets: CloudSecretWriter = {
     set: async (ref, value) => { await credentials.set(credentialRef(ref), value) },
@@ -142,7 +154,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
    * T-ui-merge：合并预览 / 合并执行共用的引擎选项。
    *
    * 解密密码口径与 /sync/sync 完全一致：请求体优先，其次已保存的 DECRYPT 凭据
-   * （syncPasswordRef('DECRYPT', channel)）。密码只存在于内存，绝不写进响应 / 日志 / 同步文件；
+   * （passwordRef('DECRYPT', channel)，已按档案作用域）。密码只存在于内存，绝不写进响应 / 日志 / 同步文件；
    * 明文快照根本不会被解密（引擎只在 manifest.encrypted 时才用密码）。
    */
   const mergeEngineOptions = async (
@@ -150,7 +162,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     syncCfg: SyncConfig,
   ): Promise<{ snapshotId?: string; password?: string; pathMappings?: PathMapping[] }> => {
     const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
-    const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', channelOf(syncCfg)))
+    const savedDecryptPassword = await resolveSyncPassword(passwordRef('DECRYPT', channelOf(syncCfg)))
     const decryptPassword = typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
       ? body['decryptPassword']
       : savedDecryptPassword
@@ -206,8 +218,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     const full = await readFullSyncConfig(syncDir, configIssues)
     const state = await loadSyncState(syncDir)
     const [cred, webdavCred] = await Promise.all([
-      credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
-      credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
+      credentials.describe(credentialRef(tokenRef)),
+      credentials.describe(credentialRef(webdavPasswordRef)),
     ])
     const transport: SyncConfig['transport'] = parseSyncChannel(full?.transport) ?? 'git'
     // m-self：插件 UI 偏好（上次选择的同步通道；ui-prefs.json，随 self 分区进备份）
@@ -223,7 +235,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         }
       : undefined
     // 云端点配置视图（只回 secretStored 布尔；与当前通道无关，配置过即回填）
-    const cloud = await cloudChannelViews(full, credentials)
+    const cloud = await cloudChannelViews(full, credentials, cloudSecret)
     // issue #79 / #104 建议 3：git 工作副本是否已跟随 repoUrl，外加「领先远端提交数 /
     // 远端快照数」（只读自检；后者是「本地一直没真正备份」的预警依据）。
     // 读不出来时**如实回传错误**（workDirError），不让状态接口静默少一块信息。
@@ -353,15 +365,15 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           if (channel === 's3') {
             // s3 通道断开 → 清掉**全部**兼容商的密钥槽位（该通道不再指向任何一家；幂等）
             for (const provider of S3_COMPAT_PROVIDERS) {
-              await credentials.unset(credentialRef(cloudSecretRef(provider)))
+              await credentials.unset(credentialRef(cloudSecret(provider)))
             }
           } else if (channel === 'gist') {
-            await credentials.unset(credentialRef(cloudSecretRef(GIST_PROVIDER)))
+            await credentials.unset(credentialRef(cloudSecret(GIST_PROVIDER)))
           } else {
-            await credentials.unset(credentialRef(channel === 'git' ? SYNC_CREDENTIAL_REF : SYNC_WEBDAV_CREDENTIAL_REF))
+            await credentials.unset(credentialRef(channel === 'git' ? tokenRef : webdavPasswordRef))
           }
-          await credentials.unset(credentialRef(syncPasswordRef('ENCRYPT', channel)))
-          await credentials.unset(credentialRef(syncPasswordRef('DECRYPT', channel)))
+          await credentials.unset(credentialRef(passwordRef('ENCRYPT', channel)))
+          await credentials.unset(credentialRef(passwordRef('DECRYPT', channel)))
           const auto = await readAutosyncConfig(syncDir, channel)
           await writeAutosyncConfig(syncDir, channel, { ...auto, enabled: false, consecutiveFailures: 0 })
           // 立即让调度器丢掉该通道的定时器（否则内存里的旧排期会继续对已删通道发请求）
@@ -384,13 +396,13 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         // 云端点通道经 CloudSecretWriter 只写端口落库（值绝不进 sync-cloud-config.json / 日志 / 回传）
         await writeSyncConfig(syncDir, syncCfg, cloudSecrets)
         const [cred, webdavCred] = await Promise.all([
-          credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
-          credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
+          credentials.describe(credentialRef(tokenRef)),
+          credentials.describe(credentialRef(webdavPasswordRef)),
         ])
         // SEC-03：写完就把落盘结果再读一遍（writeSyncConfig 可能因命名空间合并保留旧值），
         // 成因而非「写成功」才是客户端要显示的真相；字段恒在（默认空数组）。
         const configIssues: SyncConfigIssue[] = []
-        const cloud = await cloudChannelViews(await readFullSyncConfig(syncDir, configIssues), credentials)
+        const cloud = await cloudChannelViews(await readFullSyncConfig(syncDir, configIssues), credentials, cloudSecret)
         writeJson(res, 200, {
           ok: true,
           configured: true,
@@ -454,7 +466,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         // 已保存的加密密码兜底（DSH credentials；用户不必每次重输）。请求体里的密码优先，
         // 因为那是用户此刻输入的覆盖值；两者都没有 → 交给 engine 报「加密需要密码」。
         const pushChannel: SyncTransportType = channelOf(syncCfg)
-        const effectiveEncryptPassword = encryptPassword ?? await resolveSyncPassword(syncPasswordRef('ENCRYPT', pushChannel))
+        const effectiveEncryptPassword = encryptPassword ?? await resolveSyncPassword(passwordRef('ENCRYPT', pushChannel))
         // sessions 的导出参数（「最新 N 个」/ 逐会话点名）；**放行**由引擎的 optInSections 决定
         const sessions = extractSyncSessions(body)
         const sessionsOpt = sections !== undefined && sections.includes('sessions') && sessions !== undefined
@@ -505,7 +517,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         // 解密密码：请求体 > 已保存（DSH credentials）。明文快照根本不会被解密
         // （engine.prepareSnapshot 只在 manifest.encrypted 时才用密码），因此「未加密备份
         // 不会误用密码」是引擎层保证，而不是靠这里猜。密码仅内存，绝不落盘/落日志。
-        const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', channelOf(syncCfg)))
+        const savedDecryptPassword = await resolveSyncPassword(passwordRef('DECRYPT', channelOf(syncCfg)))
         const decryptPassword =
           typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
             ? body['decryptPassword']
@@ -563,7 +575,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     }),
     // -------------------------------------------------- sync/github/poll
     // m-github-oauth：轮询授权结果。凭 flowId 取回宿主登记的 device_code → GitHub 换 token
-    // → 成功则立即写入 DSH credentials（SYNC_CREDENTIAL_REF，与手动 token 同槽），
+    // → 成功则立即写入 DSH credentials（本档案的 token 槽位，与手动 token 同槽），
     // token 绝不回传浏览器；pending 返回下次轮询延迟；终止态（denied/expired/error）清理登记。
     endpoint({ path: '/api/dsh-config-manager/sync/github/poll', methods: ['POST'] }, async (req, res) => {
       const body = await readJsonBody(req)
@@ -585,7 +597,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           interval: flow.interval,
         })
         if (result.status === 'success' && result.accessToken !== undefined) {
-          await credentials.set(credentialRef(SYNC_CREDENTIAL_REF), result.accessToken)
+          await credentials.set(credentialRef(tokenRef), result.accessToken)
           githubFlows.delete(flowId)
           host.log.info('GitHub OAuth 登录成功（token 已写入 DSH credentials）')
           writeJson(res, 200, { status: 'success', credentialConfigured: true })
@@ -619,7 +631,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       writeJson(res, 200, { ok: true })
     }),
     // -------------------------------------------------- sync/github/validate
-    // m-sync-github-valid：校验 SYNC_CREDENTIAL_REF 中已存 token 是否有效（GET /user），
+    // m-sync-github-valid：校验本档案 token 槽位中已存 token 是否有效（GET /user），
     // 供 UI 判定「是否已登录」→ 已登录隐藏 GitHub 登录区块、token 失效则重新展示。
     // 只回布尔 + 登录名（非敏感），token 值绝不回传；仅 401（无效/过期）→ valid:false，
     // 其余错误（网络/限流）向上抛，由 UI 兜底（不误判登出）。
@@ -654,7 +666,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     // 仓库选择器（issue：同步通道支持「选择已有仓库 / 新建仓库」）：
     //   GET  → 列出当前用户可见仓库（按最近更新排序），供 UI 下拉选择；
     //   POST → 新建**私有**仓库（body: { name, description? }），返回仓库信息供回填 repoUrl。
-    // token 来源与 /sync/github/validate 完全一致（DSH credentials 的 SYNC_CREDENTIAL_REF），
+    // token 来源与 /sync/github/validate 完全一致（DSH credentials 的本档案 token 槽位），
     // 401（未登录 / token 失效）单独映射，其余错误走通用 500 —— 与 me 路由同一口径。
     // 不进 mutation gate：两步都不写本地文件（只读列举 + 幂等元操作），
     // 而 gate 在 SAFE MODE 下会直接拒绝，会把「选仓库」变成不可用功能。
@@ -802,7 +814,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           writeJson(res, 400, { error: 'name must be a .zip file name (no path separators)' })
           return
         }
-        const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', channelOf(syncCfg)))
+        const savedDecryptPassword = await resolveSyncPassword(passwordRef('DECRYPT', channelOf(syncCfg)))
         const decryptPassword =
           typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
             ? body['decryptPassword']
@@ -901,7 +913,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         // 解密密码：请求体 > 已保存（DSH credentials）。明文快照根本不会被解密
         // （engine.prepareSnapshot 只在 manifest.encrypted 时才用密码），因此「未加密备份
         // 不会误用密码」是引擎层保证，而不是靠这里猜。密码仅内存，绝不落盘/落日志。
-        const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', channelOf(syncCfg)))
+        const savedDecryptPassword = await resolveSyncPassword(passwordRef('DECRYPT', channelOf(syncCfg)))
         const decryptPassword =
           typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
             ? body['decryptPassword']
@@ -1019,7 +1031,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         // 拿不到密码就 `suppressAncestor` —— 宁可不留祖先（下轮两方合并），也绝不落明文副本。
         const applyDecryptPassword = typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
           ? body['decryptPassword']
-          : await resolveSyncPassword(syncPasswordRef('DECRYPT', channelOf(session.config)))
+          : await resolveSyncPassword(passwordRef('DECRYPT', channelOf(session.config)))
         const ancestorOpts = session.encrypted !== true
           ? {}
           : applyDecryptPassword !== undefined && applyDecryptPassword !== ''
@@ -1209,8 +1221,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         // 加密/解密密码持久化（用户要求：勾选即记住，取消勾选或主动删除才清）。
         // 值只写进 DSH credentials（绝不进 sync-selection.json / 日志 / 响应）；
         // 清空优先于写入，避免「同一次请求既清又写」产生歧义。
-        const encryptRef = syncPasswordRef('ENCRYPT', channel)
-        const decryptRef = syncPasswordRef('DECRYPT', channel)
+        const encryptRef = passwordRef('ENCRYPT', channel)
+        const decryptRef = passwordRef('DECRYPT', channel)
         if (body['clearEncryptPassword'] === true) await credentials.unset(credentialRef(encryptRef))
         else if (typeof body['encryptPassword'] === 'string' && body['encryptPassword'] !== '') {
           await credentials.set(credentialRef(encryptRef), body['encryptPassword'])

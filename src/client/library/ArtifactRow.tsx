@@ -67,10 +67,18 @@ export interface ArtifactRowViewProps {
    * （旧快照没有该字段，绝不显示空串或占位）。
    */
   deviceLabel?: string | undefined
+  /**
+   * 来源档案徽章（本机快照专用）：这份快照是哪个 DSH profile 拍的。
+   *
+   * 只有 `SnapshotMeta.originProfile` 真的存在时调用方才给值 —— 缺省 undefined 表示**不渲染**
+   * （旧快照没有来源，绝不显示空档案名或「未标注」徽章）。`hint` 只在「与当前档案不同」时给，
+   * 徽章本体只写档案名，差异语不重复表达。
+   */
+  originBadge?: { label: string; hint?: string; kind: 'info' | 'warn' } | undefined
 }
 
 export function ArtifactRowView({
-  row, t, uiT, formatTime, expanded, onToggle, onAction, pending = null, deviceLabel,
+  row, t, uiT, formatTime, expanded, onToggle, onAction, pending = null, deviceLabel, originBadge,
 }: ArtifactRowViewProps) {
   const detailId = useId()
   const primary = row.capabilities[0]
@@ -122,13 +130,17 @@ export function ArtifactRowView({
             </div>
           )}
         </div>
-        {row.badges.length > 0 && (
+        {(row.badges.length > 0 || originBadge !== undefined) && (
           <div className={css.artifactBadges}>
             {row.badges.map((badge) => (
               <Badge key={badge} kind={BADGE_KIND[badge]} title={badge === 'encrypted' ? encryptedHint : undefined}>
                 {uiT(ARTIFACT_BADGE_LABEL_KEY[badge])}
               </Badge>
             ))}
+            {/* 来源档案排在状态徽章之后：先读「这行现在是什么状态」，再读「它来自哪个档案」 */}
+            {originBadge !== undefined && (
+              <Badge kind={originBadge.kind} title={originBadge.hint}>{originBadge.label}</Badge>
+            )}
           </div>
         )}
         <div className={css.artifactActions} onClick={(event) => { event.stopPropagation() }}>

@@ -46,36 +46,23 @@ import { isSameOrChild } from '../utils/paths.ts'
 import { parseZip } from '../utils/zip.ts'
 
 /**
- * 同步 token 的 DSH credentials 引用名（POSIX env-var 形态，满足 CredentialRef 品牌要求）。
- * token 只经 credentialRef 读写（写入由请求体触发，读取在每次 git 网络操作时 resolve），
- * 永不进 repoUrl / argv / commit / 同步文件 / 日志。
+ * 同步凭据槽位名与 per-profile 作用域：**唯一声明处已迁到 `src/sync/sync-scope.ts`**
+ * （那里也持有 `syncScopeFor` / `adoptLegacySyncScope`）。此文件只 re-export，
+ * 保持 `src/index.ts` 与测试既有的 import 面与符号名不变（值不变，只是多了可选档案后缀）。
  */
-export const SYNC_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_TOKEN'
-
-/**
- * WebDAV 通道口令的独立 DSH credentials 引用（与 git token 槽位分离）。
- * 口令只经 credentialRef 读写（写入由请求体触发，读取在每次 WebDAV 网络操作时
- * by WebDavTransport 经注入的 getPassword() resolve），永不进 URL / 请求头 / 日志。
- */
-export const SYNC_WEBDAV_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD'
-
-/**
- * 同步快照「加密密码 / 解密密码」的 DSH credentials 引用名前缀（按通道各自独立）。
- *
- * 为什么放 DSH credentials：加密/解密密码跨会话必须可用（否则每次推送都要重新输入），
- * 但**绝不允许**写进 sync-selection.json 一类同步文件（那等于把密码推上远端）。
- * 与本插件既有的 token / WebDAV 口令同一套做法：值只存在于 DSH 凭据库，
- * 宿主内部按需 resolve，**永不回传浏览器**（UI 只拿到 configured 布尔）。
- * 引用名形如 DSH_CONFIG_MANAGER_SYNC_ENCRYPT_PASSWORD_GIT。
- */
-export const SYNC_ENCRYPT_PASSWORD_REF_PREFIX = 'DSH_CONFIG_MANAGER_SYNC_ENCRYPT_PASSWORD'
-export const SYNC_DECRYPT_PASSWORD_REF_PREFIX = 'DSH_CONFIG_MANAGER_SYNC_DECRYPT_PASSWORD'
-
-/** ('ENCRYPT'|'DECRYPT', 'git'|'webdav') → 该通道的凭据引用名。 */
-export function syncPasswordRef(kind: 'ENCRYPT' | 'DECRYPT', channel: SyncTransportType): string {
-  const prefix = kind === 'ENCRYPT' ? SYNC_ENCRYPT_PASSWORD_REF_PREFIX : SYNC_DECRYPT_PASSWORD_REF_PREFIX
-  return prefix + '_' + channel.toUpperCase()
-}
+import {
+  SYNC_CREDENTIAL_REF,
+  SYNC_WEBDAV_CREDENTIAL_REF,
+} from '../sync/sync-scope.ts'
+export {
+  SYNC_CREDENTIAL_REF,
+  SYNC_DECRYPT_PASSWORD_REF_PREFIX,
+  SYNC_ENCRYPT_PASSWORD_REF_PREFIX,
+  SYNC_WEBDAV_CREDENTIAL_REF,
+  scopedSyncRef,
+  syncPasswordRef,
+  syncScopeOrDefault,
+} from '../sync/sync-scope.ts'
 
 /* 路由基础设施（loopback 围栏 / writeJson / readJsonBody / queryParam / endpoint / 错误映射）
  * 已收敛到 src/routes/kit.ts —— 全仓只有那一份实现。 */
@@ -744,9 +731,26 @@ export function makeRestoreExecutor(snapshotDir: string, host: HostContext, prof
  * 下沉后 `src/index.sync.test.ts` 仍经组合根的再导出取用（符号名不变）。
  */
 
-/** parseSyncBody 的凭据写入依赖（只用到 set；测试可注入内存 mock）。 */
+/**
+ * parseSyncBody 的凭据写入依赖（只用到 set；测试可注入内存 mock）。
+ */
 export interface ParseSyncBodyDeps {
   credentials: Pick<CredentialProvider, 'set'>
+  /**
+   * per-profile 作用域：只决定**写哪个凭据槽位**，不影响请求体形状与返回值。
+   * 缺省 = 历史（不带后缀）槽位名 —— 单档案用户与既有测试的行为逐字不变。
+   */
+  scope?: SyncRefScope
+}
+
+/** 把历史槽位名映射到当前档案的最小接口（`SyncScope` 结构上即满足）。 */
+export interface SyncRefScope {
+  /** 本档案的 git / GitHub token 槽位 */
+  tokenRef: string
+  /** 本档案的 WebDAV 口令槽位 */
+  webdavPasswordRef: string
+  /** 历史槽位名 → 本档案槽位名（云端点密钥等按需映射） */
+  scopeRef(ref: string): string
 }
 
 /**
@@ -761,6 +765,10 @@ export async function parseSyncBody(
   body: Record<string, unknown>,
   deps: ParseSyncBodyDeps,
 ): Promise<SyncConfig> {
+  // per-profile 槽位（缺省 = 历史槽位名；请求体形状与返回值与档案无关）
+  const scope = deps.scope
+  const tokenRef = scope === undefined ? SYNC_CREDENTIAL_REF : scope.tokenRef
+  const webdavPasswordRef = scope === undefined ? SYNC_WEBDAV_CREDENTIAL_REF : scope.webdavPasswordRef
   const rawTransport = body['transport']
   // 通道值解析：接受通道名（s3/gist）；也接受**具体兼容商**（oss/cos/minio/kodo）直接落到 s3 通道
   const transport = parseSyncChannel(rawTransport) ?? (isS3CompatProvider(rawTransport) ? 's3' : 'git')
@@ -775,11 +783,11 @@ export async function parseSyncBody(
     const password = typeof body['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
     if (password !== undefined) {
       try {
-        await deps.credentials.set(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF), password)
+        await deps.credentials.set(credentialRef(webdavPasswordRef), password)
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
         throw new SyncRouteError(
-          engineMsg('host.syncWebdavPasswordWriteFailed', { reason, ref: SYNC_WEBDAV_CREDENTIAL_REF }),
+          engineMsg('host.syncWebdavPasswordWriteFailed', { reason, ref: webdavPasswordRef }),
         )
       }
     }
@@ -797,11 +805,11 @@ export async function parseSyncBody(
   const token = typeof body['token'] === 'string' && body['token'] !== '' ? body['token'] : undefined
   if (token !== undefined) {
     try {
-      await deps.credentials.set(credentialRef(SYNC_CREDENTIAL_REF), token)
+      await deps.credentials.set(credentialRef(tokenRef), token)
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       throw new SyncRouteError(
-        engineMsg('host.syncTokenWriteFailed', { reason, ref: SYNC_CREDENTIAL_REF }),
+        engineMsg('host.syncTokenWriteFailed', { reason, ref: tokenRef }),
       )
     }
   }
@@ -815,6 +823,11 @@ export async function parseSyncBody(
 /** 请求体字段 → 去空白字符串（非字符串 = 空）。 */
 function syncStr(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+/** 云端点密钥槽位按档案映射（无 scope = 历史槽位名，单档案行为逐字不变）。 */
+function scopedCloudSecretRef(ref: string, deps: ParseSyncBodyDeps): string {
+  return deps.scope === undefined ? ref : deps.scope.scopeRef(ref)
 }
 
 /** 云端点密钥写入失败 → 可操作错误（**含 ref 名、绝不含密钥值**）。 */
@@ -862,7 +875,7 @@ async function parseCloudS3Body(
   if (issue !== null) throw new SyncRouteError(issue, 400, issue)
   const secret = typeof body['secret'] === 'string' && body['secret'] !== '' ? body['secret'] : undefined
   if (secret !== undefined) {
-    const ref = cloudSecretRef(provider)
+    const ref = scopedCloudSecretRef(cloudSecretRef(provider), deps)
     try {
       await deps.credentials.set(credentialRef(ref), secret)
     } catch (error) {
@@ -903,7 +916,7 @@ async function parseCloudGistBody(body: Record<string, unknown>, deps: ParseSync
     ? body['token']
     : (typeof body['secret'] === 'string' && body['secret'] !== '' ? body['secret'] : undefined)
   if (token !== undefined) {
-    const ref = cloudSecretRef(GIST_PROVIDER)
+    const ref = scopedCloudSecretRef(cloudSecretRef(GIST_PROVIDER), deps)
     try {
       await deps.credentials.set(credentialRef(ref), token)
     } catch (error) {

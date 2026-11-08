@@ -24,6 +24,11 @@ import { formatDateTimeFull } from '../sync/history-model.ts'
 import { deviceLabelsById } from '../sync/remote-device-view.ts'
 import { runStore, type LibraryStoreSlice } from '../run-store.ts'
 import { Badge, Button, Card, Empty } from '../common/ui.tsx'
+import { Select } from '../common/Select.tsx'
+import {
+  SNAPSHOT_ORIGIN_ALL, SNAPSHOT_ORIGIN_UNLABELED, filterSnapshotsByOrigin, hasUnlabeledOrigin,
+  snapshotOriginFilterValue, snapshotOriginOf, snapshotOriginProfiles, snapshotOriginState,
+} from '../../ui/snapshots-view.ts'
 import { SkeletonRows } from '../common/Skeleton.tsx'
 import { redact } from '../../security/redaction.ts'
 import { InfoHint } from '../common/InfoHint.tsx'
@@ -84,6 +89,14 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
   const [remoteChannel, setRemoteChannel] = useState<'git' | 'webdav' | null>(null)
   /** 面板内部的刷新信号（失败源卡片里的「重试」）；外部的走 props.refreshTick */
   const [localTick, setLocalTick] = useState(0)
+  /**
+   * 当前档案名（只用于「来源档案」徽章的差异对照）：取 `/status` 的诊断位 `profile`。
+   * 宿主给不出（老宿主 / 独立 CLI）→ null，此时只显示档案名，**不声称「来自他人档案」**
+   * （不知道自己在哪个档案时，那个结论无法证明）。
+   */
+  const [currentProfile, setCurrentProfile] = useState<string | null>(null)
+  /** 来源档案筛选值（本地筛选，不往返宿主；见 snapshots-view.ts 的 SNAPSHOT_ORIGIN_*） */
+  const [originFilter, setOriginFilter] = useState<string>(SNAPSHOT_ORIGIN_ALL)
 
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
@@ -132,17 +145,35 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
       })
     }))
     put(setMarket, marketApi.browse().then((res) => res.items))
+    // 当前档案：与上面四源并行、**失败不影响任何源的状态**（只是少一个对照值）
+    api.status().then(
+      (status) => {
+        if (!mounted.current) return
+        setCurrentProfile(typeof status.profile === 'string' && status.profile !== '' ? status.profile : null)
+      },
+      () => { if (mounted.current) setCurrentProfile(null) },
+    )
     // 通道类型与远端地址都从 /sync/status 取（已并入上面的远端源加载，避免同一接口打两次）
   }, [api, syncApi, marketApi, localTick, refreshTick])
 
+  /**
+   * 来源档案筛选：插件数据目录（`$DSH_HOME/dsh-config-manager`）被所有 DSH profile 共用，
+   * 快照库里混着别的档案拍的条目 —— 这里按 `originProfile` **本地**筛（不往返宿主）。
+   * 先筛快照再出行：来源计数、底部分数与空态判据因此始终与眼前列表同口径。
+   */
+  const originFilteredSnapshots = useMemo(
+    () => filterSnapshotsByOrigin(snapshots.items, originFilter),
+    [snapshots.items, originFilter],
+  )
+
   const rows: ArtifactRow[] = useMemo(() => toArtifactRows({
-    snapshots: snapshots.status === 'ready' ? snapshots.items : [],
+    snapshots: snapshots.status === 'ready' ? originFilteredSnapshots : [],
     backupFiles: files.status === 'ready' ? files.items : [],
     remoteSnapshots: remote.status === 'ready' ? remote.items : [],
     remoteCurrentId: currentRemoteId,
     remoteChannel,
     marketItems: market.status === 'ready' ? market.items : [],
-  }, uiT), [snapshots, files, remote, market, currentRemoteId, remoteChannel, uiT])
+  }, uiT), [snapshots, originFilteredSnapshots, files, remote, market, currentRemoteId, remoteChannel, uiT])
 
   const filtered = useMemo(
     () => filterArtifacts(rows, { kind: lib.sourceFilter, text: lib.query, sort: lib.sort }),
@@ -177,6 +208,54 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
     { id: 'market', label: t('library.kind.market'), count: market.status === 'ready' ? counts['market'] : null },
   ]
 
+  /**
+   * 「来源档案」筛选项：全部 + 出现过的档案（当前档案在前）+ 有旧快照时的「未标注」。
+   * 档案名原样展示（它是身份，不翻译）。
+   */
+  const originOptions = useMemo(() => {
+    const items = snapshots.status === 'ready' ? snapshots.items : []
+    const options: Array<{ value: string; label: string }> = [
+      { value: SNAPSHOT_ORIGIN_ALL, label: t('library.origin.all') },
+      ...snapshotOriginProfiles(items, currentProfile ?? undefined)
+        .map((profile) => ({ value: snapshotOriginFilterValue(profile), label: profile })),
+    ]
+    if (hasUnlabeledOrigin(items)) {
+      options.push({ value: SNAPSHOT_ORIGIN_UNLABELED, label: t('library.origin.unlabeled') })
+    }
+    return options
+  }, [snapshots, currentProfile, t])
+
+  /** 筛选值失效（那个档案的快照被删光了）→ 回到「全部」：别停在空列表上还看不出原因 */
+  useEffect(() => {
+    if (!originOptions.some((option) => option.value === originFilter)) setOriginFilter(SNAPSHOT_ORIGIN_ALL)
+  }, [originOptions, originFilter])
+
+  /**
+   * 快照 id → 来源档案（只收**真的带来源**的）：徽章只挂在本机快照行上，
+   * 其它三个来源没有「档案」语义。
+   */
+  const originOfSnapshot = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const meta of snapshots.items) {
+      const profile = snapshotOriginOf(meta)
+      if (profile !== undefined) map.set(meta.id, profile)
+    }
+    return map
+  }, [snapshots.items])
+
+  /**
+   * 行首来源徽章：档案名恒显示；只有「已知当前档案且不同」时才升到 warn 并带差异说明
+   * （宿主没给当前档案时只显示名字 —— 那是无法证明的结论）。
+   */
+  const originBadgeOf = (row: ArtifactRow): { label: string; hint?: string; kind: 'info' | 'warn' } | undefined => {
+    if (row.kind !== 'snapshot') return undefined
+    const profile = originOfSnapshot.get(row.ref.snapshotId ?? '')
+    if (profile === undefined) return undefined
+    return snapshotOriginState({ originProfile: profile }, currentProfile ?? undefined) === 'foreign'
+      ? { label: profile, hint: t('library.origin.foreign'), kind: 'warn' }
+      : { label: profile, kind: 'info' }
+  }
+
   /** 加密项计数：只数**当前筛选后**的行（底部徽章必须与眼前列表一致，见 footer 注释） */
   const encryptedCount = useMemo(() => filtered.filter((row) => row.badges.includes('encrypted')).length, [filtered])
 
@@ -208,6 +287,21 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
           </button>
         ))}
       </div>
+
+      {/* 来源档案筛选：**只在真的分得出两组以上**时出现（至少两个档案，或 档案+未标注）。
+          全部快照都来自当前档案时它改变不了任何决定，只是噪音（DESIGN「界面只留能改变用户决定的信息」）。
+          档案名原样展示，只有「未标注」与「全部」需要字典文案。 */}
+      {originOptions.length - 1 >= 2 && (
+        <div className={css.actionRow}>
+          <Select
+            value={originFilter}
+            options={originOptions}
+            onChange={setOriginFilter}
+            ariaLabel={t('library.origin.label')}
+            title={t('library.origin.label')}
+          />
+        </div>
+      )}
 
       <input
         className={css.librarySearch}
@@ -251,7 +345,7 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
       {!loading && !anySourcePending && filtered.length === 0 && (
         <div className={css.libraryListState}>
           <Empty>
-            {lib.query.trim() !== '' || lib.sourceFilter !== null
+            {lib.query.trim() !== '' || lib.sourceFilter !== null || originFilter !== SNAPSHOT_ORIGIN_ALL
               ? t('library.emptyFiltered')
               // 全空时的解释复用备份文件那条（四源里只有它是「你可以自己去产生一个」的产物）
               : t('backupFiles.empty')}
@@ -276,6 +370,7 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
               // 只把**本行**的进行中动作交给行组件：其余行保持可点（一次只挡同一行）
               pending={pending !== null && pending.key === row.key ? pending.capability : null}
               deviceLabel={row.kind === 'remote-snapshot' ? deviceLabelOf.get(row.ref.remoteId ?? '') : undefined}
+              originBadge={originBadgeOf(row)}
             />
           ))}
         </ul>

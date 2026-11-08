@@ -274,6 +274,25 @@ export function normalizeDshVersion(value: unknown): string | undefined {
   return trimmed;
 }
 
+/**
+ * 归一「快照来源档案」（originProfile）。
+ *
+ * 与 `normalizeDshVersion` 同一口径（非空、非 'unknown' 占位），但判据多一层：档案名要拿去和
+ * 当前档案比对、要在界面上按档案分组，所以还得是**合法档案名形态**。形态判据与
+ * `core/plugin-cli.ts` 的 `validateProfileName` 同源（拒绝路径分隔符与 '.'/'..'/'node_modules'），
+ * 差别只在失败处理：那边是拼 `profiles/<name>` 路径，非法必须抛错；这里只是标注**只过滤不抛错** ——
+ * 一个可疑档案名不该让快照落盘失败。
+ * 归一不到 → undefined（快照不写该字段，界面按「未标注」处理，绝不写 'unknown' 占位）。
+ */
+export function normalizeOriginProfile(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (trimmed === '' || trimmed === 'unknown') return undefined;
+  if (trimmed.includes('/') || trimmed.includes('\\')) return undefined;
+  if (trimmed === '.' || trimmed === '..' || trimmed === 'node_modules') return undefined;
+  return trimmed;
+}
+
 export interface CreateSnapshotOptions {
   ctx: HostContext;
   plan: ImportPlan;
@@ -513,6 +532,10 @@ export async function createSnapshot(opts: CreateSnapshotOptions): Promise<Snaps
     ctx.log.warn(`快照登记插件清单失败: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // 来源档案（originProfile）：$DSH_HOME/dsh-config-manager 被所有 profile 共用，标出来源才分得清；
+  // 归一到「能证明的真实档案名」，取不到则不写该字段（绝不写 'unknown' 占位）。
+  const originProfile = normalizeOriginProfile(ctx.profile);
+
   const snapshot: Snapshot = {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
@@ -523,6 +546,8 @@ export async function createSnapshot(opts: CreateSnapshotOptions): Promise<Snaps
     hostFileBackups,
     // F-4：拍快照时的本机 DSH 版本（归一到「能证明的真实版本」；解析不到则不写该字段）。
     dshVersion: normalizeDshVersion(ctx.dshVersion),
+    // 来源档案（同上：解析不到则不写该字段）。
+    ...(originProfile !== undefined ? { originProfile } : {}),
     // Phase 4：operation-bound binding（journal ↔ snapshot 双向一致）
     ...(opts.operationId !== undefined ? { operationId: opts.operationId } : {}),
     ...(opts.operationType !== undefined ? { operationType: opts.operationType } : {}),

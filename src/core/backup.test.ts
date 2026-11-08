@@ -31,7 +31,7 @@ import path from 'node:path';
 
 import {
   FileSnapshotStore, PRE_RESTORE_KEEP_ATTEMPTS, PRE_RESTORE_KEEP_DAYS,
-  createSnapshot, normalizeDshVersion, resolveFileTarget, verifySnapshot,
+  createSnapshot, normalizeDshVersion, normalizeOriginProfile, resolveFileTarget, verifySnapshot,
 } from './backup.ts';
 import type { PrunePlan } from './backup.ts';
 import { existsSync } from 'node:fs';
@@ -597,5 +597,49 @@ test('BK-05/④：反悔副本全部过期后不留空壳目录（快照已不�
   await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
 
   assert.equal(existsSync(path.join(dir, first.id)), false, '快照没了 + 反悔副本也过期 ⇒ 不留空壳');
+});
+
+/* ---------------- BK-06：来源档案（originProfile）标注 ----------------
+ * 插件数据目录 $DSH_HOME/dsh-config-manager 被**所有** DSH profile 共用，快照库因此混着别的档案拍的条目；
+ * 不标注来源用户就分不出哪条来自哪个档案。三条硬边界：必须可选、只在能证明时写、绝不写占位值。 */
+
+test('BK-06/①：createSnapshot 记下拍快照的档案名（ctx.profile 有值 ⇒ 写入 originProfile）', async () => {
+  const store = new MemSnapshotStore();
+
+  const ctx = makeContext('win32', 'C:/home/.dsh', 'web');
+  await seedHostFiles(ctx);
+  const snap = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+  assert.equal(snap.originProfile, 'web', '档案名要随快照落盘：不标注就分不出来源');
+  assert.equal(store.snapshots.get(snap.id)?.originProfile, 'web', 'store 落库的对象也要带该字段（不只是返回值）');
+
+  // 首尾空白按 trim 归一（宿主偶尔带空格；档案身份本身不含首尾空白）
+  const padded = makeContext('win32', 'C:/home/.dsh', '  Test1  ');
+  await seedHostFiles(padded);
+  const snap2 = await createSnapshot({ ctx: padded, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+  assert.equal(snap2.originProfile, 'Test1');
+});
+
+test('BK-06/②：来源档案取不到或不可信 ⇒ 不写 originProfile（绝不写 unknown 占位）', async () => {
+  const store = new MemSnapshotStore();
+  const profiles: Array<string | undefined> = [undefined, '', '   ', 'unknown', 'web/extra', '..', 'node_modules'];
+
+  for (const profile of profiles) {
+    const ctx = makeContext('win32', 'C:/home/.dsh', profile);
+    await seedHostFiles(ctx);
+    const snap = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+    assert.equal(
+      'originProfile' in snap, false,
+      `profile=${JSON.stringify(profile)} 时该字段必须**整个缺席**（写 'unknown' 会把「不知道」伪装成「确知」）`,
+    );
+  }
+});
+
+test('BK-06/③：normalizeOriginProfile 只放行真实档案名', () => {
+  assert.equal(normalizeOriginProfile('web'), 'web');
+  assert.equal(normalizeOriginProfile(' Test1 '), 'Test1');
+  assert.equal(normalizeOriginProfile('desktop'), 'desktop');
+  for (const bad of [undefined, null, 42, {}, [], '', '   ', 'unknown', 'a/b', 'a\\b', '.', '..', 'node_modules']) {
+    assert.equal(normalizeOriginProfile(bad), undefined, `${JSON.stringify(bad)} 不是可证明的档案名`);
+  }
 });
 

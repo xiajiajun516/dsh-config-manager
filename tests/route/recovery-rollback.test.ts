@@ -111,6 +111,9 @@ function lockPort(): unknown {
 function envFor(h: Harness): never {
   const env = {
     dataDir: h.dataDir,
+    // 回滚点开关读「本档案的同步作用域」（src/routes/recovery.ts 的 rollback-points 分支）：
+    // 默认档案 = dataDir/sync，与宿主 apply 里 syncScopeFor() 的默认档布局一致。
+    syncDir: path.join(h.dataDir, 'sync'),
     host: {
       homeDir: h.homeDir,
       profile: 'web',

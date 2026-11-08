@@ -382,6 +382,8 @@ test('GET /disk-usage：HTTP 报告如实包含回滚点库与遗留数据（两
       tmpDir: f.dirs.tmpDir,
       marketDir: path.join(f.root, 'market'),
       syncDir: f.dirs.syncDir,
+      // 体检看整棵 sync/（含 sync-profiles/<p>/）：本用例的 fixture 两者同根
+      syncRootDir: f.dirs.syncDir,
       // 与生产同语义的「直通」包壳（本组 handler 只用它包裹写路由）
       withMutationGate: (_op: string, handler: unknown) => handler,
     };

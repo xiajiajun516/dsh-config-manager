@@ -37,13 +37,18 @@ import { join as joinPath } from 'node:path'
  * 各写一份目录名而漂移。
  */
 function diskUsageDirsOf(env: RoutesEnv): DiskUsageDirs {
-  const { dataDir, syncDir, marketDir, tmpDir, snapshotsDir, exportsDir } = env
+  const { dataDir, marketDir, tmpDir, snapshotsDir, exportsDir } = env
+  // `syncRootDir` 缺省回落本档案作用域目录：只有 syncDir 的装配面（未类型化夹具 / 手工装配）
+  // 就是历史单作用域布局，此时 syncDir === syncRootDir（见 syncScopeOrDefault）。
+  const syncRootDir = env.syncRootDir ?? env.syncDir
   return {
     dataDir,
     exportsDir,
     snapshotsDir,
-    // 同步历史/快照/工作副本都在 <dataDir>/sync 下（Git 通道另有 .git 工作副本，一并计入）
-    syncDir: syncDir ?? joinPath(dataDir, 'sync'),
+    // 同步历史/快照/工作副本都在 <dataDir>/sync 下（Git 通道另有 .git 工作副本，一并计入）。
+    // 用 syncRootDir 而不是本档案的 syncDir：体检要看**整棵** sync/（含 sync-profiles/<p>/），
+    // 否则切到别的档具体检会把其它档案的同步数据当成不存在。
+    syncDir: syncRootDir,
     marketCacheDir: joinPath(marketDir, 'cache'),
     marketWorkDir: joinPath(marketDir, 'work'),
     tmpDir,
@@ -58,7 +63,8 @@ function diskUsageDirsOf(env: RoutesEnv): DiskUsageDirs {
 
 /** 体检/清理共用的保留期口径（与 cache-cleaner 缺省逐字一致；定时备份前缀豁免同源） */
 async function diskUsagePolicyOf(env: RoutesEnv): Promise<{ policy: DiskUsagePolicyInput; retention: RetentionPolicy }> {
-  const schedule = await readBackupSchedule(env.syncDir)
+  // 定时备份配置全机一份（sync/backup-schedule.json）：排期与保留策略不属于任何单个档案。
+  const schedule = await readBackupSchedule(env.syncRootDir ?? env.syncDir)
   return {
     policy: {
       tmpRetentionMs: TMP_RETENTION_DEFAULT_MS,
@@ -154,9 +160,10 @@ export function backupRoutes(env: RoutesEnv): WebRoute[] {
   const {
     backupScheduler,
     exportsDir,
-    syncDir,
     withMutationGate,
   } = env
+  // 定时备份**全机一份**（不是某个档案的同步态）：读写都落 syncRootDir，缺省回落 syncDir（同上）。
+  const syncRootDir = env.syncRootDir ?? env.syncDir
   return [
     // ------------------------------------------------------- disk-usage（只读体检）
     // 界面「磁盘占用」卡的数据源：按子区回传字节数/文件数 + 各保留期的「已到期」量。
@@ -209,7 +216,7 @@ export function backupRoutes(env: RoutesEnv): WebRoute[] {
     endpoint({ path: '/api/dsh-config-manager/backup-schedule', methods: ['GET', 'PUT'] }, async (req, res) => {
       if (req.method === 'GET') {
         try {
-          writeJson(res, 200, { schedule: await readBackupSchedule(syncDir) })
+          writeJson(res, 200, { schedule: await readBackupSchedule(syncRootDir) })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -223,11 +230,11 @@ export function backupRoutes(env: RoutesEnv): WebRoute[] {
             writeJson(res, 400, { error: parsed.error })
             return
           }
-          const current = await readBackupSchedule(syncDir)
+          const current = await readBackupSchedule(syncRootDir)
           const next: BackupScheduleConfig = { ...current, ...parsed.value }
           // m-retention：保留策略保存（草稿给了就用草稿值，否则保留既有；缺省由读取层补齐）
           next.retention = parsed.value.retention ?? current.retention ?? { ...DEFAULT_RETENTION_POLICY }
-          await writeBackupSchedule(syncDir, next)
+          await writeBackupSchedule(syncRootDir, next)
           await backupScheduler.reload()
           writeJson(res, 200, { ok: true, schedule: next })
         } catch (error) {
@@ -246,7 +253,7 @@ export function backupRoutes(env: RoutesEnv): WebRoute[] {
     endpoint({ path: '/api/dsh-config-manager/backup-schedule/run', methods: ['POST'] }, async (req, res) => {
       try {
         const run = await backupScheduler.runOnce({ manual: true })
-        const schedule = await readBackupSchedule(syncDir)
+        const schedule = await readBackupSchedule(syncRootDir)
         writeJson(res, 200, { ok: true, run, schedule })
       } catch (error) {
         writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })

@@ -726,9 +726,11 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
           log: (line) => host.log.warn(line),
           ...(forkSeam !== undefined ? { fork: forkSeam } : {}),
         })
-        // 插件偏好文件与 /sync/ui-prefs 同一份（dataDir/sync/ui-prefs.json）；回滚点开关存在那里，
-        // 所以这里派生同一个目录，绝不另立第二个偏好文件。
-        const syncDir = join(dataDir, 'sync')
+        // 插件偏好文件与 /sync/ui-prefs 同一份，回滚点开关存在那里，绝不另立第二个偏好文件。
+        // 目录**按档案**（默认档案 = dataDir/sync，其它 = dataDir/sync-profiles/<profile>）：
+        // 这里直接取 env.syncDir —— 不能再自己 join(dataDir,'sync')，否则非默认档案的
+        // 开关在这里读历史根、在 /sync 里读自己的作用域，两处对不上。
+        const syncDir = env.syncDir
         const sub = segments.slice(1)
         const methodNotAllowed = (): void => { writeJson(res, 405, { error: 'method not allowed', code: 'method-not-allowed' }) }
         const reply = (value: { ok?: boolean; code?: string; outcome?: string }): void => {

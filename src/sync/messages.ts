@@ -43,7 +43,11 @@ export const zh = {
   // ---------- 内容寻址 blob 仓 ----------
   'sync.blobMissing': '内容的 blob 缺失（{hash}，{path}）：远端仓不完整，拒绝降级为空分区',
   'sync.webdav.blobHashInvalid': '内容哈希形状非法，拒绝写入 blob 仓: {hash}',
-  // ---------- 审查队列 ----------
+  // ---------- 按档案分作用域（sync-scope） ----------
+  'sync.scopeDirCreateFailed': '无法创建档案同步目录 {dir}：{reason}',
+  'sync.scopeAdoptFailed': '继承 {file} 失败：{reason}',
+  'sync.scopeAdopted': '档案 {profile} 已从历史同步根继承：{files}',
+  'sync.scopeBootFailed': '档案作用域继承失败：{reason}',  // ---------- 审查队列 ----------
   'sync.reviewQueueNotObject': 'sync-review-queue.json 损坏：必须是对象',
   'sync.reviewQueueItemsNotArray': 'sync-review-queue.json 损坏：items 必须是数组',
   'sync.reviewQueueItemNotObject': 'sync-review-queue.json 损坏：每个 item 必须是对象',
@@ -124,7 +128,10 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.layoutFileSectionDirMissing': 'Snapshot is missing the file section directory {prefix} ({section})',
   'sync.blobMissing': 'The blob for {path} is missing ({hash}): the remote store is incomplete, refusing to degrade to an empty section',
   'sync.webdav.blobHashInvalid': 'Malformed content hash; refusing to write to the blob store: {hash}',
-  'sync.reviewQueueNotObject': 'sync-review-queue.json is corrupt: must be an object',
+  'sync.scopeDirCreateFailed': 'Cannot create the profile sync directory {dir}: {reason}',
+  'sync.scopeAdoptFailed': 'Failed to adopt {file}: {reason}',
+  'sync.scopeAdopted': 'Profile {profile} adopted settings from the shared sync root: {files}',
+  'sync.scopeBootFailed': 'Failed to adopt the shared sync settings for this profile: {reason}',  'sync.reviewQueueNotObject': 'sync-review-queue.json is corrupt: must be an object',
   'sync.reviewQueueItemsNotArray': 'sync-review-queue.json is corrupt: items must be an array',
   'sync.reviewQueueItemNotObject': 'sync-review-queue.json is corrupt: every item must be an object',
   'sync.reviewQueueItemFieldsMissing': 'sync-review-queue.json is corrupt: an item must contain the strings id/sectionId/kind/description',
