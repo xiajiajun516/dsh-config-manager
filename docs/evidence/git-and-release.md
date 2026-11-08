@@ -46,3 +46,9 @@
   - 同文件 t4：反解回落成仓库根，`actual: 'D:\Projects\personal\dsh-config-manager'` / `expected: '…\.tmp\buildtmp\qoderProbe<pid>Home<rand>'`（相对 TEMP `.tmp/buildtmp` 被按仓库根解析）。
 - **落点**：build / install 用仓库内 TEMP（`TEMP=TMP=.tmp/buildtmp npm run build`），test 用系统 `TEMP`；两条分开跑，别 export 一次吃到底（同一个 shell 里 `$env:TEMP` 会一直生效，很容易把 test 也带走）。
 - **Git-Bash 里给 `TEMP` 必须写 Windows 绝对路径**（2026-11-06 实测）：`TEMP=$PWD/.tmp/buildtmp` 展开成 `/d/Projects/...`，tsgo 把首段当驱动器相对根 → 报**同一句** `mkdir /d/Projects/.../rolldown-plugin-dts-*/src: Access is denied` + `tsgo process exited with code 2`（看起来像 ACL 问题，实际是路径方言），`mkdir` 手工能成功会误导排查。改用 `TEMP="D:\\Projects\\personal\\dsh-config-manager\\.tmp\\buildtmp"` 后 exit 0（1591 ms）。
+
+## 并发会话下验证 HEAD：用临时 worktree，不拿共享树的红灯当结论（2026-11-08 实测）
+
+- **现象**：同一 HEAD、同一 `node_modules`，共享工作区跑 `npm test` 得 5476 tests / 5441 pass / **33 fail**（`tests/i18n-hardcoded-guard.test.ts` 的 A1、文件体积棘轮 F-01、`clear:true` 凭据组），而干净 worktree 里是 5474 pass / **0 fail** / 2 skipped。差异全部来自另一会话的在途改动（`git status` 里 8 个 `M` + 1 个 `??`，其中 `src/sync/sync-scope.ts` 在磁盘上但既不在 `HEAD` 也不在 `origin/main`）。
+- **手法**：`git worktree add .tmp/wt-head HEAD`，再给新树接依赖：`node -e "require('node:fs').symlinkSync('<repo>/node_modules','<repo>/.tmp/wt-head/node_modules','junction')"` —— MSYS 里 `cmd //c mklink /J` 的 `/J` 会被参数转换吞掉（只剩 cmd 横幅，junction 建不出来）。
+- **判据**：`git status --porcelain` 出现别人的 `M`/`??` 时，既不要把共享树的红灯当成自己改动的结论，也不要为了跑绿去删改别人的在途文件；改动归属只看「`git diff` 是否为空 + 该文件是否在 HEAD 里」。
