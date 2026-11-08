@@ -349,6 +349,26 @@ test('remove：物理删除目录；当前 profile 需显式确认', () => {
   }
 })
 
+test('remove：含悬空 junction 的档案也能删净（fs.rm 静默失效的回归）', () => {
+  const { mgr, home, cleanup } = makeManager()
+  try {
+    mgr.create('work', 'base')
+    const dir = join(home, 'profiles', 'work')
+    mkdirSync(join(dir, 'node_modules'), { recursive: true })
+    // DSH 的真实形态：node_modules/<pkg> → 已消失的 .dsh-module-fallback/node_modules/<pkg>
+    symlinkSync(
+      join(dir, '.dsh-module-fallback', 'node_modules', 'immer'),
+      join(dir, 'node_modules', 'immer'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+    mgr.remove('work')
+    // 曾经：fs.rmSync 遇到悬空链接「不抛错也不删」，路由回 200 + 台账 success，档案留在磁盘上
+    assert.equal(existsSync(dir), false, '悬空 junction 不得让删除静默失败')
+  } finally {
+    cleanup()
+  }
+})
+
 test('desktop 保留档案：删除与改名一律拒绝（managedProfile），只读操作照常', async () => {
   const { mgr, home, cleanup } = makeManager()
   try {

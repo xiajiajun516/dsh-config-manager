@@ -275,6 +275,8 @@ export type DshProfileErrorCode =
   | 'copyFailed'
   /** 该档案由 Desktop 应用独占管理（启动 / 删除 / 改名一律拒绝，操作它会让桌面端起不来） */
   | 'managedProfile'
+  /** 目录删不干净（被占用 / 权限不足；message 里附底层原因）—— 绝不是「删成功」 */
+  | 'deleteFailed'
 
 /** 复制档案的非致命告警码（UI 按码映射文案，绝不静默）。 */
 export type DshProfileCopyWarning =

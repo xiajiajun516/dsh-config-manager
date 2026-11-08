@@ -18,14 +18,17 @@
  *    历史上这里还有一个 `<dataDir>/next-profile`「下次启动」标记——DSH 根本没有消费者，
  *    只会误导用户（2026-09 按产品决策整体移除，连同前端按钮）。
  *
- * 物理删除：remove() 走 rmSync(recursive)，profile 目录内的 junction（pnpm 链接）
- * 只删链接本身，不会跟随进 pnpm store。
+ * 物理删除：remove() 走 utils/remove-tree 的 removeTreeSync —— 不能用 fs.rmSync(recursive)：
+ * 目录里只要有一个**悬空链接**（DSH 的 node_modules/<pkg> → 已消失的 .dsh-module-fallback），
+ * rmSync 会不报错也不删任何东西（实测），于是「删除成功」而档案原样留在磁盘上。
+ * profile 目录内的 junction（pnpm 链接）只删链接本身，不会跟随进 pnpm store。
  */
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, type Dirent } from 'node:fs'
 // 复制走 async fs（整档案上万个文件，cpSync 会把宿主事件循环卡住二十多秒）
-import { copyFile, cp, mkdir, readdir, readlink, rm, stat, symlink, unlink } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readdir, readlink, stat, symlink, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { atomicWriteFileSync } from '../utils/atomic-write.ts'
+import { removeTree, removeTreeSync } from '../utils/remove-tree.ts'
 import { isRecord } from '../utils/guards.ts'
 import { resolveProfileDir, validateProfileName } from '../core/plugin-cli.ts'
 import { readTextSafe } from './dsh-profile-io.ts'
@@ -103,9 +106,15 @@ export interface DshProfileIncompleteCopiesScan {
 /** t89：profiles 根目录枚举失败的原因码（诊断/日志用）。 */
 export const PROFILES_ROOT_UNREADABLE = 'profiles-root-unreadable'
 
-/** 回滚复制目标目录的缺省删除实现（递归强制；不存在不算错）。 */
+/**
+ * 回滚复制目标目录的缺省删除实现（不存在不算错）。
+ *
+ * 必须走 removeTree 而不是 fs.rm(recursive)：半截副本里可能已经有指向
+ * `.dsh-module-fallback` 的悬空 junction，fs.rm 会「成功」却一个字节都不删，
+ * 回滚于是无声失败。
+ */
 const defaultProfileRemove = async (target: string): Promise<void> => {
-  await rm(target, { recursive: true, force: true })
+  await removeTree(target)
 }
 
 /**
@@ -413,7 +422,7 @@ export class DshProfileManager {
   }
 
   /**
-   * 物理删除 profile 目录（rmSync recursive；目录内 junction 只删链接本身）。
+   * 物理删除 profile 目录（removeTreeSync；目录内 junction 只删链接本身，删不干净报 deleteFailed）。
    * 当前运行中的 profile 需要 allowCurrent=true 显式确认（删除会让重启后的实例直接失败）。
    *
    * Desktop 独占档案（desktop）**一律拒绝**（连 allowCurrent 也不行）：它由桌面端应用自己
@@ -428,7 +437,16 @@ export class DshProfileManager {
     if (name === this.currentProfile() && opts.allowCurrent !== true) {
       throw new DshProfileError('currentProfile')
     }
-    rmSync(dir, { recursive: true, force: true })
+    // 不用 rmSync(recursive)：悬空 junction 会让它静默空转（见 utils/remove-tree.ts 头注）。
+    // 删不掉必须变成可见错误码，绝不回 200 —— 那正是「点了删除、档案还在」的成因。
+    try {
+      removeTreeSync(dir)
+    } catch (error) {
+      throw new DshProfileError('deleteFailed', error instanceof Error ? error.message : String(error))
+    }
+    if (existsSync(dir)) {
+      throw new DshProfileError('deleteFailed', `profile directory still exists after removal: ${dir}`)
+    }
   }
 
   /**

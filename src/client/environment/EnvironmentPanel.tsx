@@ -77,14 +77,14 @@ function selectProfilesSlice(): PanelState {
 }
 
 /** host 侧 engine 错误码 → 文案（未知错误回退到通用模板，不显示裸英文码）。 */
-const ERROR_CODES = ['notLaunchable', 'launcherUnavailable', 'launchFailed', 'alreadyRunning', 'notRunning', 'stopFailed', 'instanceRunning', 'exists', 'notFound', 'currentProfile', 'invalidName', 'reservedName', 'unknownTemplate', 'managedProfile'] as const
+const ERROR_CODES = ['notLaunchable', 'launcherUnavailable', 'launchFailed', 'alreadyRunning', 'notRunning', 'stopFailed', 'instanceRunning', 'exists', 'notFound', 'currentProfile', 'invalidName', 'reservedName', 'unknownTemplate', 'managedProfile', 'deleteFailed'] as const
 
 function profileErrorText(t: TranslateNS<'config-manager'>, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   for (const code of ERROR_CODES) {
     if (message === code || message.includes(code)) {
       // launchFailed / stopFailed 的 message 形如 `<code>: <细节>`：细节是排障的唯一线索，不能吞掉
-      if ((code === 'launchFailed' || code === 'stopFailed') && message.includes(': ')) {
+      if ((code === 'launchFailed' || code === 'stopFailed' || code === 'deleteFailed') && message.includes(': ')) {
         const tail = message.slice(message.indexOf(': ') + 2).trim()
         return tail === '' ? t(`profiles.error.${code}`) : `${t(`profiles.error.${code}`)} — ${redact(tail)}`
       }

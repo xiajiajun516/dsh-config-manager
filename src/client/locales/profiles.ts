@@ -130,6 +130,7 @@ export const zh = {
   'profiles.error.notRunning': '该档案没有正在运行的实例（可能已被手动关闭）',
   'profiles.error.stopFailed': '停止实例失败',
   'profiles.error.instanceRunning': '该档案的实例正在运行，请先停止再删除',
+  'profiles.error.deleteFailed': '删除失败：档案目录被占用或权限不足，档案仍在磁盘上',
   'profiles.error.generic': '操作失败：{message}',
 } as const;
 
@@ -259,5 +260,6 @@ export const en: Record<keyof typeof zh, string> = {
   'profiles.error.notRunning': 'This profile has no running instance (it may have been closed manually)',
   'profiles.error.stopFailed': 'Stopping the instance failed',
   'profiles.error.instanceRunning': 'An instance of this profile is running — stop it before deleting',
+  'profiles.error.deleteFailed': 'Delete failed: the profile directory is in use or access is denied — the profile is still on disk',
   'profiles.error.generic': 'Operation failed: {message}',
 };
