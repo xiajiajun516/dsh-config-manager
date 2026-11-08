@@ -1878,3 +1878,64 @@ test('RV1-F8：错误文本与工作副本自检返回体都不含 userinfo（to
     assert.ok(!hostErr.message.includes(localDir), '本机路径同样不得原样回显: ' + hostErr.message);
   }
 });
+
+/* ---------------- 本机提交身份（issue：commit exit 128 ⇒ NEEDS_ATTENTION ⇒ 误升 SAFE MODE） ---------------- */
+
+test('本机缺 git 身份导致 commit 失败 → kind=config、不可重试、文案点名 git config，并标记 localOnly', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({
+    workDir: dir,
+    exec: mockExec(calls, {
+      failOn: { match: 'commit', code: 128, stderr: "fatal: unable to auto-detect email address (got 'runner@BUILD.(none)')" },
+    }),
+  }));
+  await assert.rejects(transport.upload(sampleSnapshot()), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError, '必须仍是统一传输层错误');
+    assert.equal(err.kind, 'config', '身份缺失必须归 config（不是 auth/notfound/unknown）');
+    assert.equal(err.retryable, false, '本机配置问题重试无意义');
+    // 文案必须指向本机 git 配置：用户此前只看到「备份已跳过」，完全不知道要配身份
+    assert.match(err.message, /git config/);
+    assert.match(err.message, /user\.email/);
+    // localOnly 标记 = phase3 不把插件升进 durable SAFE MODE（一个可修的配置问题不该冻结全部写入）
+    assert.ok(isLocalOnlyExternalFailure(err), '必须打 localOnly 标记');
+    assert.equal(localOnlyFailureReason(err), 'git-identity');
+    return true;
+  });
+});
+
+test('已有工作副本缺提交身份 → 进入工作副本时自动补写仓库级 user.name/user.email（不覆盖已有值）', async (t) => {
+  const dir = await makeTempDir(t);
+  await fs.mkdir(path.join(dir, '.git'), { recursive: true });
+  const writes: string[] = [];
+  const probes: string[] = [];
+  const exec: GitExecFn = async (_cmd, args) => {
+    const joined = args.join(' ');
+    if (joined.includes('--get user.name') || joined.includes('--get user.email')) {
+      probes.push(joined);
+      return { stdout: '', stderr: '', code: 1 }; // 1 = 未配置
+    }
+    if (joined.includes('config user.name') || joined.includes('config user.email')) writes.push(joined);
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
+  await transport.list();
+  assert.equal(probes.length, 2, '必须探测两个键: ' + probes.join(' | '));
+  assert.equal(writes.length, 2, '两个键都缺失时必须都补写: ' + writes.join(' | '));
+  assert.ok(writes.some((w) => w.includes('DSH Config Sync')), '补写默认作者名: ' + writes.join(' | '));
+  assert.ok(writes.some((w) => w.includes('sync@dsh.local')), '补写默认作者邮箱: ' + writes.join(' | '));
+
+  // 已有值（用户自己配的）→ 绝不覆盖
+  const dir2 = await makeTempDir(t);
+  await fs.mkdir(path.join(dir2, '.git'), { recursive: true });
+  const writes2: string[] = [];
+  const exec2: GitExecFn = async (_cmd, args) => {
+    const joined = args.join(' ');
+    if (joined.includes('--get user.name')) return { stdout: 'Alice\n', stderr: '', code: 0 };
+    if (joined.includes('--get user.email')) return { stdout: 'alice@example.com\n', stderr: '', code: 0 };
+    if (joined.includes('config user.name') || joined.includes('config user.email')) writes2.push(joined);
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  await new GitTransport(makeOptions({ workDir: dir2, exec: exec2 })).list();
+  assert.deepEqual(writes2, [], '已有身份不得被覆盖: ' + writes2.join(' | '));
+});

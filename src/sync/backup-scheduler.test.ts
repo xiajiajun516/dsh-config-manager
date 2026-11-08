@@ -596,7 +596,9 @@ test('issue #31：残留锁挡住定时备份 → 日志按分类给出 stale �
     const { scheduler } = staleLockScheduler({ cfg, tmp, logSink: (level, message) => { lines.push({ level, message }); } });
     const result = await scheduler.runOnce();
     assert.equal(result.status, 'skipped');
-    assert.equal(result.skipReason, 'mutation-locked');
+    // 分档（lockSkipToken）：残留锁必须发自己的 token —— 客户端据此给「去事故恢复回收」而不是
+    // 「另一个任务正在使用环境锁，稍后重试」（后者对残留锁是错的指引，重试/重启都不会自愈）。
+    assert.equal(result.skipReason, 'mutation-lock-stale');
     assert.equal(result.consecutiveFailures, 0, '被锁挡下不计入连续失败');
     const staleLine = lines.find((l) => l.message.includes('定时备份跳过'));
     assert.ok(staleLine !== undefined, `应有跳过日志: ${JSON.stringify(lines)}`);

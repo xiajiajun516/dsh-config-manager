@@ -23,6 +23,7 @@ import { createSnapshot, FileSnapshotStore, verifySnapshot } from './backup.ts';
 import type { Snapshot } from './types.ts';
 import { makeContext } from '../adapters/test-helpers.ts';
 import type { MutationLockContext } from '../utils/env-lock.ts';
+import { markLocalOnlyExternalFailure } from './external-failure.ts';
 
 function tmp(t: test.TestContext): string {
   const dir = fssync.mkdtempSync(path.join(os.tmpdir(), 'p3prod-'));
@@ -135,6 +136,48 @@ test('P0-A：runExternalIntent 记录 external step + COMMITTED', async (t) => {
   assert.equal(j!.steps['ext']?.status, 'done', '外部步骤成功后必须标 done');
   assert.equal(typeof j!.steps['ext']?.appliedAt, 'string', '外部步骤成功后必须有 appliedAt');
   assert.deepEqual(await recovery.store.scanActive(), []);
+});
+
+/* ---- 本地可修失败不升 SAFE MODE（issue：缺 git 身份 ⇒ 全部写入 423，界面还说环境锁被占用） ---- */
+
+test('runExternalIntent：localOnly 失败 → NEEDS_ATTENTION，但绝不升 durable SAFE MODE', async (t) => {
+  const dir = tmp(t);
+  const recovery = await makeRecovery(dir);
+  // 「本机没配 git 身份」这类失败：能在本机一步修好，不会让磁盘停在半写状态。
+  const err = markLocalOnlyExternalFailure(new Error('fatal: unable to auto-detect email address'), 'git-identity');
+  await assert.rejects(
+    () => recovery.runExternalIntent({
+      operationType: 'sync-push', lockCtx: lk(), intent: { adapter: 'sync', ref: 'git', kind: 'Push' },
+      fn: async () => { throw err; },
+    }),
+    /unable to auto-detect email address/,
+  );
+  // 交易本身照旧留痕（不掩盖失败）
+  const active = await recovery.store.scanActive();
+  assert.equal(active.length, 1, '必须留下一条可读的 journal');
+  // scanActive() 只回 id 列表（string[]），状态要 loadActive 才拿得到
+  const journal = await recovery.store.loadActive(active[0]!);
+  assert.ok(journal, 'journal 可读');
+  assert.equal(journal!.state, 'NEEDS_ATTENTION');
+  assert.match(String(journal!.error ?? ''), /auto-detect email/);
+  // 但不连坐全局：此前 catch 无条件写 durable SAFE MODE（跨重启生效），把可修配置问题放大成
+  // 「所有写入 423」，用户还得先解除阻断才能重试 —— 真机 issue 的实际链路。
+  assert.equal(recovery.safeModeActive, false, '内存 safeModeActive 不得被置位');
+  assert.equal(await recovery.store.readSafeMode(), false, 'durable SAFE MODE 标记不得落盘');
+});
+
+test('runExternalIntent：未标记的失败照旧升 SAFE MODE（收窄只对 localOnly 生效，其余 fail-closed）', async (t) => {
+  const dir = tmp(t);
+  const recovery = await makeRecovery(dir);
+  await assert.rejects(
+    () => recovery.runExternalIntent({
+      operationType: 'sync-push', lockCtx: lk(), intent: { adapter: 'sync', ref: 'git', kind: 'Push' },
+      fn: async () => { throw new Error('boom: unknown external failure'); },
+    }),
+    /boom/,
+  );
+  assert.equal(recovery.safeModeActive, true);
+  assert.equal(await recovery.store.readSafeMode(), true, '未知失败必须保持 fail-closed');
 });
 
 // ---------- 真实 child crash：runJournaled fn 中被 SIGKILL → 残留非终态 journal → reconcile ----------

@@ -1050,8 +1050,8 @@ export class EnvironmentLockManager {
       this.timers.clearInterval(this.holdWatchdogTimer)
       this.holdWatchdogTimer = null
     }
-    this.holdStartedAt = 0
-    this.holdOp = ''
+    // 注意：**不清** holdOp/holdStartedAt —— 告警命中后定时器即停，但这次持有的「是谁、持了多久」
+    // 仍要继续可读（holdInfo），直到 release 时 activeToken 归零自然失效。
   }
 
   /** 当前持有的操作与已持有时长（诊断用；未持有 → null）。持有超过阈值时它给出「是哪个 op」。 */

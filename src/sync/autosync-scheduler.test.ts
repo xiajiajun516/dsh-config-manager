@@ -165,11 +165,12 @@ test('runOnce: 残留锁挡住 → skipped(mutation-locked) 且**写历史**（i
   });
   const result = await scheduler.runOnce('git');
   assert.equal(result.status, 'skipped');
-  assert.equal(result.skipReason, 'mutation-locked');
+  // 分档（lockSkipToken）：注入的是 STALE_LOCK_DETECTED → 残留锁 token，客户端据此给「去事故恢复回收」
+  assert.equal(result.skipReason, 'mutation-lock-stale');
   const entries = getEntries();
   assert.equal(entries.length, 1, '被锁挡下必须留一条历史（否则用户只看得到「自动同步不再更新」）');
   assert.equal(entries[0]!.status, 'skipped');
-  assert.equal(entries[0]!.skipReason, 'mutation-locked');
+  assert.equal(entries[0]!.skipReason, 'mutation-lock-stale');
   assert.equal(entries[0]!.transport, 'git');
   assert.equal(getConfig().consecutiveFailures, 0, '被锁挡下不计入连续失败');
 });
@@ -187,7 +188,7 @@ test('runOnce: 被锁挡下（stale）不得泄漏 running run —— 否则后�
   assert.deepEqual(runs.listActive(), [], '被锁挡下后不得留下 running run（泄漏会挡住后续每一次 autosync）');
   // 反向控制：泄漏时这个断言必须变红（run 仍在 running）
   const again = await scheduler.runOnce('git');
-  assert.equal(again.skipReason, 'mutation-locked', '第二次仍是被锁挡下，而不是 conflict');
+  assert.equal(again.skipReason, 'mutation-lock-stale', '第二次仍是被锁挡下（残留锁），而不是 conflict');
 });
 
 test('runOnce: acquire 抛错（锁目录 IO）同样不得泄漏 running run', async () => {
@@ -230,9 +231,11 @@ test('issue #31 D：acquire 本身抛错（锁目录 IO）同样必须写历史�
   });
   const result = await scheduler.runOnce('git');
   assert.equal(result.status, 'skipped');
-  assert.equal(result.skipReason, 'mutation-locked');
+  // 分档（lockSkipToken）：acquire 抛错 = 锁不可用，既不是「被另一任务占用」也不是「残留锁」——
+  // 此前三种都落成 'mutation-locked'，界面只能写「被占用或残留」，真机 locks 为空时把排查方向带偏。
+  assert.equal(result.skipReason, 'mutation-lock-unavailable');
   assert.equal(getEntries().length, 1, 'acquire 抛错也是「被挡」，同样要留历史');
-  assert.equal(getEntries()[0]!.skipReason, 'mutation-locked');
+  assert.equal(getEntries()[0]!.skipReason, 'mutation-lock-unavailable');
   assert.equal(getConfig().consecutiveFailures, 0, '不计入连续失败');
 });
 

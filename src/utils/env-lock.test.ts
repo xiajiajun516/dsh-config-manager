@@ -37,6 +37,7 @@ import {
   HEARTBEAT_PREFIX,
   RECOVERING_PREFIX,
   LOCK_BLOCK_MESSAGE,
+  lockSkipToken,
   type LockOwnershipRecord,
   type ProcessIdentityProbe,
   type EnvLockManagerOptions,
@@ -1538,6 +1539,112 @@ test('§11.8-d 心跳未达长过期 + 进程存活 → 仍 LOCKED，acquire 与
   assert.equal((await withMutationLock(m, { op: 'profile-delete' })).reason, 'locked');
   assert.equal((await m.recoverStaleLock()).ok, false);
   assert.ok(fssync.existsSync(path.join(locksDir, OWNERSHIP_FILE)), '拒绝后现场必须原样保留');
+});
+
+/* ------------------------------------------- §11.9 长持有看门狗（issue：锁与心跳都不释放） */
+
+/**
+ * 手动 tick 的假定时器（只实现 LockTimerApi 的两个方法）。
+ * 与真实定时器不同：到点由测试显式 fire(ms)，不依赖墙钟与事件循环负载。
+ */
+function manualTimers(): {
+  api: { setInterval(fn: () => void | Promise<void>, ms: number): unknown; clearInterval(handle: unknown): void };
+  /** 触发所有 ms 匹配且未被清除的定时器一次；返回触发个数 */
+  fire(ms: number): number;
+  /** 仍存活的定时器个数（含 heartbeat） */
+  live(): number;
+} {
+  const handles: Array<{ id: object; fn: () => void | Promise<void>; ms: number; cleared: boolean }> = [];
+  return {
+    api: {
+      setInterval(fn, ms) { const h = { id: {}, fn, ms, cleared: false }; handles.push(h); return h.id; },
+      clearInterval(handle) { const h = handles.find((x) => x.id === handle); if (h !== undefined) h.cleared = true; },
+    },
+    fire(ms) {
+      let n = 0;
+      for (const h of handles.slice()) {
+        if (h.cleared || h.ms !== ms) continue;
+        h.cleared = true;
+        n += 1;
+        void h.fn();
+      }
+      return n;
+    },
+    live() { return handles.filter((h) => !h.cleared).length; },
+  };
+}
+
+test('§11.9-a 长持有看门狗：超过阈值只告警一次（点名 op 与持有时长），绝不强拆活持有者', async (t) => {
+  const locksDir = tmp(t);
+  const timers = manualTimers();
+  let clock = 1_000_000;
+  const seen: Array<{ op: string; heldMs: number; tokenId: string }> = [];
+  const mgr = lockManager(t, {
+    locksDir,
+    timers: timers.api,
+    now: () => clock,
+    heartbeatIntervalMs: 1000,
+    holdWarnAfterMs: 5000,
+    onHoldExceeded: (info) => { seen.push(info); },
+  });
+  const res = await mgr.acquire({ op: 'autosync' });
+  assert.equal(res.state, 'ACQUIRED');
+  assert.equal(seen.length, 0, '刚 acquire 不得告警');
+  clock += 5000;
+  assert.equal(timers.fire(5000), 1, '看门狗必须在阈值到点触发');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.op, 'autosync', '告警必须点名是哪个 op 卡住了');
+  assert.ok(seen[0]!.heldMs >= 5000, '告警必须给出已持有时长: ' + seen[0]!.heldMs);
+  // 只观察、不解锁：活持有者可能真在跑长任务，强拆会造出双持有（比卡死更难查）
+  assert.equal(mgr.isHolding, true, '看门狗绝不释放锁');
+  assert.notEqual(await readOwnership(locksDir), null, 'ownership 仍在盘上');
+  assert.deepEqual(mgr.holdInfo, { op: 'autosync', heldMs: 5000 }, 'holdInfo 给出「是哪个 op 持有」');
+  // 触发后自行停掉：不得每 tick 重复告警
+  assert.equal(timers.fire(5000), 0, '看门狗命中一次即停');
+  assert.equal(seen.length, 1);
+  await mgr.release(res.token!);
+});
+
+test('§11.9-b release 之后看门狗随之失效（停表 + holdInfo 为空）', async (t) => {
+  const locksDir = tmp(t);
+  const timers = manualTimers();
+  let clock = 2_000_000;
+  const seen: unknown[] = [];
+  const mgr = lockManager(t, {
+    locksDir, timers: timers.api, now: () => clock,
+    heartbeatIntervalMs: 1000, holdWarnAfterMs: 5000,
+    onHoldExceeded: (i) => { seen.push(i); },
+  });
+  const res = await mgr.acquire({ op: 'backup' });
+  assert.equal(timers.live(), 2, 'acquire 后应有 heartbeat + 看门狗两只定时器');
+  await mgr.release(res.token!);
+  assert.equal(timers.live(), 0, 'release 必须停掉全部定时器（含看门狗）');
+  assert.equal(mgr.holdInfo, null);
+  clock += 60_000;
+  assert.equal(timers.fire(5000), 0);
+  assert.equal(seen.length, 0, '已释放的持有不得再告警');
+});
+
+test('§11.9-c holdWarnAfterMs=0 关闭看门狗（只留 heartbeat，供不需要告警的宿主）', async (t) => {
+  const locksDir = tmp(t);
+  const timers = manualTimers();
+  const mgr = lockManager(t, { locksDir, timers: timers.api, heartbeatIntervalMs: 1000, holdWarnAfterMs: 0 });
+  const res = await mgr.acquire({ op: 'export' });
+  assert.equal(timers.live(), 1, '关闭时只剩 heartbeat');
+  assert.equal(timers.fire(5000), 0);
+  await mgr.release(res.token!);
+});
+
+test('§11.9-d lockSkipToken：锁分类 → 稳定机器 token（只有真被活任务占用才叫 mutation-locked）', () => {
+  // issue：此前所有被挡路径都发 'mutation-locked'，客户端只能写「被占用或残留」，
+  // 真机 locks 目录为空时这句文案把排查方向带偏。分档后一类一个 token。
+  assert.equal(lockSkipToken('blocked'), 'mutation-safe-mode');
+  assert.equal(lockSkipToken('locked'), 'mutation-locked');
+  assert.equal(lockSkipToken('stale'), 'mutation-lock-stale');
+  assert.equal(lockSkipToken('stale-degraded'), 'mutation-lock-stale');
+  assert.equal(lockSkipToken('unavailable'), 'mutation-lock-unavailable');
+  // acquire 直接抛错（未拿到分类）→ 不可用，而不是谎称被占用
+  assert.equal(lockSkipToken(undefined), 'mutation-lock-unavailable');
 });
 
 

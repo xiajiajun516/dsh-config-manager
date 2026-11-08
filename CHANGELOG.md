@@ -54,6 +54,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **The first sync round after startup now follows your selected sections**: it could previously run with “all recommended sections” for that one round, temporarily ignoring a custom selection (it could only over-pull/over-merge, never over-push).
 - **没勾「MCP 连接器」时，MCP 服务器配置不再跟着插件同步上远端**：以前插件同步会把整份 patch 清单带走，连带 MCP 服务器定义与本机路径；现在这些行只在你勾选「MCP 连接器」时才同步。
   **MCP server definitions no longer ride along with plugin sync when “MCP connectors” is off**: plugin sync used to carry the whole patch list, including MCP server definitions and local paths; those lines now sync only when you enable “MCP connectors”.
+- **「已跳过：环境锁被占用」不再误导排查方向**：备份与自动同步被挡下时会分别说明是「另一个任务正在使用锁」「盘上留着上次没释放的残留锁（重试与重启都不会自愈，要去事故恢复回收）」「插件处于 SAFE MODE」还是「锁暂时不可用」，各自给出对应处置；某次操作持锁超过两分钟还会写一条点名操作与持有时长的告警，方便看出是谁没有放开。
+  **“Skipped: the environment lock is held” no longer sends you the wrong way**: when a backup or auto-sync is blocked, the message now says which case it is — another task is using the lock, a leftover lock is sitting on disk (retrying or restarting will not clear it; reclaim it under Incident recovery), the plugin is in SAFE MODE, or the lock is temporarily unusable — each with its own remedy; holding the lock for more than two minutes also logs a warning naming the operation and how long it has been held.
+- **本机缺少 git 提交身份不再把插件锁进 SAFE MODE**：以前自动同步的提交因为本机没配 git 用户名/邮箱而失败（git 退出码 128），整个插件会被切成「所有写入一律拒绝」，而界面只说锁被占用；现在这类「本机一步就能修好」的失败只停止这一次操作并如实报出原因，插件还会顺手给同步工作副本补上仓库级身份，其余无法判断的失败仍照旧保守阻断。
+  **A missing local git identity no longer puts the plugin into SAFE MODE**: auto-sync commits used to fail when this machine had no git user name/email set (git exits 128), and the whole plugin switched to refusing every write while the UI only mentioned a held lock; such “fixable on this machine” failures now stop just that one operation and report the real reason, the plugin fills in a repository-level identity for the sync working copy, and genuinely unknown failures still fail closed as before.
 
 ### 🗑️ 移除 · Removed
 
