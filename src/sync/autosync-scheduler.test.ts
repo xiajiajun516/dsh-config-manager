@@ -66,6 +66,9 @@ function makeScheduler(opts: {
   mutationLock?: MutationLockPort;
   /** issue #31：捕获日志行（断言 stale 指引确实写给用户） */
   logSink?: LogSink;
+  /** 2026-11-07 事故护栏：注入检测结论（缺省走真实检测，需要真引擎） */
+  detectRemoteNew?: (engine: SyncEngine, listed?: readonly SyncSnapshotMeta[]) => Promise<boolean>;
+  detectLocalChange?: (engine: SyncEngine) => Promise<boolean>;
 }) {
   const runs = new RunRegistry();
   const entries: AutosyncHistoryEntry[] = [...opts.history];
@@ -83,6 +86,8 @@ function makeScheduler(opts: {
     readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: entries, updatedAt: '' }),
     appendHistoryFn: async (e) => { entries.push(e); },
     ...(opts.mutationLock !== undefined ? { mutationLock: opts.mutationLock } : {}),
+    ...(opts.detectRemoteNew !== undefined ? { detectRemoteNew: opts.detectRemoteNew } : {}),
+    ...(opts.detectLocalChange !== undefined ? { detectLocalChange: opts.detectLocalChange } : {}),
     // 测试不用真实定时器：不调 start()
   });
   return { scheduler, runs, getConfig: () => config, getEntries: () => entries };
@@ -1271,4 +1276,45 @@ test('端到端：勾选 mcp 后仅改连接器存储 → 自动同步一轮真�
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
+});
+
+// ---------- 2026-11-07 真机事故：稳态一轮不得占 GLOBAL mutation 锁 ----------
+// 现场（实测）：autosync 每 60s 触发一轮，每轮在 GLOBAL 锁内为本地源插件跑 npm pack（单个 210MB 插件 44.7s），
+// 锁几乎全程被占 → 用户删除档案/导入配置恒 423「另一个任务正在运行」。
+// 现在只读检测放在锁外：稳态（两端无变化）直接收工，不 acquire。
+test('runOnce: 稳态（两端无变化）不取环境锁；有活干才取（2026-11-07 档案删除 423 护栏）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const engine = { listSnapshots: async () => [] } as unknown as Partial<SyncEngine>;
+
+  // 锁端口：LOCKED（真机上「另一任务正在跑」的形态）。稳态里它绝不该被调用。
+  let acquireCalls = 0;
+  const lockedPort: MutationLockPort = {
+    acquire: async () => {
+      acquireCalls += 1;
+      return { state: 'LOCKED', token: null, detail: 'injected: another task' };
+    },
+    validate: (tok: unknown): tok is MutationLockToken => false,
+    release: async () => undefined,
+  };
+
+  const steady = makeScheduler({
+    cfg, engine, history: [], mutationLock: lockedPort,
+    detectRemoteNew: async () => false,
+    detectLocalChange: async () => false,
+  });
+  const idle = await steady.scheduler.runOnce('git');
+  assert.equal(idle.status, 'success');
+  assert.equal(idle.skipReason, 'upToDate');
+  assert.equal(acquireCalls, 0, '稳态一轮不得占用写锁（否则用户 destructive 操作被 423 挡住）');
+
+  // 反向控制：真有活干时才取锁 —— 取不到就按「被占用」跳过（此时 acquire 必须被调用到）
+  const busy = makeScheduler({
+    cfg, engine, history: [], mutationLock: lockedPort,
+    detectRemoteNew: async () => false,
+    detectLocalChange: async () => true,
+  });
+  const blocked = await busy.scheduler.runOnce('git');
+  assert.equal(acquireCalls, 1, '有活干才取锁（且只取一次）');
+  assert.equal(blocked.status, 'skipped');
+  assert.equal(blocked.skipReason, 'mutation-locked');
 });
