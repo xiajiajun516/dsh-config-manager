@@ -37,8 +37,16 @@ export const DEFAULT_STARTUP_MIN_INTERVAL_MS = 5 * 60 * 1000;
 /** 缺省开启「本地改动即时触发」（真·自动同步；关闭后退回纯定时器） */
 export const DEFAULT_AUTOSYNC_REALTIME = true;
 
-/** 缺省远端轮询间隔（realtime 开启时与本地监听并行：本地改动即时上行，远端改动最迟 1 分钟内下行） */
-export const DEFAULT_AUTOSYNC_REMOTE_CHECK_MS = 60 * 1000;
+/**
+ * 缺省远端轮询间隔（realtime 开启时与本地监听并行：本地改动即时上行，远端改动最迟 5 分钟内下行）。
+ *
+ * 2026-11-09 由 60s 改为 5 分钟（用户拍板）：远端探测本身很便宜，但过去每轮还会顺带做一次本地
+ * 全量导出判定，plugins 分区要为每个本机源插件跑 npm pack（真机 12 个 ≈12 s、单个 210MB 44.7 s）
+ * ⇒ 60 s 一轮等于长期占用一个核。本地改动的即时性由文件监听负责（local-change 触发），
+ * 兜底由 interval 负责，远端「有没有新快照」不需要 1 分钟一问。旧配置里已写死的值不在此处迁移
+ * （用户显式选过的值优先），需要改的走 POST /sync/autosync 的 remoteCheckMs。
+ */
+export const DEFAULT_AUTOSYNC_REMOTE_CHECK_MS = 5 * 60 * 1000;
 
 /** 远端轮询间隔下限（15 s）：再短只是空转 fetch，收益为零 */
 export const MIN_AUTOSYNC_REMOTE_CHECK_MS = 15 * 1000;
