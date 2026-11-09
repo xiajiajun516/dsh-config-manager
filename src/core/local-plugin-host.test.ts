@@ -29,6 +29,8 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }, opts: {
   tarballBytes?: number;
   oversizeTtlMs?: number;
   maxTarballBytes?: number;
+  /** 内容缓存上限（字节；0 = 关闭） */
+  packedCacheMaxBytes?: number;
 } = {}): Promise<Fixture> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dshcm-packhost-'));
   t.after(async () => { await fsp.rm(root, { recursive: true, force: true }); });
@@ -54,6 +56,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }, opts: {
     exec,
     maxTarballBytes: opts.maxTarballBytes ?? 1024,
     ...(opts.oversizeTtlMs === undefined ? {} : { oversizeTtlMs: opts.oversizeTtlMs }),
+    ...(opts.packedCacheMaxBytes === undefined ? {} : { packedCacheMaxBytes: opts.packedCacheMaxBytes }),
   });
   return {
     hook,
@@ -115,14 +118,40 @@ test('oversizeTtlMs=0：关闭缓存，两轮都真打（测试与排障用）',
   assert.equal(fx.calls(), 2);
 });
 
-test('未超限：正常产出 packed，不进负缓存（两轮都打包）', async (t) => {
+test('未超限：正常产出 packed；源没变时第二轮走内容缓存，不再 npm pack', async (t) => {
   const fx = await fixture(t, { tarballBytes: 256, maxTarballBytes: 1024 });
   const first = await fx.hook(fx.plugins, ctx);
   assert.equal(first.packed.length, 1);
   assert.equal(first.oversize.length, 0);
   assert.equal(first.warnings.length, 0);
+
+  // 2026-11-09：内容缓存上线后，源没变的第二轮直接复用 tarball 字节（此前是每轮都真打）。
+  const second = await fx.hook(fx.plugins, ctx);
+  assert.equal(fx.calls(), 1, '源没变 → 复用缓存，不再 spawn npm pack');
+  assert.equal(second.packed.length, 1, '缓存命中同样要产出 packed（备份缺它会把插件丢掉）');
+  assert.deepEqual(second.packed[0]?.data, first.packed[0]?.data, '复用的必须是同一份字节');
+  assert.equal(second.packed[0]?.rewrittenSpec, first.packed[0]?.rewrittenSpec);
+});
+
+test('内容缓存：源目录里改一个文件（lib/ 里那种不改目录 mtime 的改动）→ 必须重新打包', async (t) => {
+  const fx = await fixture(t, { tarballBytes: 256, maxTarballBytes: 1024 });
+  await fsp.mkdir(path.join(fx.sourceDir, 'lib'), { recursive: true });
+  await fsp.writeFile(path.join(fx.sourceDir, 'lib', 'index.js'), 'export const a = 1\n');
   await fx.hook(fx.plugins, ctx);
-  assert.equal(fx.calls(), 2);
+  assert.equal(fx.calls(), 1);
+
+  const file = path.join(fx.sourceDir, 'lib', 'index.js');
+  const future = new Date(Date.now() + 5000);
+  await fsp.utimes(file, future, future);
+  await fx.hook(fx.plugins, ctx);
+  assert.equal(fx.calls(), 2, '内容指纹按文件级 rel/size/mtime 算，改文件必须重打包（不能把旧 tarball 当当前内容）');
+});
+
+test('内容缓存：packedCacheMaxBytes=0 → 关闭，两轮都真打', async (t) => {
+  const fx = await fixture(t, { tarballBytes: 256, maxTarballBytes: 1024, packedCacheMaxBytes: 0 });
+  await fx.hook(fx.plugins, ctx);
+  await fx.hook(fx.plugins, ctx);
+  assert.equal(fx.calls(), 2, '关闭缓存时行为与改造前一致');
 });
 
 test('无本地源插件：零 spawn、零目录创建', async (t) => {

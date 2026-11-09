@@ -559,4 +559,16 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 
 同轮配套：空转轮在运行中心不再留卡片 —— `RunRegistry` 收尾写入 `result.idle`，`/runs?scope=recent` 用 `isIdleAutosyncRun` 过滤（`src/core/run-registry.ts`、`src/routes/import.ts`），与迁移历史的 `isAutosyncIdleRound` 同一判据。
 
+## 省掉剩下的那部分 CPU：远端探测降到 5 分钟 + 打包结果按内容缓存（2026-11-09 用户拍板）
+
+**① 远端探测缺省 60 s → 5 min**（`DEFAULT_AUTOSYNC_REMOTE_CHECK_MS`，`src/sync/autosync-config.ts:41`）。理由是分工：本地改动由 realtime 文件监听即时上行，兜底由 `interval`（30 min）负责，「远端有没有新快照」不需要 1 分钟一问。已写死的旧值不迁移（用户显式选过的优先），本机当前配置经 `POST /sync/autosync` 落到 300000。
+
+**② npm pack 结果按内容缓存**（`src/core/local-plugin-host.ts`）：解析后的源路径 → `{ fingerprint, entry, bytes, usedAt }`，命中即复用上次 tarball 字节、跳过 `npm pack`。
+
+- 指纹用 **deepSourceFingerprint**（递归 `rel\0size\0mtime`，跳过 `node_modules`/`.git`，遇到链接或超 20000 条返回 `null` 即不缓存）。**不能用负缓存那个「目录 mtime + package.json」的粗指纹**：在 `lib/` 改一行不改目录 mtime，positive cache 会把旧 tarball 当当前内容写进备份。成本实测 8810 文件 3.6 s、51502 文件 14.9 s，仍比 44.7 s 的打包便宜一个量级。
+- 上限：总字节 128 MiB + 64 条，按「最久未用」淘汰；单条超过上限不入缓存；`packedCacheMaxBytes: 0` 关闭。
+- 结果合并保持入参顺序（`orderPacked`），`rewritten` 两侧合并；超限负缓存逻辑不变。
+
+**守卫**（`src/core/local-plugin-host.test.ts`）：源没变 → 第二轮 `calls()` 仍为 1 且字节逐字相同；改 `lib/index.js` 的 mtime → 重新打包；`packedCacheMaxBytes: 0` → 两轮都真打。
+
 

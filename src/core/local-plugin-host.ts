@@ -9,11 +9,12 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
 import { packLocalPlugins, parsePackOutput, resolveLocalPluginPath } from './local-plugin-pack.ts';
 import { quoteCmdArg } from './plugin-cli.ts';
-import type { OversizeLocalPlugin, PackExec, PackExecResult, PackLocalPluginsResult } from './local-plugin-pack.ts';
+import type { OversizeLocalPlugin, PackedLocalPlugin, PackExec, PackExecResult, PackLocalPluginsResult } from './local-plugin-pack.ts';
 import type { HostContext } from './types.ts';
 import { engineMsg } from './messages-core.ts';
 
@@ -106,6 +107,15 @@ export interface LocalPluginPackHookOptions {
   sourceFingerprint?: (absPath: string) => Promise<string | null>;
   /** tarball 体积上限（缺省 MAX_LOCAL_TARBALL_BYTES；测试用小值验证超限负缓存） */
   maxTarballBytes?: number;
+  /**
+   * 内容缓存上限（字节；缺省 PACKED_CACHE_MAX_BYTES，**0 = 关闭**）。
+   * 命中判据 = 源目录的**内容指纹**（递归 rel/size/mtime）未变：命中即复用上次的 tarball 字节，跳过 npm pack。
+   */
+  packedCacheMaxBytes?: number;
+  /** 内容缓存条目上限（缺省 PACKED_CACHE_MAX_ENTRIES）。 */
+  packedCacheMaxEntries?: number;
+  /** 内容指纹（测试注入；缺省 deepSourceFingerprint）。 */
+  contentFingerprint?: (absPath: string) => Promise<string | null>;
 }
 
 /**
@@ -140,6 +150,69 @@ async function defaultSourceFingerprint(absPath: string): Promise<string | null>
     return null;
   }
 }
+/** 内容缓存上限（缺省 128 MiB）：只缓存真的打过的 tarball 字节。 */
+const PACKED_CACHE_MAX_BYTES = 128 * 1024 * 1024;
+
+/** 内容缓存条目上限（防「一堆小插件」把 Map 撑大）。 */
+const PACKED_CACHE_MAX_ENTRIES = 64;
+
+/** 内容指纹的遍历上限：超过就不缓存（宁可不省，也不拿可能过期的字节去备份）。 */
+const CONTENT_FP_MAX_ENTRIES = 20_000;
+
+/**
+ * 内容指纹（**正缓存**用）：递归列出目录内每个文件的相对路径 + 字节数 + mtime。
+ *
+ * 为什么不用上面的 defaultSourceFingerprint：它只取「目录 mtime + package.json」，
+ * 在 lib/ 里改一行**不会**改目录 mtime —— 拿它做正缓存，会把旧 tarball 当成当前内容上传进备份。
+ * 负缓存能容忍这种粗糙（最坏是少备份一次、30 分钟内重试），正缓存不能容忍（最坏是备份里是旧代码）。
+ *
+ * 成本实测（2026-11-07，真机）：8810 文件 3.6 s、51502 文件 14.9 s —— 仍比一次 210 MB 插件的
+ * 44.7 s npm pack 便宜一个量级；超过 CONTENT_FP_MAX_ENTRIES 或遇到链接/特殊文件一律返回 null
+ * （调用方据此**不缓存**，直接照常打包）。
+ */
+async function deepSourceFingerprint(absPath: string): Promise<string | null> {
+  let st;
+  try {
+    st = await fsp.stat(absPath);
+  } catch {
+    return null;
+  }
+  if (st.isFile()) return 'file:' + st.size + ':' + Math.trunc(st.mtimeMs);
+  if (!st.isDirectory()) return null;
+
+  const hash = createHash('sha256');
+  let entries = 0;
+  const walk = async (dir: string, rel: string): Promise<boolean> => {
+    let list;
+    try {
+      list = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    list.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of list) {
+      // 与 npm pack 同口径：node_modules 不进产物；.git 不参与内容身份
+      if (entry.name === 'node_modules' || entry.name === '.git') continue;
+      const abs = path.join(dir, entry.name);
+      const relPath = rel === '' ? entry.name : rel + '/' + entry.name;
+      if (entry.isDirectory()) {
+        if (!(await walk(abs, relPath))) return false;
+        continue;
+      }
+      if (!entry.isFile()) return false; // 链接 / 设备文件：不猜它指向什么，放弃缓存
+      const s = await fsp.stat(abs).catch(() => null);
+      if (s === null) return false;
+      entries += 1;
+      if (entries > CONTENT_FP_MAX_ENTRIES) return false;
+      hash.update(relPath + '\u0000' + s.size + '\u0000' + Math.trunc(s.mtimeMs) + '\n');
+    }
+    return true;
+  };
+  if (!(await walk(absPath, ''))) return null;
+  hash.update('entries:' + entries);
+  return 'deep:' + hash.digest('hex');
+}
+
 export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): LocalPluginPackHook {
   const exec = opts.exec ?? defaultExec;
   const oversizeTtlMs = opts.oversizeTtlMs ?? OVERSIZE_NEGATIVE_TTL_MS;
@@ -151,6 +224,42 @@ export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): Loc
    * 要省的只是那几十秒的 npm pack。键用绝对源路径（同一插件在 link:/file: 两种写法下同键）。
    */
   const oversizeCache = new Map<string, { fingerprint: string; at: number; oversize: OversizeLocalPlugin }>();
+
+  /**
+   * 内容缓存（正缓存）：解析后的源路径 → 上次打出的 tarball 字节 + 当时的内容指纹。
+   *
+   * 与超限负缓存的区别：负缓存存「结论」，这里存**产物本身**，命中即跳过 npm pack。
+   * 命中判据是 deepSourceFingerprint（文件级 rel/size/mtime），不是目录 mtime —— 见该函数注释。
+   * 上限双保险：总字节数 + 条目数，超出按「最久未用」淘汰；单条超过上限则根本不入缓存。
+   */
+  const packedMaxBytes = opts.packedCacheMaxBytes ?? PACKED_CACHE_MAX_BYTES;
+  const packedMaxEntries = opts.packedCacheMaxEntries ?? PACKED_CACHE_MAX_ENTRIES;
+  const contentFp = opts.contentFingerprint ?? deepSourceFingerprint;
+  const packedCache = new Map<string, { fingerprint: string; entry: PackedLocalPlugin; bytes: number; usedAt: number }>();
+  let packedCacheBytes = 0;
+  const evictPacked = (): void => {
+    while (packedCache.size > packedMaxEntries || packedCacheBytes > packedMaxBytes) {
+      let oldestKey: string | null = null;
+      let oldestAt = Number.POSITIVE_INFINITY;
+      for (const [key, value] of packedCache) {
+        if (value.usedAt < oldestAt) {
+          oldestAt = value.usedAt;
+          oldestKey = key;
+        }
+      }
+      if (oldestKey === null) return;
+      const removed = packedCache.get(oldestKey);
+      if (removed !== undefined) packedCacheBytes -= removed.bytes;
+      packedCache.delete(oldestKey);
+    }
+  };
+  /** 按入参顺序输出打包结果（缓存命中与本轮打包混在一起时，保持确定性顺序）。 */
+  const orderPacked = (input: readonly { name: string }[], packed: readonly PackedLocalPlugin[]): PackedLocalPlugin[] => {
+    const byName = new Map(packed.map((p) => [p.packageName, p] as const));
+    return input.map((p) => byName.get(p.name)).filter((p): p is PackedLocalPlugin => p !== undefined);
+  };
+  const rewrittenOf = (packed: readonly PackedLocalPlugin[]): Record<string, string> =>
+    Object.fromEntries(packed.map((p) => [p.packageName, p.rewrittenSpec]));
 
   const hasLocalSpec = (p: { spec?: string }): boolean =>
     p.spec !== undefined && /^\s*(link|file):/i.test(p.spec);
@@ -209,6 +318,46 @@ export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): Loc
       return { packed: [], rewritten: {}, warnings: cacheWarnings, oversize: cacheOversize };
     }
 
+    // —— 内容缓存命中分流：源内容没变的那几个直接复用上次的 tarball，其余才真的打包 ——
+    const hitPacked: PackedLocalPlugin[] = [];
+    const toPack: { name: string; version: string; spec?: string }[] = [];
+    if (packedMaxBytes > 0) {
+      for (const p of kept) {
+        const spec = p.spec;
+        if (spec === undefined || !hasLocalSpec(p)) {
+          toPack.push(p);
+          continue;
+        }
+        const abs = resolveLocalPluginPath(spec, { homeDir: opts.homeDir, profileDir });
+        const hit = packedCache.get(abs);
+        if (hit === undefined) {
+          toPack.push(p);
+          continue;
+        }
+        const fp = await contentFp(abs).catch(() => null);
+        if (fp === null || fp !== hit.fingerprint) {
+          packedCacheBytes -= hit.bytes;
+          packedCache.delete(abs);
+          toPack.push(p);
+          continue;
+        }
+        hit.usedAt = Date.now();
+        hitPacked.push(hit.entry);
+      }
+    } else {
+      toPack.push(...kept);
+    }
+
+    if (!toPack.some(hasLocalSpec)) {
+      // 全部命中：不建临时目录、不 spawn 一次 npm。
+      return {
+        packed: orderPacked(plugins, hitPacked),
+        rewritten: rewrittenOf(hitPacked),
+        warnings: cacheWarnings,
+        oversize: cacheOversize,
+      };
+    }
+
     const tmpRoot = path.join(opts.dataDir, 'tmp');
     let packDir: string;
     try {
@@ -227,8 +376,12 @@ export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): Loc
     }
 
     try {
+      const specOfName = new Map<string, string>();
+      for (const p of toPack) {
+        if (p.spec !== undefined && hasLocalSpec(p)) specOfName.set(p.name, p.spec);
+      }
       const result = await packLocalPlugins({
-        plugins: kept.map((p) => ({ name: p.name, version: p.version, spec: p.spec })),
+        plugins: toPack.map((p) => ({ name: p.name, version: p.version, spec: p.spec })),
         homeDir: opts.homeDir,
         profileDir,
         packDir,
@@ -257,8 +410,28 @@ export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): Loc
           }
         }
       }
+      // 内容缓存记账：本轮真打出来的 tarball 按「源内容指纹」入缓存；超限/算不出指纹的跳过（不猜）。
+      if (packedMaxBytes > 0) {
+        for (const entry of result.packed) {
+          const spec = specOfName.get(entry.packageName);
+          if (spec === undefined) continue;
+          const bytes = entry.data.byteLength;
+          if (bytes > packedMaxBytes) continue;
+          const abs = resolveLocalPluginPath(spec, { homeDir: opts.homeDir, profileDir });
+          const fp = await contentFp(abs).catch(() => null);
+          if (fp === null) continue;
+          const prev = packedCache.get(abs);
+          if (prev !== undefined) packedCacheBytes -= prev.bytes;
+          packedCache.set(abs, { fingerprint: fp, entry, bytes, usedAt: Date.now() });
+          packedCacheBytes += bytes;
+        }
+        evictPacked();
+      }
+      const allPacked = [...hitPacked, ...result.packed];
       return {
         ...result,
+        packed: orderPacked(plugins, allPacked),
+        rewritten: { ...result.rewritten, ...rewrittenOf(hitPacked) },
         oversize: [...cacheOversize, ...result.oversize],
         warnings: [...cacheWarnings, ...result.warnings],
       };

@@ -42,6 +42,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **自动同步的每分钟远端检查不再重算本机全部配置**：以前每 60 秒都要把本机配置整体导出一次（本机源插件还要重新打包），机器一直在忙；现在这类检查只问「远端有没有新快照」，本机改动仍由保存即同步与 30 分钟兜底负责，改动不再漏。
   **The per-minute remote check no longer re-exports your whole config**: every 60 seconds the plugin used to export all local config (repacking locally sourced plugins), keeping a core busy; the check now only asks whether the remote has a new snapshot, while local edits are still picked up by save-triggered sync and the 30-minute fallback.
 
+- **远端新快照默认 5 分钟探一次（原 60 秒）**：远端有没有新东西不需要每分钟问一遍，本机改动依旧是保存即同步；想立刻拿到远端更新时手动同步一次即可。
+  **Remote checks now default to every 5 minutes (was 60 seconds)**: there is no need to ask the remote for new snapshots every minute; local edits still sync as soon as you save, and a manual sync fetches remote updates immediately.
+
+- **本机源插件只在改动后重新打包**：以前每轮导出都会把 link:/file: 插件重新打一次包（大插件一次几十秒），现在按源文件内容判断，没改就直接复用上一次的打包结果，改了才重打。
+  **Locally sourced plugins are repacked only when they change**: exports used to repack every link:/file: plugin on every round (tens of seconds for large ones); the packed result is now reused until the source files actually change.
+
 ### 🆕 新增 · Added
 
 - 同步的 Git 通道现在可以把快照放进仓库里的子目录（如 `DSH备份/`），一个私有仓库就能给多个工具各自备份、互不覆盖；留空仍是原来的仓库根布局。
