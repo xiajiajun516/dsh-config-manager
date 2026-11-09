@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.7.0] - 2026-11-09
+
+> **同步安静了，也省电了**：运行中心不再每分钟多一张卡片，远端探测降到 5 分钟一轮，本机源插件只在改动后重新打包；Git 通道还能把快照放进仓库里的子目录。
+>
+> **Theme**: a quieter and cheaper auto-sync — no per-minute card, remote checks every five minutes, local plugins repacked only when they change — plus snapshot subdirectories for the git channel.
+
 ### 🐛 修复 · Fixed
 
 - **活动记录不再每分钟多一张「自动同步」卡片**：以前只要开着自动同步，运行中心每分钟就多一张「已完成」卡片，真正的推送反而不显眼；现在什么都没传的那一轮不再留卡片，只有真的上传、下载、冲突或失败才出现。
