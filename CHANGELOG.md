@@ -32,6 +32,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+- **活动记录不再每分钟多一张「自动同步」卡片**：以前只要开着自动同步，运行中心每分钟就多一张「已完成」卡片，真正的推送反而不显眼；现在什么都没传的那一轮不再留卡片，只有真的上传、下载、冲突或失败才出现。
+  **The activity list no longer gains an "auto-sync" card every minute**: with auto-sync on, the run center used to add a "completed" card every minute and bury the real pushes; rounds that transferred nothing no longer produce a card — only actual uploads, downloads, conflicts and failures do.
+
+### 🔧 变更 · Changed
+
+- **自动同步的每分钟远端检查不再重算本机全部配置**：以前每 60 秒都要把本机配置整体导出一次（本机源插件还要重新打包），机器一直在忙；现在这类检查只问「远端有没有新快照」，本机改动仍由保存即同步与 30 分钟兜底负责，改动不再漏。
+  **The per-minute remote check no longer re-exports your whole config**: every 60 seconds the plugin used to export all local config (repacking locally sourced plugins), keeping a core busy; the check now only asks whether the remote has a new snapshot, while local edits are still picked up by save-triggered sync and the 30-minute fallback.
+
 ### 🆕 新增 · Added
 
 - 同步的 Git 通道现在可以把快照放进仓库里的子目录（如 `DSH备份/`），一个私有仓库就能给多个工具各自备份、互不覆盖；留空仍是原来的仓库根布局。

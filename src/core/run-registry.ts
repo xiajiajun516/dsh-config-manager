@@ -136,6 +136,24 @@ export interface RunRegistryOptions {
  * 内存 run 注册表。Node 单线程 + 同步 Map 读写，无并发竞争；
  * 所有公开读方法返回状态副本，防止外部直接篡改内部状态。
  */
+/**
+ * 自动同步「空转」run：60s 一次的远端探测拿到 upToDate —— 本轮既没上传也没下行、没应用任何分区。
+ *
+ * 为什么要过滤（2026-11-09 真机）：realtime 通道每轮都会 register('autosync')，于是运行中心每分钟
+ * 多一张「自动同步 · 已完成」卡片，与「迁移历史」同一种噪音（那边已由 isAutosyncIdleRound 挡住）。
+ * 轮询不是活动；真干活（push/pull/冲突/失败）的卡片必须留着 —— 它们才解释「刚才发生了什么」。
+ *
+ * 判定只认 run 自己的 result.idle（由调度器收尾时写入），不在 UI 猜 skipReason。
+ */
+export function isIdleAutosyncRun(
+  state: Pick<RunState, 'kind' | 'status' | 'result'>,
+): boolean {
+  if (state.kind !== 'autosync' || state.status === 'running') return false
+  const result = state.result
+  if (result === null || typeof result !== 'object') return false
+  return (result as { idle?: unknown }).idle === true
+}
+
 export class RunRegistry {
   private readonly runs = new Map<string, RunState>()
   private readonly retentionMs: number

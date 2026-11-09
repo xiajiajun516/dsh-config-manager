@@ -567,10 +567,10 @@ export class AutoSyncScheduler {
      * 仍 updatedAt == createdAt；此后每次 autosync 都 `register('autosync')` → RunConflictError
      * → 后台同步静默停摆（正是下面 finally 注释警告的后果），运行中心里那张卡片也「一直在加载」。
      */
-    const finishRun = (): void => {
+    const finishRun = (extra: { idle?: true } = {}): void => {
       if (runId === null) return;
       try {
-        this.runs.finish(runId, { kind: 'autosync' });
+        this.runs.finish(runId, { kind: 'autosync', ...extra });
       } catch {
         /* 尽力而为：收尾失败不影响同步结果 */
       }
@@ -583,11 +583,17 @@ export class AutoSyncScheduler {
     // （实测单个 210MB 插件 44.7s/次、每轮重算）。旧实现把这段整个放进 GLOBAL mutation 锁内，60s 一轮的
     // 轮询于是让锁几乎全程被占（45s/60s），用户任何 destructive 操作（删除档案…）都撞 423「另一个任务正在运行」。
     // 现在稳态（upToDate）根本不取锁；命中「有活干」才取，并在锁内重跑检测再写。
-    const preflight = await this.detectPhase(channel, cfg, nowIso, historyId);
+    // 远端轮询轮跳过本地导出（reason='remote-poll'）：本地改动由 realtime 监听（local-change 触发）
+    // 与 30 分钟兜底 interval 负责；这里每 60s 再跑一次全量导出 = 白跑 plugins 的 npm pack
+    // （真机单插件 44.7s/轮）。判定口径不变 —— 真要比对时比的仍是载荷字节，不做任何近似。
+    const preflight = await this.detectPhase(channel, cfg, nowIso, historyId, {
+      localCheck: opts.reason !== 'remote-poll',
+    });
     if (preflight.kind === 'skip') {
       this.running = false;
       this.watcher?.resume();
-      finishRun();
+      // 空转轮（什么都没传）打上 idle：运行中心据此不为它留卡片（见 core/run-registry 的 isIdleAutosyncRun）。
+      finishRun(preflight.result.skipReason === 'upToDate' ? { idle: true } : {});
       return preflight.result;
     }
 
@@ -947,6 +953,11 @@ export class AutoSyncScheduler {
     cfg: AutosyncConfig,
     nowIso: string,
     historyId: string,
+    /**
+     * localCheck=false = 本轮只回答「远端有没有新快照」，不跑本地导出（60s 远端轮询专用）。
+     * 本地是否改动由 realtime 监听与兜底 interval 负责；这不是近似判定 —— 需要比对时比的仍是载荷字节。
+     */
+    opts: { localCheck?: boolean } = {},
   ): Promise<AutosyncDetectOutcome> {
     // 读该通道 sync-config：按通道判定「已配置」——git 看 git.repoUrl、webdav 看 webdav.url。
     // SEC-03：「未配置」有两种成因 —— 真的没配，或存过的地址被白名单拒掉（读侧丢弃）。
@@ -1011,7 +1022,8 @@ export class AutoSyncScheduler {
     // 定时器只是兜底轮询；真正驱动是这两个「变化」信号。
     // 列表拿不到（网络失败）时 remoteMetas 为 null → 检测自己再 list 一次，行为与改造前一致
     const remoteNew = await this.detectRemoteNew(engine, remoteMetas ?? undefined);
-    const localDirty = await this.detectLocalChange(engine);
+    // 关掉本地检测时 localDirty 恒 false：远端也没变 → 立刻 upToDate，一次导出都不跑。
+    const localDirty = opts.localCheck === false ? false : await this.detectLocalChange(engine);
     // SYN-05：首轮（从未跑过）与「远端有新快照」是覆盖风险最高的两个时刻 —— 由
     // resolveConflictPushPolicy 统一把这两处的 ask 标成 forced。
     const firstRun = cfg.lastRunAt === undefined || cfg.lastRunAt === '';

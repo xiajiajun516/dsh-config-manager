@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { RunRegistry } from './run-registry.ts';
+import { RunRegistry, isIdleAutosyncRun } from './run-registry.ts';
 
 test('pendingDecision：登记后可见，终态 run 上的晚到写入被忽略', () => {
   const runs = new RunRegistry({ now: () => 1000 });
@@ -68,4 +68,29 @@ test('requestCancel：记录首个请求时刻（重复请求不刷新，界面�
   runs.finish(run.runId, {});
   assert.equal(runs.requestCancel(run.runId)?.cancelRequestedAt, 1_000, '终态后的晚到请求被忽略');
   assert.equal(runs.requestCancel('nope'), undefined, '未知 runId 返回 undefined（不伪造状态）');
+});
+
+/**
+ * 2026-11-09：空转的自动同步轮次不进运行中心。
+ *
+ * 现场：realtime 开着时每 60s 一轮远端探测，每轮都 register('autosync') → 运行中心每分钟一张
+ * 「自动同步 · 已完成」卡片（与迁移历史同一种噪音）。判据只认调度器写入的 result.idle，
+ * 不在 UI 猜 skipReason；running 与真干活的轮次必须照常显示。
+ */
+test('isIdleAutosyncRun：只认 result.idle（running / 其它 kind / 无 result 一律不算）', () => {
+  const runs = new RunRegistry({ now: () => 1000 });
+  const idle = runs.register('autosync');
+  runs.finish(idle.runId, { kind: 'autosync', idle: true });
+  assert.equal(isIdleAutosyncRun(runs.get(idle.runId)!), true);
+
+  const real = runs.register('autosync');
+  runs.finish(real.runId, { kind: 'autosync' });
+  assert.equal(isIdleAutosyncRun(runs.get(real.runId)!), false, '真推/真拉的轮次必须留卡片');
+
+  const running = runs.register('autosync');
+  assert.equal(isIdleAutosyncRun(runs.get(running.runId)!), false, '进行中的轮次不得被过滤（否则看不到在跑的任务）');
+
+  const other = runs.register('import');
+  runs.finish(other.runId, { idle: true });
+  assert.equal(isIdleAutosyncRun(runs.get(other.runId)!), false, '标志只对 autosync 生效');
 });

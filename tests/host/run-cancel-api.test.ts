@@ -66,8 +66,12 @@ test('H-04 决策回调必须置待决策态，并带超时兜底到安全侧', 
 });
 
 test('H-05 /runs 支持 scope=recent，缺省行为不变', () => {
-  const runs = block(routesSource, RUNS, 700);
-  assert.ok(runs.includes("scope === 'recent' ? runs.listRecent(50) : runs.listActive()"), 'recent 走 listRecent');
+  const runs = block(routesSource, RUNS, 900);
+  assert.ok(runs.includes('runs.listRecent(50)'), 'recent 走 listRecent');
+  assert.ok(runs.includes('runs.listActive()'), '缺省（非 recent）仍走 listActive');
+  // 2026-11-09：空转的自动同步轮次不进运行中心 —— 与迁移历史的 isAutosyncIdleRound 同一判据，
+  // 否则 realtime 每 60s 一轮就给运行中心添一张「已完成」卡片（真机反馈）。
+  assert.ok(runs.includes('.filter((run) => !isIdleAutosyncRun(run))'), '空转轮必须在 recent 列表里被过滤掉');
 });
 
 test('H-06 宿主 env 暴露终止通道与审计', () => {
