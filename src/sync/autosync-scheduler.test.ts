@@ -15,7 +15,7 @@ import {
   AutoSyncScheduler, intervalToMs, shouldTriggerStartupRun, buildAutoApplyPlan,
   resolveConflictPushPolicy,
 } from './autosync-scheduler.ts';
-import { RunRegistry } from '../core/run-registry.ts';
+import { RunRegistry, isIdleAutosyncRun } from '../core/run-registry.ts';
 import { nullLogger, createLogger } from '../utils/logger.ts';
 import type { LogSink } from '../utils/logger.ts';
 import type { MutationLockPort, MutationLockToken } from '../utils/env-lock.ts';
@@ -1317,4 +1317,64 @@ test('runOnce: 稳态（两端无变化）不取环境锁；有活干才取（20
   assert.equal(acquireCalls, 1, '有活干才取锁（且只取一次）');
   assert.equal(blocked.status, 'skipped');
   assert.equal(blocked.skipReason, 'mutation-locked');
+});
+
+/**
+ * 2026-11-09（CPU 优化）：远端轮询轮不得跑本地全量导出。
+ *
+ * 现场：realtime 开着时每 60s 一轮 remote-poll，而每轮预检都会导出所有分区 —— plugins 分区要为每个
+ * 本机源插件跑一次 npm pack（真机单插件 44.7s/轮）。轮询只需要回答「远端有没有新快照」，
+ * 本地改动由 realtime 监听（local-change）与 30 分钟兜底 interval 负责。
+ */
+test('runOnce: reason=remote-poll 且远端无新快照 → 跳过本地导出（不白跑 npm pack）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let localCalls = 0;
+  const { scheduler, runs } = makeScheduler({
+    cfg,
+    engine: { listSnapshots: async () => [] } as never,
+    history: [],
+    detectRemoteNew: async () => false,
+    detectLocalChange: async () => { localCalls += 1; return false; },
+  });
+
+  const result = await scheduler.runOnce('git', { reason: 'remote-poll' });
+  assert.equal(result.skipReason, 'upToDate');
+  assert.equal(localCalls, 0, '远端轮询轮不得触发本地全量导出');
+
+  const [only] = runs.listRecent(50);
+  assert.ok(only !== undefined);
+  assert.equal(isIdleAutosyncRun(only), true, '空转轮跑完后应是 idle run（运行中心据此过滤卡片）');
+});
+
+test('runOnce: 非远端轮询触发仍要跑本地检测（不能把优化扩成「永不检查本地」）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let localCalls = 0;
+  const { scheduler, runs } = makeScheduler({
+    cfg,
+    engine: { listSnapshots: async () => [] } as never,
+    history: [],
+    detectRemoteNew: async () => false,
+    detectLocalChange: async () => { localCalls += 1; return false; },
+  });
+
+  const result = await scheduler.runOnce('git', { reason: 'local-change' });
+  assert.equal(result.skipReason, 'upToDate');
+  assert.equal(localCalls, 1, '本地改动触发必须真的比对一次');
+  const [only] = runs.listRecent(50);
+  assert.equal(isIdleAutosyncRun(only!), true);
+});
+
+test('runOnce: 真有改动时不带 idle（卡片必须留下，它解释刚才发生了什么）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const { scheduler, runs } = makeScheduler({
+    cfg,
+    engine: { listSnapshots: async () => [] } as never,
+    history: [],
+    detectRemoteNew: async () => false,
+    detectLocalChange: async () => true,
+  });
+  await scheduler.runOnce('git', { reason: 'local-change' }).catch(() => undefined);
+  const recent = runs.listRecent(50);
+  assert.ok(recent.length > 0, '有活干必然留下 run 记录');
+  assert.equal(isIdleAutosyncRun(recent[0]!), false, '有改动的轮次不得被当成空转过滤掉');
 });

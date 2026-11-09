@@ -9,6 +9,7 @@ import { endpoint, requireJsonObject, readJsonBody, writeJson, queryParam } from
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import type { RunState } from '../core/run-registry.ts'
+import { isIdleAutosyncRun } from '../core/run-registry.ts'
 import type { ImportPlan } from '../core/types.ts'
 import { DEFAULT_ROLLBACK_ON_ERROR } from '../core/import-defaults.ts'
 import { decryptErrorText, isControlledPath, tryDecryptCredentials, writeRequestBodyToFile } from './route-support.ts'
@@ -361,7 +362,11 @@ export function importRoutes(env: RoutesEnv): WebRoute[] {
     endpoint({ path: '/api/dsh-config-manager/runs', methods: ['GET'] }, async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://localhost')
       const scope = queryParam(url, 'scope')
-      writeJson(res, 200, scope === 'recent' ? runs.listRecent(50) : runs.listActive())
+      // 空转的自动同步轮次不进「运行中心」：60s 一次轮询，每轮一张「已完成」卡片与迁移历史同属噪音；
+      // running / 真干活的轮次照常列出（判据见 core/run-registry.ts 的 isIdleAutosyncRun）。
+      writeJson(res, 200, scope === 'recent'
+        ? runs.listRecent(50).filter((run) => !isIdleAutosyncRun(run))
+        : runs.listActive())
     }),
     // ------------------------------------------------------- runs/cancel
     // 运行中心「终止」：只在**计划项边界**生效的协作式取消（abort run 级信号）。

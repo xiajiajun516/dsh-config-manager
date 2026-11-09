@@ -546,4 +546,17 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 
 **未做（需用户决定）**：历史目录里 934 条旧 autosync 条目属破坏性清理，未自动删除，等 `retention` 自然淘汰。
 
+## 60 s 远端轮询的真实 CPU 代价：每轮重算全量导出（2026-11-09 实测）
+
+现场：realtime 开着时 `remoteCheckMs` 缺省 60 s（`src/sync/autosync-config.ts`），每轮 `detectPhase` 会**同时**做「远端有没有新快照」与「本地有没有改动」，后者 = 全分区导出比基线（`SyncEngine.hasLocalChanges`）。
+其中 plugins 分区要为每个本机源（`link:` / `file:`）插件跑一次 `npm pack`：真机 12 个本地源插件 ≈ 12 s（`src/adapters/plugins.ts` 注释），单个 210 MB 插件单轮 44.7 s（`src/sync/autosync-scheduler.ts` 的 Phase 1 注释，正是 2026-11-07「锁被占」事故的起因）。
+
+判定：轮询只需要回答「远端有没有新快照」。本地改动本来就有两条权威来源 —— realtime 文件监听（`local-change` 触发）与 30 分钟兜底 `interval` —— 每分钟再全量导出一次是纯浪费。
+
+改法：`runOnceInternal` 把触发原因带进 `detectPhase(..., { localCheck: false })`，`reason === 'remote-poll'` 时跳过 `detectLocalChange`，`localDirty` 恒 false；远端也没变就立刻 `upToDate`。**口径不变**：需要比对时比的仍是载荷字节，没有任何近似或 mtime 猜测。锁内 Phase 2 的重跑检测不带该开关（有活干时照常全量重判）。
+
+守卫：`src/sync/autosync-scheduler.test.ts` 三条 —— ① `remote-poll` 且远端无新 → `detectLocalChange` 调用次数 0 且结果为 `upToDate`；② `local-change` 触发仍必须比对一次（防止把优化扩成「永不检查本地」）；③ 真有改动时不打 `idle` 标记。
+
+同轮配套：空转轮在运行中心不再留卡片 —— `RunRegistry` 收尾写入 `result.idle`，`/runs?scope=recent` 用 `isIdleAutosyncRun` 过滤（`src/core/run-registry.ts`、`src/routes/import.ts`），与迁移历史的 `isAutosyncIdleRound` 同一判据。
+
 
