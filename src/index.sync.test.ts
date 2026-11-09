@@ -73,6 +73,33 @@ test('parseSyncBody: git 分支 repoUrl 含 userinfo（token 拼 URL）→ 拒�
   );
 });
 
+test('issue #131 parseSyncBody: git 分支带 subdir → 归一后进配置；空串/缺省不落字段', async () => {
+  const deps = memCreds();
+  const withSubdir = await parseSyncBody({ repoUrl: 'https://github.com/foo/bar.git', subdir: '  DSH备份  ' }, deps);
+  assert.deepEqual(withSubdir, {
+    schemaVersion: 2,
+    transport: 'git',
+    git: { repoUrl: 'https://github.com/foo/bar.git', subdir: 'DSH备份' },
+  });
+  const blank = await parseSyncBody({ repoUrl: 'https://github.com/foo/bar.git', subdir: '   ' }, deps);
+  assert.deepEqual(blank, {
+    schemaVersion: 2,
+    transport: 'git',
+    git: { repoUrl: 'https://github.com/foo/bar.git' },
+  }, '空串 = 仓库根，不落字段（旧宿主/旧配置同形）');
+});
+
+test('issue #131 parseSyncBody: 非法 subdir（绝对路径 / .. / .git 段）→ SyncRouteError 且不回显裸值', async () => {
+  const deps = memCreds();
+  for (const subdir of ['/abs', 'a/../b', '.git', 'a\\b', 'a//b']) {
+    await assert.rejects(
+      () => parseSyncBody({ repoUrl: 'https://github.com/foo/bar.git', subdir }, deps),
+      (err: unknown) => err instanceof SyncRouteError && /子目录前缀不合法/.test(err.message),
+      '必须拒绝: ' + subdir,
+    );
+  }
+});
+
 /* ---------------- webdav 分支 ---------------- */
 
 test('parseSyncBody: webdav 分支解析 url/username，password 写入 SYNC_WEBDAV_CREDENTIAL_REF', async () => {

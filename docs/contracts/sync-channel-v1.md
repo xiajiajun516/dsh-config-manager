@@ -12,10 +12,16 @@
 
 | 通道 | 快照位置 | 形态 |
 |---|---|---|
-| git | `snapshots/<snapshotId>/`（加密快照：`snapshots-encrypted/<snapshotId>.json`） | 散文件目录（`manifest.json` + 按分区平铺） |
+| git | `snapshots/<snapshotId>/`（加密快照：`snapshots-encrypted/<snapshotId>.json`；可选的仓库内子目录前缀 `subdir` 会整体前移：`<subdir>/snapshots/...`、`<subdir>/snapshots-encrypted/...`、`<subdir>/blobs/...`） | 散文件目录（`manifest.json` + 按分区平铺） |
 | webdav | `<base>/dsh-config-manager/<snapshotId>.json` + 集合索引 `index.json` | 单文件 JSON 载荷 |
 | s3（含 oss / cos / minio / kodo） | `<prefix>/<snapshotId>.json` + 总索引 `<prefix>/index.json`（blob：`<prefix>/blobs/<sha256>` + `<prefix>/blobs-index.json`；`prefix` 缺省 `dsh-config-manager`） | 单文件 JSON 载荷（与 WebDAV 同构，便于跨通道迁移与排障） |
 | gist | `<filePrefix>-<snapshotId>.json` + 索引 `<filePrefix>-index.json`（`filePrefix` 缺省 `dsh-sync`） | 单文件 JSON 载荷（gist 是**扁平文件名**命名空间，故用前缀隔离；**不外置 blob**，见 §3） |
+
+git 通道的 `subdir`（缺省空 = 仓库根，issue #131）让多个工具各自独占同一个私有仓库里的一个子目录：
+写入方只碰 `<subdir>/` 下的三个同步目录（`snapshots` / `snapshots-encrypted` / `blobs`），仓库根与别的
+子目录保持不动。前缀变更**不迁移**已有快照 —— 根布局与子目录布局是两套互不互通的同步历史；实现侧
+把前缀记进工作副本的 git 本地配置，前缀与工作副本不一致时明确报「同步布局已变、需重建工作副本」，
+绝不静默按旧布局读写（否则表现为「远端没有快照」）。`adopt` 采纳远端时只校验 `<subdir>/` 子树。
 
 散文件目录布局与 `layout.ts` 一致：JSON 分区按 `SECTION_JSON_PATHS` 平铺，
 文件类分区按 `SECTION_FILE_PREFIXES` 建目录放真实文件，`manifest.json` 记录
@@ -154,6 +160,7 @@
 | s3 | `accessKeyId` | AccessKey **ID**（标识符，可回显；**不是**密钥） |
 | s3 | `pathStyle` | path-style 寻址开关（缺省取变体默认：MinIO `true`，其余 `false`） |
 | s3 | `dialectId` | 可选：显式覆盖签名方言（`aws4` / `oss4`）；非法值在解析期被忽略（回落变体默认） |
+| git | `subdir` | 仓库内子目录前缀（缺省空 = 仓库根；允许 UTF-8 与 `a/b` 嵌套，拒绝绝对路径 / `..` / 反斜杠 / 空段 / `.git` 段）。改前缀 = 换一套互不互通的同步历史 |
 | gist | `gistId` | 目标 gist id（十六进制串） |
 | gist | `apiBaseUrl` | GitHub API 根（缺省 `https://api.github.com`；GitHub Enterprise 可改） |
 | gist | `filePrefix` | gist 内文件名前缀（缺省 `dsh-sync`；改前缀 = 同一 gist 里换一套互不干扰的同步数据） |

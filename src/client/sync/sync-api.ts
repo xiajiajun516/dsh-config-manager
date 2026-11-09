@@ -68,6 +68,8 @@ export interface SyncStatusResponse {
   configured: boolean;
   /** git 通道：已配置的仓库地址（不含 token，可回显；与当前通道无关，配置过即返回） */
   repoUrl?: string;
+  /** git 通道：仓库内子目录前缀（'' / 缺省 = 仓库根；issue 131，供表单回填） */
+  subdir?: string;
   /** git 通道：DSH credentials 中是否已存在 token（describe 只报状态，值永不返回） */
   credentialConfigured: boolean;
   credentialWritable: boolean;

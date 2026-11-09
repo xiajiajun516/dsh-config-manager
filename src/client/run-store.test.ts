@@ -1613,7 +1613,7 @@ test('P0-9: 持久化字段清单显式化（键集合断言 —— 新增字段
     'runId', 'running', 'selectedFileName', 'sessionFormatDisposition', 'step', 'uploading', 'zipPath',
   ])
   assert.deepEqual(keys(p.sync), [
-    'byChannel', 'channel', 'confirmDecisions', 'confirmSession', 'error', 'lastRestoreId',
+    'byChannel', 'channel', 'confirmDecisions', 'confirmSession', 'error', 'gitSubdir', 'lastRestoreId',
     'loadError', 'pullReport', 'pushPreview', 'pushReport', 'repoUrl', 'webdavUrl', 'webdavUsername',
   ])
   assert.deepEqual(keys(p.sync.byChannel.git), [

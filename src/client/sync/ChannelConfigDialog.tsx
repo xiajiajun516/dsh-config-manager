@@ -34,6 +34,7 @@ const SAVED_TICK_MS = 2400
 /** 通道配置弹窗的表单字段补丁（onFormChange 入参：git/webdav + 云端点两组）。 */
 export type ChannelFormPatch = {
   repoUrl?: string
+  gitSubdir?: string
   token?: string
   webdavUrl?: string
   webdavUsername?: string
@@ -91,7 +92,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
 }) {
   const channel = form.channel
   const {
-    repoUrl, token, webdavUrl, webdavUsername, webdavPassword,
+    repoUrl, gitSubdir, token, webdavUrl, webdavUsername, webdavPassword,
     s3Provider, s3Endpoint, s3Region, s3Bucket, s3Prefix, s3AccessKeyId, s3PathStyle, s3Secret,
     gistId, gistApiBaseUrl, gistFilePrefix, gistToken,
   } = form
@@ -159,6 +160,19 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => {
                 onFormChange({ repoUrl: e.target.value }) // 改动自动保存（防抖；关闭设置页不丢输入）
+              }}
+            />
+          </div>
+          <div className={css.field}>
+            <span className={css.fieldLabel}>{t('config.gitSubdir')} <InfoHint text={t('config.gitSubdirHint')} label={t('common.infoHint')} /></span>
+            <input aria-label={t('config.gitSubdir')}
+              type="text"
+              className={css.input}
+              value={gitSubdir}
+              placeholder={t('config.gitSubdirPlaceholder')}
+              disabled={busy}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                onFormChange({ gitSubdir: e.target.value }) // 改动自动保存（防抖；空 = 仓库根）
               }}
             />
           </div>

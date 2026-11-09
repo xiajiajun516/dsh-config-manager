@@ -148,6 +148,8 @@ interface SyncUiState {
   channel: SyncChannel
   /** git 通道表单 */
   repoUrl: string
+  /** 仓库内子目录前缀（空 = 仓库根；issue 131） */
+  gitSubdir: string
   /** 仅内存：成功后清空（已写入 DSH credentials），绝不持久化 */
   token: string
   /** webdav 通道表单 */
@@ -232,6 +234,7 @@ const initial: SyncUiState = {
   // 用户最近选择的通道优先（localStorage 记住）；无则缺省 git，由 loadStatus 按配置回填
   channel: readStoredChannel() ?? 'git',
   repoUrl: '',
+  gitSubdir: '',
   token: '',
   webdavUrl: '',
   webdavUsername: '',
@@ -291,6 +294,7 @@ function initFromStore(): SyncUiState {
     // 避免升级后把用户此前记住的 webdav 通道冲掉
     channel: resolveInitialChannel(s.channel, readStoredChannel()),
     repoUrl: s.repoUrl,
+    gitSubdir: s.gitSubdir,
     token: s.token,
     webdavUrl: s.webdavUrl,
     webdavUsername: s.webdavUsername,
@@ -491,6 +495,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         statusInfo: info,
         channel: remembered ?? savedChannel,
         repoUrl: info.repoUrl ?? '',
+        gitSubdir: info.subdir ?? '',
         webdavUrl: info.webdav?.url ?? '',
         webdavUsername: info.webdav?.username ?? '',
         catalog,
@@ -609,6 +614,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const formOf = (s: SyncUiState): SyncFormSnapshot => ({
     channel: s.channel,
     repoUrl: s.repoUrl,
+    gitSubdir: s.gitSubdir,
     token: s.token,
     webdavUrl: s.webdavUrl,
     webdavUsername: s.webdavUsername,

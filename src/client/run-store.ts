@@ -138,6 +138,8 @@ export function defaultExportSelection(): SectionId[] {
 export interface SyncStoreSlice {
   channel: SyncChannel
   repoUrl: string
+  /** git 通道：仓库内子目录前缀（空 = 仓库根；非敏感，随切片持久化） */
+  gitSubdir: string
   /** 仅内存：成功后清空（已写入 DSH credentials），绝不持久化/回显 */
   token: string
   webdavUrl: string
@@ -609,6 +611,7 @@ function defaultSyncState(): SyncStoreSlice {
   return {
     channel: 'git',
     repoUrl: '',
+    gitSubdir: '',
     token: '',
     webdavUrl: '',
     webdavUsername: '',
@@ -778,6 +781,7 @@ export function toSyncStoreSlice(s: SyncStoreSlice): SyncStoreSlice {
   return {
     channel: s.channel,
     repoUrl: s.repoUrl,
+    gitSubdir: s.gitSubdir,
     token: s.token,
     webdavUrl: s.webdavUrl,
     webdavUsername: s.webdavUsername,
@@ -1088,6 +1092,7 @@ export function toPersistedState(state: StoreState): PersistedState {
       // 宿主 validateRepoUrl/validateWebDavUrl 本来就拒绝这种地址，所以这里只影响掩码，不改合法输入。
       // webdavUsername 是**非敏感**字段（保留可读），刻意不掩（掩了会让回填的表单变 ***）。
       repoUrl: redactPersistedValue(sync.repoUrl),
+      gitSubdir: sync.gitSubdir,
       webdavUrl: redactPersistedValue(sync.webdavUrl),
       webdavUsername: sync.webdavUsername,
       byChannel: channelMapOf((ch) => pickChannel(sync.byChannel[ch])),

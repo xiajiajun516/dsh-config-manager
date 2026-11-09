@@ -36,7 +36,7 @@ import { collectRestoreWalEntries, createRestoreWal, restoreActionStepId, restor
 import type { RestoreResumeHint } from '../core/restore-resume.ts'
 import type { RestoreJournalPort, RestoreWalHandle, RestoreWalSettleStatus } from '../core/restore-wal.ts'
 import type { SyncConfig, SyncTransportType } from '../sync/sync-config.ts'
-import { GIST_PROVIDER, cloudSecretRef, isS3CompatProvider, isWebDavConfig, parseSyncChannel, validateCloudChannelInput, validateRepoUrl, validateWebDavUrl } from '../sync/sync-config.ts'
+import { GIST_PROVIDER, cloudSecretRef, isS3CompatProvider, isWebDavConfig, normalizeGitSubdir, parseSyncChannel, validateCloudChannelInput, validateRepoUrl, validateWebDavUrl } from '../sync/sync-config.ts'
 import { DEFAULT_AUTOSYNC_AUTO_APPLY_TIER, DEFAULT_AUTOSYNC_CONFLICT_POLICY, DEFAULT_AUTOSYNC_REALTIME, DEFAULT_AUTOSYNC_REMOTE_CHECK_MS, lastRunFailureMessage, readAllAutosyncConfigs, readAutosyncConfig } from '../sync/autosync-config.ts'
 import type { AutosyncAutoApplyTier, AutosyncConflictPolicy, AutosyncInterval, AutosyncRunStatus } from '../sync/autosync-config.ts'
 import { SYNC_CHANNELS } from '../sync/sync-config.ts'
@@ -756,7 +756,8 @@ export interface SyncRefScope {
 /**
  * 解析同步请求体，按 transport 分支返回归一化的 SyncConfig（可辨识联合，schemaVersion=2）。
  * 请求体形状（flat，M4 契约）：
- * - git:    { transport:'git', repoUrl, token? } —— token 非空写 SYNC_CREDENTIAL_REF；
+ * - git:    { transport:'git', repoUrl, subdir?, token? } —— subdir = 仓库内子目录前缀（issue #131）；
+ *   token 非空写 SYNC_CREDENTIAL_REF；
  *   git 可执行文件固定使用系统 PATH 中的 git（不再接受自定义 gitBin）。
  * - webdav: { transport:'webdav', url, username?, password? } —— password 非空写 SYNC_WEBDAV_CREDENTIAL_REF。
  * 返回值不含任何 secret（password/token 只进 credentials，永不回传/落同步文件）。
@@ -802,6 +803,9 @@ export async function parseSyncBody(
   if (repoUrl === '') throw new SyncRouteError('repoUrl is required')
   const urlError = validateRepoUrl(repoUrl)
   if (urlError !== null) throw new SyncRouteError(urlError)
+  // issue #131：仓库内子目录前缀（可选；空 = 仓库根）。非法值在这里就拒，绝不先落盘再交给 git。
+  const subdirCheck = normalizeGitSubdir(syncStr(body['subdir']))
+  if (!subdirCheck.ok) throw new SyncRouteError(engineMsg('sync.git.subdirInvalid', { subdir: syncStr(body['subdir']) }))
   const token = typeof body['token'] === 'string' && body['token'] !== '' ? body['token'] : undefined
   if (token !== undefined) {
     try {
@@ -816,7 +820,7 @@ export async function parseSyncBody(
   return {
     schemaVersion: 2,
     transport: 'git',
-    git: { repoUrl },
+    git: { repoUrl, ...(subdirCheck.value === '' ? {} : { subdir: subdirCheck.value }) },
   }
 }
 

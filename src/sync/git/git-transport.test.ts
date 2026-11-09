@@ -1939,3 +1939,120 @@ test('已有工作副本缺提交身份 → 进入工作副本时自动补写仓
   await new GitTransport(makeOptions({ workDir: dir2, exec: exec2 })).list();
   assert.deepEqual(writes2, [], '已有身份不得被覆盖: ' + writes2.join(' | '));
 });
+
+/* ---------------- issue #131：仓库内子目录前缀 ---------------- */
+
+test('issue #131 集成：子目录前缀 —— 上传/列表/下载/删除都落在前缀下，仓库根不被污染', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const subdir = 'DSH备份';
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN }, subdir });
+
+  const snap = sampleSnapshot();
+  await transport.upload(snap);
+
+  // 远端根只有前缀目录（多工具共用一个私有仓库：根上不放任何同步内容）
+  const root = await runRealGit(['-c', 'core.quotePath=false', 'ls-tree', '--name-only', 'HEAD'], bare);
+  assert.equal(root.code, 0, 'ls-tree 失败: ' + root.stderr);
+  assert.deepEqual(root.stdout.split('\n').filter(Boolean), [subdir], '仓库根必须只有子目录前缀');
+
+  // 前缀下的同步目录（无外置 blob 时只建 snapshots）
+  const inner = await runRealGit(['-c', 'core.quotePath=false', 'ls-tree', '--name-only', 'HEAD:' + subdir], bare);
+  assert.equal(inner.code, 0, 'ls-tree 子目录失败: ' + inner.stderr);
+  assert.deepEqual(inner.stdout.split('\n').filter(Boolean), ['snapshots'], '子目录下必须是同步目录');
+
+  // 工作副本同样落在前缀下
+  assert.ok(await fs.stat(path.join(workDir, subdir, 'snapshots', 'snap-001', 'manifest.json')));
+  await assert.rejects(fs.stat(path.join(workDir, 'snapshots')), /ENOENT/, '工作副本根不得出现 snapshots/');
+
+  // list / download 从前缀位置读
+  const listed = await transport.list();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]!.id, 'snap-001');
+  assert.deepEqual(await transport.download('snap-001'), snap);
+
+  // delete 也只动前缀下的内容
+  await transport.delete('snap-001');
+  assert.equal((await transport.list()).length, 0);
+  const after = await runRealGit(['ls-tree', '-r', '--name-only', 'HEAD'], bare);
+  assert.equal(after.code, 0, 'ls-tree 失败: ' + after.stderr);
+  assert.ok(!after.stdout.includes('snap-001'), '远端不得残留已删除的快照: ' + after.stdout);
+});
+
+test('issue #131：同一工作副本换前缀 → 明确「同步布局已变」并指向重建，绝不静默表现为远端没有快照', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const creds = { getToken: async () => TEST_TOKEN };
+  await new GitTransport({ repoUrl: bare, workDir, credentials: creds }).upload(sampleSnapshot());
+
+  // 旧工作副本（根布局）换成子目录前缀：sparse-checkout 只在首次 clone 生效，旧副本里没有新前缀的树
+  const moved = new GitTransport({ repoUrl: bare, workDir, credentials: creds, subdir: 'tools/dsh' });
+  await assert.rejects(moved.list(), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError);
+    assert.match(err.message, /同步布局/, '必须说清是布局不一致');
+    assert.match(err.message, /仓库根/, '必须点出当前工作副本的真实布局');
+    assert.match(err.message, /重建工作副本/, '必须给出出口');
+    return true;
+  });
+
+  // 重建后可正常使用新前缀（同一远端、同一历史，布局换到子目录）
+  await moved.rebuildWorkDir('reclone');
+  await moved.upload(sampleSnapshot({ id: 'snap-002' }));
+  const tools = await runRealGit(['ls-tree', '--name-only', 'HEAD:tools'], bare);
+  assert.equal(tools.code, 0, 'ls-tree 失败: ' + tools.stderr);
+  assert.deepEqual(tools.stdout.split('\n').filter(Boolean), ['dsh'], '重建后内容落进 tools/dsh');
+  // 工作副本按新前缀布局：根上没有 snapshots/，新快照落在 tools/dsh/snapshots 下
+  await assert.rejects(fs.stat(path.join(workDir, 'snapshots')), /ENOENT/, '重建后的工作副本根不得有旧布局目录');
+  assert.ok(await fs.stat(path.join(workDir, 'tools', 'dsh', 'snapshots', 'snap-002', 'manifest.json')));
+  assert.equal((await moved.list())[0]!.id, 'snap-002');
+});
+
+test('issue #131：adopt 只看 <subdir>/ 子树 —— 仓库根有其他工具目录可采纳，子树内陌生条目仍拒', async (t) => {
+  const creds = { getToken: async () => TEST_TOKEN };
+  const subdir = 'DSH备份';
+
+  /**
+   * 造一个「多工具共用」远端：先用本插件正常上传一条快照（子目录布局由被测代码自己写），
+   * 再在仓库根塞一个别的工具目录（可再在子目录里塞一个陌生条目）。
+   */
+  const seedRemote = async (extraInSubdir: string | null): Promise<string> => {
+    const bare = await makeBareRepo(t);
+    const work = await makeTempDir(t);
+    await new GitTransport({ repoUrl: bare, workDir: work, credentials: creds, subdir }).upload(sampleSnapshot({ id: 'snap-009' }));
+    const seed = await makeTempDir(t);
+    const cloned = await runRealGit(['clone', bare, '.'], seed);
+    assert.equal(cloned.code, 0, 'clone 失败: ' + cloned.stderr);
+    await runRealGit(['config', 'user.name', 'test'], seed);
+    await runRealGit(['config', 'user.email', 'test@local'], seed);
+    await fs.mkdir(path.join(seed, 'other-tool', 'data'), { recursive: true });
+    await fs.writeFile(path.join(seed, 'other-tool', 'data', 'x.json'), '{}');
+    if (extraInSubdir !== null) await fs.writeFile(path.join(seed, subdir, extraInSubdir), 'oops');
+    await runRealGit(['add', '-A'], seed);
+    await runRealGit(['commit', '-m', 'seed'], seed);
+    const pushed = await runRealGit(['push', 'origin', 'HEAD'], seed);
+    assert.equal(pushed.code, 0, 'push 失败: ' + pushed.stderr);
+    return bare;
+  };
+
+  // 仓库根有别的工具目录 → 仍可采纳（子目录模式只认子树）
+  const okBare = await seedRemote(null);
+  const workA = await makeTempDir(t);
+  const tA = new GitTransport({ repoUrl: okBare, workDir: workA, credentials: creds, subdir });
+  await tA.rebuildWorkDir('reclone'); // 先建出工作副本（adopt 要求 .git 已存在）
+  await tA.rebuildWorkDir('adopt');
+  assert.equal((await tA.inspectWorkDir()).exists, true);
+  const ids = (await tA.list()).map((m) => m.id);
+  assert.ok(ids.includes('snap-009'), '采纳后必须能读到子目录里的快照: ' + ids.join(','));
+
+  // 子树内出现陌生条目 → 仍拒绝（不放宽成「顶层随便」）
+  const badBare = await seedRemote('random.txt');
+  const workB = await makeTempDir(t);
+  const tB = new GitTransport({ repoUrl: badBare, workDir: workB, credentials: creds, subdir });
+  await tB.rebuildWorkDir('reclone');
+  await assert.rejects(tB.rebuildWorkDir('adopt'), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError);
+    assert.match(err.message, /random\.txt/, '必须点名陌生条目');
+    return true;
+  });
+});
+

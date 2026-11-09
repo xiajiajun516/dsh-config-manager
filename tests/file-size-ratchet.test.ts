@@ -33,7 +33,9 @@ const CEILINGS: Record<string, number> = {
   'src/sync/sync-engine.ts': 2213,
   // 2166 → 2221（2026-11-04）：恢复面板「写盘进行中」瞬态切片 + begin/endRecoveryWrite
   // （不落盘，PersistedRecoveryState 显式 Omit 'write'），是 tech-debt #7 的修法本体。
-  'src/client/run-store.ts': 2221,
+  // 2221 → 2226（2026-11-09，issue 131）：git 子目录前缀 gitSubdir 进 sync 切片 ——
+  // 类型声明 + 3 处映射/持久化白名单各 1 行，无新逻辑；拆解计划见 tech-debt #24。
+  'src/client/run-store.ts': 2226,
   'src/core/analyzer.ts': 1481,
   'src/client/sync/SyncPanel.tsx': 1590,
   'src/cli/actions.ts': 1574,

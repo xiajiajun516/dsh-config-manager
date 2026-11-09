@@ -441,6 +441,10 @@ export const zh = {
   'sync.git.adoptNotSyncRepo': '远端仓库顶层出现了快照布局以外的内容（{entries}）：它看起来不是本插件的同步仓库，已拒绝合并（不会把别的仓库内容搬进工作副本）。',
   'sync.git.adoptMergeConflict': '合并远端 {branch} 时发生冲突：已撤销这次合并（merge --abort），工作副本回到操作前的状态。请手工解决冲突后重试，或改用「重新克隆工作副本」。',
   'sync.workdirModeInvalidFull': '重建工作副本的模式非法: {mode}（只允许 relink（重指向地址）、adopt（采纳远端历史）或 reclone（重新克隆））',
+  // issue #131：git 通道的仓库内子目录前缀（多工具共用一个备份仓库时各占一个目录）。
+  'sync.git.subdirInvalid': '同步子目录前缀不合法：{subdir}（不得以 / 开头或结尾，不得含反斜杠、空段、. 段、.. 段或 .git 段）',
+  'sync.git.subdirRoot': '仓库根',
+  'sync.git.subdirChanged': '工作副本的同步布局是「{stored}」，当前配置是「{expected}」：sparse-checkout 只在首次克隆时生效，旧工作副本里没有新前缀的目录树 —— 照常同步会表现为「远端没有快照」。请在「同步 → 通道配置」里重建工作副本（重新克隆）后再同步。',
 
   'sync.git.cmdFailed': 'git {args} 失败 (exit {code}): {err}',
   // 本机提交身份缺失（真机 issue：commit exit 128 ⇒ 交易 NEEDS_ATTENTION ⇒ 被误升 SAFE MODE）。
@@ -957,6 +961,10 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.git.adoptNotSyncRepo': 'The remote repository root contains entries outside the snapshot layout ({entries}): it does not look like this plugin\'s sync repository, so the merge was refused (another repository\'s content is never pulled into the working copy).',
   'sync.git.adoptMergeConflict': 'Merging remote {branch} produced conflicts: the merge was aborted (merge --abort) and the working copy is back to its previous state. Resolve the conflicts manually and retry, or use "clone the working copy again".',
   'sync.workdirModeInvalidFull': 'Invalid working-copy rebuild mode: {mode} (only relink (re-point the address), adopt (merge the remote history) or reclone (clone again) are allowed).',
+  // issue #131: in-repo subdirectory prefix for the git channel (several tools sharing one backup repository).
+  'sync.git.subdirInvalid': 'Invalid sync subdirectory prefix: {subdir} (must not start or end with /, and must not contain a backslash, an empty segment, a . segment, a .. segment, or a .git segment)',
+  'sync.git.subdirRoot': 'repository root',
+  'sync.git.subdirChanged': 'This working copy uses the sync layout "{stored}" but the current config is "{expected}": sparse-checkout only applies on the first clone, so the old working copy has no tree for the new prefix — syncing would look like "the remote has no snapshots". Rebuild the working copy (clone again) under Sync → Channel configuration, then sync again.',
 
   'sync.git.cmdFailed': 'git {args} failed (exit {code}): {err}',
   // Missing local commit identity (real-world issue: commit exit 128 → NEEDS_ATTENTION → wrongly escalated to SAFE MODE).

@@ -2176,7 +2176,7 @@ const WEBDAV_TIMEOUT_MS = 120_000
  * （见 W1 报告的重测配方），把结果落到这里；makeRoutes 里的 const routeEnv: RouteEnvInferred =
  * 注解保证两侧不漂移（新增依赖漏登记会在构造点报错）。
  */
-export type RouteEnvInferred = { sessionExportFetch: ((input: string, init: RequestInit) => Promise<Response>) | undefined; sessionExportPort: number | undefined; adapters: ConfigAdapter<unknown>[]; sessionHealth: { homeDir: string; targetFormatVersion: () => number | undefined; workspaceKeys: () => Promise<ReadonlySet<string>>; knownSessionIds: () => Promise<ReadonlySet<string>>; sessionMeta: (ids: readonly string[]) => Promise<SessionMetaIndex>; }; backupScheduler: BackupScheduler; bootSafetyAudit: () => Promise<BootSafetyReport>; cancelDecisionTimeoutMs: number; buildMarketSummary: (e: { url: string; addedAt: string; }) => Promise<MarketSummary>; credentials: CredentialProvider; dataDir: string; exportsDir: string; syncRootDir: string; syncScope: SyncScope; githubAuth: GitHubAuthClient; githubClientId: string | undefined; githubClientSecret: string | undefined; githubFlows: DeviceFlowStore; history: MigrationStore; host: ConfigManagerHostContext; itemCached: (url: string, itemId: string) => Promise<boolean>; knownSyncSectionIds: Set<SectionId>; makeImporter: () => Importer; makeMarketReader: () => GitMarketReader; makeRecoveryExecutors: (runId: string) => RecoveryExecutorFns; makeSyncEngine: (cfg: SyncConfig, engineOpts?: { optInSections?: readonly SectionId[]; }) => SyncEngine; marketBootAutoRefreshed: { value: boolean; }; marketCacheIndex: (url: string) => string; marketDir: string; marketCacheItemDir: (url: string) => string; marketStarCache: StarCache; marketWorkDir: (url: string) => string; meGitHubRest: GitHubAuthRest; meService: MyRepoService; meTokenProvider: () => Promise<string>; msg: MsgFunc; prepareSync: (body: Record<string, unknown>) => Promise<SyncConfig>; pluginVersion: string; profileLauncher: DshProfileLauncher; profileRuntime: DshProfileRuntimeRegistry; profiles: DshProfileManager; pruneStagedMarketZips: () => Promise<void>; readCachedIndexObj: (url: string) => Promise<MarketIndex | null>; recoveryOrchestrator: RecoveryOrchestrator; resolveSyncPassword: (ref: string) => Promise<string | undefined>; roots: string[]; runAbortControllers: Map<string, AbortController>; runCancels: Map<string, { signal: AbortController; settle: (d: 'rollback' | 'keep') => void; decided: boolean }>; runs: RunRegistry; scheduler: AutoSyncScheduler; selectionCache: Partial<Record<SyncTransportType, SyncSelection>>; selectionOptInSections: (channel: SyncTransportType, onlyAuto?: boolean) => SectionId[]; selectionView: (channel: SyncTransportType) => Promise<SelectionView>; selectionViewByChannel: () => Promise<Record<SyncTransportType, SelectionView>>; snapshotEntrySections: (snapshotDir: string) => Promise<string[]>; snapshotsDir: string; starPromptRepoUrl: string; syncCredentialsByChannelView: () => Promise<Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean; }>>; syncDir: string; syncPasswordConfigured: (ref: string) => Promise<boolean>; syncWorkDir: { inspect: (repoUrl: string, opts?: { detail?: boolean; }) => Promise<{ facts: GitWorkDirFacts; } | { error: string; }>; rebuild: (repoUrl: string, mode: 'relink' | 'adopt' | 'reclone') => Promise<GitWorkDirFacts>; }; syncSectionCatalog: { id: SectionId; displayName: string; portability: Portability; defaultIncluded: boolean; }[]; syncSessions: SyncSessionStore; tmpDir: string; tryAppendHistory: (raw: { kind: MigrationKind; result: MigrationResult; sections: string[]; operationId?: string; snapshotId?: string; runId?: string; source: 'api' | 'autosync' | 'backup-scheduler' | 'recovery' | 'cli' | 'internal'; summary: string; error?: string; }) => Promise<string | undefined>; withMutationGate: (op: string, handler: (req: IncomingMessage, res: ServerResponse, lockCtx?: MutationLockContext, journalCtx?: JournalRunContext) => Promise<void>, opts?: { journaled?: boolean; deferredSnapshot?: boolean; }) => ((req: IncomingMessage, res: ServerResponse) => Promise<void>); selfUpdate: (targetVersion: string) => Promise<SelfUpdateOutcome>; writeItemCache: (url: string, itemId: string, manifestRaw: string, zipBytes: Uint8Array) => Promise<void>; }
+export type RouteEnvInferred = { sessionExportFetch: ((input: string, init: RequestInit) => Promise<Response>) | undefined; sessionExportPort: number | undefined; adapters: ConfigAdapter<unknown>[]; sessionHealth: { homeDir: string; targetFormatVersion: () => number | undefined; workspaceKeys: () => Promise<ReadonlySet<string>>; knownSessionIds: () => Promise<ReadonlySet<string>>; sessionMeta: (ids: readonly string[]) => Promise<SessionMetaIndex>; }; backupScheduler: BackupScheduler; bootSafetyAudit: () => Promise<BootSafetyReport>; cancelDecisionTimeoutMs: number; buildMarketSummary: (e: { url: string; addedAt: string; }) => Promise<MarketSummary>; credentials: CredentialProvider; dataDir: string; exportsDir: string; syncRootDir: string; syncScope: SyncScope; githubAuth: GitHubAuthClient; githubClientId: string | undefined; githubClientSecret: string | undefined; githubFlows: DeviceFlowStore; history: MigrationStore; host: ConfigManagerHostContext; itemCached: (url: string, itemId: string) => Promise<boolean>; knownSyncSectionIds: Set<SectionId>; makeImporter: () => Importer; makeMarketReader: () => GitMarketReader; makeRecoveryExecutors: (runId: string) => RecoveryExecutorFns; makeSyncEngine: (cfg: SyncConfig, engineOpts?: { optInSections?: readonly SectionId[]; }) => SyncEngine; marketBootAutoRefreshed: { value: boolean; }; marketCacheIndex: (url: string) => string; marketDir: string; marketCacheItemDir: (url: string) => string; marketStarCache: StarCache; marketWorkDir: (url: string) => string; meGitHubRest: GitHubAuthRest; meService: MyRepoService; meTokenProvider: () => Promise<string>; msg: MsgFunc; prepareSync: (body: Record<string, unknown>) => Promise<SyncConfig>; pluginVersion: string; profileLauncher: DshProfileLauncher; profileRuntime: DshProfileRuntimeRegistry; profiles: DshProfileManager; pruneStagedMarketZips: () => Promise<void>; readCachedIndexObj: (url: string) => Promise<MarketIndex | null>; recoveryOrchestrator: RecoveryOrchestrator; resolveSyncPassword: (ref: string) => Promise<string | undefined>; roots: string[]; runAbortControllers: Map<string, AbortController>; runCancels: Map<string, { signal: AbortController; settle: (d: 'rollback' | 'keep') => void; decided: boolean }>; runs: RunRegistry; scheduler: AutoSyncScheduler; selectionCache: Partial<Record<SyncTransportType, SyncSelection>>; selectionOptInSections: (channel: SyncTransportType, onlyAuto?: boolean) => SectionId[]; selectionView: (channel: SyncTransportType) => Promise<SelectionView>; selectionViewByChannel: () => Promise<Record<SyncTransportType, SelectionView>>; snapshotEntrySections: (snapshotDir: string) => Promise<string[]>; snapshotsDir: string; starPromptRepoUrl: string; syncCredentialsByChannelView: () => Promise<Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean; }>>; syncDir: string; syncPasswordConfigured: (ref: string) => Promise<boolean>; syncWorkDir: { inspect: (repoUrl: string, opts?: { detail?: boolean; subdir?: string; }) => Promise<{ facts: GitWorkDirFacts; } | { error: string; }>; rebuild: (repoUrl: string, mode: 'relink' | 'adopt' | 'reclone', subdir?: string) => Promise<GitWorkDirFacts>; }; syncSectionCatalog: { id: SectionId; displayName: string; portability: Portability; defaultIncluded: boolean; }[]; syncSessions: SyncSessionStore; tmpDir: string; tryAppendHistory: (raw: { kind: MigrationKind; result: MigrationResult; sections: string[]; operationId?: string; snapshotId?: string; runId?: string; source: 'api' | 'autosync' | 'backup-scheduler' | 'recovery' | 'cli' | 'internal'; summary: string; error?: string; }) => Promise<string | undefined>; withMutationGate: (op: string, handler: (req: IncomingMessage, res: ServerResponse, lockCtx?: MutationLockContext, journalCtx?: JournalRunContext) => Promise<void>, opts?: { journaled?: boolean; deferredSnapshot?: boolean; }) => ((req: IncomingMessage, res: ServerResponse) => Promise<void>); selfUpdate: (targetVersion: string) => Promise<SelfUpdateOutcome>; writeItemCache: (url: string, itemId: string, manifestRaw: string, zipBytes: Uint8Array) => Promise<void>; }
 
 
 interface RoutesDeps {
@@ -2688,8 +2688,10 @@ function makeRoutes(deps: RoutesDeps): {
    * 构造 git 通道实例（同步引擎与 issue #79 的工作副本自检/重建共用同一份地址与凭据口径）。
    * token 只经 credentials 端口现取（值永不落盘/日志/回传）。
    */
-  const makeGitTransport = (repoUrl: string): GitTransport => new GitTransport({
+  const makeGitTransport = (repoUrl: string, subdir?: string): GitTransport => new GitTransport({
     repoUrl,
+    // issue #131：子目录前缀与 repoUrl 同源（配置 → 传输层），空串 = 仓库根
+    ...(subdir === undefined ? {} : { subdir }),
     workDir: gitWorkDir,
     credentials: {
       getToken: async () => {
@@ -2752,7 +2754,7 @@ function makeRoutes(deps: RoutesDeps): {
         msg,
       })
     } else {
-      transport = makeGitTransport(cfg.git.repoUrl)
+      transport = makeGitTransport(cfg.git.repoUrl, cfg.git.subdir)
     }
     const channel: SyncTransportType = channelOf(cfg)
     const sections = effectiveSections(selectionCache[channel] ?? defaultSyncSelection())
@@ -3054,20 +3056,20 @@ function makeRoutes(deps: RoutesDeps): {
       syncWorkDir: {
         // 自检失败（git 不可用 / 工作副本异常）→ 返回 { error }，**不让整个状态接口 500**，
         // 也不伪装成「工作副本不存在」。
-        inspect: async (repoUrl: string, opts: { detail?: boolean } = {}): Promise<{ facts: GitWorkDirFacts } | { error: string }> => {
+        inspect: async (repoUrl: string, opts: { detail?: boolean; subdir?: string } = {}): Promise<{ facts: GitWorkDirFacts } | { error: string }> => {
           try {
             // issue #104 建议 3：`/sync/status` 要回传「领先远端提交数 / 远端快照数」，
             // 用户看不见积压就会在「以为在备份」的状态下一直失败。detail 那几条是本地只读但各起
             // 一次 git 进程（Windows 约 80 ms）⇒ 缺省完整（WorkDirCard 要），路由可传 false。
-            return { facts: await makeGitTransport(repoUrl).inspectWorkDir({ detail: opts.detail !== false }) }
+            return { facts: await makeGitTransport(repoUrl, opts.subdir).inspectWorkDir({ detail: opts.detail !== false }) }
           } catch (err) {
             return { error: err instanceof Error ? err.message : String(err) }
           }
         },
         // 重建：relink 非破坏；adopt 合并远端历史（不改写本地提交，issue #104）；
         // reclone 删目录重克隆（调用方必须先取得用户确认）
-        rebuild: async (repoUrl: string, mode: 'relink' | 'adopt' | 'reclone'): Promise<GitWorkDirFacts> => {
-          const transport = makeGitTransport(repoUrl)
+        rebuild: async (repoUrl: string, mode: 'relink' | 'adopt' | 'reclone', subdir?: string): Promise<GitWorkDirFacts> => {
+          const transport = makeGitTransport(repoUrl, subdir)
           await transport.rebuildWorkDir(mode)
           return await transport.inspectWorkDir()
         },

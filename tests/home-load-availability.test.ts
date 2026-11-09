@@ -92,9 +92,11 @@ test('L-04 workDir detail 开关贯通四层：默认完整、按需降级', () 
     '取值体必须收到 detail 选择',
   );
   assert.ok(
-    route.includes('syncWorkDir.inspect(gitRepoUrl, { detail: opts.workDirDetail })'),
+    route.includes('syncWorkDir.inspect(gitRepoUrl, { detail: opts.workDirDetail'),
     '降级必须真的传到工作副本自检，不能只解析不生效',
   );
+  // issue 131：自检还必须按配置的子目录前缀读（远端快照数来自 <subdir>/snapshots），同一路传进去
+  assert.ok(route.includes('subdir: gitSubdir'), '子目录前缀必须与 detail 一起进工作副本自检');
   const host = read('src/index.ts');
   assert.ok(
     host.includes('inspectWorkDir({ detail: opts.detail !== false })'),
