@@ -155,4 +155,16 @@ test('detail=0 → 工作副本自检降级；缺省仍是完整自检', async (
   await route.handler(fakeRequest(STATUS_PATH), full.res)
   assert.equal(full.status(), 200)
   assert.deepEqual(seen[1], { detail: true }, '缺省仍是完整自检：同步页 WorkDirCard 依赖那三项')
+
+  // issue 131：配置了子目录前缀时，自检必须按 <subdir>/ 读（否则远端快照数恒为 0 = 假的「没有备份」）。
+  // 空串不落参数 —— 旧调用形态（{ detail }）逐字不变。
+  await fs.writeFile(
+    path.join(syncDir, 'sync-config.json'),
+    JSON.stringify({ schemaVersion: 4, transport: 'git', git: { repoUrl: 'https://example.com/r.git', subdir: 'DSH备份' } }),
+    'utf8',
+  )
+  const prefixed = fakeResponse()
+  await route.handler(fakeRequest(STATUS_PATH + '?detail=0'), prefixed.res)
+  assert.equal(prefixed.status(), 200)
+  assert.deepEqual(seen[2], { detail: false, subdir: 'DSH备份' }, '子目录前缀必须与 detail 一起传给工作副本自检')
 })

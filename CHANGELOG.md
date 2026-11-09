@@ -32,6 +32,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🆕 新增 · Added
+
+- 同步的 Git 通道现在可以把快照放进仓库里的子目录（如 `DSH备份/`），一个私有仓库就能给多个工具各自备份、互不覆盖；留空仍是原来的仓库根布局。
+  The Git sync channel can now keep its snapshots inside a subdirectory of the repo (e.g. `DSH备份/`), so one private repo can host separate backups per tool; leaving it empty keeps the previous repo-root layout.
+
 ## [0.6.0] - 2026-11-08
 
 > **说完就真的做到**：删除档案、恢复与撤销、中止安装这三处以前会「报告成功、东西还在」，现在要么删净、要么如实报错；GitHub 登录与配置保存当场给出反馈，自动同步也不再每分钟往活动列表塞一条「成功」。

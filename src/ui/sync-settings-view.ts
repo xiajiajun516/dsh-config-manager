@@ -41,6 +41,8 @@ export type SyncAutosyncInterval = '5m' | '15m' | '30m' | '60m' | '6h' | '12h' |
 export interface SyncFormSnapshot {
   channel: SyncChannelName
   repoUrl: string
+  /** 仓库内子目录前缀（空 = 仓库根；issue #131：多工具共用一个私有仓库时各自独立） */
+  gitSubdir: string
   /** 仅内存；成功后由组件清空（已写入 DSH credentials） */
   token: string
   webdavUrl: string
@@ -102,6 +104,8 @@ export interface SyncPushBody {
    */
   transport?: SyncTransportType
   repoUrl?: string
+  /** git：仓库内子目录前缀（issue #131；空 / 缺省 = 仓库根，旧配置读出来即空） */
+  subdir?: string
   token?: string
   url?: string
   username?: string
@@ -293,9 +297,12 @@ function channelAuthBody(form: SyncFormSnapshot, opts: { trimToken: boolean }): 
       ...(token === '' ? {} : { secret: token }),
     }
   }
+  const subdir = form.gitSubdir.trim()
   return {
     transport: 'git',
     repoUrl: form.repoUrl.trim(),
+    // 空串不携带：宿主按「缺省 = 仓库根」解析，旧配置与旧宿主都能吃这份载荷
+    ...(subdir === '' ? {} : { subdir }),
     token: form.token.trim() !== '' ? (opts.trimToken ? form.token.trim() : form.token) : undefined,
   }
 }

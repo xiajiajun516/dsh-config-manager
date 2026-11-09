@@ -87,14 +87,26 @@ export function channelMap<T>(make: (channel: SyncTransportType) => T): Record<S
   return out;
 }
 
-/** 当前 sync-config.json schema 版本号（v3：双命名空间共存，切换通道不丢失另一通道配置）。 */
-export const SYNC_CONFIG_SCHEMA_VERSION = 3;
-/** 历史可读取版本：v1、v2、v3。 */
-export const SYNC_CONFIG_SUPPORTED_VERSIONS: readonly number[] = [1, 2, 3];
+/**
+ * 当前 sync-config.json schema 版本号（v4：git 通道新增可选 `subdir` 子目录前缀，issue #131）。
+ *
+ * 为什么必须升版而不是只加一个可选字段：老版本插件读到带 `subdir` 的配置会**丢掉这个字段**
+ * 然后照旧往仓库根写快照 —— 在「多工具共用一个备份仓库」的现场，那等于把快照撒进别人的目录布局。
+ * 升版后老版本读到 v4 直接判为不支持（显示未配置），宁可让用户看见「要升级」，也不静默写错位置。
+ */
+export const SYNC_CONFIG_SCHEMA_VERSION = 4;
+/** 历史可读取版本：v1、v2、v3、v4。 */
+export const SYNC_CONFIG_SUPPORTED_VERSIONS: readonly number[] = [1, 2, 3, 4];
 
 /** git 通道配置（不含任何凭据；git 可执行文件固定使用系统 PATH 中的 git） */
 export interface GitConfig {
   repoUrl: string;
+  /**
+   * 仓库内子目录前缀（issue #131，可缺省）：快照布局落在 `<subdir>/snapshots`、
+   * `<subdir>/snapshots-encrypted`、`<subdir>/blobs`。缺省 = 仓库根（历史行为逐字不变）。
+   * 多工具共用同一个私有备份仓库时，每个工具各占一个子目录。
+   */
+  subdir?: string;
 }
 
 /** webdav 通道配置（不含 password；password 走 DSH credentials） */
@@ -149,7 +161,12 @@ export function isGistConfig(cfg: SyncConfig): cfg is Extract<SyncConfig, { tran
 /** 从 v1 扁平形态解析 git 配置；缺 repoUrl → null（gitBin 已废弃：始终使用系统 PATH 中的 git） */
 function parseV1Git(obj: Record<string, unknown>): GitConfig | null {
   if (typeof obj['repoUrl'] !== 'string' || obj['repoUrl'] === '') return null;
-  return { repoUrl: obj['repoUrl'] };
+  // issue #131：子目录前缀必须在这里**显式搬运** —— 本函数只构造已知字段，漏搬就是静默丢掉用户配置。
+  // 读侧同口径校验：非法值当作「未设置」（落在仓库根），绝不把可疑路径继续交给 git 子进程。
+  const subdir = normalizeGitSubdir(obj['subdir']);
+  return subdir.ok && subdir.value !== ''
+    ? { repoUrl: obj['repoUrl'], subdir: subdir.value }
+    : { repoUrl: obj['repoUrl'] };
 }
 
 /** 从 v2 git 命名空间解析；缺有效 repoUrl → null */
@@ -915,6 +932,35 @@ export function validateCloudBucket(bucket: string): CloudConfigIssueCode | null
   const b = bucket.trim();
   if (!BUCKET_NAME_RE.test(b) || b.includes('..')) return 'cloud.bucketInvalid';
   return null;
+}
+
+/**
+ * git 通道子目录前缀的归一化与校验（issue #131）。
+ *
+ * 为什么单独一个函数而不是复用 validateCloudPrefix：对象键前缀与仓库内目录名不是同一套约束 ——
+ * 目录名要允许 UTF-8（报告者现场就是 `DSH备份/` 这种中文目录）与多级嵌套，而对象键前缀按
+ * 存储桶语义只关心「不是绝对路径、没有 ..」。
+ *
+ * 接受：空串（= 仓库根，历史行为）、UTF-8 段、多级嵌套（`a/b`）。
+ * 拒绝：绝对路径（首部 /）、尾部 /、反斜杠、空段（含 `a//b`）、`.` / `..` 段、控制字符、
+ * `.git` 段（写进去会撞 git 自己的元数据目录名，任何大小写都算）。
+ */
+export type GitSubdirCheck = { ok: true; value: string } | { ok: false; reason: 'gitSubdirInvalid' };
+
+export function normalizeGitSubdir(raw: unknown): GitSubdirCheck {
+  // 缺省（字段不存在）与空串同义：仓库根。只有「显式写了但不是字符串」才算非法。
+  if (raw === undefined || raw === null) return { ok: true, value: '' };
+  if (typeof raw !== 'string') return { ok: false, reason: 'gitSubdirInvalid' };
+  const p = raw.trim();
+  if (p === '') return { ok: true, value: '' };
+  if (p.startsWith('/') || p.endsWith('/')) return { ok: false, reason: 'gitSubdirInvalid' };
+  if (p.includes('\\') || /[\u0000-\u001f\u007f]/.test(p)) return { ok: false, reason: 'gitSubdirInvalid' };
+  const segments = p.split('/');
+  for (const seg of segments) {
+    if (seg === '' || seg === '.' || seg === '..') return { ok: false, reason: 'gitSubdirInvalid' };
+    if (seg.toLowerCase() === '.git') return { ok: false, reason: 'gitSubdirInvalid' };
+  }
+  return { ok: true, value: segments.join('/') };
 }
 
 /** 对象键前缀校验（可缺省 = 根前缀；不得以 / 开头、不得含 .. / 反斜杠 / 空段）。 */

@@ -26,7 +26,7 @@ import {
   SYNC_CONFIG_FILE, SYNC_CONFIG_SCHEMA_VERSION, SYNC_CONFIG_SUPPORTED_VERSIONS, CLOUD_SYNC_CONFIG_FILE,
   validateWebDavUrl, validateRepoUrl, type SyncConfig, type SyncConfigIssue,
   SYNC_CHANNELS, channelOf, channelMap, isSyncTransportType, parseSyncChannel, clearSyncChannel,
-  S3_COMPAT_PROVIDERS, CLOUD_SYNC_PROVIDERS, cloudSecretRef,
+  S3_COMPAT_PROVIDERS, CLOUD_SYNC_PROVIDERS, cloudSecretRef, normalizeGitSubdir,
 } from './sync-config.ts';
 // t88 跨侧常量守卫：共享零依赖常量 + 客户端镜像（见文件末尾的 t88 用例）
 import { S3_COMPAT_PROVIDERS as SHARED_S3_COMPAT_PROVIDERS, cloudSecretRefName } from '../utils/shared-constants.ts';
@@ -919,3 +919,61 @@ test('validateRepoUrl（RV1-F7）：带 scheme 的 userinfo —— ssh 的 token
   assert.ok(half !== null);
   assert.ok(!half.includes('ghp_halfsecret'), '无法解析的地址同样不得回显凭据: ' + half);
 });
+
+test('issue #131：normalizeGitSubdir —— 中文与嵌套放行，绝对路径/../反斜杠/空段/.git 段拒绝', () => {
+  const ok = (raw: unknown): string => {
+    const r = normalizeGitSubdir(raw);
+    assert.equal(r.ok, true, '应放行: ' + String(raw));
+    return r.ok ? r.value : '';
+  };
+  const bad = (raw: unknown): void => {
+    assert.equal(normalizeGitSubdir(raw).ok, false, '应拒绝: ' + String(raw));
+  };
+  assert.equal(ok(undefined), '', '缺省 = 仓库根');
+  assert.equal(ok(''), '', '空串 = 仓库根');
+  assert.equal(ok('   '), '', '纯空白 = 仓库根');
+  assert.equal(ok('  DSH备份  '), 'DSH备份', '去首尾空白，保留 UTF-8');
+  assert.equal(ok('tools/dsh'), 'tools/dsh', '允许嵌套');
+  for (const raw of ['/abs', 'a/', '/', 'a//b', '..', 'a/../b', './a', 'a/.', '.git', 'a/.git/b', 'a/.GIT', 'a\\b', 'a\u0000b', 123, true]) bad(raw);
+});
+
+test('issue #131：git 子目录前缀往返 —— 写入保留字段，空/缺省按仓库根读回，旧 v2 文件不受影响', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cfg-subdir-'));
+  try {
+    const cfg: SyncConfig = {
+      schemaVersion: 2,
+      transport: 'git',
+      git: { repoUrl: 'git@github.com:foo/bar.git', subdir: 'DSH备份' },
+    };
+    await writeSyncConfig(dir, cfg);
+    assert.deepEqual(await readSyncConfig(dir), cfg, '子目录前缀必须原样往返');
+    const raw = JSON.parse(await fs.readFile(path.join(dir, SYNC_CONFIG_FILE), 'utf8'));
+    assert.equal(raw.git.subdir, 'DSH备份');
+    assert.equal(raw.schemaVersion, SYNC_CONFIG_SCHEMA_VERSION, '带新字段的文件按当前版本写');
+
+    // 旧 v2 文件（无 subdir）→ 读成仓库根布局，不因新字段缺失而丢配置
+    await fs.writeFile(path.join(dir, SYNC_CONFIG_FILE), JSON.stringify({
+      schemaVersion: 2,
+      transport: 'git',
+      git: { repoUrl: 'git@github.com:foo/bar.git' },
+    }));
+    assert.deepEqual(await readSyncConfig(dir), {
+      schemaVersion: 2,
+      transport: 'git',
+      git: { repoUrl: 'git@github.com:foo/bar.git' },
+    });
+
+    // 非法 subdir（历史文件被人改坏）→ 丢弃该字段而不是整份配置报错
+    await fs.writeFile(path.join(dir, SYNC_CONFIG_FILE), JSON.stringify({
+      schemaVersion: 2,
+      transport: 'git',
+      git: { repoUrl: 'git@github.com:foo/bar.git', subdir: '../escape' },
+    }));
+    assert.deepEqual(await readSyncConfig(dir), {
+      schemaVersion: 2,
+      transport: 'git',
+      git: { repoUrl: 'git@github.com:foo/bar.git' },
+    }, '非法前缀按仓库根处理（不拿坏值去拼路径）');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+

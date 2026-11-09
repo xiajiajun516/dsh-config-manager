@@ -31,7 +31,7 @@ import type { SnapshotDirManifest } from '../layout.ts';
 import { BLOB_SECTIONS, gcBlobs, referencedBlobHashes } from '../blob-store.ts';
 import type { BlobSink } from '../blob-store.ts';
 import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
-import { classifyRepoUrl, isPrivateRepoHost } from '../sync-config.ts';
+import { classifyRepoUrl, isPrivateRepoHost, normalizeGitSubdir } from '../sync-config.ts';
 import {
   classifyNetworkErrorText, computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS, isEncryptedSections,
   SyncTransportError, withSyncRetry,
@@ -120,13 +120,24 @@ const inspectFactsCache = new Map<string, { at: number; detail: boolean; facts: 
  */
 const INSPECT_WORKDIR_LOCK_TIMEOUT_MS = 1_500;
 
-function inspectFactsCacheKey(workDir: string, repoUrl: string): string {
-  return workDir + '\u0000' + repoUrl;
+/**
+ * 工作副本布局身份的进程内缓存（key = workDir，值同 `readStoredSubdir()`，issue #131）。
+ *
+ * 为什么缓存：每次操作都要校验布局，而读一次 git 本地配置就是一次 git 子进程启动
+ * （Windows 真机约 80 ms，正是 L-04 在削的那笔开销）。布局身份是**工作副本的属性**，
+ * 只有本类写入（clone / adopt）与重建（reclone）会改它 —— 那三处显式更新缓存。
+ */
+const storedSubdirCache = new Map<string, string | null>();
+
+function inspectFactsCacheKey(workDir: string, repoUrl: string, subdir: string): string {
+  // 子目录前缀必须进 key：同一工作副本路径在不同前缀下的「远端快照数」是不同的答案（issue #131）。
+  return workDir + '\u0000' + repoUrl + '\u0000' + subdir;
 }
 
 /** 清空自检缓存（测试隔离用；生产路径由 `withWorkdir` 逐 key 失效）。 */
 export function clearInspectFactsCache(): void {
   inspectFactsCache.clear();
+  storedSubdirCache.clear();
 }
 
 /** 凭据提供者：token 只从这里读取，绝不在任何地方持久化 */
@@ -139,6 +150,12 @@ export interface GitAuthor { name: string; email: string; }
 export interface GitTransportOptions {
   /** 远端私有仓库地址（https/ssh/本地路径）；token 绝不拼入此 URL */
   repoUrl: string;
+  /**
+   * 仓库内子目录前缀（issue #131，可缺省）：快照布局落在 `<subdir>/snapshots`、
+   * `<subdir>/snapshots-encrypted`、`<subdir>/blobs`；空串/缺省 = 仓库根（历史行为）。
+   * 多工具共用同一个私有备份仓库时，每个工具各占一个子目录。
+   */
+  subdir?: string;
   /** 本地 git 工作副本目录（不存在则创建；已 clone 则复用） */
   workDir: string;
   /** token 提供者（http(s) 远端必填；本地/ssh 远端不会被调用） */
@@ -190,7 +207,22 @@ const ADOPT_ROOT_ALLOW = new Set<string>([SNAPSHOTS_REL, SNAPSHOTS_ENCRYPTED_REL
  * 远端仓库比同步内容大几个数量级时（报告者现场：1.8 GB 仓库 / 6 MB 内容），全量 clone 与全量 fetch
  * 都要拉完整对象图，而工作副本真正需要的只有这三个目录。
  */
-const SYNC_ROOT_DIRS: readonly string[] = [...ADOPT_ROOT_ALLOW];
+/* 具体的 sparse 面在 `syncDirs()` 里按子目录前缀派生（issue #131），基名与 ADOPT_ROOT_ALLOW 同源。 */
+/**
+ * 工作副本的**布局身份**键（git 本地配置，issue #131）：记录这份工作副本是按哪个子目录前缀建的。
+ *
+ * 为什么必须落盘：sparse-checkout 只在首次 clone 时生效 —— 前缀从「仓库根」改成 `DSH备份` 后，
+ * 旧工作副本里根本没有 `DSH备份/` 这棵树，pull 会成功、list 会读空，用户看到的是
+ * 「远端没有快照」（issue #104 那类最难自查的假象）。存成 git 本地配置而不是工作树里的文件：
+ * 工作树文件会让 `status --porcelain` 恒 dirty，adopt 直接拒绝。
+ */
+const SUBDIR_CONFIG_KEY = 'dsh.syncSubdir';
+/**
+ * 标记值的版本前缀（issue #131）。为什么带前缀：读侧必须能区分「本插件写的」与「任何别的值」——
+ * 值不匹配前缀一律按「读不出」处理（回落历史布局 = 仓库根），这样伪造/污染的配置不会凭空
+ * 造出一条假的「布局已变」错误。空子目录写作 `1:`，仍是可判读的有效标记。
+ */
+const SUBDIR_MARKER_PREFIX = '1:';
 /**
  * 走网络的 git 子命令：一律附加低速上限（issue #122）。
  *
@@ -378,6 +410,8 @@ export class GitTransport implements SyncTransport {
   private readonly msg: MsgFunc;
   /** repoUrl 是否为网络地址（本地目录仓库 == false）：决定要不要额外禁 file 传输（SEC-12）。 */
   private readonly networkRepo: boolean;
+  /** 仓库内子目录前缀（'' = 仓库根）：快照布局、sparse 面与 adopt 判据都从它派生（issue #131）。 */
+  private readonly subdir: string;
 
   constructor(options: GitTransportOptions) {
     if (typeof options.repoUrl !== 'string' || options.repoUrl.length === 0) {
@@ -401,6 +435,12 @@ export class GitTransport implements SyncTransport {
       throw new GitTransportError(this.msg('sync.git.repoUrlInvalid', { url: REPO_URL_PLACEHOLDER }));
     }
     this.networkRepo = repoShape.kind !== 'local';
+    // issue #131：子目录前缀在构造期就收窄（与 repoUrl 同一条纪律：非法值绝不进 git 子进程）。
+    const subdirCheck = normalizeGitSubdir(options.subdir ?? '');
+    if (!subdirCheck.ok) {
+      throw new GitTransportError(this.msg('sync.git.subdirInvalid', { subdir: String(options.subdir ?? '') }));
+    }
+    this.subdir = subdirCheck.value;
     this.o = {
       repoUrl: options.repoUrl,
       workDir: options.workDir,
@@ -498,7 +538,7 @@ export class GitTransport implements SyncTransport {
       await fsx.writeFile(file, new TextEncoder().encode(serializeSnapshot(snapshot)));
       // 同 id 旧散文件目录残留 → 一并清理（形态切换不残留）
       await fsx.remove(this.snapshotDir(snapshot.id));
-      rel = `${SNAPSHOTS_ENCRYPTED_REL}/${snapshot.id}.json`;
+      rel = `${this.relDir(SNAPSHOTS_ENCRYPTED_REL)}/${snapshot.id}.json`;
     } else {
       const dir = this.snapshotDir(snapshot.id);
       if (await fsx.exists(dir)) await fsx.remove(dir); // 覆盖语义：先清旧目录，避免残留旧文件
@@ -519,11 +559,11 @@ export class GitTransport implements SyncTransport {
       }
       // 同 id 旧密文单文件残留 → 一并清理（形态切换不残留）
       await fsx.remove(this.encryptedSnapshotFile(snapshot.id));
-      rel = `${SNAPSHOTS_REL}/${snapshot.id}`;
+      rel = `${this.relDir(SNAPSHOTS_REL)}/${snapshot.id}`;
     }
     // blob 仓与快照同一次提交：引用文件与它引用的字节绝不跨 commit 分离
     const hasBlobs = await fsx.exists(this.blobsDir());
-    await this.runGit(hasBlobs ? ['add', '--', rel, BLOBS_REL] : ['add', '--', rel]);
+    await this.runGit(hasBlobs ? ['add', '--', rel, this.relDir(BLOBS_REL)] : ['add', '--', rel]);
     const diff = await this.runGit(['diff', '--cached', '--quiet'], { allowNonZero: true });
     if (diff.code !== 0) {
       const verb = existed ? 'update' : 'add';
@@ -588,10 +628,10 @@ export class GitTransport implements SyncTransport {
     let rel: string;
     if (plainExists) {
       await fsx.remove(plainDir);
-      rel = `${SNAPSHOTS_REL}/${id}`;
+      rel = `${this.relDir(SNAPSHOTS_REL)}/${id}`;
     } else {
       await fsx.remove(encFile);
-      rel = `${SNAPSHOTS_ENCRYPTED_REL}/${id}.json`;
+      rel = `${this.relDir(SNAPSHOTS_ENCRYPTED_REL)}/${id}.json`;
     }
     await this.runGit(['add', '-A', '--', rel]);
     const diff = await this.runGit(['diff', '--cached', '--quiet'], { allowNonZero: true });
@@ -684,7 +724,7 @@ export class GitTransport implements SyncTransport {
     } finally {
       // 除纯只读自检外，任何操作都可能改变工作副本状态（push 改 ahead、fetch 改远端引用、
       // 重建删目录、失败也可能已留下 commit）→ 收尾即丢弃自检缓存，绝不让「写后读」看到旧事实。
-      if (opts.readonly !== true) inspectFactsCache.delete(inspectFactsCacheKey(this.o.workDir, this.o.repoUrl));
+      if (opts.readonly !== true) inspectFactsCache.delete(inspectFactsCacheKey(this.o.workDir, this.o.repoUrl, this.subdir));
     }
   }
 
@@ -699,6 +739,8 @@ export class GitTransport implements SyncTransport {
       // 而失败面表现为旧地址的网络超时（真机：局域网地址 → Tailscale 地址后同步长期失败），
       // 用户会误判成网络/凭据问题。
       await this.reconcileOrigin();
+      // issue #131：布局身份（子目录前缀）与当前配置不一致 ⇒ 明确报「需重建」，绝不照常同步
+      await this.assertLayoutMatches();
       // 真机 issue：仓库级提交身份此前**只在首次 clone 时**写过（见本方法末尾），已有 .git 的分支
       // 直接 return —— 换机器/换工作副本/用户清过本地配置之后，每次 commit 都以 exit 128 失败
       // （"unable to auto-detect email address"），交易停在 NEEDS_ATTENTION，用户只看到
@@ -724,6 +766,8 @@ export class GitTransport implements SyncTransport {
     // 仓库级提交身份（写入远端历史，可经 author 选项覆盖；不改全局配置）
     await this.runGit(['config', 'user.name', this.o.author.name]);
     await this.runGit(['config', 'user.email', this.o.author.email]);
+    // 记录布局身份（issue #131）：此后前缀再变，assertLayoutMatches 能把它判出来
+    await this.writeLayoutMarker();
     this.repoReady = true;
   }
 
@@ -756,6 +800,48 @@ export class GitTransport implements SyncTransport {
   }
 
   /**
+   * 工作副本是按哪个子目录前缀建的（issue #131）：读 git 本地配置 `dsh.syncSubdir`。
+   * null = 键不存在 ⇒ 本功能上线前建的工作副本，布局 = 仓库根（历史行为）。
+   */
+  private async readStoredSubdir(): Promise<string | null> {
+    const cached = storedSubdirCache.get(this.o.workDir);
+    if (cached !== undefined) return cached;
+    try {
+      const r = await this.runGit(['config', '--get', SUBDIR_CONFIG_KEY], { allowNonZero: true });
+      const raw = r.code === 0 ? r.stdout.trim() : '';
+      // 键不存在 / 前缀不符（不是本插件写的标记，或被人改坏）⇒ 不知道，按历史布局处理
+      const value = raw.startsWith(SUBDIR_MARKER_PREFIX) ? raw.slice(SUBDIR_MARKER_PREFIX.length) : null;
+      storedSubdirCache.set(this.o.workDir, value);
+      return value;
+    } catch {
+      return null; // 读不出 = 不知道，按历史布局处理（不拿猜测阻断同步；失败不进缓存，下次再读）
+    }
+  }
+
+  /** 写入布局身份标记（issue #131）：git 本地配置 + 同步更新进程内缓存。 */
+  private async writeLayoutMarker(): Promise<void> {
+    await this.runGit(['config', SUBDIR_CONFIG_KEY, SUBDIR_MARKER_PREFIX + this.subdir]);
+    storedSubdirCache.set(this.o.workDir, this.subdir);
+  }
+
+  /**
+   * 布局身份校验（issue #131）：工作副本建好时的前缀必须与当前配置一致。
+   *
+   * 为什么必须显式报错而不是「照常同步」：sparse-checkout 只在首次 clone 生效 —— 前缀换了以后，
+   * 旧工作副本里根本没有 `<新前缀>/` 这棵树，pull 成功、list 读空，用户看到的是
+   * 「远端没有快照」。这条错误把出口指回既有的「重建工作副本（重新克隆）」。
+   */
+  private async assertLayoutMatches(): Promise<void> {
+    const stored = (await this.readStoredSubdir()) ?? '';
+    if (stored === this.subdir) return;
+    const label = (prefix: string): string => (prefix === '' ? this.msg('sync.git.subdirRoot') : prefix);
+    throw new GitTransportError(
+      this.msg('sync.git.subdirChanged', { stored: label(stored), expected: label(this.subdir) }),
+      { kind: 'protocol', retryable: false },
+    );
+  }
+
+  /**
    * 首次 clone（issue #122）：partial clone + sparse-checkout，只落地同步内容。
    *
    * 为什么：同步仓库可能比同步内容大几个数量级（报告者现场 1.8 GB 仓库 / 6 MB 内容）。此前 `git clone`
@@ -784,7 +870,8 @@ export class GitTransport implements SyncTransport {
     const head = await this.runGit(['rev-parse', '--verify', '--quiet', 'HEAD'], { allowNonZero: true });
     if (head.code !== 0) return; // 空仓库：没有可 checkout 的树，后续 push 会建分支
     const target = branch === '' ? 'HEAD' : branch;
-    const sparse = await this.runGit(['sparse-checkout', 'set', '--cone', ...SYNC_ROOT_DIRS], { allowNonZero: true });
+    // issue #131：sparse 面跟着子目录前缀走 —— 共用仓库里其它工具的目录绝不被 materialize
+    const sparse = await this.runGit(['sparse-checkout', 'set', '--cone', ...this.syncDirs()], { allowNonZero: true });
     if (sparse.code !== 0) {
       // 老 git 没有 cone 模式：宁可全量落地（修复前行为），也不留下一个空工作树
       await this.runGit(['checkout', target], { allowNonZero: true });
@@ -891,7 +978,7 @@ export class GitTransport implements SyncTransport {
    * 因此放进 `detail: true`（供「重建工作副本」前评估数据量等场景显式索取）。
    */
   async inspectWorkDir(opts: { detail?: boolean } = {}): Promise<GitWorkDirFacts> {
-    const key = inspectFactsCacheKey(this.o.workDir, this.o.repoUrl);
+    const key = inspectFactsCacheKey(this.o.workDir, this.o.repoUrl, this.subdir);
     const detail = opts.detail === true;
     const hit = inspectFactsCache.get(key);
     // 命中即返回：不必排队等锁，也不必再 spawn 一条 git（这是首页/切页/轮询的常态路径）。
@@ -947,8 +1034,8 @@ export class GitTransport implements SyncTransport {
             // 每个快照是一级子项；`.gitkeep` 只是占位，不是快照
             .filter((line) => line !== '' && !line.endsWith(SNAPSHOT_KEEP_FILE)).length;
         };
-        const plain = await countTree(`origin/${branch}:${SNAPSHOTS_REL}`);
-        const encrypted = await countTree(`origin/${branch}:${SNAPSHOTS_ENCRYPTED_REL}`);
+        const plain = await countTree(`origin/${branch}:${this.relDir(SNAPSHOTS_REL)}`);
+        const encrypted = await countTree(`origin/${branch}:${this.relDir(SNAPSHOTS_ENCRYPTED_REL)}`);
         // 两个目录都不存在 = 远端分支根本没有快照布局（0）；分支/引用读不出 = null（不猜）
         remoteSnapshots = plain === null && encrypted === null ? 0 : (plain ?? 0) + (encrypted ?? 0);
       }
@@ -1006,6 +1093,7 @@ export class GitTransport implements SyncTransport {
       return;
     }
     await fs.rm(this.o.workDir, { recursive: true, force: true });
+    storedSubdirCache.delete(this.o.workDir); // 旧副本连同它的布局身份一起没了
     await this.ensureRepo();
   }
 
@@ -1047,6 +1135,8 @@ export class GitTransport implements SyncTransport {
       );
     }
     await this.reconcileOrigin();
+    // issue #131：采纳远端历史也不许跨布局 —— 前缀变了要先重建工作副本
+    await this.assertLayoutMatches();
     const branchRes = await this.runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { allowNonZero: true });
     const branch = branchRes.code === 0 ? branchRes.stdout.trim() : '';
     if (branch === '' || branch === 'HEAD') {
@@ -1079,9 +1169,13 @@ export class GitTransport implements SyncTransport {
         { kind: 'protocol', retryable: false },
       );
     }
-    // ② 远端顶层只能是快照布局
-    const treeRes = await this.runGit(['ls-tree', '--name-only', `origin/${branch}`], { allowNonZero: true });
-    if (treeRes.code !== 0) {
+    // ② 同步布局只能是那三个目录。配了子目录前缀时校验的是 <subdir>/ **子树**（issue #131）：
+    // 共用仓库里其它工具的目录在仓库根，那不是本插件的同步内容，也不该被判成「污染」。
+    const treeish = this.subdir === '' ? `origin/${branch}` : `origin/${branch}:${this.subdir}`;
+    const treeRes = await this.runGit(['ls-tree', '--name-only', treeish], { allowNonZero: true });
+    // 子树不存在 = 远端还没有该前缀的同步内容（首次 push 会建它），不是错误；
+    // 仓库根读不出来才是真异常（引用在上面已验过存在）。
+    if (treeRes.code !== 0 && this.subdir === '') {
       throw new GitTransportError(
         this.msg('sync.git.cmdFailed', {
           args: `ls-tree --name-only origin/${branch}`,
@@ -1091,7 +1185,7 @@ export class GitTransport implements SyncTransport {
         { kind: 'unknown', retryable: true },
       );
     }
-    const unknownEntries = treeRes.stdout
+    const unknownEntries = (treeRes.code === 0 ? treeRes.stdout : '')
       .split('\n')
       .map((name) => name.trim().replace(/\/$/, ''))
       .filter((name) => name !== '' && !ADOPT_ROOT_ALLOW.has(name));
@@ -1112,6 +1206,7 @@ export class GitTransport implements SyncTransport {
     }
     // 让后续 pull --ff-only 有 upstream 可用（忽略失败：分支可能已被删/重命名）
     await this.runGit(['branch', '--set-upstream-to', `origin/${branch}`, branch], { allowNonZero: true });
+    await this.writeLayoutMarker();
     this.repoReady = true;
   }
 
@@ -1395,8 +1490,21 @@ export class GitTransport implements SyncTransport {
       : this.msg('sync.git.hostKeyUnverified', { host });
   }
 
+  /** 子目录前缀下的同步布局相对路径（'' 前缀 = 历史布局，逐字不变）。 */
+  private relDir(base: string): string {
+    return this.subdir === '' ? base : `${this.subdir}/${base}`;
+  }
+
+  /**
+   * 三个同步根目录（带前缀）：sparse 面、add 路径、adopt 判据都从这里取 ——
+   * 任何一处漏加前缀都会让「写入 A、读取 B」（issue #131 的失败面）。
+   */
+  private syncDirs(): string[] {
+    return [this.relDir(SNAPSHOTS_REL), this.relDir(SNAPSHOTS_ENCRYPTED_REL), this.relDir(BLOBS_REL)];
+  }
+
   private blobsDir(): string {
-    return path.join(this.o.workDir, BLOBS_REL);
+    return path.join(this.o.workDir, this.relDir(BLOBS_REL));
   }
 
   /**
@@ -1464,7 +1572,7 @@ export class GitTransport implements SyncTransport {
     if (!readable) return;
     const deleted = await gcBlobs({ sink: this.blobSink(fsx), referenced, nowMs: Date.now() });
     if (deleted.length === 0) return;
-    await this.runGit(['add', '-A', '--', BLOBS_REL]);
+    await this.runGit(['add', '-A', '--', this.relDir(BLOBS_REL)]);
     const diff = await this.runGit(['diff', '--cached', '--quiet'], { allowNonZero: true });
     if (diff.code === 0) return;
     await this.runGit(['commit', '-m', `sync: gc ${deleted.length} blob(s)`]);
@@ -1482,12 +1590,12 @@ export class GitTransport implements SyncTransport {
   }
 
   private snapshotsDir(): string {
-    return joinFs(this.o.workDir, SNAPSHOTS_REL);
+    return joinFs(this.o.workDir, this.relDir(SNAPSHOTS_REL));
   }
 
-  /** 加密快照密文单文件目录（<workDir>/snapshots-encrypted/） */
+  /** 加密快照密文单文件目录（<workDir>/snapshots-encrypted/；配了前缀则在 <subdir>/ 下） */
   private encryptedSnapshotsDir(): string {
-    return joinFs(this.o.workDir, SNAPSHOTS_ENCRYPTED_REL);
+    return joinFs(this.o.workDir, this.relDir(SNAPSHOTS_ENCRYPTED_REL));
   }
 
   /** 加密快照密文单文件路径（<id>.json） */

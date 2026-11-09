@@ -35,6 +35,7 @@ function form(overrides: Partial<SyncFormSnapshot> = {}): SyncFormSnapshot {
   return {
     channel: 'git',
     repoUrl: '  https://github.com/u/repo.git  ',
+    gitSubdir: '',
     token: '  GIT-TOKEN  ',
     webdavUrl: '  https://dav.example.com/dav  ',
     webdavUsername: '  alice  ',

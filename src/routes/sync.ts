@@ -240,13 +240,16 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     // 远端快照数」（只读自检；后者是「本地一直没真正备份」的预警依据）。
     // 读不出来时**如实回传错误**（workDirError），不让状态接口静默少一块信息。
     const gitRepoUrl = full?.git?.repoUrl ?? ''
+    // issue #131：自检必须按配置的子目录前缀读（远端快照数来自 <subdir>/snapshots）
+    const gitSubdir = full?.git?.subdir ?? ''
     let workDir: Awaited<ReturnType<typeof syncWorkDir.inspect>> | null = null
-    if (gitRepoUrl !== '') workDir = await syncWorkDir.inspect(gitRepoUrl, { detail: opts.workDirDetail })
+    if (gitRepoUrl !== '') workDir = await syncWorkDir.inspect(gitRepoUrl, { detail: opts.workDirDetail, ...(gitSubdir === '' ? {} : { subdir: gitSubdir }) })
     return {
       ok: true,
       configured: full !== null,
       transport,
       repoUrl: full?.git?.repoUrl,
+      subdir: full?.git?.subdir,
       // 被丢弃的通道配置成因（默认空数组：字段恒在，客户端不必判 undefined；
       // 合法配置不产生幻影告警）。code 是机读 token，message 可直接展示。
       configIssues,
@@ -334,7 +337,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           })
           return
         }
-        const rebuilt = await syncWorkDir.rebuild(repoUrl, mode)
+        const rebuilt = await syncWorkDir.rebuild(repoUrl, mode, full?.git?.subdir)
         writeJson(res, 200, { ok: true, mode, workDir: { facts: rebuilt } })
       } catch (error) {
         writeSyncRouteError(res, error)
