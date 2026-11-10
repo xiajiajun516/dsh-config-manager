@@ -60,6 +60,14 @@ export interface SyncSelection {
   encrypt: boolean;
   /** 手动推送默认导出真实凭据值（安全：必须同时 encrypt；自动同步恒 false） */
   includeSecrets: boolean;
+  /**
+   * 跟随远端删除插件（issue #132；缺省 **false** = 既有行为逐字不变）。
+   *
+   * 打开后：祖先快照里有、远端快照里没有、且本机未改过的插件，手动合并与自动同步都会执行
+   * `dsh plugin remove`（开关本身就是用户的显式授权，见 docs/known-issues/known-gaps.md G-20）。
+   * 关闭时一律不删（候选降级为 `switch-off`，报告里逐项写明原因）。
+   */
+  deletePlugins: boolean;
 }
 
 /** 全通道选择视图（v2 文件直接读取；status 路由一次返回两个通道的选择）。 */
@@ -107,6 +115,7 @@ export function defaultSyncSelection(): SyncSelection {
     sessionsInclude: [],
     encrypt: false,
     includeSecrets: false,
+    deletePlugins: false,
   };
 }
 
@@ -155,6 +164,8 @@ function parseChannelSelection(obj: Record<string, unknown>): SyncSelection {
   sel.sessionsInclude = normalizeSessionsInclude(obj['sessionsInclude']);
   if (typeof obj['encrypt'] === 'boolean') sel.encrypt = obj['encrypt'];
   if (typeof obj['includeSecrets'] === 'boolean') sel.includeSecrets = obj['includeSecrets'];
+  // issue #132：缺字段 = 旧文件 = 关（绝不把「没这个字段」解释成「用户同意删插件」）
+  if (typeof obj['deletePlugins'] === 'boolean') sel.deletePlugins = obj['deletePlugins'];
   // 安全兜底：持久化数据被篡改导致 includeSecrets 但未 encrypt → 强制关掉导出密钥
   if (sel.includeSecrets && !sel.encrypt) sel.includeSecrets = false;
   return sel;
@@ -246,6 +257,8 @@ export async function writeSyncSelection(dir: string, channel: SyncTransportType
       sessionsInclude: channels[ch].sessionsInclude,
       encrypt: channels[ch].encrypt,
       includeSecrets: channels[ch].includeSecrets,
+      // issue #132：落盘白名单漏写 = 用户勾了开关、重启后静默变回关（P0-3 的同一类错）
+      deletePlugins: channels[ch].deletePlugins,
     })),
   };
   const target = path.join(dir, SYNC_SELECTION_FILE);

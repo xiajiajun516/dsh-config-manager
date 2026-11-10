@@ -25,7 +25,6 @@ import { defaultSecretScanner } from '../core/exporter.ts';
 import { Importer } from '../core/importer.ts';
 import { DEFAULT_ROLLBACK_ON_ERROR } from '../core/import-defaults.ts';
 // issue #91：只读预览与基线 hash 的口径判定（本地源插件在预览里不会被 npm pack）
-import { isLocalPluginSpec } from '../core/local-plugin-pack.ts';
 import type {
   ConfigAdapter, ExportSection, GlobalConflictStrategy, HostContext,
   ImportAnalysis, ImportPlan, ImportResult, PathMapping, PlanItem, PlanItemKind, RollbackReport, SecretScanner,
@@ -46,6 +45,14 @@ import {
   credentialsMapFromYaml, decryptCredentialsPayload, decryptSectionsPayload,
   encryptCredentialsPayload, encryptSectionsPayload,
 } from './snapshot-crypto.ts';
+import {
+  applyPluginRemovalStep,
+  pluginRemovalPlanOf,
+  pluginRemovalPreviewOf,
+  recordPluginRemovalUndo,
+} from './plugin-removal-apply.ts';
+import type { PluginRemovalReportItem } from './plugin-removal-apply.ts';
+import type { PluginRemovalPlan } from './plugin-removals.ts';
 import { OPT_IN_SYNC_SECTIONS } from './sync-selection.ts';
 import {
   listRemoteSnapshotIndex, planSessionBookkeeping, remoteTombstonesOf, stripTombstonedSessionsInPlace,
@@ -61,10 +68,12 @@ import { msgOf, zhMsg } from '../core/messages.ts';
 import { engineMsg } from './messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import { DEFAULT_ANCESTOR_KEEP, pruneAncestors, tryLoadAncestor, writeAncestor, writeEncryptedAncestor } from './ancestor.ts';
-import type { MergeConflictReason, MergePlan, MergeSectionResult } from './merge.ts';
+import type { MergePlan, MergeSectionResult } from './merge.ts';
 import { merge as mergeSections } from './merge.ts';
 import { prepareApplyBundle } from './apply-bundle.ts';
-import { previewTextOf } from './merge-preview-text.ts';
+import { mergePreviewSectionView, previewCaliberDiffersFromExport } from './merge-preview-view.ts';
+import type { MergePreview } from './merge-preview-view.ts';
+export type { MergePreview, MergePreviewConflictView, MergePreviewSectionView } from './merge-preview-view.ts';
 import { gcSkipWarning, readGcSkipCode, reportGcSkipOnce } from './gc-skip.ts';
 import { classifyMergePlan } from './risk.ts';
 import type { SyncApplyPlan } from './risk.ts';
@@ -106,25 +115,6 @@ const en: Record<keyof typeof zh, string> = {
 };
 
 registerMessageCatalog({ id: 'sync-engine-merge', zh, en });
-
-/** plan 的单个分区结果 → 预览视图（三侧都只回传可读文本，绝不回传原始值）。 */
-function mergePreviewSectionView(result: MergeSectionResult): MergePreviewSectionView {
-  const conflicts: MergePreviewConflictView[] = result.conflicts.map((c) => ({
-    path: c.path,
-    kind: c.kind,
-    ...(c.reason !== undefined ? { reason: c.reason } : {}),
-    localPreview: previewTextOf(c.local),
-    remotePreview: previewTextOf(c.remote),
-    ancestorPreview: previewTextOf(c.ancestor),
-  }));
-  return {
-    id: result.id,
-    decision: result.decision,
-    ...(result.autoMerged !== undefined ? { autoMerged: result.autoMerged } : {}),
-    conflictCount: result.conflicts.length,
-    conflicts,
-  };
-}
 
 export interface SyncEngineOptions {
   ctx: HostContext;
@@ -172,6 +162,19 @@ export interface SyncEngineOptions {
    * 手动请求仍可用 push(opts.sections) 覆盖。
    */
   sections?: SectionId[];
+  /**
+   * 跟随远端删除插件（issue #132）：祖先快照里有、远端快照里没有、本机未改过的插件 →
+   * 在本轮应用成功后执行 `dsh plugin remove`。
+   *
+   * 缺省 **false**（既有行为逐字不变）。只由宿主的持久化选择注入 —— 用户勾开关即授权，
+   * 手动合并与自动同步因此共享同一个判据（不再由调用点各自决定）。
+   */
+  deletePlugins?: boolean;
+  /**
+   * 本插件自己的包名（跟随删除时**永不**碰它；'' = 不设防，只用于不关心自身的测试）。
+   * 宿主注入 `PLUGIN_NAME`：删掉正在运行的宿主插件会让下一次启动直接缺功能。
+   */
+  selfPluginName?: string;
   /**
    * 远端快照保留策略提供者（m-retention 接线）：缺省 = DEFAULT_RETENTION_POLICY
    * （keepLast=10，与改造前的硬编码 FIFO 逐字等价）。
@@ -351,7 +354,19 @@ export interface ApplyReport {
   review: import('./review-queue.ts').ReviewQueueItem[];
   /** 来自 Importer.ImportResult 的 warnings；UI 可用于红条提示（含回滚未完成项） */
   warnings: string[];
+  /**
+   * 跟随远端删除插件的逐项结果（issue #132；缺省不出现 = 本轮没有该步骤）。
+   *
+   * 之所以逐项回传而不是只回一条汇总：卸载是**不可回滚**的外部进程动作（plugins 分区没有
+   * snapshot/rollback 钩子），界面与报告必须能逐条说清「删了哪个版本、哪个没删成、为什么」。
+   */
+  pluginRemovals?: PluginRemovalReportItem[];
+  /** 删过插件 → 必须重启（与安装同语义；导入结果说不用也不能吞） */
+  needsRestart?: boolean;
 }
+
+/** 一条插件卸载结果（实现与 undo 编排见 ./plugin-removal-apply.ts；此处再导出保持既有导入面）。 */
+export type { PluginRemovalReportItem } from './plugin-removal-apply.ts';
 
 /**
  * 失败路径的**显式兜底回滚**：把 core 的 RollbackReport 翻成「是否完整 + 告警行」。
@@ -434,64 +449,6 @@ const FORBIDDEN_SECTIONS: readonly SectionId[] = ['credentialsStatus', 'secrets'
 export const MAX_REMOTE_SNAPSHOTS = DEFAULT_RETENTION_POLICY.keepLast;
 
 /**
- * issue #91：走只读 `preview()` 拿到的产物，能否直接与该分区**基线 hash**（push 时按 export() 产物记录）比对。
- *
- * 为什么需要这个判定：`plugins` 适配器的 `preview()` 走 `collect(…, pack=false)` —— 刻意**不做**
- * 本地源（`link:` / `file:`）插件的 `npm pack`。于是当 profile 里存在本地源插件时，预览产物既没有
- * `localTarballs`、插件 spec 也保持原样（export() 会改写成 `file:<tarball>`），与基线**不同口径**：
- * 此时既不能断言「无变化」（本地插件源码改了体积/内容，预览看不见），也不该为了比对去打包
- * （那正是本 issue 的缺陷本身）。
- *
- * 返回 true = 该分区本趟**不可比** ⇒ 调用方只能保守报「有变化」并如实说明原因。
- * 其余分区的 preview() 产物与 export() 逐字节相同（文件类分区不走 preview()，见 previewPush）。
- */
-function previewCaliberDiffersFromExport(sectionId: SectionId, data: SectionData): boolean {
-  if (sectionId !== 'plugins') return false;
-  const plugins = (data as { plugins?: { spec?: string }[] }).plugins;
-  return Array.isArray(plugins) && plugins.some((p) => isLocalPluginSpec(p?.spec));
-}
-
-/** previewMerge 的单条冲突视图（三侧文本都已截断 + redact；绝不回传原始值对象）。 */
-export interface MergePreviewConflictView {
-  /** 冲突位置：JSON 分区是 top-level key；文件类分区是 relativePath；'$' = 整分区冲突。 */
-  path: string;
-  kind: 'key' | 'file';
-  /** 冲突成因（可选：旧数据/旧 merge 结果没有该字段，界面缺省按 'both-modified' 措辞）。 */
-  reason?: MergeConflictReason;
-  /** 本机侧的可读预览（≤ 2 KiB，超出截断加省略号；已过 redact()）。 */
-  localPreview: string;
-  /** 远端侧的可读预览（同上）。 */
-  remotePreview: string;
-  /** 共同祖先侧的可读预览（同上；无祖先时为空串）。 */
-  ancestorPreview: string;
-}
-
-/** previewMerge 的单个分区视图。 */
-export interface MergePreviewSectionView {
-  id: SectionId;
-  decision: MergeSectionResult['decision'];
-  /** 自动合并并入的变更点数量（仅 decision === 'merge' 时有意义；缺省 = 未统计）。 */
-  autoMerged?: number;
-  conflictCount: number;
-  conflicts: MergePreviewConflictView[];
-}
-
-/** previewMerge 结果（只读、零写入）。 */
-export interface MergePreview {
-  /** 预览是否成功产出（远端无快照 → false + message，分区清单为空）。 */
-  ok: boolean;
-  /** 本次预览针对的**远端**快照 id；'' = 远端无快照。 */
-  snapshotId: string;
-  /** 是否拿到了本地祖先副本（false = 退化为两方合并 → 所有双侧差异都会呈现为 conflict）。 */
-  hasAncestor: boolean;
-  sections: MergePreviewSectionView[];
-  /** 与 risk.ts 的 classifyMergePlan 同口径计数：auto = 可自动应用，review = 需人工，conflicts = 冲突，skipped = 跳过。 */
-  summary: { auto: number; review: number; conflicts: number; skipped: number };
-  message?: string;
-  reason?: 'remote-empty'; // 远端没有任何快照：首次同步的正常起点，不是故障（客户端据此给「先推送」引导，issue 116）
-}
-
-/**
  * 用户对**单个分区**的裁决（分区粒度：没有冲突项粒度 / 复合 id）。
  *  - useRemote：用远端整分区原值（对键级冲突而言 = 放弃本机该分区里除冲突键以外的改动）；远端没有该分区 → 无法表达删除，计入 pendingConflicts；
  *  - keepLocal ：保持本机整分区原值（本机没有该分区 = 无写入，直接跳过）；
@@ -568,6 +525,10 @@ export class SyncEngine {
     remote: Partial<Record<SectionId, SectionData>>;
     ancestor: Partial<Record<SectionId, SectionData>>;
   } | null = null;
+  /** issue #132：跟随远端删除插件（缺省 false = 既有行为逐字不变） */
+  private readonly deletePlugins: boolean;
+  /** 本插件自己的包名（永不跟随删除；'' = 不设防） */
+  private readonly selfPluginName: string;
 
   constructor(opts: SyncEngineOptions) {
     if (opts.ctx === null || typeof opts.ctx !== 'object') throw new Error(zhMsg('sync.missingCtx'));
@@ -600,6 +561,27 @@ export class SyncEngine {
       (opts.optInSections ?? []).filter((id) => OPT_IN_SYNC_SECTIONS.includes(id)),
     );
     this.retentionPolicyProvider = opts.retentionPolicy ?? (() => DEFAULT_RETENTION_POLICY);
+    this.deletePlugins = opts.deletePlugins === true;
+    this.selfPluginName = opts.selfPluginName ?? '';
+  }
+
+  /** 删除计划（预览与执行共用同一份判据；本机清单读不到 → undefined = 本轮不判也不删）。 */
+  private async pluginRemovalPlan(): Promise<PluginRemovalPlan | undefined> {
+    const inputs = this.lastMergeInputs;
+    if (inputs === null) return undefined;
+    let installed;
+    try {
+      installed = await this.ctx.plugins.listInstalled();
+    } catch {
+      return undefined; // 读不到本机清单 = 无法证明「本机装着」→ 一个都不删（绝不盲删）
+    }
+    return pluginRemovalPlanOf({
+      ancestor: inputs.ancestor['plugins'],
+      remote: inputs.remote['plugins'],
+      installed,
+      enabled: this.deletePlugins,
+      selfName: this.selfPluginName,
+    });
   }
 
   /** 同步只做 portable 分区（deviceSpecific/platformSpecific 永不参与）。
@@ -1536,7 +1518,7 @@ export class SyncEngine {
         if (portableIds.has(id as SectionId)) ancestorPortable[id as SectionId] = data as SectionData;
       }
     }
-    const plan = mergeSections(localSections, remotePortable, ancestorPortable);
+    const plan = mergeSections(localSections, remotePortable, ancestorPortable, { deletePlugins: this.deletePlugins });
     // 结果**经返回值**交给调用方（previewMerge / applyMergeResolutions 都用这一份，不会二次下载）；
     // 这里只留两个进程内备忘：祖先可用性（预览要如实说明「为什么全是冲突」）与三方输入
     // （applyMergeResolutions 要把分区级裁决落回**整分区**数据）。
@@ -1567,12 +1549,17 @@ export class SyncEngine {
     summary.review = split.review.length;
     summary.skipped = split.skipped.length;
     summary.conflicts = plan.sections.filter((s) => s.decision === 'conflict').length;
+    const removalView = pluginRemovalPreviewOf({
+      plan: await this.pluginRemovalPlan(),
+      sections: plan.sections,
+    });
     return {
       ok: true,
       snapshotId,
       hasAncestor: this.lastMergeHadAncestor,
       sections: plan.sections.map(mergePreviewSectionView),
       summary,
+      ...(removalView === undefined ? {} : removalView),
     };
   }
 
@@ -1976,6 +1963,17 @@ export class SyncEngine {
           rollbackFull: rb.full,
         };
       }
+      // 4') issue #132：跟随远端删除插件（手动与自动共享此路径）。必须在 exportAppliedSections
+      //     之前 —— 基线要记录「删完之后」的真实清单，否则祖先仍带着刚删的包、每轮重复提删除。
+      // 4'') undo 线索：删掉的插件写进本次回滚快照，恢复计划据此反向重装；记不上只告警。
+      const pluginStep = await applyPluginRemovalStep({
+        appliedIds, plan: await this.pluginRemovalPlan(), enabled: this.deletePlugins,
+        uninstall: (name) => this.ctx.plugins.uninstall(name), msg: this.msg,
+      });
+      const undoWarnings = await recordPluginRemovalUndo({
+        removals: pluginStep.removals, snapshotId: snapshot.id,
+        record: store.recordPluginRemovals?.bind(store), msg: this.msg,
+      });
       // 5) 全成功 → recordBaseline（更新祖先基线）。
       //    **基线必须以「实际落地的本地导出」为准（F-2，2026-10）**：写回时 adapter 会自增本机侧字段
       //    （如 settings.namespaces[*].revision），而 merged 携带的是**远端快照里的值**；用它记基线
@@ -1990,7 +1988,8 @@ export class SyncEngine {
           restoreId: snapshot.id,
           rolledBack: false,
           review: [],
-          warnings: [...(result.warnings ?? []), this.msg('sync.baselineRexportFailed', { sections: appliedIds.join(', ') })],
+          warnings: [...(result.warnings ?? []), ...pluginStep.warnings, ...undoWarnings, this.msg('sync.baselineRexportFailed', { sections: appliedIds.join(', ') })],
+          ...(pluginStep.removals.length === 0 ? {} : { pluginRemovals: pluginStep.removals, needsRestart: true }),
         };
       }
       await this.recordBaseline(tempSnapshot.id, landed, undefined, {
@@ -2005,7 +2004,9 @@ export class SyncEngine {
         restoreId: snapshot.id,
         rolledBack: false,
         review: [],
-        warnings: result.warnings ?? [],
+        warnings: [...(result.warnings ?? []), ...pluginStep.warnings, ...undoWarnings],
+        // 删过插件必须重启（与安装同语义）：报告不能只说「已应用」
+        ...(pluginStep.removals.length === 0 ? {} : { pluginRemovals: pluginStep.removals, needsRestart: true }),
       };
     } finally {
       try { await fs.rm(path.dirname(zipPath), { recursive: true, force: true }); } catch { /* noop */ }

@@ -32,6 +32,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🆕 新增 · Added
+
+- **同步可以跟随远端删除插件（默认关）**：勾上开关后，远端删掉、你这边没改过的插件会在合并/自动同步时一起卸载，并在报告里逐项列明「已删除：包@版本」；被删的包会记进当轮快照，恢复快照时自动装回同一版本。
+  **Sync can now remove plugins that were deleted remotely (off by default)**: with the switch on, plugins that no longer exist remotely and were untouched locally get uninstalled during merge or auto-sync, each one listed in the report; every removal is recorded in that round's snapshot and reinstalled at the same version when you restore it.
+
 ## [0.7.0] - 2026-11-09
 
 > **同步安静了，也省电了**：运行中心不再每分钟多一张卡片，远端探测降到 5 分钟一轮，本机源插件只在改动后重新打包；Git 通道还能把快照放进仓库里的子目录。

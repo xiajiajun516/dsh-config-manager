@@ -32,7 +32,13 @@ const WAL_KINDS: ReadonlySet<string> = new Set([
   'fileRestore',
   'fileRemove',
   'pluginRemove',
+  'pluginInstall',
 ]);
+
+/** 插件类动作 = 外部副作用（不带文件指纹；reconcile 恒走保守分支）。 */
+export function isExternalPluginKind(kind: string): boolean {
+  return kind === 'pluginRemove' || kind === 'pluginInstall';
+}
 
 export function isWalActionKind(kind: string): boolean {
   return WAL_KINDS.has(kind);
@@ -113,8 +119,8 @@ export function createRestoreWal(journal: RestoreJournalPort | undefined): Resto
           out.push(undefined);
           continue;
         }
-        // 插件卸载：外部副作用，刻意不带指纹（probeExternal 会得 unknown → 保守）。
-        const external = entry.kind === 'pluginRemove';
+        // 插件装卸：外部副作用，刻意不带指纹（probeExternal 会得 unknown → 保守）。
+        const external = isExternalPluginKind(entry.kind);
         const ref = external ? '' : (entry.abs ?? '');
         const beforeFp = external ? null : await restoreFingerprint(entry.abs);
         const id = stepIdOf(entry, ref);
@@ -163,7 +169,7 @@ export function restoreStepId(kind: string, subject: string): string {
 
 /** step id 的 subject 段：插件卸载用包名，其余用绝对路径（拿不到绝对路径时退回流相对 target）。 */
 export function restoreWalSubject(kind: string, pluginName: string | undefined, refOrTarget: string): string {
-  return kind === 'pluginRemove' ? (pluginName ?? refOrTarget) : refOrTarget;
+  return isExternalPluginKind(kind) ? (pluginName ?? refOrTarget) : refOrTarget;
 }
 
 function stepIdOf(entry: RestoreWalEntry, ref: string): string {
@@ -175,7 +181,7 @@ export function restoreActionStepId(
   action: { kind: string; target?: string; pluginName?: string },
   abs: string | null,
 ): string {
-  const ref = action.kind === 'pluginRemove' ? '' : (abs ?? '');
+  const ref = isExternalPluginKind(action.kind) ? '' : (abs ?? '');
   return restoreStepId(action.kind, restoreWalSubject(action.kind, action.pluginName, ref || (action.target ?? '')));
 }
 
@@ -196,7 +202,7 @@ export function collectRestoreWalEntries<A extends { kind: string; target?: stri
       kind: action.kind,
       ...(action.target !== undefined ? { target: action.target } : {}),
       ...(action.pluginName !== undefined ? { pluginName: action.pluginName } : {}),
-      abs: action.kind === 'pluginRemove' || action.target === undefined ? null : absOf(action),
+      abs: isExternalPluginKind(action.kind) || action.target === undefined ? null : absOf(action),
     });
   }
   return { mutating, entries };
@@ -212,7 +218,7 @@ export function restoreWalHandlesFromSteps(
 ): (RestoreWalHandle | undefined)[] {
   return entries.map((entry) => {
     if (!isWalActionKind(entry.kind)) return undefined;
-    const external = entry.kind === 'pluginRemove';
+    const external = isExternalPluginKind(entry.kind);
     const ref = external ? '' : (entry.abs ?? '');
     const id = restoreStepId(entry.kind, restoreWalSubject(entry.kind, entry.pluginName, ref || (entry.target ?? '')));
     const known = steps[id];

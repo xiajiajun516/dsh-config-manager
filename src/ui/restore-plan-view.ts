@@ -96,6 +96,7 @@ function statusOfKind(kind: RestoreActionKind): SnapshotChangeStatus {
     case 'fileRemove':
       return 'deleted';
     case 'pluginRemove':
+    case 'pluginInstall':
       return 'plugin';
     case 'credentialHint':
       return 'hint';

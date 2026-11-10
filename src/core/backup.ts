@@ -20,7 +20,7 @@ import { MCP_CONNECTOR_STORE_REL } from './mcp-connector-store.ts';
 import type { SectionId } from '../schema/types.ts';
 import type {
   ConfigAdapter, FileSystemFacade, HostContext, HostFileBackup, ImportPlan, PlanItem, Snapshot,
-  SnapshotEntry, SnapshotManifest, SnapshotStatus, SnapshotStore, SnapshotTarget,
+  SnapshotEntry, SnapshotManifest, SnapshotPluginRemoval, SnapshotStatus, SnapshotStore, SnapshotTarget,
 } from './types.ts';
 
 /**
@@ -958,6 +958,26 @@ export class FileSnapshotStore implements SnapshotStore {
     const file = path.join(this.snapshotDir(id), 'snapshot.json');
     const snapshot = parseJsonSafe(await fs.readFile(file, 'utf8')) as Snapshot;
     snapshot.status = status;
+    await atomicWriteFile(file, JSON.stringify(snapshot, null, 2));
+  }
+
+  /**
+   * 记录本轮跟删的插件（issue #132 undo 线索）：只重写 snapshot.json 的 pluginRemovals 字段。
+   *
+   * 为什么不像 save() 那样走 finalizeSnapshot：那条路会重算 manifest.blobHashes（本次没有 blob
+   * 可写 → 空 map → 磁盘校验直接判失败）并重跑 verify。这里只补一个**不在 metadataHash 覆盖面内**
+   * 的字段，manifest 与 blob 一字不动，快照的 READY/完整性语义不受影响。
+   */
+  async recordPluginRemovals(id: string, removals: SnapshotPluginRemoval[]): Promise<void> {
+    if (removals.length === 0) return;
+    const file = path.join(this.snapshotDir(id), 'snapshot.json');
+    const snapshot = parseJsonSafe(await fs.readFile(file, 'utf8')) as Snapshot;
+    // 同日多次应用：保留既有记录（append 而不是覆盖），undo 才能把每一轮删的都装回来
+    const merged = [...(snapshot.pluginRemovals ?? [])];
+    for (const r of removals) {
+      if (!merged.some((m) => m.name === r.name)) merged.push(r);
+    }
+    snapshot.pluginRemovals = merged;
     await atomicWriteFile(file, JSON.stringify(snapshot, null, 2));
   }
 }

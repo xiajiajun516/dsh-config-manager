@@ -259,6 +259,14 @@ export interface PluginsFacade {
    * signal 可选：中止时宿主应 kill 子进程并清理半装状态（恢复 package.json + 删 node_modules/<pkg>）。
    */
   install(pkg: string, target?: string, signal?: AbortSignal): Promise<{ needsRestart: boolean; installedVersion?: string | null }>;
+  /**
+   * 卸载插件（issue #132 跟随远端删除；`dsh plugin remove <pkg>`）。
+   *
+   * 失败即抛（消息经 `classifyDshPluginFailure` 给出可操作诊断，例如 desktop 保留档案被 CLI 拒绝）。
+   * 调用方逐项记录 warning、**不阻断**其余项：一次卸载失败不该让整轮同步回滚。
+   * `signal` 中止语义与 install 一致（宿主 kill 子进程）。
+   */
+  uninstall(pkg: string, signal?: AbortSignal): Promise<{ needsRestart: boolean }>;
 }
 
 export interface WorkspaceFacade {
@@ -1021,6 +1029,21 @@ export interface HostFileBackup {
   unreadable?: boolean;
 }
 
+/**
+ * 一轮同步里**跟随远端删除**掉的插件（issue #132）。
+ *
+ * 为什么写进快照：undo 必须能把用户装回去 —— 删插件是不可逆的外部副作用，只有快照记得
+ * 「删的是谁、哪个版本」。有意**不进** computeMetadataHash（它只覆盖 entries/hostFileBackups/
+ * beforePlugins 三样破坏性内容），因此记录它不需要重写 manifest 与 blob。
+ */
+export interface SnapshotPluginRemoval {
+  name: string;
+  /** 删除时本机已装的版本（快照记的是事实；重装用 target = name@version） */
+  version: string;
+  /** 重装目标（name@version；版本未知时就是裸包名） */
+  target: string;
+}
+
 export interface Snapshot {
   id: string;
   createdAt: string;
@@ -1030,6 +1053,8 @@ export interface Snapshot {
   status?: SnapshotStatus;
   /** 导入前已安装插件清单（M2 restore 撤销插件时与当前已装对比）。旧快照缺省 */
   beforePlugins?: PluginInfo[];
+  /** 本轮跟随远端删除的插件（issue #132；restore 计划里对称地重装）。旧快照缺省 */
+  pluginRemovals?: SnapshotPluginRemoval[];
   /** 宿主整文件备份（settings.yaml / settings.json / cordis.patch.yml / profiles/<p>/cordis.patch.yml）。旧快照缺省 */
   hostFileBackups?: HostFileBackup[];
   /**
@@ -1079,6 +1104,12 @@ export interface SnapshotStore {
   readBlob(id: string, blobPath: string): Promise<Uint8Array>;
   /** 标记快照生命周期状态（导入成功→done；失败回滚→rolled-back；持久化由实现负责） */
   updateStatus(id: string, status: SnapshotStatus): Promise<void>;
+  /**
+   * 记录「本轮跟删掉的插件」（issue #132）：只重写 snapshot.json 的这一个字段，
+   * 不动 manifest 与 blob（它不在 metadataHash 覆盖面内）。不可用时调用方**跳过记录**并靠
+   * 报告里的重装目标人工兜底，绝不因为记不上就中止同步。
+   */
+  recordPluginRemovals?(id: string, removals: SnapshotPluginRemoval[]): Promise<void>;
 }
 
 /**

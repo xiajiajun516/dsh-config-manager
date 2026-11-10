@@ -84,6 +84,11 @@ export interface SyncChannelSettings {
   sessionsInclude: readonly string[]
   encrypt: boolean
   includeSecrets: boolean
+  /**
+   * 跟随远端删除插件（issue #132，缺省 **false**）：祖先有、远端没有、本机未改过的插件
+   * 会执行 `dsh plugin remove`。勾上 = 用户显式授权手动合并与自动同步都删。
+   */
+  deletePlugins: boolean
   encryptPassword: string
   encryptPasswordConfirm: string
   /** 本机凭据库里是否已有密码（只回布尔，值永不回浏览器） */
@@ -151,6 +156,7 @@ export interface SyncSelectionRequestBody {
   sessionsInclude: string[]
   encrypt: boolean
   includeSecrets: boolean
+  deletePlugins: boolean
   encryptPassword?: string
   decryptPassword?: string
   clearEncryptPassword?: boolean
@@ -164,6 +170,7 @@ export interface SyncSelectionPatch {
   sessionsInclude?: string[]
   encrypt?: boolean
   includeSecrets?: boolean
+  deletePlugins?: boolean
   encryptPassword?: string
   decryptPassword?: string
   clearEncryptPassword?: boolean
@@ -177,6 +184,7 @@ export interface SyncChannelSettingsPatch {
   sessionsInclude?: string[]
   encrypt?: boolean
   includeSecrets?: boolean
+  deletePlugins?: boolean
   encryptPassword?: string
   encryptPasswordConfirm?: string
   encryptPasswordSaved?: boolean
@@ -192,6 +200,7 @@ export interface SyncChannelBackfill {
   sessionsInclude: string[]
   encrypt: boolean
   includeSecrets: boolean
+  deletePlugins: boolean
   encryptPasswordSaved: boolean
   decryptPasswordSaved: boolean
   autosyncEnabled: boolean
@@ -204,6 +213,7 @@ export interface SyncSelectionLike {
   sessionsInclude?: string[]
   encrypt?: boolean
   includeSecrets?: boolean
+  deletePlugins?: boolean
 }
 
 /** 按通道的自动同步状态（/sync/status 的 autosyncByChannel[ch]）。 */
@@ -565,6 +575,7 @@ export function buildSelectionRequest(
     sessionsInclude: [...(patch.sessionsInclude ?? current.sessionsInclude)],
     encrypt: patch.encrypt ?? current.encrypt,
     includeSecrets: patch.includeSecrets ?? current.includeSecrets,
+    deletePlugins: patch.deletePlugins ?? current.deletePlugins,
     ...(patch.encryptPassword !== undefined && patch.encryptPassword !== ''
       ? { encryptPassword: patch.encryptPassword }
       : {}),
@@ -731,6 +742,7 @@ export function channelBackfillFromStatus(input: {
     sessionsInclude: [...(selection?.sessionsInclude ?? [])],
     encrypt: selection?.encrypt ?? false,
     includeSecrets: selection?.includeSecrets ?? false,
+    deletePlugins: selection?.deletePlugins ?? false,
     encryptPasswordSaved: credentials?.encryptPasswordConfigured ?? false,
     decryptPasswordSaved: credentials?.decryptPasswordConfigured ?? false,
     autosyncEnabled: autosync?.enabled ?? false,

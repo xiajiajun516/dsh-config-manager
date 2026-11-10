@@ -20,7 +20,7 @@ import type { SectionId } from '../schema/types.ts';
 test('writeSyncSelection + readSyncSelection：advanced 模式写入 → 读回字段一致（git 通道）', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-rt-'));
   try {
-    await writeSyncSelection(dir, 'git', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, sessionsInclude: [], encrypt: true, includeSecrets: true });
+    await writeSyncSelection(dir, 'git', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, sessionsInclude: [], encrypt: true, includeSecrets: true, deletePlugins: false });
     const sel = await readSyncSelection(dir, 'git');
     assert.equal(sel.mode, 'advanced');
     assert.deepEqual(sel.sections, ['settings', 'skills']);
@@ -86,12 +86,12 @@ test('readSyncSelection：非法 mode / 非字符串 sections 元素 → 过滤�
 
 test('effectiveSections：advanced + 非空 → 勾选分区；default / advanced 空勾选 → undefined（全量）', () => {
   assert.deepEqual(
-    effectiveSections({ schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, sessionsInclude: [], encrypt: false, includeSecrets: false }),
+    effectiveSections({ schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, sessionsInclude: [], encrypt: false, includeSecrets: false, deletePlugins: false }),
     ['settings', 'skills'],
   );
   assert.equal(effectiveSections(defaultSyncSelection()), undefined, 'default 模式 = 全量推荐分区');
   assert.equal(
-    effectiveSections({ schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: [], sessionsLimit: 5, sessionsInclude: [], encrypt: false, includeSecrets: false }),
+    effectiveSections({ schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: [], sessionsLimit: 5, sessionsInclude: [], encrypt: false, includeSecrets: false, deletePlugins: false }),
     undefined,
     'advanced 但未勾选 → 回退全量（避免自动同步卡死）',
   );
@@ -114,8 +114,8 @@ test('readSyncSelection：includeSecrets 但未 encrypt（持久化被篡改）�
 test('按通道独立：写 webdav 不影响 git，反之亦然', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-perchannel-'));
   try {
-    await writeSyncSelection(dir, 'git', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'default', sections: [], sessionsLimit: 5, sessionsInclude: [], encrypt: false, includeSecrets: false });
-    await writeSyncSelection(dir, 'webdav', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, sessionsInclude: [], encrypt: true, includeSecrets: true });
+    await writeSyncSelection(dir, 'git', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'default', sections: [], sessionsLimit: 5, sessionsInclude: [], encrypt: false, includeSecrets: false, deletePlugins: false });
+    await writeSyncSelection(dir, 'webdav', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, sessionsInclude: [], encrypt: true, includeSecrets: true, deletePlugins: false });
     const git = await readSyncSelection(dir, 'git');
     assert.equal(git.mode, 'default', 'git 通道保持 default');
     const webdav = await readSyncSelection(dir, 'webdav');
@@ -231,7 +231,7 @@ test('sessionsLimit: 缺省 5、写盘读回一致、非法值回退缺省、超
 
     await writeSyncSelection(dir, 'git', {
       schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced',
-      sections: ['settings', 'sessions'], sessionsLimit: 3, sessionsInclude: [], encrypt: false, includeSecrets: false,
+      sections: ['settings', 'sessions'], sessionsLimit: 3, sessionsInclude: [], encrypt: false, includeSecrets: false, deletePlugins: false,
     });
     const sel = await readSyncSelection(dir, 'git');
     assert.equal(sel.sessionsLimit, 3, '写盘读回一致');
@@ -265,7 +265,7 @@ test('sessionsInclude: 缺省空数组、写盘读回一致、非法条目被丢
     const picks = ['sessions:--p--/a', 'sessions:--p--/b'];
     await writeSyncSelection(dir, 'git', {
       schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced',
-      sections: ['sessions'], sessionsLimit: 5, sessionsInclude: picks, encrypt: false, includeSecrets: false,
+      sections: ['sessions'], sessionsLimit: 5, sessionsInclude: picks, encrypt: false, includeSecrets: false, deletePlugins: false,
     });
     assert.deepEqual((await readSyncSelection(dir, 'git')).sessionsInclude, picks, '写盘读回一致');
 
@@ -300,6 +300,28 @@ test('normalizeSessionsLimit: 只有非负整数被接受', () => {
   assert.equal(normalizeSessionsLimit('5'), DEFAULT_SYNC_SESSIONS_LIMIT);
   assert.equal(normalizeSessionsLimit(undefined), DEFAULT_SYNC_SESSIONS_LIMIT);
   assert.equal(normalizeSessionsLimit(999999), 10000);
+});
+
+test('deletePlugins: 缺省关、写盘读回一致、旧文件缺字段 = 关、落盘白名单不漏字段（issue #132）', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-del-plugins-'));
+  try {
+    assert.equal(defaultSyncSelection().deletePlugins, false, '破坏性开关缺省必须关');
+    // 文件不存在 ⇒ 缺省（关）
+    assert.equal((await readSyncSelection(dir, 'git')).deletePlugins, false);
+    // 开 → 读回 true（含落盘白名单：漏写会静默丢字段，P0-3 教训）
+    await writeSyncSelection(dir, 'git', { ...defaultSyncSelection(), deletePlugins: true });
+    assert.equal((await readSyncSelection(dir, 'git')).deletePlugins, true);
+    const raw = JSON.parse(await fs.readFile(path.join(dir, SYNC_SELECTION_FILE), 'utf8'));
+    assert.equal(raw.channels.git.deletePlugins, true);
+    // 旧文件（无该字段）⇒ 关：升级不得自己把破坏性开关打开
+    const legacy = JSON.parse(await fs.readFile(path.join(dir, SYNC_SELECTION_FILE), 'utf8'));
+    delete legacy.channels.git.deletePlugins;
+    await fs.writeFile(path.join(dir, SYNC_SELECTION_FILE), JSON.stringify(legacy), 'utf8');
+    assert.equal((await readSyncSelection(dir, 'git')).deletePlugins, false);
+    // 关回去也要落盘（重新保存表单 = 明确关掉）
+    await writeSyncSelection(dir, 'git', { ...defaultSyncSelection(), deletePlugins: false });
+    assert.equal((await readSyncSelection(dir, 'git')).deletePlugins, false);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
 test('OPT_IN_SYNC_SECTIONS: 只含需要用户显式勾选的可选分区，凭据类分区永不入选', () => {

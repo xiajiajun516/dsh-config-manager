@@ -44,7 +44,11 @@ test('契约 ①：previewMerge 返回的字段集合 = 冻结类型（含冲突
   try {
     const a = await setupConflict(root);
     const preview = (await a.engine.previewMerge()) as unknown as Record<string, unknown>;
-    const allowed = new Set(['ok', 'snapshotId', 'hasAncestor', 'sections', 'summary', 'message']);
+    // issue #132 追加三个插件删除视图字段（plugins 分区可应用时才出现）：同属冻结契约。
+    const allowed = new Set([
+      'ok', 'snapshotId', 'hasAncestor', 'sections', 'summary', 'message',
+      'pluginRemovals', 'pluginRemovalConflicts', 'pluginRemovalSkipped',
+    ]);
     for (const key of Object.keys(preview)) {
       assert.ok(allowed.has(key), 'previewMerge 出现未声明字段: ' + key);
     }
@@ -81,7 +85,7 @@ test('契约 ①b：applyMergeResolutions 报告 = ApplyReport + pendingConflict
   try {
     const a = await setupConflict(root);
     const report = (await a.engine.applyMergeResolutions([{ id: 'settings', action: 'skip' }])) as unknown as Record<string, unknown>;
-    const allowed = new Set(['ok', 'applied', 'restoreId', 'rolledBack', 'review', 'warnings', 'rollbackFull', 'pendingConflicts']);
+    const allowed = new Set(['ok', 'applied', 'restoreId', 'rolledBack', 'review', 'warnings', 'rollbackFull', 'pendingConflicts', 'pluginRemovals']);
     for (const key of Object.keys(report)) {
       assert.ok(allowed.has(key), 'applyMergeResolutions 出现未声明字段: ' + key);
     }

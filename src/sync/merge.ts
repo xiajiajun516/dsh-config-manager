@@ -32,8 +32,9 @@
 import type { FilesSection, SectionData, SectionId } from '../schema/types.ts';
 import { hashSection } from './sync-state.ts';
 import { mergeBytesThreeWay, mergeJsonValues, type TextMergeConflict } from './text-merge.ts';
+import { mergePluginsSection } from './plugin-removals.ts';
 import { mergeWorkspacesSection } from './workspace-merge.ts';
-import type { GranularMerger } from './workspace-merge.ts';
+import type { GranularMergeHooks, GranularMerger } from './workspace-merge.ts';
 
 /**
  * 分区级决胜结果（三方合并，2026-10 收口）：
@@ -298,6 +299,10 @@ function mergeFilesSectionGranular(
  */
 const GRANULAR_MERGES: Partial<Record<SectionId, GranularMerger>> = {
   workspaces: mergeWorkspacesSection,
+  // plugins（issue #132）：plugins 是**数组**，通用 JSON 合并对「两侧各自改过」一律判冲突 ——
+  // 本机装了 Y、远端删了 X 就会整分区冲突，X 永远删不掉、Y 也永远同步不出去。
+  // 钩子按包名做三方逐条判定（本地新增保留 / 远端删除跟随 / 版本冲突交人工）。
+  plugins: mergePluginsSection,
 };
 
 /** 单分区三方合并（决策链见文件头注释）。 */
@@ -307,6 +312,7 @@ function mergeSectionTriple(
   rData: SectionData | undefined,
   aData: SectionData | undefined,
   h: TripleHashes,
+  hooks: GranularMergeHooks,
 ): MergeSectionResult {
   // ⓪ 形状闸门（先于一切取舍）：远端载荷来自不可信输入（解析层只保证整体是合法 JSON，
   //    不保证每个分区的值形状正确）。值形状不对时**绝不原样采用** —— 那等于把畸形数据
@@ -366,7 +372,7 @@ function mergeSectionTriple(
   //    没有祖先时也应并集（否则首轮同步就整分区冲突），字段取值分歧由钩子逐键如实报冲突。
   const granular = GRANULAR_MERGES[id];
   if (granular !== undefined) {
-    const res = granular(local, remote, aData);
+    const res = granular(local, remote, aData, hooks);
     if (res !== undefined) {
       if (res.conflicts.length > 0) return { id, decision: 'conflict', conflicts: res.conflicts };
       const merged = res.merged;
@@ -433,6 +439,7 @@ export function merge(
   local: Partial<Record<SectionId, SectionData>>,
   remote: Partial<Record<SectionId, SectionData>>,
   ancestor?: Partial<Record<SectionId, SectionData>>,
+  hooks: GranularMergeHooks = {},
 ): MergePlan {
   const l = local as Record<string, SectionData>;
   const r = remote as Record<string, SectionData>;
@@ -441,7 +448,7 @@ export function merge(
   const hashes = computeHashes(l, r, a, ids);
   const results: MergeSectionResult[] = [];
   for (const id of ids) {
-    results.push(mergeSectionTriple(id, l[id], r[id], a ? a[id] : undefined, hashes.get(id)!));
+    results.push(mergeSectionTriple(id, l[id], r[id], a ? a[id] : undefined, hashes.get(id)!, hooks));
   }
   return { sections: results };
 }

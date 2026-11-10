@@ -349,6 +349,11 @@ export interface ChannelSyncState {
   encrypt: boolean
   /** 手动推送默认导出真实凭据值（持久化开关；必须同时 encrypt） */
   includeSecrets: boolean
+  /**
+   * 跟随远端删除插件（issue 132；持久化开关，缺省关）。
+   * 勾上即授权手动合并与自动同步都执行 `dsh plugin remove`。
+   */
+  deletePlugins: boolean
   /** 加密密码输入框（仅内存；已保存的密码在 DSH 凭据库里，不回显） */
   encryptPassword: string
   /** 加密密码确认（仅内存） */
@@ -398,6 +403,7 @@ export function defaultChannelSyncState(): ChannelSyncState {
     sessionsInclude: [],
     encrypt: false,
     includeSecrets: false,
+    deletePlugins: false,
     encryptPassword: '',
     encryptPasswordConfirm: '',
     decryptPassword: '',

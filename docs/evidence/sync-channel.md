@@ -571,7 +571,7 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 
 **守卫**（`src/core/local-plugin-host.test.ts`）：源没变 → 第二轮 `calls()` 仍为 1 且字节逐字相同；改 `lib/index.js` 的 mtime → 重新打包；`packedCacheMaxBytes: 0` → 两轮都真打。
 
-## 跟随远端删除插件（issue #132 评估）：删除语义的现状、唯一可行闸门与缺口（2026-11-10，triage 期核实）
+## 跟随远端删除插件（issue #132）：删除语义的判定、执行通道与 undo（2026-11-10 实现完成，前半段为 triage 期核实）
 
 **现状（逐条对照源码，非推测）**：
 
@@ -593,8 +593,14 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 
 这条裁决构成对 G-20 第②条前置（「逐项确认 UI，不得并入自动应用」）的**受控破例**：依据是插件可回滚（`beforePlugins` 基线 + 重装通道）而会话字节不可回滚；破例只覆盖 `plugins` 分区，`sessions` 仍受 G-20 全约束（已回填 `docs/known-issues/known-gaps.md` 的 G-20 行）。
 
-**实现时必须一起改的回滚缺口**：`planRestore` 只算「导入期间新增 → 卸载」，删除项要可回滚必须补「基线有、当前没有 → 用 `name@version/spec` 装回」的 `pluginInstall` 分支；`pluginRemove` 记 `external=true`、不带指纹（`docs/known-issues/known-limits.md:77`），重装结果只能靠回读版本判成功。
+**已交付（2026-11-10，issue #132 实现完成）** —— 判据、执行、undo 三段拆开：
 
-**待实现的守卫清单**（做的时候一条一个测试）：A 卸载 → B 删除；B 新装不删；B 改版不删且报冲突；开关关不删（降级 `Skip` 并写明原因）；开关开 → 手动与自动都删且必须落 undo + 报告列明；`bundlesOnly`/本插件自身不删；祖先缺失不删；删除失败逐项 warning 不阻断；`desktop` 档案被拒记 warning 不阻断；回滚能重装被删插件。
+- **判据（纯函数，唯一事实源）**：`src/sync/plugin-removals.ts` 的 `planPluginRemovals()`。顺序：无祖先 → 空计划；远端仍有 → `still-in-remote`；`name === selfName` → `self`；任一侧 `isBundlesOnlyEntry` → `bundles-only`；本机未装 → `not-installed`；开关关 → `switch-off`（**不是删，也不是静默**，执行侧发逐项 warning）；`local.version !== ancestor.version` → `version-changed` 冲突；其余才进 `removals`。
+- **合并粒度**：同文件 `mergePluginsSection()` 注册进 `GRANULAR_MERGES['plugins']`（`src/sync/merge.ts:300`），按包名三方合并 —— 本机新装 Y 保留、远端删且本机未改跟随删、本机改版又遇远端删 → `modify-delete` 冲突。走分区钩子而不是通用 JSON 合并的原因：数组两侧各改在通用口径下必然整分区冲突，「本机装 Y + 远端删 X」会被误判。
+- **执行（唯一通道）**：`SyncEngine.applyMergePlan` 调 `applyPluginRemovalStep()`（`src/sync/plugin-removal-apply.ts`；调用点 `src/sync/sync-engine.ts:1968`）在 `applyMergePlan` 内、`exportAppliedSections()` **之前**执行（否则基线记的还是刚删掉的包，每轮重复提删除）。卸载经新增的 `PluginsFacade.uninstall()`（`src/core/types.ts`，实现 = `runDshPlugin ['remove', name]` + `uninstallErrorFor()` 分类）。自动同步 Phase B 直接调 `applyMergePlan`，故开关开启时手动与自动共享同一份判据，scheduler 内**没有**第二条卸载路径（源码守卫）。
+- **undo**：成功卸载后把 `{name, version, target}` 写入当轮兜底快照的 `snapshot.pluginRemovals`（`SnapshotStore.recordPluginRemovals()`，`src/core/backup.ts:971`；**有意不进 `computeMetadataHash`**，否则要重写 manifest/blob 校验）。恢复侧新增对称分支 `pluginInstall`（`src/core/restore.ts:740-762` 计划、`1077-1090` 执行，`defaultPluginInstaller` = `dsh plugin add name@version`）；**只认记录过的名字**，不按 `beforePlugins` 差集反推（手动卸载/换包也会让基线名字消失，按差集重装等于替用户改主意）。
+- **开关**：`SyncSelection.deletePlugins`（`src/sync/sync-selection.ts:70`）缺省 `false`，落在落盘白名单里（`:261`，漏写会静默丢字段）；`makeSyncEngine` 注入 `SyncEngineOptions.deletePlugins` 与 `selfPluginName`（`src/index.ts:2774`、`:2776`）；`/sync/selection` 只认 `body.deletePlugins === true`（`src/routes/sync.ts:1225`）；UI 开关落在同步分区选择弹窗的 plugins 行（只在勾了 plugins 分区时才出现）。
+
+**守卫（一条一个测试，已全部落地）**：A 卸载 → B 删除 / B 新装不删 / B 改版不删且报冲突 / 开关关不删且逐项 warning / 开关开 → 手动与自动都删且落 undo + 报告列明 / `bundlesOnly` 与本插件自身不删 / 祖先缺失不删 / 删除失败逐项 warning 不阻断 / `desktop` 档案被拒记 warning 不阻断 / 回滚能重装被删插件 —— 覆盖在 `src/sync/plugin-removals.test.ts`（判据 16 例）、`src/sync/sync-engine.test.ts`（引擎行为 6 例 + 单通道源码守卫）、`src/core/restore-plugin-install.test.ts`（undo 三例）、`src/sync/sync-selection.test.ts`（开关持久化）。
 
 

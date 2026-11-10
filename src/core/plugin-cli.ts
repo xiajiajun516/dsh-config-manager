@@ -811,6 +811,43 @@ export function classifyDshPluginFailure(output: string): DshPluginFailure | nul
   return null
 }
 
+/**
+ * 卸载一个插件（issue #132 的唯一写入口）：`dsh plugin remove`，不自己改 package.json。
+ *
+ * 为什么不复用安装后的 reconcileBundlesAfterInstall：对账是「安装成功后补一次」的写操作，
+ * 卸载后 bundles 由 CLI 自己收尾；这里再补一次只会在失败语义上制造歧义。
+ */
+export async function uninstallViaCli(
+  homeDir: string,
+  profile: string,
+  pkg: string,
+  runner: (profileDir: string, profile: string, argv: readonly string[], input?: undefined, signal?: AbortSignal) => Promise<DshPluginResult>,
+  signal?: AbortSignal,
+): Promise<{ needsRestart: boolean }> {
+  const result = await runner(resolveProfileDir(homeDir, profile), profile, ['remove', pkg], undefined, signal)
+  if (result.exitCode !== 0 || result.timedOut) throw uninstallErrorFor(pkg, result)
+  return { needsRestart: true }
+}
+
+/** 卸载失败（issue #132）→ 与安装同一套分类口径的双语可读 Error。 */
+export function uninstallErrorFor(pkg: string, result: DshPluginResult): Error {
+  if (result.spawnError !== undefined && /ENOENT|EINVAL/.test(result.spawnError)) {
+    return new Error(engineMsg('core.pluginCli.dshCliStartFailed', { spawnError: result.spawnError, pkg }))
+  }
+  if (result.timedOut) {
+    return new Error(engineMsg('core.pluginCli.uninstallTimeout', { pkg }))
+  }
+  const output = `${result.stderr}\n${result.stdout}`
+  const failure = classifyDshPluginFailure(output)
+  if (failure !== null) {
+    return new Error(engineMsg('core.pluginCli.uninstallFailed', { pkg, code: failure.code, message: failure.message }))
+  }
+  const tail = (result.stderr.trim().split('\n').slice(-8).join('\n')
+    || result.stdout.trim().split('\n').slice(-8).join('\n')
+    || engineMsg('core.pluginCli.noOutput'))
+  return new Error(engineMsg('core.pluginCli.uninstallFailedWithTail', { pkg, exitCode: String(result.exitCode), tail }))
+}
+
 /** 安装失败 → 分类后的双语可读 Error；未识别则保留 stderr 尾部摘要。 */
 export function installErrorFor(pkg: string, result: DshPluginResult): Error {
   if (result.spawnError !== undefined && /ENOENT|EINVAL/.test(result.spawnError)) {

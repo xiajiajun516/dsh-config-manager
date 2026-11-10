@@ -132,34 +132,36 @@ test('merge: 深层嵌套 JSON 合并（不同叶子自动合，未知字段两�
   assert.equal(merged.ui['remoteOnly'], true, '远端新增的未知字段不得被静默丢弃');
 });
 
+// 注意：这里**故意**用 settings 的普通数组做样本。plugins 自 issue #132 起有了按包名的专属
+// 合并钩子（见 plugin-removals.test.ts），不再走通用「数组两侧各改即冲突」的口径。
 test('merge: 数组双侧都改且不同 → conflict(reason=array)，不按索引猜', () => {
-  const anc: SectionData = { version: 1, plugins: [{ spec: 'a' }] } as unknown as SectionData;
-  const loc: SectionData = { version: 1, plugins: [{ spec: 'a' }, { spec: 'b' }] } as unknown as SectionData;
-  const rem: SectionData = { version: 1, plugins: [{ spec: 'c' }] } as unknown as SectionData;
-  const plan = merge({ plugins: loc }, { plugins: rem }, { plugins: anc });
+  const anc: SectionData = { version: 1, list: [{ spec: 'a' }] } as unknown as SectionData;
+  const loc: SectionData = { version: 1, list: [{ spec: 'a' }, { spec: 'b' }] } as unknown as SectionData;
+  const rem: SectionData = { version: 1, list: [{ spec: 'c' }] } as unknown as SectionData;
+  const plan = merge({ settings: loc }, { settings: rem }, { settings: anc });
   const r = plan.sections[0]!;
   assert.equal(r.decision, 'conflict');
-  assert.equal(r.conflicts[0]!.path, 'plugins');
+  assert.equal(r.conflicts[0]!.path, 'list');
   assert.equal(r.conflicts[0]!.reason, 'array');
 });
 
 test('merge: 数组仅一侧改 → 采纳该侧（另一侧键的改动同时保住）', () => {
-  const anc: SectionData = { version: 1, plugins: [{ spec: 'a' }], note: 'x' } as unknown as SectionData;
-  const loc: SectionData = { version: 1, plugins: [{ spec: 'a' }, { spec: 'b' }], note: 'x' } as unknown as SectionData;
-  const rem: SectionData = { version: 1, plugins: [{ spec: 'a' }], note: 'y' } as unknown as SectionData;
-  const plan = merge({ plugins: loc }, { plugins: rem }, { plugins: anc });
+  const anc: SectionData = { version: 1, list: [{ spec: 'a' }], note: 'x' } as unknown as SectionData;
+  const loc: SectionData = { version: 1, list: [{ spec: 'a' }, { spec: 'b' }], note: 'x' } as unknown as SectionData;
+  const rem: SectionData = { version: 1, list: [{ spec: 'a' }], note: 'y' } as unknown as SectionData;
+  const plan = merge({ settings: loc }, { settings: rem }, { settings: anc });
   const r = plan.sections[0]!;
   assert.equal(r.decision, 'merge');
-  const merged = r.merged as unknown as { plugins: unknown[]; note: string };
-  assert.equal(merged.plugins.length, 2);
+  const merged = r.merged as unknown as { list: unknown[]; note: string };
+  assert.equal(merged.list.length, 2);
   assert.equal(merged.note, 'y');
 });
 
 test('merge: 数组双侧改成相同结果 → 收敛为一份（不算冲突）', () => {
-  const anc: SectionData = { version: 1, plugins: [{ spec: 'a' }] } as unknown as SectionData;
-  const loc: SectionData = { version: 1, plugins: [{ spec: 'a' }, { spec: 'b' }] } as unknown as SectionData;
-  const rem: SectionData = { version: 1, plugins: [{ spec: 'a' }, { spec: 'b' }] } as unknown as SectionData;
-  const plan = merge({ plugins: loc }, { plugins: rem }, { plugins: anc });
+  const anc: SectionData = { version: 1, list: [{ spec: 'a' }] } as unknown as SectionData;
+  const loc: SectionData = { version: 1, list: [{ spec: 'a' }, { spec: 'b' }] } as unknown as SectionData;
+  const rem: SectionData = { version: 1, list: [{ spec: 'a' }, { spec: 'b' }] } as unknown as SectionData;
+  const plan = merge({ settings: loc }, { settings: rem }, { settings: anc });
   assert.equal(plan.sections[0]!.decision, 'skip');
 });
 

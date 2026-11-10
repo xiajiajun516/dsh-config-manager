@@ -782,12 +782,14 @@ function makeEngineWithMockImporter(opts: {
   stateDir: string;
   localSnapshotsDir?: string;
   mockImporter: MockImporter;
+  /** 追加引擎选项（issue #132：deletePlugins / selfPluginName 等） */
+  extra?: Partial<ConstructorParameters<typeof SyncEngine>[0]>;
 }) {
   // 把 mock 注入到 SyncEngine 的 importer 槽位 —— Importer 是类，类型上不能完全替换；
   // 这里用对象字面量 duck-type 兼容 Importer 的三个方法。
   return makeEngine({
     ...opts,
-    extra: { importer: opts.mockImporter as unknown as Importer },
+    extra: { ...opts.extra, importer: opts.mockImporter as unknown as Importer },
   });
 }
 
@@ -2052,6 +2054,28 @@ test('P0-23 源码守卫：autosync-scheduler 以 snapshotBinding 调 applyMerge
   assert.ok(
     call.includes('snapshotBinding'),
     'autosync-scheduler 必须把 intent ctx 作为 snapshotBinding 传给 applyMergePlan，实际调用片段：' + call,
+  );
+});
+
+/**
+ * issue #132 源码守卫：跟远端删插件只有**一条**执行通道 —— applyMergePlan。
+ * 自动同步（autosync-scheduler Phase B）直接调 applyMergePlan，因此手动「合并并应用」与自动同步
+ * 天然共享同一份删除判据（用户勾开关即授权，见 maintainer 裁决）；一旦有人在 scheduler 里
+ * 另开一条卸载路径，判据就会分叉成两套（开关关也删 / 不记 undo）。
+ */
+test('issue #132 源码守卫：跟删只在 applyMergePlan 内执行，自动同步不得另开卸载通道', async () => {
+  const scheduler = await fs.readFile(new URL('./autosync-scheduler.ts', import.meta.url), 'utf8');
+  assert.ok(
+    !scheduler.includes('uninstall') && !scheduler.includes('plugin-removals'),
+    'autosync-scheduler 不得自己判删/卸载：它只经 applyMergePlan 落盘',
+  );
+  const engine = await fs.readFile(new URL('./sync-engine.ts', import.meta.url), 'utf8');
+  const stepIdx = engine.indexOf('await applyPluginRemovalStep({');
+  const reexportIdx = engine.indexOf('exportAppliedSections(appliedIds)');
+  assert.ok(stepIdx > 0, 'applyMergePlan 内应有 applyPluginRemovalStep 调用');
+  assert.ok(
+    reexportIdx > stepIdx,
+    '删除必须发生在 exportAppliedSections 之前：否则基线记的还是刚删掉的包，每轮重复提删除',
   );
 });
 
@@ -3322,6 +3346,232 @@ test('issue #127: apply 阶段会话必须伴随工作区落地 —— 只应用
       ['s-local', 's-remote'],
       '本机既有会话归属不得被覆盖，远端会话也要挂上（否则导入的会话在目标机完全不显示）',
     );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+
+/* ---------------- issue #132：跟随远端删除插件（开关 + 三方判据 + undo 线索） ---------------- */
+
+/** 本轮被远端删掉的插件（seedSource 装的那一个） */
+const GONE_PLUGIN = '@deepseek-ai/dsh-ssh';
+
+/** 远端快照：settings 变了，plugins 分区里**没有** GONE_PLUGIN（= 另一台机器卸载了它）。 */
+function mkRemoteWithoutPlugin(id: string, createdAt: string): SyncSnapshot {
+  return {
+    id,
+    createdAt,
+    manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['settings', 'plugins'], containsSecrets: false },
+    sections: {
+      settings: {
+        version: 1,
+        namespaces: { general: { value: { theme: 'light', language: 'zh-CN' }, revision: 9, secrets: [] } },
+      },
+      plugins: { version: 1, plugins: [], patch: [] },
+    },
+  };
+}
+
+/**
+ * 摆好「本机推过基线（祖先副本里有 GONE_PLUGIN）→ 远端把它删了」的局面。
+ * 返回的引擎尚未 merge —— 每个用例自己决定 merge / previewMerge / applyMergePlan。
+ */
+async function arrangeRemoteDeletedPlugin(opts: {
+  tmp: string;
+  engineExtra?: Partial<ConstructorParameters<typeof SyncEngine>[0]>;
+  /** 推基线之后再动本机（模拟「推完又在本机升级了它」） */
+  afterBaseline?: (ctx: ReturnType<typeof makeContext>) => void;
+}) {
+  const ctx = makeContext('win32', 'C:\\Users\\alice');
+  seedSource(ctx);
+  const transport = new MemSyncTransport();
+  const mock = new MockImporter();
+  mock.ok = true;
+  const engine = makeEngineWithMockImporter({
+    ctx,
+    transport,
+    stateDir: opts.tmp,
+    localSnapshotsDir: path.join(opts.tmp, 'snapshots'),
+    mockImporter: mock,
+    ...(opts.engineExtra === undefined ? {} : { extra: opts.engineExtra }),
+  });
+  const baseline = await engine.push({ snapshotId: 'sync-132-base' });
+  assert.equal(baseline.ok, true, '基线推送必须成功: ' + baseline.warnings.join(' | '));
+  assert.ok(baseline.sections.includes('plugins'), 'plugins 是 portable 分区，必须进基线');
+  const remote = mkRemoteWithoutPlugin('sync-132-remote', '2026-08-16T13:00:00.000Z');
+  transport.snapshots.set(remote.id, remote);
+  transport.metas.push(computeSnapshotMeta(remote));
+  opts.afterBaseline?.(ctx);
+  return { ctx, transport, engine, mock };
+}
+
+/**
+ * 把 plugins 分区塞进 autoApply：真实流程里 riskTier=medium 会先落到 review（确认页），
+ * 用户确认后 applyMergeResolutions 复用同一条 applyMergePlan 路径 —— 删除判定就在那一步。
+ * 这里直接构造「用户已确认」的 apply 计划，等价于确认后的调用形态。
+ */
+function applyPlanIncludingPlugins(plan: Awaited<ReturnType<SyncEngine['merge']>>): SyncApplyPlan {
+  const base = buildAutoApplyPlan(plan);
+  const plugins = plan.sections.find((s) => s.id === 'plugins');
+  return {
+    autoApply: [...base.autoApply.filter((r) => r.id !== 'plugins'), ...(plugins === undefined ? [] : [plugins])],
+    review: [],
+    skipped: [],
+  };
+}
+
+test('issue #132: 开关开 + 祖先有远端无 → 卸载插件，报告给出重装目标', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-132-remove-'));
+  try {
+    const { ctx, engine } = await arrangeRemoteDeletedPlugin({
+      tmp,
+      engineExtra: { deletePlugins: true },
+    });
+    const plan = await engine.merge();
+    const plugins = plan.sections.find((s) => s.id === 'plugins');
+    assert.ok(plugins, 'plugins 分区必须参与合并');
+    assert.notEqual(plugins!.decision, 'conflict', '本机未改、远端删了 → 不是冲突: ' + JSON.stringify(plugins!.conflicts));
+    const report = await engine.applyMergePlan(applyPlanIncludingPlugins(plan));
+    assert.equal(report.ok, true, '整轮同步必须成功: ' + report.warnings.join(' | '));
+    assert.equal(ctx.plugins.installed.has(GONE_PLUGIN), false, '必须跟随远端删除');
+    assert.equal(ctx.plugins.lastUninstalled, GONE_PLUGIN, '只允许删那一个（不得误删本机新装的）');
+    assert.deepEqual(report.pluginRemovals, [{
+      name: GONE_PLUGIN,
+      version: '1.0.0',
+      reinstallTarget: GONE_PLUGIN + '@1.0.0',
+      ok: true,
+    }], '报告必须逐项列明删了什么、怎么装回');
+    assert.ok(
+      report.warnings.some((w) => w.includes('已跟随远端删除插件')),
+      '用户必须能看到删了哪个: ' + report.warnings.join(' | '),
+    );
+    assert.equal(report.needsRestart, true, '删过插件必须要求重启，报告不能只说「已应用」');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #132: 开关关（缺省）→ 一个都不删，但如实说明「开启后会删」', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-132-off-'));
+  try {
+    const { ctx, engine } = await arrangeRemoteDeletedPlugin({ tmp });
+    const plan = await engine.merge();
+    const report = await engine.applyMergePlan(applyPlanIncludingPlugins(plan));
+    assert.equal(report.ok, true, report.warnings.join(' | '));
+    assert.equal(ctx.plugins.installed.has(GONE_PLUGIN), true, '开关关 → 绝不卸载');
+    assert.equal(ctx.plugins.lastUninstalled, undefined, '开关关 → 不得调用 uninstall');
+    assert.equal(report.pluginRemovals, undefined, '没删任何东西 → 报告不列删除项');
+    assert.ok(
+      report.warnings.some((w) => w.includes('未开启')),
+      '必须提示候选而不是静默保留: ' + report.warnings.join(' | '),
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #132: 卸载被拒（desktop 保留档案）→ 逐项 warning、整轮仍 ok、不阻断其余项', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-132-fail-'));
+  try {
+    const { ctx, engine } = await arrangeRemoteDeletedPlugin({
+      tmp,
+      engineExtra: { deletePlugins: true },
+    });
+    ctx.plugins.failUninstall = true; // 模拟 CLI 拒绝：profile "desktop" is managed exclusively…
+    const plan = await engine.merge();
+    const report = await engine.applyMergePlan(applyPlanIncludingPlugins(plan));
+    assert.equal(report.ok, true, '一次卸载失败不该让整轮回滚: ' + report.warnings.join(' | '));
+    assert.equal(ctx.plugins.installed.has(GONE_PLUGIN), true, '卸载失败 = 本机还装着（不做本地假删）');
+    assert.equal(report.pluginRemovals?.length, 1, '失败项也要进报告（逐项可见）');
+    assert.equal(report.pluginRemovals![0]!.ok, false);
+    assert.match(report.pluginRemovals![0]!.message ?? '', /desktop/, '原因要原样带出（用户据此判断是不是保留档案）');
+    assert.ok(
+      report.warnings.some((w) => w.includes('删除插件') && w.includes('失败')),
+      '必须逐项告警: ' + report.warnings.join(' | '),
+    );
+    assert.ok(report.applied.includes('settings'), '其余分区照旧落地');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #132: 本机改过版本 + 远端删了 → 冲突、不删、不猜', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-132-conflict-'));
+  try {
+    const { ctx, engine } = await arrangeRemoteDeletedPlugin({
+      tmp,
+      engineExtra: { deletePlugins: true },
+      // 推完基线又在本机升级了它 → 与祖先不同 = 用户在动它，不许替用户卸载
+      afterBaseline: (c) => {
+        c.plugins.installed.set(GONE_PLUGIN, { name: GONE_PLUGIN, version: '1.1.0', enabled: true });
+      },
+    });
+    const preview = await engine.previewMerge();
+    assert.equal(preview.ok, true, 'preview 必须成功: ' + (preview.message ?? ''));
+    assert.deepEqual(preview.pluginRemovalConflicts, [{
+      name: GONE_PLUGIN,
+      ancestorVersion: '1.0.0',
+      localVersion: '1.1.0',
+    }], '确认页必须说明「远端删了、本机改过」');
+    const plan = await engine.merge();
+    const plugins = plan.sections.find((s) => s.id === 'plugins');
+    assert.equal(plugins!.decision, 'conflict', 'modify-delete 必须交人工裁决');
+    const report = await engine.applyMergePlan(buildAutoApplyPlan(plan));
+    assert.equal(ctx.plugins.installed.has(GONE_PLUGIN), true, '有冲突 → 一个都不删');
+    assert.equal(ctx.plugins.lastUninstalled, undefined);
+    assert.equal(report.pluginRemovals, undefined, '冲突项不进删除报告（在 review 里）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #132: 无祖先（首次同步）→ 不删任何插件（无法区分「对方删了」与「本机独有」）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-132-noanc-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    mock.ok = true;
+    // 从未 push → 没有祖先副本
+    const remote = mkRemoteWithoutPlugin('sync-132-first', '2026-08-16T13:00:00.000Z');
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+    const engine = makeEngineWithMockImporter({
+      ctx,
+      transport,
+      stateDir: tmp,
+      localSnapshotsDir: path.join(tmp, 'snapshots'),
+      mockImporter: mock,
+      extra: { deletePlugins: true },
+    });
+    const preview = await engine.previewMerge();
+    assert.equal(preview.ok, true);
+    assert.deepEqual(preview.pluginRemovals, [], '没有祖先 → 不给删除清单（空清单，不是「未知」）');
+    const plan = await engine.merge();
+    const report = await engine.applyMergePlan(applyPlanIncludingPlugins(plan));
+    assert.equal(ctx.plugins.installed.has(GONE_PLUGIN), true, '无祖先不得删除');
+    assert.equal(ctx.plugins.lastUninstalled, undefined);
+    assert.equal(report.pluginRemovals, undefined);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #132: previewMerge 单列「将删除」清单（且预览绝不真的删）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-132-preview-'));
+  try {
+    const { ctx, engine } = await arrangeRemoteDeletedPlugin({
+      tmp,
+      engineExtra: { deletePlugins: true },
+    });
+    const preview = await engine.previewMerge();
+    assert.equal(preview.ok, true);
+    assert.deepEqual(preview.pluginRemovals, [{ name: GONE_PLUGIN, version: '1.0.0' }], '确认页必须能列出将删除项');
+    assert.deepEqual(preview.pluginRemovalConflicts, [], '本机没改过 → 无冲突');
+    assert.equal(ctx.plugins.installed.has(GONE_PLUGIN), true, '预览是只读的，绝不卸载');
+    assert.equal(ctx.plugins.lastUninstalled, undefined);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

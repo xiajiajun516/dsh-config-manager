@@ -1208,7 +1208,7 @@ export interface RestorePlanView {
 
 /** 危险动作判定：会改动磁盘的分区（skip / credentialHint 不算）。 */
 function isDangerousRestoreKind(kind: string): boolean {
-  return kind === 'hostFileRestore' || kind === 'hostFileRemove' || kind === 'fileRestore' || kind === 'fileRemove' || kind === 'pluginRemove'
+  return kind === 'hostFileRestore' || kind === 'hostFileRemove' || kind === 'fileRestore' || kind === 'fileRemove' || kind === 'pluginRemove' || kind === 'pluginInstall'
 }
 
 /** 本机 DSH 包名（T8-F3；与 core/restore.ts 的 `DSH_PACKAGE_NAME` 同值 —— 两处读的是同一个文件）。 */

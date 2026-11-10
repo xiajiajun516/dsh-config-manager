@@ -43,7 +43,7 @@ const planOf = (kinds: RestoreActionKind[]): RestorePlan => ({
   sourceZip: 'dsh-config.zip',
   actions: kinds.map((kind) => ({ kind, description: kind })),
   summary: {
-    hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0,
+    hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0, pluginInstalls: 0,
     fileRestores: 0, fileRemoves: 0, credentialHints: 0, skips: 0,
   },
   pluginBaselineConfirmed: false,

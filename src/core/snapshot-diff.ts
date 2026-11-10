@@ -139,6 +139,7 @@ function statusOf(kind: RestoreActionKind, beforeExists: boolean): SnapshotChang
     case 'fileRemove':
       return 'deleted';
     case 'pluginRemove':
+    case 'pluginInstall':
       return 'plugin';
     case 'credentialHint':
       return 'hint';
@@ -293,7 +294,7 @@ export async function summarizeRestoreChanges(opts: {
       entries.push(entry);
       continue;
     }
-    if (action.kind === 'pluginRemove') entry.status = 'plugin';
+    if (action.kind === 'pluginRemove' || action.kind === 'pluginInstall') entry.status = 'plugin';
     else if (action.kind === 'credentialHint') entry.status = 'hint';
     else entry.status = 'skip';
     entries.push(entry);

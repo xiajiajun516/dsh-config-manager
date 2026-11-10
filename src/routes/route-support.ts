@@ -32,7 +32,7 @@ import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { engineMsg } from '../core/engine-locale.ts'
 import { createPreRestoreAttemptDir } from '../core/restore.ts'
 import type { RestoreActionKind, RestorePlan, RestoreReport } from '../core/restore.ts'
-import { collectRestoreWalEntries, createRestoreWal, restoreActionStepId, restoreWalHandlesFromSteps } from '../core/restore-wal.ts'
+import { collectRestoreWalEntries, createRestoreWal, isExternalPluginKind, restoreActionStepId, restoreWalHandlesFromSteps } from '../core/restore-wal.ts'
 import type { RestoreResumeHint } from '../core/restore-resume.ts'
 import type { RestoreJournalPort, RestoreWalHandle, RestoreWalSettleStatus } from '../core/restore-wal.ts'
 import type { SyncConfig, SyncTransportType } from '../sync/sync-config.ts'
@@ -554,6 +554,8 @@ export interface RestoreExecutor {
   removeHome(relPath: string): Promise<void>
   /** 卸载插件（官方通道）；失败返回 { ok:false, message } */
   uninstallPlugin(name: string): Promise<{ ok: boolean; message?: string }>
+  /** 装回跟远端删掉的插件（官方通道，issue 132 的反向）；失败返回 { ok:false, message } */
+  installPlugin(name: string, target: string): Promise<{ ok: boolean; message?: string }>
   /**
    * home 相对路径 → 磁盘绝对路径（逐动作 WAL 用：journal 的 ref 必须是绝对路径，
    * reconcile 的 verifyStepFingerprint 直接拿它读盘算指纹）。缺省 = 不登记 WAL。
@@ -578,6 +580,7 @@ export async function executeRestorePlan(
     snapshotId: plan.snapshotId,
     restored: [],
     removedPlugins: [],
+    installedPlugins: [],
     manualHints: [],
     failed: [],
     skipped: [],
@@ -589,7 +592,7 @@ export async function executeRestorePlan(
   const walByAction = new Map<(typeof plan.actions)[number], RestoreWalHandle | undefined>()
   const resume = resumeHint
   const absOf = (action: (typeof plan.actions)[number]): string | null =>
-    action.kind === 'pluginRemove' || action.target === undefined || exec.absPath === undefined
+    isExternalPluginKind(action.kind) || action.target === undefined || exec.absPath === undefined
       ? null
       : exec.absPath(action.target)
   if (wal !== null && exec.absPath !== undefined) {
@@ -651,6 +654,21 @@ export async function executeRestorePlan(
             const reason = result.message ?? engineMsg('restore.pluginRemoveFailed')
             report.failed.push({ item: `plugin:${action.pluginName}`, reason })
             // 外部副作用没做成 → attention（绝不记 done）
+            settleStatus = 'attention'
+            settleMessage = reason
+          }
+          break
+        }
+        case 'pluginInstall': {
+          const name = action.pluginName
+          const target = action.pluginTarget ?? name
+          if (name === undefined || target === undefined) throw new Error(engineMsg('restore.missingPluginName'))
+          const result = await exec.installPlugin(name, target)
+          if (result.ok) {
+            report.installedPlugins.push(target)
+          } else {
+            const reason = result.message ?? engineMsg('restore.pluginInstallFailed')
+            report.failed.push({ item: `plugin:${name}`, reason })
             settleStatus = 'attention'
             settleMessage = reason
           }
@@ -719,6 +737,13 @@ export function makeRestoreExecutor(snapshotDir: string, host: HostContext, prof
       const output = `${result.stderr}\n${result.stdout}`.trim()
       const tail = output.split('\n').slice(-8).join('\n') || msgOf(host)('host.restoreNoOutput')
       return { ok: false, message: msgOf(host)('host.restoreUninstallFailed', { name, code: String(result.exitCode), tail }) }
+    },
+    installPlugin: async (name, target) => {
+      const result = await runDshPlugin(profileDir, profile, ['add', target])
+      if (result.exitCode === 0) return { ok: true }
+      const output = `${result.stderr}\n${result.stdout}`.trim()
+      const tail = output.split('\n').slice(-8).join('\n') || msgOf(host)('host.restoreNoOutput')
+      return { ok: false, message: engineMsg('restore.installFailedExit', { name, code: String(result.exitCode), tail }) }
     },
   }
 }

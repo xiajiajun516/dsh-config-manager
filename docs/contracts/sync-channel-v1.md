@@ -138,6 +138,7 @@ git 通道的 `subdir`（缺省空 = 仓库根，issue #131）让多个工具各
 | `mode` / `sections` | 缺省 `mode='default'` = 全部 portable 且 `defaultIncluded` 的分区（`src/sync/sync-selection.ts:101`、`:134-139`，此时 `sections` 不参与）；只有 `mode='advanced'` 且 `sections` 非空才以勾选集合为范围 |
 | `sessionsLimit` | `sessions` 勾选时只带「最新 N 个」（按会话日志 mtime 倒序；0 = 不带） |
 | `sessionsInclude` | **显式点名的会话单元**；非空时**优先于 `sessionsLimit`**（用户点名的必须赢） |
+| `deletePlugins` | 缺省 `false`。开启后跟随远端删除插件：只删「共同祖先还有它、远端没有、本机未改过版本」的包，且只在 plugins 分区本轮真正应用那一轮执行（`src/sync/plugin-removals.ts` 的 `planPluginRemovals`）；关着时合并钩子不参与，行为与引入该字段前逐字一致。宿主自身与 `bundlesOnly` 条目永不删 |
 | `retention`（远端保留） | 来自 `backup-schedule.json`：远端快照裁剪走 GFS（keepLast/keepMonthly/keepYearly），缺省 = 最近 10 个（与旧硬编码 FIFO 逐字等价） |
 
 ## 6. 云端点通道（s3 / gist）的配置形状与密钥纪律

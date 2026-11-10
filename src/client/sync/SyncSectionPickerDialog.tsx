@@ -32,7 +32,7 @@ import css from '../config-manager.module.css'
  * （与导出选择器一致的弹窗语义），因此底部只有「完成」—— 没有「取消」
  * （取消会让用户以为改动被丢弃）。
  */
-export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, sessionNode, sessionPending, sessionFailed, onToggleSection, onSessionsLimit, onSessionsInclude, onClose }: {
+export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, deletePlugins, sessionNode, sessionPending, sessionFailed, onToggleSection, onSessionsLimit, onSessionsInclude, onToggleDeletePlugins, onClose }: {
   t: TranslateNS<'config-manager-sync'>
   /** ui 命名空间的翻译器（UiT）：分区描述与分组说明的**字典键**由它解析（英文界面零中文） */
   uiT: UiT
@@ -45,6 +45,8 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
   sessionsLimit: number
   /** 显式点名的会话单元 id（非空时优先于 sessionsLimit） */
   sessionsInclude: readonly string[]
+  /** 跟随远端删除插件（issue 132；只在 plugins 分区被勾选时可操作） */
+  deletePlugins: boolean
   /** 会话单元清单（未取到 / 读取失败 → undefined） */
   sessionNode: SelectionSection | undefined
   sessionPending: boolean
@@ -53,6 +55,7 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
   onSessionsLimit: (value: number) => void
   /** 点名结果（空数组 = 回到「最新 N 个」模式） */
   onSessionsInclude: (ids: string[]) => void
+  onToggleDeletePlugins: (next: boolean) => void
   onClose: () => void
 }) {
   /** 弹窗内的两个视图：分区目录 / 会话逐项勾选（同一 Modal，不嵌套第二个遮罩） */
@@ -176,6 +179,19 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
                               </Button>
                             )}
                           </div>
+                        </div>
+                      )}
+                      {/* issue 132：插件专属的「跟随远端删除」。放在 Checkbox **之外**（同 sessions
+                          参数的理由：Checkbox 内部是 label，嵌进去点开关会连带切换分区勾选）。
+                          只在 plugins 已被勾选时出现 —— 没勾这个分区，这条开关没有任何作用对象。 */}
+                      {s.id === 'plugins' && sections.includes('plugins') && (
+                        <div className={css.controlRow}>
+                          <Checkbox
+                            checked={deletePlugins}
+                            onChange={onToggleDeletePlugins}
+                            label={<span className={css.categoryName}>{t('mode.deletePlugins')}</span>}
+                          />
+                          <InfoHint text={t('mode.deletePluginsHint')} label={t('common.infoHint')} />
                         </div>
                       )}
                     </div>

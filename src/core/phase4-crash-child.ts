@@ -53,7 +53,7 @@ async function main(): Promise<void> {
       describe: async (ref: string) => ({ value: { theme: 'dark' }, revision: 1, secrets: [] }),
     },
     credentials: { describe: async () => ({ configured: false }) },
-    plugins: { listInstalled: async () => [] },
+    plugins: { listInstalled: async () => [], uninstall: async () => ({ needsRestart: true }) },
     workspace: { listRecords: async () => [] },
     patchFile: { readPatchLines: async () => [] },
     log: { warn: () => {} },

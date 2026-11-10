@@ -64,6 +64,7 @@ function settings(overrides: Partial<SyncChannelSettings> = {}): SyncChannelSett
     sessionsInclude: [],
     encrypt: false,
     includeSecrets: false,
+    deletePlugins: false,
     encryptPassword: '',
     encryptPasswordConfirm: '',
     encryptPasswordSaved: false,
@@ -265,6 +266,8 @@ test('sync-settings-view: 通道回填 —— 无持久化 → 缺省值；密�
     sessionsInclude: [],
     encrypt: false,
     includeSecrets: false,
+    // 宿主没给 selection → 破坏性开关缺省关（issue #132）
+    deletePlugins: false,
     encryptPasswordSaved: false,
     decryptPasswordSaved: false,
     autosyncEnabled: false,
@@ -288,6 +291,17 @@ test('sync-settings-view: 通道回填 —— 持久化值优先；用户主动�
   assert.equal(backfill.decryptPasswordSaved, true)
   assert.equal(backfill.autosyncEnabled, true)
   assert.equal(backfill.autosyncInterval, '6h')
+  // issue #132：开关以宿主 selection 为权威；宿主没给（undefined）= 关
+  assert.equal(backfill.deletePlugins, false)
+
+  const switchedOn = channelBackfillFromStatus({
+    selection: { sessionsLimit: 12, deletePlugins: true },
+    autosync: { enabled: true, interval: '6h' },
+    credentials: { encryptPasswordConfigured: true, decryptPasswordConfigured: true },
+    persistedSections: [],
+    sessionsLimit: 12,
+  })
+  assert.equal(switchedOn.deletePlugins, true)
 })
 
 /* ------------------------------------ 分区选择请求体 + 配置保存状态机 */
@@ -302,6 +316,8 @@ test('sync-settings-view: 分区选择请求体 —— 未给出的字段沿用�
     sessionsInclude: [],
     encrypt: true,
     includeSecrets: true,
+    // issue #132：破坏性开关必须显式随请求体发出（缺省关）
+    deletePlugins: false,
   })
 
   const patched = buildSelectionRequest('git', current, { sections: ['settings'], encryptPassword: '', decryptPassword: 'D' })
@@ -312,6 +328,10 @@ test('sync-settings-view: 分区选择请求体 —— 未给出的字段沿用�
   const clearing = buildSelectionRequest('git', current, { clearEncryptPassword: true, encryptPassword: 'new' })
   assert.equal(clearing.clearEncryptPassword, true)
   assert.equal(clearing.encryptPassword, 'new', '删除与写入可同时出现（Host 侧删除优先）')
+
+  // issue #132：开关只由 patch 携带；未给时沿用当前通道值，不会被静默关掉
+  assert.equal(buildSelectionRequest('git', settings({ deletePlugins: true })).deletePlugins, true)
+  assert.equal(buildSelectionRequest('git', current, { deletePlugins: true }).deletePlugins, true)
 })
 
 test('sync-settings-view: 保存防重入状态机 —— 在途期间的改动结束后补发，flush 优先待发', () => {

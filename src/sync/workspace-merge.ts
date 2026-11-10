@@ -32,11 +32,20 @@ export interface GranularMergeOutcome {
   mergePoints: number;
 }
 
+/**
+ * 钩子可读的合并上下文：目前只有 plugins 需要 —— 「跟随远端删除插件」是用户开关，
+ * 关着时钩子必须**不参与**（交给通用路径 = 与未引入 #132 前逐字一致），否则会静默丢掉本机条目。
+ */
+export interface GranularMergeHooks {
+  deletePlugins?: boolean;
+}
+
 /** 记录级合并钩子签名（`merge.ts` 按分区 id 调用；返回 undefined = 不参与，走通用路径）。 */
 export type GranularMerger = (
   local: SectionData,
   remote: SectionData,
   ancestor: SectionData | undefined,
+  hooks?: GranularMergeHooks,
 ) => GranularMergeOutcome | undefined;
 
 function isWorkspaces(data: SectionData | undefined): data is WorkspacesSection {

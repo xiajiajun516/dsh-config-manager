@@ -14,7 +14,7 @@ function plan(): RestorePlan {
     createdAt: '2026-09-21T00:00:00.000Z',
     sourceZip: 'x.zip',
     pluginBaselineConfirmed: true,
-    summary: { hostFileRestores: 1, hostFileRemoves: 1, pluginRemoves: 1, fileRestores: 1, fileRemoves: 0, credentialHints: 1, skips: 3 },
+    summary: { hostFileRestores: 1, hostFileRemoves: 1, pluginRemoves: 1, pluginInstalls: 0, fileRestores: 1, fileRemoves: 0, credentialHints: 1, skips: 3 },
     actions: [
       { kind: 'hostFileRestore', description: '整文件还原 settings.yaml', target: 'settings.yaml', blobPath: 'blobs/a', detail: '会先备份' },
       { kind: 'fileRestore', description: '还原文件 skills/x.md', target: 'skills/x.md', blobPath: 'blobs/b' },

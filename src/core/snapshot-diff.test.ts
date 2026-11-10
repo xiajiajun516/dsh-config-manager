@@ -52,7 +52,7 @@ function planWith(actions: RestorePlan['actions']): RestorePlan {
     createdAt: '2026-09-21T00:00:00.000Z',
     sourceZip: 'x.zip',
     pluginBaselineConfirmed: true,
-    summary: { hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0, fileRestores: 0, fileRemoves: 0, credentialHints: 0, skips: 0 },
+    summary: { hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0, pluginInstalls: 0, fileRestores: 0, fileRemoves: 0, credentialHints: 0, skips: 0 },
     actions,
   };
 }

@@ -459,6 +459,8 @@ export function createModelTools(deps: ModelToolsDeps) {
             hostFileRestores: plan.summary.hostFileRestores,
             hostFileRemoves: plan.summary.hostFileRemoves,
             pluginRemoves: plan.summary.pluginRemoves,
+            // issue #132：undo 会反向装回跟删过的插件，计数单独给出（agent 不必自己数 actions）
+            pluginInstalls: plan.summary.pluginInstalls,
             fileRestores: plan.summary.fileRestores,
             fileRemoves: plan.summary.fileRemoves,
             credentialHints: plan.summary.credentialHints,

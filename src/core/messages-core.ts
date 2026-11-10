@@ -363,6 +363,9 @@ export const zh = {
   'core.pluginCli.installFailed': '安装 {pkg} 失败（{code}）：{message}',
   'core.pluginCli.noOutput': '无输出',
   'core.pluginCli.installFailedWithTail': 'dsh plugin 安装 {pkg} 失败（exit {exitCode}）：{tail}',
+  'core.pluginCli.uninstallTimeout': '卸载 {pkg} 超时（进程已终止）：请稍后重试 / remove {pkg} timed out (process killed): retry later',
+  'core.pluginCli.uninstallFailed': '卸载 {pkg} 失败（{code}）：{message}',
+  'core.pluginCli.uninstallFailedWithTail': 'dsh plugin remove {pkg} 失败（exit {exitCode}）：{tail}',
 
   // ---------- migration-consult ----------
   'core.consult.compatNoManifest': '无法评估兼容性：manifest 缺失',
@@ -725,6 +728,9 @@ export const en: Record<keyof typeof zh, string> = {
   'core.pluginCli.installFailed': 'install {pkg} failed ({code}): {message}',
   'core.pluginCli.noOutput': 'no output',
   'core.pluginCli.installFailedWithTail': 'dsh plugin install {pkg} failed (exit {exitCode}): {tail}',
+  'core.pluginCli.uninstallTimeout': 'remove {pkg} timed out (process killed): retry later',
+  'core.pluginCli.uninstallFailed': 'remove {pkg} failed ({code}): {message}',
+  'core.pluginCli.uninstallFailedWithTail': 'dsh plugin remove {pkg} failed (exit {exitCode}): {tail}',
 
   // ---------- migration-consult ----------
   'core.consult.compatNoManifest': 'cannot assess compatibility: the manifest is missing',

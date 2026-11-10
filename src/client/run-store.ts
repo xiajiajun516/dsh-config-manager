@@ -1035,16 +1035,14 @@ export function toPersistedState(state: StoreState): PersistedState {
     syncMode: c.syncMode,
     syncSections: [...c.syncSections],
     sessionsLimit: c.sessionsLimit,
-    // 历史对话的显式点名清单（非敏感配置；空 = 「最新 N 个」模式）
-    sessionsInclude: [...c.sessionsInclude],
+    sessionsInclude: [...c.sessionsInclude], // 显式点名清单（非敏感；空 = 「最新 N 个」模式）
     encrypt: c.encrypt,
     includeSecrets: c.includeSecrets,
+    deletePlugins: c.deletePlugins, // issue 132：用户配置、非敏感，必须落盘
     selectedSnapshotId: c.selectedSnapshotId,
     // 快照列表按值复制，避免落盘对象与运行时切片共享可变数组
     snapshots: [...c.snapshots],
-    // issue #59 的读失败诊断：属于「远端当下的状态」而非用户配置，**不落盘**
-    // （刷新/切 tab 后重新 list 会重新得到，落盘只会在远端恢复后留下陈旧告警）
-    loadingSnapshots: c.loadingSnapshots === true,
+    loadingSnapshots: c.loadingSnapshots === true, // issue #59：远端当下诊断，不落盘（落盘只会留下陈旧告警）
     autosync: c.autosync,
     autosyncEnabled: c.autosyncEnabled,
     autosyncInterval: c.autosyncInterval,
@@ -1674,6 +1672,7 @@ export class RunStore {
               sessionsInclude: [],
               encrypt: legacySync['encrypt'] === true,
               includeSecrets: legacySync['includeSecrets'] === true,
+              deletePlugins: legacySync['deletePlugins'] === true, // 旧载荷无此字段 → 缺省关（破坏性操作必须显式开启）
               selectedSnapshotId: typeof legacySync['selectedSnapshotId'] === 'string'
                 ? legacySync['selectedSnapshotId']
                 : '',

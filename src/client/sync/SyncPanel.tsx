@@ -132,6 +132,8 @@ interface SelectionPatch {
   sessionsInclude?: string[]
   encrypt?: boolean
   includeSecrets?: boolean
+  /** 跟随远端删除插件（issue 132；破坏性，缺省关） */
+  deletePlugins?: boolean
   /** 非空 = 写入本机凭据库（长期复用） */
   encryptPassword?: string
   decryptPassword?: string
@@ -969,6 +971,12 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     void saveSelection(channel, linked.selectionPatch)
   }
 
+  /** 「跟随远端删除插件」开关（issue 132；勾上 = 显式授权手动与自动都删，执行在宿主 applyMergePlan）。 */
+  const setDeletePlugins = (channel: SyncChannel, next: boolean): void => {
+    patchChannelOf(channel, { deletePlugins: next })
+    void saveSelection(channel, { deletePlugins: next })
+  }
+
   /** 当前通道导出密钥开关（持久化）。勾选时自动联动选中加密（密钥绝不明文进同步通道）。 */
   const setIncludeSecrets = (channel: SyncChannel, next: boolean): void => {
     // t42：勾「导出密钥」自动打开加密（密钥绝不明文上行）——规则在 ui/sync-settings-view.ts
@@ -1430,12 +1438,14 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             sections={chState.syncSections}
             sessionsLimit={chState.sessionsLimit}
             sessionsInclude={chState.sessionsInclude}
+            deletePlugins={chState.deletePlugins}
             sessionNode={sessionPickerNode}
             sessionPending={sessionInvPending}
             sessionFailed={sessionInvFailedRef.current}
             onToggleSection={(id, checked) => { toggleSyncSection(state.channel, id, checked) }}
             onSessionsLimit={(value) => { setSessionsLimit(state.channel, value) }}
             onSessionsInclude={(ids) => { setSessionsInclude(state.channel, ids) }}
+            onToggleDeletePlugins={(next) => { setDeletePlugins(state.channel, next) }}
             onClose={() => { setSectionPickerOpen(false) }}
           />
           {/* v3：页面级的加密/解密/快照列表卡已移入各自的通道卡（见 renderChannelCard）。 */}

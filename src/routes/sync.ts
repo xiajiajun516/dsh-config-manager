@@ -1220,6 +1220,9 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           encrypt: body['encrypt'] === true,
           // 安全兜底：includeSecrets 必须同时 encrypt（密钥绝不明文进同步通道）
           includeSecrets: body['includeSecrets'] === true && body['encrypt'] === true,
+          // issue #132：跟随远端删除插件。缺省关；请求体非 true 一律按关处理
+          // （重新保存表单时收起开关 = 明确关掉，不留上一次的 true）
+          deletePlugins: body['deletePlugins'] === true,
         }
         // 加密/解密密码持久化（用户要求：勾选即记住，取消勾选或主动删除才清）。
         // 值只写进 DSH credentials（绝不进 sync-selection.json / 日志 / 响应）；

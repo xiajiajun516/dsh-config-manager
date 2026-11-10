@@ -168,6 +168,16 @@ export class MemPlugins implements PluginsFacade {
     this.installed.set(pkg, { name: pkg, version: '1.0.0', enabled: true, spec });
     return { needsRestart: true };
   }
+  /** 测试钩子：卸载失败（模拟 desktop 保留档案被 CLI 拒绝） */
+  failUninstall = false;
+  /** 最近一次 uninstall 收到的包名（验证只删该删的那个） */
+  lastUninstalled: string | undefined;
+  async uninstall(pkg: string): Promise<{ needsRestart: boolean }> {
+    if (this.failUninstall) throw new Error(`profile "desktop" is managed exclusively by the Electron application`);
+    this.lastUninstalled = pkg;
+    this.installed.delete(pkg);
+    return { needsRestart: true };
+  }
 }
 
 export class MemWorkspace implements WorkspaceFacade {

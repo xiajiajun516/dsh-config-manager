@@ -92,7 +92,7 @@ import { ROLLBACK_ACTIVITY_FILE_NAME, RollbackSessionActivity } from './core/rol
 import { isRollbackEnabled, onRollbackEnabledChange, setRollbackEnabled } from './core/rollback-gate.ts'
 // t3：宿主斜杠命令 /rollback（与 HTTP 路由同一道写入门；命令服务惰取，未组合时安静跳过）。
 import { agentSessionFactsOf, registerRollbackCommand, type CommandServiceLike, type RollbackCommandHost } from './core/command-rollback.ts'
-import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, readInstalledVersion, reconcileBundlesAfterInstall, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
+import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, uninstallViaCli, readInstalledVersion, reconcileBundlesAfterInstall, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
 import { ImportUserSkippedError, type ConfigAdapter, type CredentialsFacade, type ExportUnit, type FileSystemFacade, type HostContext, type ImportDecisions, type ImportPlan, type NamedNamespaceInfo, type NamespaceInfo, type PatchFileFacade, type PluginInfo, type PluginsFacade, type Portability, type SecretScanner, type SessionFormatDisposition, type SessionMoveResult, type SessionParentRelation, type SessionRewriteResult, type SessionStoreFacade, type SettingsFacade, type SkillDefinitionView, type SkillStoreFacade, type SkillSummaryView, type WorkspaceFacade } from './core/types.ts'
 import { PLUGIN_NPM_PACKAGE } from './core/update-check.ts'
 import { planSelfUpdate, runSelfUpdate, type SelfUpdateOutcome } from './core/self-update.ts'
@@ -596,6 +596,11 @@ export class DshPluginsFacade implements PluginsFacade {
     }
     // 回读实际落盘版本：调用方据此校验升级是否真的生效（issue #101），而不是只看子进程退出码。
     return { needsRestart: true, installedVersion: readInstalledVersion(profileDir, pkg) }
+  }
+
+  /** 卸载插件（issue #132）：走官方 CLI `dsh plugin remove`，不自己改 package.json、也不补对账。 */
+  uninstall(pkg: string, signal?: AbortSignal): Promise<{ needsRestart: boolean }> {
+    return uninstallViaCli(this.homeDir, this.profile, pkg, this.runner, signal)
   }
 }
 
@@ -2240,7 +2245,7 @@ export interface PluginDiagnostics {
   bundles: string[]
 }
 
-type SelectionView = { mode: SyncSelectionMode; sections: SectionId[]; sessionsLimit: number; sessionsInclude: string[]; encrypt: boolean; includeSecrets: boolean }
+type SelectionView = { mode: SyncSelectionMode; sections: SectionId[]; sessionsLimit: number; sessionsInclude: string[]; encrypt: boolean; includeSecrets: boolean; deletePlugins: boolean }
 
 
 /**
@@ -2641,21 +2646,17 @@ function makeRoutes(deps: RoutesDeps): {
 
   /** 全部通道的分区选择视图（status 路由一次返回；UI 按当前 tab 取对应通道）。 */
   /** 指定通道的分区选择视图。 */
-  const selectionView = async (channel: SyncTransportType): Promise<SelectionView> => {
-    const sel = await ensureSelectionLoaded(channel)
-    return { mode: sel.mode, sections: sel.sections, sessionsLimit: sel.sessionsLimit, sessionsInclude: sel.sessionsInclude, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets }
-  }
+  /** SyncSelection → SelectionView（字段白名单；密码值永不进视图）。 */
+  const toSelectionView = (sel: SyncSelection): SelectionView =>
+    ({ mode: sel.mode, sections: sel.sections, sessionsLimit: sel.sessionsLimit, sessionsInclude: sel.sessionsInclude, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets, deletePlugins: sel.deletePlugins })
+
+  const selectionView = async (channel: SyncTransportType): Promise<SelectionView> => toSelectionView(await ensureSelectionLoaded(channel))
 
   const selectionViewByChannel = async (): Promise<Record<SyncTransportType, SelectionView>> => {
     const all = await readAllSyncSelections(syncDir)
-    const view = (sel: SyncSelection): SelectionView =>
-      ({ mode: sel.mode, sections: sel.sections, sessionsLimit: sel.sessionsLimit, sessionsInclude: sel.sessionsInclude, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets })
     // 通道集合来自唯一枚举（SYNC_CHANNELS）；不得穷举字面量（漏一处即该通道状态静默缺失）
     const out = {} as Record<SyncTransportType, SelectionView>
-    for (const channel of SYNC_CHANNELS) {
-      selectionCache[channel] = all[channel]
-      out[channel] = view(all[channel])
-    }
+    for (const channel of SYNC_CHANNELS) { selectionCache[channel] = all[channel]; out[channel] = toSelectionView(all[channel]) }
     return out
   }
 
@@ -2757,7 +2758,8 @@ function makeRoutes(deps: RoutesDeps): {
       transport = makeGitTransport(cfg.git.repoUrl, cfg.git.subdir)
     }
     const channel: SyncTransportType = channelOf(cfg)
-    const sections = effectiveSections(selectionCache[channel] ?? defaultSyncSelection())
+    const selection = selectionCache[channel] ?? defaultSyncSelection()
+    const sections = effectiveSections(selection)
     return new SyncEngine({
       ctx: host,
       transport,
@@ -2768,11 +2770,10 @@ function makeRoutes(deps: RoutesDeps): {
       zipDir: tmpDir,
       msg,
       ...(sections === undefined ? {} : { sections }),
-      ...(engineOpts.optInSections === undefined || engineOpts.optInSections.length === 0
-        ? {}
-        : { optInSections: engineOpts.optInSections }),
-      // m-retention：远端快照裁剪与本地备份产物共用同一份 GFS 保留策略（缺省 = 最近 10 个，
-      // 与改造前逐字等价）；用户改完策略即时生效（每次 prune 都重读）。
+      // issue #132：开关开 = 授权(手动/自动同判据)；self 守卫防同步把自己删掉
+      deletePlugins: selection.deletePlugins, selfPluginName: PLUGIN_NPM_PACKAGE,
+      ...(engineOpts.optInSections?.length ? { optInSections: engineOpts.optInSections } : {}),
+      // m-retention：远端裁剪与本地备份共用 GFS 策略（缺省最近 10 个，每次 prune 重读 ⇒ 改完即时生效）。
       retentionPolicy: () => retentionPolicyProvider(),
     })
   }
@@ -3795,8 +3796,7 @@ export function apply(ctx: Context, config?: Config): void {
     namespaces: async () => (await ctx.settings.describe({ redactSecrets: true })).map((d) => String(d.ns)),
     // Sessions 分区默认关（含敏感内容）：挂载 adapter 供 Custom Export 显式勾选（§3.3/§15）。
     includeSessions: true,
-    // 导出 plugins 分区时不列本插件自身，避免备份中的自引用条目。
-    selfPluginName: PLUGIN_NAME,
+    selfPluginName: PLUGIN_NAME, // 导出 plugins 分区时不列本插件自身，避免备份里的自引用条目
     // pluginFiles 扩展：额外白名单文件 + 约定配置目录（都相对 ~/.dsh 根），支持导出更多插件配置。
     pluginFiles: config?.pluginFiles,
     pluginFilesDir: config?.pluginFilesDir,

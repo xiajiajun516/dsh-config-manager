@@ -34,7 +34,7 @@ import {
   classifyDshPluginFailure, readInstalled, readInstalledVersion, resolveProfileDir, runDshPlugin,
 } from './plugin-cli.ts';
 import {
-  collectRestoreWalEntries, createRestoreWal, restoreActionStepId, restoreWalHandlesFromSteps,
+  collectRestoreWalEntries, createRestoreWal, isExternalPluginKind, restoreActionStepId, restoreWalHandlesFromSteps,
 } from './restore-wal.ts';
 import type { RestoreJournalPort, RestoreWalHandle, RestoreWalSettleStatus } from './restore-wal.ts';
 import type { RestoreResumeHint } from './restore-resume.ts';
@@ -50,6 +50,7 @@ export type RestoreActionKind =
   | 'hostFileRestore'   // 宿主整文件 blob → 写回 $DSH_HOME
   | 'hostFileRemove'    // 快照时不存在、现已出现的宿主文件 → 删除
   | 'pluginRemove'      // 导入期间新增插件 → dsh plugin remove
+  | 'pluginInstall'     // 跟远端删插件的反向：快照记录了删过、本机现在缺 → dsh plugin add 装回
   | 'fileRestore'       // file 类条目 blob → 写回原路径
   | 'fileRemove'        // file 类条目快照时不存在 → 删除导入写入的文件
   | 'credentialHint'    // 凭据值不可回读 → 人工补录提示（无自动动作）
@@ -63,8 +64,10 @@ export interface RestoreAction {
   target?: string;
   /** hostFileRestore/fileRestore：快照内 blob 相对路径（相对 snapshotDir） */
   blobPath?: string;
-  /** pluginRemove：插件包名 */
+  /** pluginRemove / pluginInstall：插件包名 */
   pluginName?: string;
+  /** pluginInstall：重装目标（name@version；版本未知时就是裸包名） */
+  pluginTarget?: string;
   /** credentialHint：人工提示文本 */
   manualHint?: string;
   /** 附加说明（旧快照缺基线 / 离线无法恢复等） */
@@ -82,6 +85,7 @@ export interface RestorePlan {
     hostFileRestores: number;
     hostFileRemoves: number;
     pluginRemoves: number;
+    pluginInstalls: number;
     fileRestores: number;
     fileRemoves: number;
     credentialHints: number;
@@ -121,6 +125,13 @@ export interface RestoreOptions {
   /** 注入式插件卸载器（测试用；缺省走 runDshPlugin 官方通道） */
   pluginUninstaller?: (
     name: string, profileDir: string, profile: string,
+  ) => Promise<{ ok: boolean; message?: string }>;
+  /**
+   * 注入式插件重装器（issue #132 undo；测试用）。缺省走官方 `dsh plugin add <name>@<version>`。
+   * 只用于「快照记录过跟删、本机现在缺失」的插件；未记录过的插件绝不重装。
+   */
+  pluginInstaller?: (
+    name: string, target: string, profileDir: string, profile: string,
   ) => Promise<{ ok: boolean; message?: string }>;
   /** 每项动作执行回调（宿主路由埋点：更新 RunRegistry 进度；index/1-based、total=计划动作数、
    * detail=动作描述。dry-run/planRestore 不触发） */
@@ -163,6 +174,8 @@ export interface RestoreReport {
   restored: string[];
   /** 已卸载的插件名 */
   removedPlugins: string[];
+  /** 已按 undo 记录装回的插件目标（name@version；issue #132） */
+  installedPlugins: string[];
   /** 需人工处理的提示（凭据补录等） */
   manualHints: string[];
   /** 失败清单 */
@@ -440,6 +453,26 @@ async function defaultPluginUninstaller(
   return { ok: false, message: msg('restore.uninstallFailedExit', { name, code: String(result.exitCode), tail }) };
 }
 
+/**
+ * 默认插件重装器（issue #132 undo）：官方 dsh plugin add 通道 + 失败分类诊断。
+ *
+ * 与卸载器同口径：非 0 退出先归类（已知失败码给准确文案），否则回落到退出码 + 输出尾部。
+ * 绝不在这里做版本回退/猜测 —— target 就是快照里记下的 `name@version`。
+ */
+async function defaultPluginInstaller(
+  name: string, target: string, profileDir: string, profile: string, msg: MsgFunc,
+): Promise<{ ok: boolean; message?: string }> {
+  const result = await runDshPlugin(profileDir, profile, ['add', target]);
+  if (result.exitCode === 0) return { ok: true };
+  const output = `${result.stderr}\n${result.stdout}`.trim();
+  const failure = classifyDshPluginFailure(output);
+  if (failure !== null) {
+    return { ok: false, message: msg('restore.installFailedCode', { name, code: failure.code, message: failure.message }) };
+  }
+  const tail = output.split('\n').slice(-8).join('\n') || msg('restore.noOutput');
+  return { ok: false, message: msg('restore.installFailedExit', { name, code: String(result.exitCode), tail }) };
+}
+
 /* -------------------------------------------------- 统一恢复校验（Phase 4 F8/F9/F25） */
 
 /**
@@ -704,6 +737,30 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
     }
   }
 
+  // 2') 插件重装（issue #132 跟远端删插件的反向）：只认快照里**明确记录过**的跟删项。
+  //     为什么不按 beforePlugins 反推「缺了就是被删了」：手动卸载/换包也会让基线里的名字消失，
+  //     那种情况下重装是替用户改主意。记录过的才装回；现在已存在的直接跳过。
+  const recordedRemovals = snapshot.pluginRemovals ?? [];
+  if (recordedRemovals.length > 0) {
+    const installed = readInstalled(profileDir);
+    for (const removal of recordedRemovals) {
+      if (Object.hasOwn(installed, removal.name)) {
+        actions.push({
+          kind: 'skip',
+          description: msg('restore.pluginInstallAlreadyPresent', { name: removal.name }),
+        });
+        continue;
+      }
+      actions.push({
+        kind: 'pluginInstall',
+        description: msg('restore.pluginInstall', { name: removal.name, version: removal.version }),
+        target: removal.name,
+        pluginName: removal.name,
+        pluginTarget: removal.target,
+      });
+    }
+  }
+
   // 3) file 类条目补偿 + credentials 提示（聚合计数供报告）
   let namespaceCount = 0;
   let patchLineCount = 0;
@@ -860,7 +917,7 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
 
 function summarizeActions(actions: RestoreAction[]): RestorePlan['summary'] {
   const summary: RestorePlan['summary'] = {
-    hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0,
+    hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0, pluginInstalls: 0,
     fileRestores: 0, fileRemoves: 0, credentialHints: 0, skips: 0,
   };
   for (const a of actions) {
@@ -868,6 +925,7 @@ function summarizeActions(actions: RestoreAction[]): RestorePlan['summary'] {
       case 'hostFileRestore': summary.hostFileRestores += 1; break;
       case 'hostFileRemove': summary.hostFileRemoves += 1; break;
       case 'pluginRemove': summary.pluginRemoves += 1; break;
+      case 'pluginInstall': summary.pluginInstalls += 1; break;
       case 'fileRestore': summary.fileRestores += 1; break;
       case 'fileRemove': summary.fileRemoves += 1; break;
       case 'credentialHint': summary.credentialHints += 1; break;
@@ -892,11 +950,14 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
   const profileDir = resolveProfileDir(homeDir, profile);
   const uninstaller = opts.pluginUninstaller
     ?? ((name: string, dir: string, prof: string) => defaultPluginUninstaller(name, dir, prof, msg));
+  const installer = opts.pluginInstaller
+    ?? ((name: string, target: string, dir: string, prof: string) => defaultPluginInstaller(name, target, dir, prof, msg));
 
   const report: RestoreReport = {
     snapshotId: plan.snapshotId,
     restored: [],
     removedPlugins: [],
+    installedPlugins: [],
     manualHints: [],
     failed: [],
     skipped: [],
@@ -936,7 +997,7 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
   }
   /** 文件类动作的绝对目标（reconcile 直接拿它读盘算指纹）；插件卸载/越界目标 → null（不可指纹）。 */
   function walAbsOf(action: RestoreAction): string | null {
-    if (action.kind === 'pluginRemove' || action.target === undefined) return null;
+    if (isExternalPluginKind(action.kind) || action.target === undefined) return null;
     try {
       return homeAbs(homeDir, action.target, msg);
     } catch {
@@ -1008,6 +1069,20 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
             const reason = result.message ?? msg('restore.pluginRemoveFailed');
             report.failed.push({ item: `plugin:${action.pluginName}`, reason });
             // 外部副作用没做成 → 记 attention（绝不记 done：reconcile 对 external step 本就保守）
+            settleStatus = 'attention';
+            settleMessage = reason;
+          }
+          break;
+        }
+        case 'pluginInstall': {
+          const target = action.pluginTarget ?? action.pluginName!;
+          const result = await installer(action.pluginName!, target, profileDir, profile);
+          if (result.ok) {
+            report.installedPlugins.push(target);
+          } else {
+            const reason = result.message ?? msg('restore.pluginInstallFailed');
+            report.failed.push({ item: `plugin:${action.pluginName}`, reason });
+            // 同卸载分支：外部副作用没做成 → attention（绝不记 done）
             settleStatus = 'attention';
             settleMessage = reason;
           }

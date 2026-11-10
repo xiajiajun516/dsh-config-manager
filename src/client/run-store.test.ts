@@ -1009,13 +1009,14 @@ test('低频面板: 同步/市场/快照切片与当前面板刷新往返恢复�
         createdAt: '2026-01-01T00:00:00Z',
         sourceZip: 'x.zip',
         actions: [],
-        summary: { hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0, fileRestores: 0, fileRemoves: 0, credentialHints: 0, skips: 1 },
+        summary: { hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0, pluginInstalls: 0, fileRestores: 0, fileRemoves: 0, credentialHints: 0, skips: 1 },
         pluginBaselineConfirmed: true,
       },
       report: {
         snapshotId: 'snap-1',
         restored: ['settings.yaml'],
         removedPlugins: [],
+        installedPlugins: [],
         manualHints: [],
         failed: [],
         skipped: [],
@@ -1223,6 +1224,7 @@ test('m2-resume: 活跃 restore run 经 /runs 恢复 running 并轮询到完成�
     snapshotId: 'snap-1',
     restored: ['settings.yaml'],
     removedPlugins: ['@scope/pkg'],
+    installedPlugins: [],
     manualHints: [],
     failed: [],
     skipped: [],
@@ -1519,7 +1521,7 @@ test('P0-9: 宿主载荷（plan/analysis/result/confirmSession/snapshots.plan/ma
           detail: `MCP_TOKEN=${P0_9_SECRET}`, manualHint: `Authorization: Bearer ${P0_9_SECRET}`,
         }],
         summary: {
-          hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0,
+          hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0, pluginInstalls: 0,
           fileRestores: 0, fileRemoves: 0, credentialHints: 1, skips: 0,
         },
         pluginBaselineConfirmed: true,
@@ -1617,9 +1619,9 @@ test('P0-9: 持久化字段清单显式化（键集合断言 —— 新增字段
     'loadError', 'pullReport', 'pushPreview', 'pushReport', 'repoUrl', 'webdavUrl', 'webdavUsername',
   ])
   assert.deepEqual(keys(p.sync.byChannel.git), [
-    'autosync', 'autosyncEnabled', 'autosyncInterval', 'autosyncRealtime', 'encrypt', 'includeSecrets',
-    'loadingSnapshots', 'selectedSnapshotId', 'sessionsInclude', 'sessionsLimit', 'snapshots',
-    'syncMode', 'syncSections',
+    'autosync', 'autosyncEnabled', 'autosyncInterval', 'autosyncRealtime', 'deletePlugins', 'encrypt',
+    'includeSecrets', 'loadingSnapshots', 'selectedSnapshotId', 'sessionsInclude', 'sessionsLimit',
+    'snapshots', 'syncMode', 'syncSections',
   ])
   assert.deepEqual(keys(p.market), [
     'category', 'conflictResolutions', 'detail', 'error', 'importResult', 'items', 'loadError',

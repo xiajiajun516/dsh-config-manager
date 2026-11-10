@@ -113,6 +113,11 @@ class MemPlugins implements PluginsFacade {
     this.installed.set(pkg, { name: pkg, version: '1.0.0', enabled: true });
     return { needsRestart: true };
   }
+  /** issue #132：卸载（跟随远端删除）；缺失即抛，模拟真实 CLI 的失败语义。 */
+  async uninstall(pkg: string) {
+    if (!this.installed.delete(pkg)) throw new Error(`plugin ${pkg} is not installed`);
+    return { needsRestart: true };
+  }
 }
 
 class MemWorkspace implements WorkspaceFacade {
