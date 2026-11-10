@@ -47,7 +47,7 @@ function makePlan(actions: RestorePlan['actions']): RestorePlan {
     pluginBaselineConfirmed: true,
     actions,
     summary: {
-      hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0,
+      hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0, pluginInstalls: 0,
       fileRestores: 0, fileRemoves: 0, credentialHints: 0, skips: 0,
     },
   };
@@ -63,6 +63,7 @@ test('G-02 executeRestorePlan：整文件/文件还原与删除 + pre-restore �
     writeHome: async (relPath, data) => { calls.push(`write:${relPath}:${data.toString()}`) },
     removeHome: async (relPath) => { calls.push(`remove:${relPath}`) },
     uninstallPlugin: async () => ({ ok: true }),
+    installPlugin: async () => ({ ok: true }),
   };
 
   const plan = makePlan([
@@ -97,6 +98,7 @@ test('G-03 executeRestorePlan：插件卸载成败、凭据提示、跳过、单
       uninstalled.push(name);
       return name === 'good-plugin' ? { ok: true } : { ok: false, message: '模拟 pnpm 卸载失败' };
     },
+    installPlugin: async () => ({ ok: true }),
   };
 
   const plan = makePlan([
@@ -168,6 +170,7 @@ test('G-04 executeRestorePlan：续跑只做剩下的动作，已完成动作零
     writeHome: async (relPath) => { writes.push(relPath) },
     removeHome: async () => {},
     uninstallPlugin: async () => ({ ok: true }),
+    installPlugin: async () => ({ ok: true }),
   };
   const plan = makePlan([
     { kind: 'hostFileRestore', description: '还原 settings.yaml', target: 'settings.yaml', blobPath: 'blobs/host/settings' },
@@ -188,4 +191,29 @@ test('G-04 executeRestorePlan：续跑只做剩下的动作，已完成动作零
   assert.deepEqual(pre, ['extra.yaml'], '被跳过的动作不留反悔副本（它没被再次覆盖）');
   assert.deepEqual(recs.map((r) => r.id), [id2], '续跑只 settle 本次真正执行的动作');
   assert.equal(recs[0]!.status, 'done');
+});
+
+test('issue #132 收尾：GUI 恢复路径执行 pluginInstall（成功装回、失败如实记 failed）', async () => {
+  const installed: string[] = [];
+  const exec: RestoreExecutor = {
+    readBlob: async () => Buffer.from('x'),
+    savePreRestore: async () => {},
+    existsHome: async () => false,
+    writeHome: async () => {},
+    removeHome: async () => {},
+    uninstallPlugin: async () => ({ ok: true }),
+    installPlugin: async (name, target) => {
+      installed.push(target);
+      return name === 'ok-plugin' ? { ok: true } : { ok: false, message: '模拟 desktop 档案保留被拒' };
+    },
+  };
+  const plan = makePlan([
+    { kind: 'pluginInstall', description: '装回 ok-plugin@1.2.0', pluginName: 'ok-plugin', pluginTarget: 'ok-plugin@1.2.0' },
+    { kind: 'pluginInstall', description: '装回 desk-plugin@2.0.0', pluginName: 'desk-plugin', pluginTarget: 'desk-plugin@2.0.0' },
+  ]);
+  const report = await executeRestorePlan(plan, exec);
+  assert.deepEqual(installed, ['ok-plugin@1.2.0', 'desk-plugin@2.0.0'], '装回必须用快照记下的来源');
+  assert.deepEqual(report.installedPlugins, ['ok-plugin@1.2.0'], '成功的才进装回清单（记的是快照里的来源）');
+  assert.equal(report.failed.length, 1, '桌面档案被拒不能静默，也不能算成功');
+  assert.ok(report.failed[0]!.reason.includes('desktop 档案保留被拒'), '失败原因原样带出');
 });
