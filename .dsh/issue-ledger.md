@@ -6,3 +6,4 @@
 
 | issue | 症状 | 状态 | 修复提交 | 更新 |
 |---|---|---|---|---|
+| [#132](https://github.com/xiajiajun516/dsh-config-manager/issues/132) | 同步：跟随远端删除插件（开关默认关） | awaiting-release | 23df0bd | 2026-11-10 |
