@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 恢复计划弹窗</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #F0F1F2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #0F1115;
+      -webkit-font-smoothing: antialiased;
+    }
+    .font-mono-code {
+      font-family: "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+    }
+    .tabular-num {
+      font-variant-numeric: tabular-nums;
+    }
+    /* Custom scrollbar for dense tools */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #F5F5F5;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #D4D4D8;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #A1A1AA;
+    }
+  </style>
+</head>
+<body class="flex items-center justify-center min-h-screen w-[1440px] h-[900px] overflow-hidden select-none bg-[#F0F1F2]">
+<!-- 800x800 Desktop Settings Window Container -->
+<div class="relative w-[800px] h-[800px] bg-white rounded-[16px] border border-[#E6E6E6] shadow-[0_20px_50px_rgba(0,0,0,0.08)] flex overflow-hidden">
+<!-- Window Traffic Lights (Native macOS feel) -->
+<div class="absolute top-[13px] left-[14px] flex items-center space-x-[7px] z-10">
+<span class="w-[10px] h-[10px] rounded-full bg-[#FF5F56] border border-[#E0443E]"></span>
+<span class="w-[10px] h-[10px] rounded-full bg-[#FFBD2E] border border-[#DEA123]"></span>
+<span class="w-[10px] h-[10px] rounded-full bg-[#27C93F] border border-[#1AAB29]"></span>
+</div>
+<!-- Window Header Title Bar (Centering native window title) -->
+<div class="absolute top-0 left-0 right-0 h-[38px] flex items-center justify-center text-[12.5px] font-medium text-[#61666B] border-b border-[#E6E6E6] pointer-events-none z-0">
+      设置
+    </div>
+<!-- 188px Host Native Navigation Sidebar -->
+<div class="w-[188px] h-full bg-[#FAFAFA] border-r border-[#E6E6E6] pt-[46px] pb-[16px] px-[8px] flex flex-col justify-between shrink-0 select-none">
+<div class="space-y-[2px]">
+<div class="px-[10px] py-[5px] text-[11px] text-[#81858C] font-medium tracking-tight">首选项</div>
+<!-- Sidebar Item: 常规 -->
+<div class="flex items-center space-x-[8px] px-[10px] py-[6px] rounded-[8px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-pointer">
+<svg class="w-[14px] h-[14px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>常规</span>
+</div>
+<!-- Sidebar Item: 外观 -->
+<div class="flex items-center space-x-[8px] px-[10px] py-[6px] rounded-[8px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-pointer">
+<svg class="w-[14px] h-[14px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>外观</span>
+</div>
+<!-- Sidebar Item: 模型 -->
+<div class="flex items-center space-x-[8px] px-[10px] py-[6px] rounded-[8px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-pointer">
+<svg class="w-[14px] h-[14px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>模型</span>
+</div>
+<!-- Sidebar Item: 插件 -->
+<div class="flex items-center space-x-[8px] px-[10px] py-[6px] rounded-[8px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-pointer">
+<svg class="w-[14px] h-[14px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>插件</span>
+</div>
+<!-- Sidebar Item: 备份与迁移 (Selected) -->
+<div class="flex items-center space-x-[8px] px-[10px] py-[6px] rounded-[8px] text-[12px] font-medium text-[#0F1115] bg-[#EBEEF2] cursor-pointer">
+<svg class="w-[14px] h-[14px] text-[#0F1115]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>备份与迁移</span>
+</div>
+</div>
+<!-- Sidebar Item: 关于 -->
+<div class="flex items-center space-x-[8px] px-[10px] py-[6px] rounded-[8px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-pointer">
+<svg class="w-[14px] h-[14px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>关于</span>
+</div>
+</div>
+<!-- Right Side 564x800 Plugin Area (Including Title Bar area) -->
+<div class="flex-1 flex flex-col h-full bg-[#FFFFFF] relative overflow-hidden pt-[38px]">
+<!-- 1) Top 32px Tab Bar -->
+<div class="h-[32px] px-[12px] border-b border-[#E6E6E6] flex items-center justify-between shrink-0 bg-white">
+<!-- Tabs -->
+<div class="flex items-center space-x-[2px]">
+<div class="flex items-center space-x-[4px] px-[8px] py-[3px] text-[12px] text-[#61666B] rounded-[6px] hover:bg-[rgba(38,49,72,0.04)] cursor-pointer">
+<svg class="w-[13px] h-[13px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>首页</span>
+</div>
+<div class="flex items-center space-x-[4px] px-[8px] py-[3px] text-[12px] font-medium text-[#0F1115] bg-[#EBEEF2] rounded-[6px] cursor-pointer">
+<svg class="w-[13px] h-[13px] text-[#0F1115]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>产物库</span>
+</div>
+<div class="flex items-center space-x-[4px] px-[8px] py-[3px] text-[12px] text-[#61666B] rounded-[6px] hover:bg-[rgba(38,49,72,0.04)] cursor-pointer">
+<svg class="w-[13px] h-[13px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>同步</span>
+</div>
+<div class="flex items-center space-x-[4px] px-[8px] py-[3px] text-[12px] text-[#61666B] rounded-[6px] hover:bg-[rgba(38,49,72,0.04)] cursor-pointer">
+<svg class="w-[13px] h-[13px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>环境</span>
+</div>
+</div>
+<!-- 4 Action Icons -->
+<div class="flex items-center space-x-[2px]">
+<div class="w-[26px] h-[26px] flex items-center justify-center rounded-[6px] text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-pointer text-[11px] font-mono-code">
+            ⌘K
+          </div>
+<div class="w-[26px] h-[26px] flex items-center justify-center rounded-[6px] text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-pointer">
+<svg class="w-[13px] h-[13px]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+<div class="w-[26px] h-[26px] flex items-center justify-center rounded-[6px] text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-pointer">
+<svg class="w-[13px] h-[13px]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+<div class="w-[26px] h-[26px] flex items-center justify-center rounded-[6px] text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-pointer">
+<svg class="w-[13px] h-[13px]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</div>
+</div>
+<!-- Underlying "产物库" Content Area (Visible underneath the overlay) -->
+<div class="flex-1 p-[16px] bg-[#FFFFFF] overflow-hidden space-y-[10px] pointer-events-none opacity-90">
+<!-- Search bar & filter pills -->
+<div class="flex items-center justify-between">
+<div class="h-[28px] w-[200px] border border-[#E6E6E6] rounded-[8px] px-[8px] flex items-center space-x-[6px] text-[12px] text-[#81858C] bg-[#FAFAFA]">
+<svg class="w-[12px] h-[12px]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span>搜索产物</span>
+</div>
+<div class="flex items-center space-x-[2px] bg-[#F5F5F5] p-[2px] rounded-[6px] text-[11px] text-[#61666B]">
+<span class="px-[8px] py-[2px] bg-white rounded-[4px] shadow-sm font-medium text-[#0F1115]">全部</span>
+<span class="px-[8px] py-[2px]">本机快照</span>
+<span class="px-[8px] py-[2px]">备份文件</span>
+<span class="px-[8px] py-[2px]">远端快照</span>
+</div>
+</div>
+<!-- Sample artifact rows in background -->
+<div class="border border-[#E6E6E6] rounded-[12px] overflow-hidden divide-y divide-[#E6E6E6]">
+<div class="p-[10px] flex items-center justify-between bg-[#FAFAFA]">
+<div class="flex items-center space-x-[8px]">
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[rgba(65,118,230,0.12)] text-[#4176E6] text-[11px] font-medium">本机快照</span>
+<span class="text-[12px] font-mono-code font-medium">before-import</span>
+<span class="text-[11px] text-[#81858C]">· 1,204 文件 · 24.8 MB</span>
+</div>
+<span class="text-[11px] text-[#81858C]">20:41</span>
+</div>
+<div class="p-[10px] flex items-center justify-between bg-white">
+<div class="flex items-center space-x-[8px]">
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[rgba(34,197,94,0.12)] text-[#22C55E] text-[11px] font-medium">备份文件</span>
+<span class="text-[12px] font-mono-code">backup-2026-11-10T2104.zip</span>
+<span class="text-[11px] text-[#81858C]">· 24.8 MB</span>
+</div>
+<span class="text-[11px] text-[#81858C]">21:04</span>
+</div>
+<div class="p-[10px] flex items-center justify-between bg-white">
+<div class="flex items-center space-x-[8px]">
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[rgba(65,118,230,0.12)] text-[#4176E6] text-[11px] font-medium">本机快照</span>
+<span class="text-[12px] font-mono-code">auto · 定时备份</span>
+<span class="text-[11px] text-[#81858C]">· 1,198 文件</span>
+</div>
+<span class="text-[11px] text-[#81858C]">15:48</span>
+</div>
+<div class="p-[10px] flex items-center justify-between bg-white">
+<div class="flex items-center space-x-[8px]">
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[rgba(168,85,247,0.12)] text-[#9333EA] text-[11px] font-medium">远端快照</span>
+<span class="text-[12px] font-mono-code">gist · main · 2026-11-09</span>
+</div>
+<span class="text-[11px] text-[#81858C]">昨天</span>
+</div>
+</div>
+</div>
+<!-- 3) Bottom 28px Status Bar -->
+<div class="h-[28px] px-[12px] border-t border-[#E6E6E6] flex items-center justify-between shrink-0 bg-[#FAFAFA] text-[11px] text-[#81858C]">
+<div class="flex items-center space-x-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span class="text-[#0F1115] font-medium">就绪</span>
+</div>
+<div class="font-mono-code tabular-num">v0.7.0 · DSH 2.4</div>
+</div>
+<!-- Backdrop Overlay (24% Black Overlay: #0000003D) across the entire 800x800 container -->
+</div>
+<!-- ==================== RESTORE PLAN MODAL OVERLAY ==================== -->
+<div class="absolute inset-0 bg-[#0000003D] flex items-center justify-center z-50 p-[8px]">
+<!-- Modal: 620px x 640px, rounded-16, 1px #E6E6E6, shadow-lg, bg-white -->
+<div class="w-[620px] h-[700px] bg-white rounded-[16px] border border-[#E6E6E6] shadow-[0_8px_32px_rgba(0,0,0,0.12)] flex flex-col overflow-hidden"><div class="h-[44px] px-[16px] flex items-center justify-between shrink-0 border-b border-[#E6E6E6] bg-white"><div class="flex items-baseline space-x-[10px]"><h2 class="text-[13px] font-semibold text-[#0F1115] leading-none">恢复计划</h2><span class="text-[11px] text-[#81858C]">快照 before-import → 当前工作区 · 1,204 个文件</span></div><button class="w-[24px] h-[24px] flex items-center justify-center rounded-[6px] text-[#81858C] hover:text-[#0F1115] hover:bg-[rgba(38,49,72,0.06)] transition-colors"><svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button></div><div class="h-[36px] px-[16px] flex items-center justify-between shrink-0 border-b border-[#CCCCCC] border-t-0 bg-[#FAFAFA] text-[11px]"><div class="flex items-center space-x-[10px]"><div class="flex items-center space-x-[4px]"><span class="text-[#81858C]">将被还原</span><span class="text-[12px] font-medium text-[#0F1115] tabular-num">24</span></div><span class="w-[0.5px] h-[12px] bg-[#CCCCCC]"></span><div class="flex items-center space-x-[4px]"><span class="text-[#81858C]">新增</span><span class="text-[12px] font-medium text-[#0F1115] tabular-num">3</span></div><span class="w-[0.5px] h-[12px] bg-[#CCCCCC]"></span><div class="flex items-center space-x-[4px]"><span class="text-[#81858C]">将被删除</span><span class="text-[12px] font-medium text-[#0F1115] tabular-num">1</span></div><span class="w-[0.5px] h-[12px] bg-[#CCCCCC]"></span><div class="flex items-center space-x-[4px]"><span class="text-[#81858C]">卸载插件</span><span class="text-[12px] font-medium text-[#0F1115] tabular-num">0</span></div><span class="w-[0.5px] h-[12px] bg-[#CCCCCC]"></span><div class="flex items-center space-x-[4px]"><span class="text-[#81858C]">需人工处理</span><span class="text-[12px] font-medium text-[#F59E0B] tabular-num">2</span></div><span class="w-[0.5px] h-[12px] bg-[#CCCCCC]"></span><div class="flex items-center space-x-[4px]"><span class="text-[#81858C]">无动作</span><span class="text-[12px] font-medium text-[#61666B] tabular-num">118</span></div></div><div class="flex items-center space-x-[6px] font-mono-code text-[11px] tabular-num font-medium"><span class="text-[#22C55E]">+312</span><span class="text-[#EC1313]">−47</span></div></div><div class="flex-1 overflow-y-auto bg-white p-[12px] pb-[16px] space-y-[10px]"><div class="border border-[#E6E6E6] rounded-[10px] overflow-hidden bg-white"><div class="h-[28px] px-[10px] bg-[#FAFAFA] border-b border-[#E6E6E6] flex items-center justify-between cursor-pointer"><div class="flex items-center space-x-[6px]"><svg class="w-[12px] h-[12px] text-[#81858C] transition-transform duration-100" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M19 9l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg><span class="text-[11px] font-medium text-[#61666B]">修改与新增</span><span class="text-[11px] text-[#81858C]">· 5</span></div><span class="text-[11px] font-mono-code text-[#81858C] tabular-num">+252 −8</span></div><div class="divide-y divide-[#E6E6E6]"><div><div class="h-[32px] px-[10px] flex items-center justify-between hover:bg-[#FAFAFA] cursor-pointer bg-[#F8FAFC]"><div class="flex items-center space-x-[8px] min-w-0 pr-[8px]"><svg class="w-[11px] h-[11px] text-[#0F1115] shrink-0" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M19 9l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg><span class="px-[5px] py-[1.5px] rounded-[4px] bg-[rgba(65,118,230,0.12)] text-[#4176E6] text-[11px] font-medium leading-none shrink-0">修改</span><span class="font-mono-code text-[12px] text-[#0F1115] truncate font-medium">src/index.ts</span></div><div class="flex items-center space-x-[6px] shrink-0 font-mono-code text-[11px] tabular-num"><span class="text-[#22C55E]">+12</span><span class="text-[#EC1313]">−4</span></div></div><div class="border-t border-[#CCCCCC] bg-[#FFFFFF]"><div class="grid grid-cols-2 text-[11px] text-[#81858C] bg-[#FAFAFA] border-b border-[#CCCCCC]"><div class="px-[12px] py-[3px] border-r border-[#CCCCCC] font-medium flex items-center justify-between"><span>当前 (Current Workspace)</span><span class="font-mono-code text-[10px] text-[#81858C]">HEAD</span></div><div class="px-[12px] py-[3px] font-medium flex items-center justify-between"><span>快照 (Snapshot: before-import)</span><span class="font-mono-code text-[10px] text-[#81858C]">4f9c1a2</span></div></div><div class="font-mono-code text-[12px] leading-[20px]"><div class="px-[10px] py-[2px] bg-[#F1F3F5] text-[#61666B] text-[11px] border-b border-[#E6E6E6]">@@ -12,7 +12,9 @@ export interface ConfigOptions {</div><div class="grid grid-cols-2 border-b border-[rgba(0,0,0,0.03)] hover:bg-[#F9FAFB]"><div class="flex border-r border-[#CCCCCC]"><div class="w-[40px] px-[6px] text-right text-[11px] text-[#81858C] bg-[#FAFAFA] border-r border-[#E6E6E6] select-none tabular-num shrink-0">12</div><div class="px-[8px] whitespace-pre text-[#61666B] overflow-x-hidden">  version: string;</div></div><div class="flex"><div class="w-[40px] px-[6px] text-right text-[11px] text-[#81858C] bg-[#FAFAFA] border-r border-[#E6E6E6] select-none tabular-num shrink-0">12</div><div class="px-[8px] whitespace-pre text-[#61666B] overflow-x-hidden">  version: string;</div></div></div><div class="grid grid-cols-2 border-b border-[rgba(0,0,0,0.03)]"><div class="flex border-r border-[#CCCCCC] bg-[rgba(236,19,19,0.08)] relative"><div class="w-[40px] px-[6px] text-right text-[11px] text-[#EC1313] bg-[rgba(236,19,19,0.12)] border-r border-[#E6E6E6] select-none tabular-num relative shrink-0"><span class="absolute left-0 top-0 bottom-0 w-[3px] bg-[#EC1313]"></span>13</div><div class="px-[8px] whitespace-pre text-[#0F1115] overflow-x-hidden">- autoSyncInterval: 1800;</div></div><div class="flex bg-[rgba(34,197,94,0.08)] relative"><div class="w-[40px] px-[6px] text-right text-[11px] text-[#22C55E] bg-[rgba(34,197,94,0.12)] border-r border-[#E6E6E6] select-none tabular-num relative shrink-0"><span class="absolute left-0 top-0 bottom-0 w-[3px] bg-[#22C55E]"></span>13</div><div class="px-[8px] whitespace-pre text-[#0F1115] overflow-x-hidden">+ autoSyncInterval: 900;</div></div></div><div class="grid grid-cols-2 border-b border-[rgba(0,0,0,0.03)]"><div class="flex border-r border-[#CCCCCC] bg-[rgba(236,19,19,0.08)] relative"><div class="w-[40px] px-[6px] text-right text-[11px] text-[#EC1313] bg-[rgba(236,19,19,0.12)] border-r border-[#E6E6E6] select-none tabular-num relative shrink-0"><span class="absolute left-0 top-0 bottom-0 w-[3px] bg-[#EC1313]"></span>14</div><div class="px-[8px] whitespace-pre text-[#0F1115] overflow-x-hidden">- legacyTelemetry: true;</div></div><div class="flex bg-[#FAFAFA]"><div class="w-[40px] px-[6px] text-right text-[11px] text-[#81858C] bg-[#FAFAFA] border-r border-[#E6E6E6] select-none shrink-0"></div><div class="px-[8px] whitespace-pre text-transparent select-none"> </div></div></div><div class="grid grid-cols-2 border-b border-[rgba(0,0,0,0.03)]"><div class="flex border-r border-[#CCCCCC] bg-[#FAFAFA]"><div class="w-[40px] px-[6px] text-right text-[11px] text-[#81858C] bg-[#FAFAFA] border-r border-[#E6E6E6] select-none shrink-0"></div><div class="px-[8px] whitespace-pre text-transparent select-none"> </div></div><div class="flex bg-[rgba(34,197,94,0.08)] relative"><div class="w-[40px] px-[6px] text-right text-[11px] text-[#22C55E] bg-[rgba(34,197,94,0.12)] border-r border-[#E6E6E6] select-none tabular-num relative shrink-0"><span class="absolute left-0 top-0 bottom-0 w-[3px] bg-[#22C55E]"></span>14</div><div class="px-[8px] whitespace-pre text-[#0F1115] overflow-x-hidden">+ maxRollbackPoints: 10;</div></div></div><div class="grid grid-cols-2 hover:bg-[#F9FAFB]"><div class="flex border-r border-[#CCCCCC]"><div class="w-[40px] px-[6px] text-right text-[11px] text-[#81858C] bg-[#FAFAFA] border-r border-[#E6E6E6] select-none tabular-num shrink-0">15</div><div class="px-[8px] whitespace-pre text-[#61666B] overflow-x-hidden">  runtimeTarget: 'sys';</div></div><div class="flex"><div class="w-[40px] px-[6px] text-right text-[11px] text-[#81858C] bg-[#FAFAFA] border-r border-[#E6E6E6] select-none tabular-num shrink-0">15</div><div class="px-[8px] whitespace-pre text-[#61666B] overflow-x-hidden">  runtimeTarget: 'sys';</div></div></div></div></div></div><div class="h-[32px] px-[10px] flex items-center justify-between hover:bg-[#FAFAFA] cursor-pointer"><div class="flex items-center space-x-[8px] min-w-0 pr-[8px]"><svg class="w-[11px] h-[11px] text-[#81858C] shrink-0" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg><span class="px-[5px] py-[1.5px] rounded-[4px] bg-[rgba(65,118,230,0.12)] text-[#4176E6] text-[11px] font-medium leading-none shrink-0">修改</span><span class="font-mono-code text-[12px] text-[#0F1115] truncate">src/routes/sync.ts</span></div><div class="flex items-center space-x-[6px] shrink-0 font-mono-code text-[11px] tabular-num"><span class="text-[#22C55E]">+8</span><span class="text-[#EC1313]">−2</span></div></div><div class="h-[32px] px-[10px] flex items-center justify-between hover:bg-[#FAFAFA] cursor-pointer"><div class="flex items-center space-x-[8px] min-w-0 pr-[8px]"><svg class="w-[11px] h-[11px] text-[#81858C] shrink-0" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg><span class="px-[5px] py-[1.5px] rounded-[4px] bg-[rgba(34,197,94,0.12)] text-[#22C55E] text-[11px] font-medium leading-none shrink-0">新增</span><span class="font-mono-code text-[12px] text-[#0F1115] truncate">src/core/rollback-point.ts</span></div><div class="flex items-center space-x-[6px] shrink-0 font-mono-code text-[11px] tabular-num"><span class="text-[#22C55E]">+184</span><span class="text-[#81858C]">−0</span></div></div><div class="h-[32px] px-[10px] flex items-center justify-between hover:bg-[#FAFAFA] cursor-pointer"><div class="flex items-center space-x-[8px] min-w-0 pr-[8px]"><svg class="w-[11px] h-[11px] text-[#81858C] shrink-0" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg><span class="px-[5px] py-[1.5px] rounded-[4px] bg-[rgba(65,118,230,0.12)] text-[#4176E6] text-[11px] font-medium leading-none shrink-0">修改</span><span class="font-mono-code text-[12px] text-[#0F1115] truncate">package.json</span></div><div class="flex items-center space-x-[6px] shrink-0 font-mono-code text-[11px] tabular-num"><span class="text-[#22C55E]">+2</span><span class="text-[#EC1313]">−2</span></div></div><div class="h-[32px] px-[10px] flex items-center justify-between hover:bg-[#FAFAFA] cursor-pointer"><div class="flex items-center space-x-[8px] min-w-0 pr-[8px]"><svg class="w-[11px] h-[11px] text-[#81858C] shrink-0" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg><span class="px-[5px] py-[1.5px] rounded-[4px] bg-[rgba(34,197,94,0.12)] text-[#22C55E] text-[11px] font-medium leading-none shrink-0">新增</span><span class="font-mono-code text-[12px] text-[#0F1115] truncate">docs/adr/0012-restore-resume.md</span></div><div class="flex items-center space-x-[6px] shrink-0 font-mono-code text-[11px] tabular-num"><span class="text-[#22C55E]">+46</span><span class="text-[#81858C]">−0</span></div></div></div></div><div class="border border-[#E6E6E6] rounded-[10px] overflow-hidden bg-white"><div class="h-[30px] px-[10px] bg-[#FAFAFA] flex items-center justify-between cursor-pointer hover:bg-[#F5F5F5] transition-colors"><div class="flex items-center space-x-[6px]"><svg class="w-[12px] h-[12px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg><span class="text-[11px] font-medium text-[#61666B]">删除</span><span class="text-[11px] text-[#81858C]">· 1</span></div><span class="text-[11px] font-mono-code text-[#EC1313] tabular-num font-medium">−39</span></div></div><div class="border border-[#E6E6E6] rounded-[10px] overflow-hidden bg-white opacity-70"><div class="h-[30px] px-[10px] bg-[#FAFAFA] flex items-center justify-between cursor-pointer"><div class="flex items-center space-x-[6px]"><svg class="w-[12px] h-[12px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg><span class="text-[11px] font-medium text-[#81858C]">卸载插件</span><span class="text-[11px] text-[#81858C]">· 0（已折叠）</span></div><span class="text-[11px] font-mono-code text-[#81858C] tabular-num">0</span></div></div><div class="border border-[#E6E6E6] rounded-[10px] overflow-hidden bg-white"><div class="h-[30px] px-[10px] bg-[#FAFAFA] flex items-center justify-between cursor-pointer hover:bg-[#F5F5F5] transition-colors"><div class="flex items-center space-x-[6px]"><svg class="w-[12px] h-[12px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg><span class="text-[11px] font-medium text-[#F59E0B]">提示</span><span class="text-[11px] text-[#81858C]">· 2（本地冲突需合并）</span></div><span class="px-[5px] py-[1px] rounded-[3px] bg-[rgba(245,158,11,0.12)] text-[#F59E0B] text-[10px] font-medium">需人工</span></div></div><div class="border border-[#E6E6E6] rounded-[10px] overflow-hidden bg-white opacity-70"><div class="h-[30px] px-[10px] bg-[#FAFAFA] flex items-center justify-between cursor-pointer"><div class="flex items-center space-x-[6px]"><svg class="w-[12px] h-[12px] text-[#81858C]" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg><span class="text-[11px] font-medium text-[#81858C]">跳过</span><span class="text-[11px] text-[#81858C]">· 118（已折叠）</span></div><span class="text-[11px] text-[#81858C]">内容一致</span></div></div></div><div class="h-[48px] px-[16px] flex items-center justify-between shrink-0 border-t border-[#CCCCCC] bg-[#FAFAFA]"><div class="flex items-center space-x-[6px] text-[11px] text-[#81858C]"><span class="inline-block w-[6px] h-[6px] rounded-full bg-[#4176E6]"></span><span>恢复后将覆盖当前工作区未保存的改动</span></div><div class="flex items-center space-x-[8px]"><button class="h-[28px] px-[14px] rounded-[8px] border border-[#CCCCCC] bg-transparent text-[12px] text-[#0F1115] hover:bg-[rgba(38,49,72,0.06)] active:bg-[rgba(38,49,72,0.1)] transition-colors">取消</button><button class="h-[28px] px-[14px] rounded-[8px] bg-[#0F1115] text-[12px] font-medium text-white hover:bg-[#262B33] active:bg-[#000000] transition-colors shadow-sm">确认恢复</button></div></div></div>
+</div>
+</div>
+</body>
+</html>

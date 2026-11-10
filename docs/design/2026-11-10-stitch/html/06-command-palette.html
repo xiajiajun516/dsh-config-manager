@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 产物库</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+    
+    * {
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #F0F1F2;
+      color: #0F1115;
+      user-select: none;
+    }
+
+    .font-mono {
+      font-family: 'JetBrains Mono', Menlo, Monaco, Consolas, monospace;
+    }
+
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 自定义细滚动条 */
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #D1D5DB;
+      border-radius: 2px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #9CA3AF;
+    }
+
+    /* 状态栏不定态动画 */
+    @keyframes progress-slide {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(250%); }
+    }
+    .animate-progress-indeterminate {
+      animation: progress-slide 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    }
+  </style>
+</head>
+<body class="w-[1440px] h-[900px] flex items-center justify-center overflow-hidden bg-[#F0F1F2]">
+<!-- 桌面主窗口 800×800 -->
+<div class="w-[800px] h-[800px] bg-white rounded-[16px] border border-[#E6E6E6] shadow-[0_20px_50px_rgba(0,0,0,0.08)] flex overflow-hidden">
+<!-- 左侧 188px 宿主原生侧边导航 -->
+<div class="w-[188px] h-full bg-[#FAFAFA] border-r border-[#E6E6E6] flex flex-col justify-between p-3 select-none shrink-0">
+<div class="flex flex-col gap-4">
+<!-- 窗口红黄绿胶囊圆点 -->
+<div class="flex items-center gap-1.5 px-1 pt-1 pb-1">
+<div class="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E]"></div>
+<div class="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123]"></div>
+<div class="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29]"></div>
+</div>
+<!-- 导航分组标题 -->
+<div class="px-2 pt-1">
+<span class="text-[11px] font-medium text-[#81858C] tracking-wide">设置</span>
+</div>
+<!-- 导航菜单项 -->
+<nav class="flex flex-col gap-0.5">
+<!-- 常规 -->
+<div class="flex items-center gap-2.5 px-2.5 h-[30px] rounded-[8px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.05)] cursor-pointer transition-colors">
+<svg class="w-3.5 h-3.5 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke-linecap="round" stroke-linejoin="round"></path>
+<path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>常规</span>
+</div>
+<!-- 外观 -->
+<div class="flex items-center gap-2.5 px-2.5 h-[30px] rounded-[8px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.05)] cursor-pointer transition-colors">
+<svg class="w-3.5 h-3.5 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>外观</span>
+</div>
+<!-- 模型 -->
+<div class="flex items-center gap-2.5 px-2.5 h-[30px] rounded-[8px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.05)] cursor-pointer transition-colors">
+<svg class="w-3.5 h-3.5 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>模型</span>
+</div>
+<!-- 插件 -->
+<div class="flex items-center gap-2.5 px-2.5 h-[30px] rounded-[8px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.05)] cursor-pointer transition-colors">
+<svg class="w-3.5 h-3.5 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>插件</span>
+</div>
+<!-- 备份与迁移 (当前高亮选中态) -->
+<div class="flex items-center gap-2.5 px-2.5 h-[30px] rounded-[8px] text-[12.5px] font-medium text-[#0F1115] bg-[#EBEEF2] border border-[#979DA6]/30 cursor-pointer shadow-sm">
+<svg class="w-3.5 h-3.5 text-[#0F1115]" fill="none" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24">
+<path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>备份与迁移</span>
+</div>
+</nav>
+</div>
+<!-- 底部关于链接 -->
+<div class="pt-2 border-t border-[#E6E6E6]/60">
+<div class="flex items-center gap-2 px-2.5 h-[30px] rounded-[8px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.05)] cursor-pointer transition-colors">
+<svg class="w-3.5 h-3.5 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>关于</span>
+</div>
+</div>
+</div>
+<!-- 右侧插件界面容器 (564px × 800px) -->
+<div class="w-[612px] flex-1 h-full bg-white flex flex-col justify-between overflow-hidden relative">
+<!-- 1) 顶部 32px 页签条 -->
+<div class="h-[32px] px-3 border-b border-[#E6E6E6] flex items-center justify-between shrink-0 select-none bg-white">
+<!-- 左侧 4 个页签 -->
+<div class="flex items-center gap-1">
+<!-- 首页 -->
+<div class="flex items-center gap-1.5 px-2.5 h-[24px] rounded-[6px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-pointer transition-colors">
+<svg class="w-3 h-3 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>首页</span>
+</div>
+<!-- 产物库 (当前页激活态) -->
+<div class="flex items-center gap-1.5 px-2.5 h-[24px] rounded-[6px] text-[12px] font-medium text-[#0F1115] bg-[#EBEEF2] border border-[#979DA6]/40 cursor-default">
+<svg class="w-3 h-3 text-[#0F1115]" fill="none" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24">
+<path d="M4 7v10c0 2 1.5 3 3.5 3h9c2 0 3.5-1 3.5-3V7c0-2-1.5-3-3.5-3h-9C5.5 4 4 5 4 7z" stroke-linecap="round" stroke-linejoin="round"></path>
+<path d="M9 12h6M9 8h6M9 16h4" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>产物库</span>
+</div>
+<!-- 同步 -->
+<div class="flex items-center gap-1.5 px-2.5 h-[24px] rounded-[6px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-pointer transition-colors">
+<svg class="w-3 h-3 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>同步</span>
+</div>
+<!-- 环境 -->
+<div class="flex items-center gap-1.5 px-2.5 h-[24px] rounded-[6px] text-[12px] text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-pointer transition-colors">
+<svg class="w-3 h-3 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>环境</span>
+</div>
+</div>
+<!-- 右侧 4 个 26px 图标按钮 -->
+<div class="flex items-center gap-1">
+<button class="h-[24px] px-1.5 flex items-center justify-center rounded-[6px] text-[11px] font-mono text-[#81858C] hover:text-[#0F1115] hover:bg-[rgba(38,49,72,0.06)] transition-colors" title="全局搜索">
+            ⌘K
+          </button>
+<button class="w-[24px] h-[24px] flex items-center justify-center rounded-[6px] text-[#81858C] hover:text-[#0F1115] hover:bg-[rgba(38,49,72,0.06)] transition-colors" title="活动状态">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</button>
+<button class="w-[24px] h-[24px] flex items-center justify-center rounded-[6px] text-[#81858C] hover:text-[#0F1115] hover:bg-[rgba(38,49,72,0.06)] transition-colors" title="历史记录">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</button>
+<button class="w-[24px] h-[24px] flex items-center justify-center rounded-[6px] text-[#81858C] hover:text-[#0F1115] hover:bg-[rgba(38,49,72,0.06)] transition-colors" title="关于插件">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</button>
+</div>
+</div>
+<!-- 2) 中间内容区 (吃满剩余高度，禁止外层滚动) -->
+<div class="flex-1 flex flex-col min-h-0 px-3 pt-2.5 pb-1 overflow-hidden">
+<!-- 1) 工具栏 (高 28px, flex 一行) -->
+<div class="h-[28px] flex items-center justify-between mb-2 shrink-0">
+<!-- 搜索框 (宽 180px) -->
+<div class="relative w-[180px] h-[28px] flex items-center">
+<svg class="w-3.5 h-3.5 text-[#81858C] absolute left-2.5 pointer-events-none" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<input class="w-full h-[28px] pl-7 pr-2.5 text-[12px] bg-white border border-[#E6E6E6] rounded-[8px] text-[#0F1115] placeholder-[#81858C] focus:outline-none focus:border-[#4176E6] focus:ring-1 focus:ring-[#4176E6] transition-all" placeholder="搜索产物" type="text"/>
+</div>
+<!-- 分段控件 Segmented (高 24px) -->
+<div class="h-[24px] bg-[#F5F5F5] p-0.5 rounded-[8px] border border-[#E6E6E6] flex items-center gap-0.5 select-none">
+<button class="h-[20px] px-2 rounded-[6px] text-[11px] font-medium bg-[#EBEEF2] text-[#0F1115] border border-[#979DA6]/35 shadow-xs cursor-default">全部</button>
+<button class="h-[20px] px-2 rounded-[6px] text-[11px] text-[#61666B] hover:text-[#0F1115] hover:bg-white/60 transition-colors">本机快照</button>
+<button class="h-[20px] px-2 rounded-[6px] text-[11px] text-[#61666B] hover:text-[#0F1115] hover:bg-white/60 transition-colors">备份文件</button>
+<button class="h-[20px] px-2 rounded-[6px] text-[11px] text-[#61666B] hover:text-[#0F1115] hover:bg-white/60 transition-colors">远端快照</button>
+<button class="h-[20px] px-2 rounded-[6px] text-[11px] text-[#61666B] hover:text-[#0F1115] hover:bg-white/60 transition-colors">市场产物</button>
+</div>
+</div>
+<!-- 2) 产物列表外框 (1px 描边，内部垂直滚动，吃掉剩余空间) -->
+<div class="flex-1 border border-[#E6E6E6] rounded-[12px] bg-white flex flex-col min-h-0 overflow-hidden shadow-xs">
+<!-- 滚动列表容器 -->
+<div class="flex-1 overflow-y-auto custom-scrollbar flex flex-col divide-y divide-[#CCCCCC]/50">
+<!-- 第 1 行: 本机快照 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#CCCCCC] text-[#61666B] bg-[#F5F5F5] shrink-0">本机快照</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate font-mono">before-import</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· 1,204 文件 · 24.8 MB</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">20:41</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 第 2 行: 备份文件 (展开态) -->
+<div class="flex flex-col bg-white shrink-0">
+<!-- 行头部 -->
+<div class="h-[44px] px-3 flex items-center justify-between bg-[rgba(65,118,230,0.03)] border-l-2 border-l-[#4176E6] cursor-pointer">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#4176E6]/40 text-[#4176E6] bg-[#4176E6]/10 shrink-0">备份文件</span>
+<span class="text-[12px] font-semibold text-[#0F1115] truncate font-mono">backup-2026-11-10T2104.zip</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· 24.8 MB</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">21:04</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#0F1115] bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 展开详情区 (浅 #FAFAFA 底，8px 内边距) -->
+<div class="bg-[#FAFAFA] p-2.5 mx-2 my-1.5 rounded-[8px] border border-[#E6E6E6] flex flex-col gap-2">
+<!-- 三行元信息 -->
+<div class="flex flex-col gap-1.5">
+<!-- 路径 -->
+<div class="flex items-center text-[11px] leading-tight">
+<span class="w-[52px] text-[#81858C] shrink-0">路径</span>
+<span class="text-[12px] text-[#0F1115] font-mono break-all selection:bg-[#4176E6]/20">~/.dsh/exports/backup-2026-11-10T2104.zip</span>
+</div>
+<!-- 分区 -->
+<div class="flex items-center text-[11px] leading-tight">
+<span class="w-[52px] text-[#81858C] shrink-0">分区</span>
+<span class="text-[12px] text-[#0F1115] font-mono">settings · providers · plugins · mcp · skills</span>
+</div>
+<!-- SHA-256 -->
+<div class="flex items-center text-[11px] leading-tight">
+<span class="w-[52px] text-[#81858C] shrink-0">SHA-256</span>
+<span class="text-[12px] text-[#61666B] font-mono">4f9c1a2b8e70</span>
+</div>
+</div>
+<!-- 底部操作按钮: 右下角三个 ghost 小按钮 (高 24px) -->
+<div class="flex items-center justify-end gap-2 pt-1 border-t border-[#E6E6E6]/70">
+<button class="h-[24px] px-2.5 rounded-[6px] text-[11px] font-medium text-[#0F1115] border border-[#CCCCCC] bg-white hover:bg-[#F5F5F5] active:bg-[#EBEEF2] transition-colors">恢复</button>
+<button class="h-[24px] px-2.5 rounded-[6px] text-[11px] font-medium text-[#0F1115] border border-[#CCCCCC] bg-white hover:bg-[#F5F5F5] active:bg-[#EBEEF2] transition-colors">导入</button>
+<button class="h-[24px] px-2.5 rounded-[6px] text-[11px] font-medium text-[#EC1313] border border-[#EC1313]/30 bg-white hover:bg-[#EC1313]/10 active:bg-[#EC1313]/15 transition-colors">删除</button>
+</div>
+</div>
+</div>
+<!-- 第 3 行: 本机快照 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#CCCCCC] text-[#61666B] bg-[#F5F5F5] shrink-0">本机快照</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate font-mono">auto</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· 定时备份 · 1,198 文件</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">15:48</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 第 4 行: 备份文件 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#4176E6]/40 text-[#4176E6] bg-[#4176E6]/10 shrink-0">备份文件</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate font-mono">full-export.zip</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· 24.8 MB</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">18:30</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 第 5 行: 远端快照 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#8B5CF6]/40 text-[#8B5CF6] bg-[#8B5CF6]/10 shrink-0">远端快照</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate font-mono">gist</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· main · 2026-11-09</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">昨天</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 第 6 行: 市场产物 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#22C55E]/40 text-[#16A34A] bg-[#22C55E]/10 shrink-0">市场产物</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate">前端工具箱配置包</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· v1.2.0</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">11-08</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 第 7 行: 本机快照 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#CCCCCC] text-[#61666B] bg-[#F5F5F5] shrink-0">本机快照</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate font-mono">before-sync</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· 1,190 文件</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">11-07</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 第 8 行: 备份文件 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#4176E6]/40 text-[#4176E6] bg-[#4176E6]/10 shrink-0">备份文件</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate font-mono">backup-2026-11-06.zip</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· 22.1 MB</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">11-06</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 第 9 行: 远端快照 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#8B5CF6]/40 text-[#8B5CF6] bg-[#8B5CF6]/10 shrink-0">远端快照</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate font-mono">s3</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· dsh-backups/2026-11-05</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">11-05</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 第 10 行: 本机快照 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#CCCCCC] text-[#61666B] bg-[#F5F5F5] shrink-0">本机快照</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate font-mono">manual</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· 迁移前 · 1,180 文件</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">11-04</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 第 11 行: 备份文件 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#4176E6]/40 text-[#4176E6] bg-[#4176E6]/10 shrink-0">备份文件</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate font-mono">pre-upgrade-0.6.9.zip</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· 21.4 MB</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">11-02</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+<!-- 第 12 行: 市场产物 -->
+<div class="h-[44px] px-3 flex items-center justify-between hover:bg-[rgba(38,49,72,0.03)] cursor-pointer transition-colors shrink-0 group">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-1.5 py-0.5 rounded-[4px] text-[11px] font-medium border border-[#22C55E]/40 text-[#16A34A] bg-[#22C55E]/10 shrink-0">市场产物</span>
+<span class="text-[12px] font-medium text-[#0F1115] truncate">团队同步预设</span>
+<span class="text-[11px] text-[#81858C] shrink-0">· v0.9.1</span>
+</div>
+<div class="flex items-center gap-3 shrink-0">
+<span class="text-[11px] tabular-nums text-[#81858C]">10-30</span>
+<button class="w-5 h-5 flex items-center justify-center rounded text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2]">
+<span class="text-xs leading-none">⋯</span>
+</button>
+</div>
+</div>
+</div>
+<!-- 4) 底栏 (高 28px, 贴底, flex) -->
+<div class="h-[28px] px-3 bg-[#F5F5F5]/60 border-t border-[#E6E6E6] flex items-center justify-between shrink-0 select-none">
+<span class="text-[11px] tabular-nums text-[#81858C]">共 12 项</span>
+<div class="flex items-center gap-3">
+<button class="text-[11px] text-[#61666B] hover:text-[#0F1115] transition-colors">逛市场</button>
+<span class="text-[10px] text-[#CCCCCC]">|</span>
+<button class="text-[11px] text-[#61666B] hover:text-[#0F1115] transition-colors">发布到市场</button>
+</div>
+</div>
+</div>
+</div>
+<!-- 3) 底部 28px 状态栏 -->
+<div class="h-[28px] px-3 border-t border-[#E6E6E6] flex items-center justify-between shrink-0 select-none text-[11px] text-[#61666B] bg-[#FAFAFA]">
+<!-- 左侧状态点 + 就绪 -->
+<div class="flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span class="text-[#0F1115] font-medium">就绪</span>
+</div>
+<!-- 中间任务名 + 细不定态进度条 -->
+<div class="flex items-center gap-2">
+<span class="text-[#81858C]">导出 ZIP 进行中</span>
+<div class="w-32 h-[3px] bg-[#E6E6E6] rounded-full overflow-hidden relative">
+<div class="absolute inset-y-0 w-1/3 bg-[#4176E6] rounded-full animate-progress-indeterminate"></div>
+</div>
+</div>
+<!-- 右侧版本号 -->
+<div class="text-[#81858C] font-mono tabular-nums">
+          v0.7.0 · DSH 2.4
+        </div>
+</div>
+<div class="absolute inset-0 bg-black/25 z-50 flex flex-col items-center select-none pt-[72px]"><div class="w-[420px] max-h-[520px] bg-white rounded-[16px] border border-[#E6E6E6] shadow-[0_8px_32px_rgba(0,0,0,0.12)] flex flex-col overflow-hidden"><div class="h-[44px] px-3.5 border-b border-[#E6E6E6] flex items-center justify-between shrink-0 bg-white"><div class="flex items-center gap-2 flex-1"><svg class="w-4 h-4 text-[#61666B] shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12.5px] text-[#81858C]">输入命令…</span></div><span class="text-[11px] font-mono text-[#81858C] border border-[#CCCCCC] rounded-[4px] px-1.5 py-0.5 bg-[#F5F5F5] leading-none shrink-0">esc</span></div><div class="flex-1 overflow-y-auto custom-scrollbar p-1.5 flex flex-col gap-0.5"><div class="px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-[#81858C]">导航</div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between bg-[#EBEEF2] text-[#0F1115] font-medium cursor-pointer"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#0F1115]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">首页</span></div><span class="text-[11px] font-mono text-[#81858C]">⌘1</span></div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M4 7v10c0 2 1.5 3 3.5 3h9c2 0 3.5-1 3.5-3V7c0-2-1.5-3-3.5-3h-9C5.5 4 4 5 4 7z" stroke-linecap="round" stroke-linejoin="round"></path><path d="M9 12h6M9 8h6M9 16h4" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">产物库</span></div><span class="text-[11px] font-mono text-[#81858C]">⌘2</span></div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">同步</span></div><span class="text-[11px] font-mono text-[#81858C]">⌘3</span></div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">环境</span></div><span class="text-[11px] font-mono text-[#81858C]">⌘4</span></div><div class="h-[1px] bg-[#E6E6E6] mx-1.5 my-1"></div><div class="px-2 pt-1 pb-0.5 text-[11px] font-medium text-[#81858C]">备份</div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M12 4v16m8-8H4" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">新建备份</span></div></div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">导出 ZIP</span></div></div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">导入备份</span></div></div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">恢复快照</span></div></div><div class="h-[1px] bg-[#E6E6E6] mx-1.5 my-1"></div><div class="px-2 pt-1 pb-0.5 text-[11px] font-medium text-[#81858C]">同步</div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">立即同步</span></div></div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke-linecap="round" stroke-linejoin="round"></path><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">打开同步配置</span></div></div><div class="h-[1px] bg-[#E6E6E6] mx-1.5 my-1"></div><div class="px-2 pt-1 pb-0.5 text-[11px] font-medium text-[#81858C]">维护</div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">事故恢复</span></div></div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824-2.12a4.978 4.978 0 012.83 1.414" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">救援模式</span></div></div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">回滚点</span></div></div><div class="h-[36px] px-2 rounded-[8px] flex items-center justify-between text-[#0F1115] hover:bg-[#F5F5F5] cursor-pointer transition-colors"><div class="flex items-center gap-2.5"><svg class="w-3.5 h-3.5 text-[#61666B]" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round"></path></svg><span class="text-[12px]">检查更新</span></div></div></div><div class="h-[28px] px-3 bg-[#FAFAFA] border-t border-[#E6E6E6] flex items-center justify-end shrink-0"><span class="text-[11px] text-[#81858C] font-mono tracking-tight">↑↓ 选择 · ↵ 执行 · esc 关闭</span></div></div></div></div>
+</div>
+</body>
+</html>

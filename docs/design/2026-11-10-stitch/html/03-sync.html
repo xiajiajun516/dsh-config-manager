@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 同步</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<style>
+    * {
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+      font-feature-settings: "tnum";
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      width: 1440px;
+      height: 900px;
+      overflow: hidden;
+      background-color: #F0F1F2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+      color: #0F1115;
+    }
+    .font-mono-code {
+      font-family: "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+    }
+    .text-title { font-size: 13px; line-height: 1.25; }
+    .text-base-custom { font-size: 12.5px; line-height: 1.5; }
+    .text-table { font-size: 12px; line-height: 1.5; }
+    .text-meta { font-size: 11px; line-height: 1.5; }
+    
+    .btn-ghost {
+      height: 24px;
+      padding: 0 8px;
+      font-size: 11px;
+      font-weight: 500;
+      border-radius: 6px;
+      border: 0.5px solid #CCCCCC;
+      background: #FFFFFF;
+      color: #0F1115;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      cursor: default;
+    }
+    .btn-ghost:hover {
+      background: rgba(38,49,72,0.06);
+    }
+    .badge-success {
+      background-color: rgba(34, 197, 94, 0.12);
+      color: #15803d;
+      font-size: 11px;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 500;
+    }
+    .badge-neutral {
+      background-color: #EBEEF2;
+      color: #61666B;
+      font-size: 11px;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body class="flex items-center justify-center select-none">
+<!-- 800x800 Desktop Settings Window -->
+<div class="w-[800px] h-[800px] bg-white rounded-[16px] border border-[#E6E6E6] shadow-[0_20px_50px_rgba(0,0,0,0.08)] flex flex-col overflow-hidden relative">
+<!-- Window Body (Top Native Bar + Content) -->
+<div class="flex-1 flex overflow-hidden">
+<!-- Left 188px Host Native Navigation -->
+<div class="w-[188px] bg-[#FAFAFA] border-r border-[#E6E6E6] flex flex-col justify-between p-[12px] shrink-0">
+<div>
+<!-- macOS Window Controls -->
+<div class="flex items-center gap-[6px] px-1 py-[6px] mb-3">
+<span class="w-[11px] h-[11px] rounded-full bg-[#EC6A5E] border border-[#D04E42]"></span>
+<span class="w-[11px] h-[11px] rounded-full bg-[#F4BF4F] border border-[#D8A137]"></span>
+<span class="w-[11px] h-[11px] rounded-full bg-[#62C554] border border-[#4BA43D]"></span>
+</div>
+<!-- Section Label -->
+<div class="text-meta text-[#81858C] font-medium px-2 py-1 mb-1 tracking-wider uppercase">设置</div>
+<!-- Navigation Items -->
+<nav class="flex flex-col gap-[2px]">
+<!-- 常规 -->
+<div class="flex items-center gap-2 px-2.5 h-[28px] rounded-[6px] text-table text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-default">
+<svg class="text-[#81858C]" fill="none" height="13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="13"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+<span>常规</span>
+</div>
+<!-- 外观 -->
+<div class="flex items-center gap-2 px-2.5 h-[28px] rounded-[6px] text-table text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-default">
+<svg class="text-[#81858C]" fill="none" height="13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="13"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path></svg>
+<span>外观</span>
+</div>
+<!-- 模型 -->
+<div class="flex items-center gap-2 px-2.5 h-[28px] rounded-[6px] text-table text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-default">
+<svg class="text-[#81858C]" fill="none" height="13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="13"><rect height="16" rx="2" width="16" x="4" y="4"></rect><rect height="6" width="6" x="9" y="9"></rect><line x1="9" x2="9" y1="1" y2="4"></line><line x1="15" x2="15" y1="1" y2="4"></line><line x1="9" x2="9" y1="20" y2="23"></line><line x1="15" x2="15" y1="20" y2="23"></line><line x1="20" x2="23" y1="9" y2="9"></line><line x1="20" x2="23" y1="14" y2="14"></line><line x1="1" x2="4" y1="9" y2="9"></line><line x1="1" x2="4" y1="14" y2="14"></line></svg>
+<span>模型</span>
+</div>
+<!-- 插件 -->
+<div class="flex items-center gap-2 px-2.5 h-[28px] rounded-[6px] text-table text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-default">
+<svg class="text-[#81858C]" fill="none" height="13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="13"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"></path><line x1="16" x2="2" y1="8" y2="22"></line><line x1="17.5" x2="9" y1="15" y2="15"></line></svg>
+<span>插件</span>
+</div>
+<!-- 备份与迁移 (Active) -->
+<div class="flex items-center gap-2 px-2.5 h-[28px] rounded-[6px] text-table text-[#0F1115] bg-[#EBEEF2] font-semibold border border-[#979DA6]/20 cursor-default">
+<svg class="text-[#0F1115]" fill="none" height="13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="13"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" x2="12" y1="3" y2="15"></line></svg>
+<span>备份与迁移</span>
+</div>
+</nav>
+</div>
+<!-- Left Bottom: 关于 -->
+<div>
+<div class="flex items-center gap-2 px-2.5 h-[28px] rounded-[6px] text-table text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-default">
+<svg class="text-[#81858C]" fill="none" height="13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="13"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+<span>关于</span>
+</div>
+</div>
+</div>
+<!-- Right 564px Plugin Interface (Strictly 564x720 + layout bounds) -->
+<div class="w-[612px] flex flex-col justify-between bg-white overflow-hidden">
+<!-- Upper part: Tabs (32px) + Content Area -->
+<div class="flex flex-col flex-1 overflow-hidden">
+<!-- 32px Tab Bar -->
+<div class="h-[32px] px-3 border-b border-[#E6E6E6] flex items-center justify-between shrink-0 bg-white">
+<!-- Left Tabs -->
+<div class="flex items-center gap-1">
+<!-- 首页 -->
+<div class="flex items-center gap-1.5 px-2 h-[24px] rounded-[6px] text-meta text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-default">
+<svg fill="none" height="12" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="12"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+<span>首页</span>
+</div>
+<!-- 产物库 -->
+<div class="flex items-center gap-1.5 px-2 h-[24px] rounded-[6px] text-meta text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-default">
+<svg fill="none" height="12" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="12"><rect height="14" rx="2" width="20" x="2" y="3"></rect><line x1="8" x2="16" y1="21" y2="21"></line><line x1="12" x2="12" y1="17" y2="21"></line></svg>
+<span>产物库</span>
+</div>
+<!-- 同步 (Active) -->
+<div class="flex items-center gap-1.5 px-2 h-[24px] rounded-[6px] text-meta text-[#0F1115] bg-[#EBEEF2] font-semibold cursor-default">
+<svg fill="none" height="12" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="12"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+<span>同步</span>
+</div>
+<!-- 环境 -->
+<div class="flex items-center gap-1.5 px-2 h-[24px] rounded-[6px] text-meta text-[#61666B] hover:bg-[rgba(38,49,72,0.04)] cursor-default">
+<svg fill="none" height="12" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="12"><rect height="16" rx="2" width="16" x="4" y="4"></rect><rect height="6" width="6" x="9" y="9"></rect></svg>
+<span>环境</span>
+</div>
+</div>
+<!-- Right 4 Action Icons (26px buttons) -->
+<div class="flex items-center gap-[2px]">
+<!-- ⌘K -->
+<div class="w-[26px] h-[26px] rounded-[6px] flex items-center justify-center text-meta font-mono-code text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-default" title="命令面板">⌘K</div>
+<!-- 活动 -->
+<div class="w-[26px] h-[26px] rounded-[6px] flex items-center justify-center text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-default" title="活动记录">
+<svg fill="none" height="13" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="13"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+</div>
+<!-- 历史 -->
+<div class="w-[26px] h-[26px] rounded-[6px] flex items-center justify-center text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-default" title="同步历史">
+<svg fill="none" height="13" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="13"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
+</div>
+<!-- 关于 -->
+<div class="w-[26px] h-[26px] rounded-[6px] flex items-center justify-center text-[#61666B] hover:bg-[rgba(38,49,72,0.06)] cursor-default" title="关于插件">
+<svg fill="none" height="13" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="13"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</div>
+</div>
+</div>
+<!-- Main Content Area: 4 Cards filling the full vertical height, 10px gap -->
+<div class="flex-1 p-[14px] flex flex-col justify-between gap-[10px] overflow-hidden bg-[#FFFFFF]"><!-- 1. Git (已连接, 紧凑卡) -->
+<div class="border border-[#E6E6E6] rounded-[12px] p-[12px] bg-white flex flex-col justify-between shrink-0 h-[106px]">
+<!-- Header -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<svg fill="none" height="15" stroke="#0F1115" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="15">
+<circle cx="18" cy="18" r="3"></circle>
+<circle cx="6" cy="6" r="3"></circle>
+<circle cx="6" cy="18" r="3"></circle>
+<path d="M18 9a9 9 0 0 1-9 9"></path>
+<line x1="6" x2="6" y1="9" y2="15"></line>
+</svg>
+<span class="text-title font-semibold text-[#0F1115]">Git</span>
+<span class="badge-success">
+<span class="w-[5px] h-[5px] rounded-full bg-[#22C55E]"></span>
+        已连接
+      </span>
+</div>
+<div class="text-meta text-[#81858C] font-mono-code">上次同步 19:52</div>
+</div>
+<!-- Content line -->
+<div class="flex items-center justify-between text-table">
+<div class="flex items-center gap-2 truncate">
+<span class="text-meta text-[#81858C] shrink-0">仓库</span>
+<span class="font-mono-code text-[#0F1115] truncate text-meta">github.com/xiajiajun516/dsh-config</span>
+<span class="text-meta text-[#81858C] ml-1 shrink-0">(main)</span>
+</div>
+<div class="text-meta text-[#22C55E] shrink-0 font-medium">自动同步 (每 30 分钟)</div>
+</div>
+<!-- Actions & Status -->
+<div class="flex items-center justify-between pt-1 border-t border-[#F0F1F2]">
+<div class="flex items-center gap-2">
+<button class="btn-ghost">
+<svg fill="none" height="11" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="11"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+        立即同步
+      </button>
+<button class="btn-ghost">配置</button>
+</div>
+<div class="flex items-center gap-1 text-meta text-[#81858C]">
+<svg fill="none" height="12" stroke="#22C55E" stroke-width="2.5" viewbox="0 0 24 24" width="12"><polyline points="20 6 9 17 4 12"></polyline></svg>
+<span>3 个分区已推送</span>
+</div>
+</div>
+</div>
+<!-- 2. WebDAV (未配置, 紧凑卡) -->
+<div class="border border-[#E6E6E6] rounded-[12px] p-[12px] bg-white flex flex-col justify-between shrink-0 h-[106px]">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<svg fill="none" height="15" stroke="#0F1115" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="15">
+<rect height="16" rx="2" width="20" x="2" y="4"></rect>
+<path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h12M6 16h12"></path>
+</svg>
+<span class="text-title font-semibold text-[#0F1115]">WebDAV</span>
+<span class="badge-neutral">
+<span class="w-[5px] h-[5px] rounded-full bg-[#81858C]"></span>
+        未配置
+      </span>
+</div>
+<div class="text-meta text-[#81858C]">未启用</div>
+</div>
+<div class="text-meta text-[#61666B]">
+    未配置。添加服务器地址后可在多台机器间协同备份。
+  </div>
+<div class="flex items-center justify-end pt-1 border-t border-[#F0F1F2]">
+<button class="btn-ghost">配置</button>
+</div>
+</div>
+<!-- 3. S3 (未配置, 紧凑卡) -->
+<div class="border border-[#E6E6E6] rounded-[12px] p-[12px] bg-white flex flex-col justify-between shrink-0 h-[106px]">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<svg fill="none" height="15" stroke="#0F1115" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="15">
+<ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+<path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+<path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+</svg>
+<span class="text-title font-semibold text-[#0F1115]">S3 对象存储</span>
+<span class="badge-neutral">
+<span class="w-[5px] h-[5px] rounded-full bg-[#81858C]"></span>
+        未配置
+      </span>
+</div>
+<div class="text-meta text-[#81858C]">未启用</div>
+</div>
+<div class="text-meta text-[#61666B]">
+    支持兼容 S3 协议的自建 MinIO、Cloudflare R2 与 AWS S3 存储桶。
+  </div>
+<div class="flex items-center justify-end pt-1 border-t border-[#F0F1F2]">
+<button class="btn-ghost">配置</button>
+</div>
+</div>
+<!-- 4. Gist (已连接, 紧凑卡) -->
+<div class="border border-[#E6E6E6] rounded-[12px] p-[12px] bg-white flex flex-col justify-between shrink-0 h-[106px]">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<svg fill="none" height="15" stroke="#0F1115" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="15">
+<polyline points="16 18 22 12 16 6"></polyline>
+<polyline points="8 6 2 12 8 18"></polyline>
+</svg>
+<span class="text-title font-semibold text-[#0F1115]">GitHub Gist</span>
+<span class="badge-success">
+<span class="w-[5px] h-[5px] rounded-full bg-[#22C55E]"></span>
+        已连接
+      </span>
+</div>
+<div class="text-meta text-[#81858C] font-mono-code">上次同步 昨天 18:20</div>
+</div>
+<div class="flex items-center justify-between text-meta">
+<div class="flex items-center gap-2">
+<span class="text-[#81858C]">代码片段</span>
+<span class="font-mono-code text-[#0F1115]">7f3a…c21b</span>
+<span class="text-[#81858C] ml-1">(secret 密钥加密)</span>
+</div>
+<div class="text-meta text-[#81858C]">全量配置镜像</div>
+</div>
+<div class="flex items-center justify-between pt-1 border-t border-[#F0F1F2]">
+<div class="flex items-center gap-2">
+<button class="btn-ghost">
+<svg fill="none" height="11" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="11"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+        立即同步
+      </button>
+<button class="btn-ghost">配置</button>
+</div>
+<div class="text-meta text-[#81858C]">版本快照 #14</div>
+</div>
+</div>
+<!-- 5. 同步记录卡 (吃满剩余高度, 5 条历史) -->
+<div class="border border-[#E6E6E6] rounded-[12px] p-[12px] bg-white flex flex-col flex-1 overflow-hidden justify-between">
+<!-- Header -->
+<div class="flex items-center justify-between shrink-0 mb-1">
+<div class="flex items-center gap-1.5">
+<svg fill="none" height="14" stroke="#0F1115" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 14 14"></polyline>
+</svg>
+<span class="text-title font-semibold text-[#0F1115]">同步记录</span>
+</div>
+<span class="text-meta text-[#81858C]">最近 5 次</span>
+</div>
+<!-- 5 Log Rows -->
+<div class="flex flex-col justify-around flex-1 text-meta">
+<!-- Row 1 -->
+<div class="flex items-center justify-between py-1 border-b border-[#E6E6E6]/60">
+<div class="flex items-center gap-2">
+<span class="font-mono-code text-[#81858C]">19:52</span>
+<span class="text-[#0F1115]"><span class="font-mono-code">git</span> 推送到 main · 3 个分区</span>
+</div>
+<div class="flex items-center gap-1 text-[#22C55E]">
+<span class="w-[5px] h-[5px] rounded-full bg-[#22C55E]"></span>
+<span>成功</span>
+</div>
+</div>
+<!-- Row 2 -->
+<div class="flex items-center justify-between py-1 border-b border-[#E6E6E6]/60">
+<div class="flex items-center gap-2">
+<span class="font-mono-code text-[#81858C]">18:20</span>
+<span class="text-[#0F1115]"><span class="font-mono-code">gist</span> 拉取</span>
+</div>
+<div class="flex items-center gap-1 text-[#22C55E]">
+<span class="w-[5px] h-[5px] rounded-full bg-[#22C55E]"></span>
+<span>成功</span>
+</div>
+</div>
+<!-- Row 3 -->
+<div class="flex items-center justify-between py-1 border-b border-[#E6E6E6]/60">
+<div class="flex items-center gap-2">
+<span class="font-mono-code text-[#81858C]">昨天</span>
+<span class="text-[#61666B]"><span class="font-mono-code">s3</span> 未配置</span>
+</div>
+<div class="flex items-center gap-1 text-[#81858C]">
+<span class="w-[5px] h-[5px] rounded-full bg-[#81858C]"></span>
+<span>跳过</span>
+</div>
+</div>
+<!-- Row 4 -->
+<div class="flex items-center justify-between py-1 border-b border-[#E6E6E6]/60">
+<div class="flex items-center gap-2">
+<span class="font-mono-code text-[#81858C]">11-08</span>
+<span class="text-[#0F1115]"><span class="font-mono-code">git</span> 推送</span>
+</div>
+<div class="flex items-center gap-1 text-[#EC6A5E]">
+<span class="w-[5px] h-[5px] rounded-full bg-[#EC6A5E]"></span>
+<span>冲突已中止</span>
+</div>
+</div>
+<!-- Row 5 -->
+<div class="flex items-center justify-between py-1">
+<div class="flex items-center gap-2">
+<span class="font-mono-code text-[#81858C]">11-07</span>
+<span class="text-[#0F1115]"><span class="font-mono-code">git</span> 拉取</span>
+</div>
+<div class="flex items-center gap-1 text-[#22C55E]">
+<span class="w-[5px] h-[5px] rounded-full bg-[#22C55E]"></span>
+<span>成功</span>
+</div>
+</div>
+</div>
+</div></div>
+</div>
+<!-- 28px Bottom Status Bar -->
+<div class="h-[28px] px-3 border-t border-[#E6E6E6] flex items-center justify-between bg-white shrink-0">
+<div class="flex items-center gap-2">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span class="text-meta text-[#61666B]">就绪</span>
+</div>
+<div class="text-meta text-[#81858C] font-mono-code">
+            v0.7.0 · DSH 2.4
+          </div>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>
