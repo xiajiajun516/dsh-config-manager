@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 导出备份流程面板</title>
+<!-- Tailwind CSS v3 with forms and container queries -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            app: {
+              bg: '#F0F1F2',
+              card: '#FFFFFF',
+              sidebar: '#FAFAFA',
+              border: '#E6E6E6',
+              divider: '#CCCCCC',
+              primary: '#0F1115',
+              secondary: '#61666B',
+              muted: '#81858C',
+              accent: '#4176E6',
+              activeNav: '#EBEEF2'
+            }
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', '"SF Pro Icons"', '"Helvetica Neue"', 'Helvetica', 'Arial', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', '"Liberation Mono"', '"Courier New"', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+<style data-purpose="custom-scrollbars">
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #E0E2E6;
+      border-radius: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #C4C7CC;
+    }
+  </style>
+<style data-purpose="micro-borders">
+    .border-hairline {
+      border-width: 0.5px;
+    }
+    .border-b-hairline {
+      border-bottom-width: 0.5px;
+    }
+    .border-t-hairline {
+      border-top-width: 0.5px;
+    }
+  </style>
+</head>
+<body class="bg-[#F0F1F2] text-[#0F1115] font-sans antialiased min-h-screen flex items-center justify-center p-0 m-0 select-none">
+<!-- BEGIN: 1440x900 Canvas Wrapper -->
+<div class="w-[1440px] h-[900px] flex items-center justify-center relative overflow-hidden bg-[#F0F1F2]" data-purpose="outer-canvas">
+<!-- BEGIN: HostWindow (800x800) -->
+<div class="w-[800px] h-[800px] bg-[#FFFFFF] rounded-[16px] border border-[#E6E6E6] flex overflow-hidden relative shadow-none" data-purpose="host-desktop-window">
+<!-- BEGIN: NativeSidebar (188px) -->
+<aside class="w-[188px] h-full bg-[#FAFAFA] border-r border-[#E6E6E6] flex flex-col justify-between shrink-0 p-3 pt-3.5 select-none" data-purpose="native-navigation-sidebar">
+<!-- Top Section: macOS Dots & Nav Items -->
+<div class="flex flex-col gap-4">
+<!-- macOS Traffic Lights (12px) -->
+<div class="flex items-center gap-2 px-1 pt-0.5" data-purpose="window-traffic-lights">
+<div class="w-[12px] h-[12px] rounded-full bg-[#FF5F56] border border-[#E0443E]/40 cursor-default"></div>
+<div class="w-[12px] h-[12px] rounded-full bg-[#FFBD2E] border border-[#DEA123]/40 cursor-default"></div>
+<div class="w-[12px] h-[12px] rounded-full bg-[#27C93F] border border-[#1AAB29]/40 cursor-default"></div>
+</div>
+<!-- Section Label -->
+<div class="px-2 pt-1">
+<span class="text-[11px] font-medium text-[#81858C] tracking-wider">设置</span>
+</div>
+<!-- Navigation Menu List -->
+<nav class="flex flex-col gap-1" data-purpose="settings-menu-list">
+<!-- 常规 -->
+<button class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[#61666B] hover:text-[#0F1115] hover:bg-black/5 text-[13px] font-normal transition-colors text-left w-full" type="button">
+<svg class="w-4 h-4 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke-linecap="round" stroke-linejoin="round"></path>
+<path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>常规</span>
+</button>
+<!-- 外观 -->
+<button class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[#61666B] hover:text-[#0F1115] hover:bg-black/5 text-[13px] font-normal transition-colors text-left w-full" type="button">
+<svg class="w-4 h-4 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>外观</span>
+</button>
+<!-- 模型 -->
+<button class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[#61666B] hover:text-[#0F1115] hover:bg-black/5 text-[13px] font-normal transition-colors text-left w-full" type="button">
+<svg class="w-4 h-4 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<path d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>模型</span>
+</button>
+<!-- 插件 -->
+<button class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[#61666B] hover:text-[#0F1115] hover:bg-black/5 text-[13px] font-normal transition-colors text-left w-full" type="button">
+<svg class="w-4 h-4 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<path d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" stroke-linecap="round" stroke-linejoin="round"></path>
+<path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>插件</span>
+</button>
+<!-- 备份与迁移 (Active) -->
+<button class="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg bg-[#EBEEF2] text-[#0F1115] text-[13px] font-medium transition-colors text-left w-full" type="button">
+<svg class="w-4 h-4 stroke-current stroke-[1.8]" fill="none" viewbox="0 0 24 24">
+<path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>备份与迁移</span>
+</button>
+</nav>
+</div>
+<!-- Bottom: About button -->
+<button class="flex items-center gap-2 px-2.5 py-2 text-[#81858C] hover:text-[#0F1115] text-[12px] transition-colors w-full rounded-lg" type="button">
+<svg class="w-3.5 h-3.5 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="9"></circle>
+<path d="M12 8v4m0 4h.01" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>关于</span>
+</button>
+</aside>
+<!-- END: NativeSidebar -->
+<!-- BEGIN: MainContentArea (564px wide container, 800px high total) -->
+<main class="w-[564px] h-full flex flex-col relative bg-[#FFFFFF] border-l border-[#E6E6E6]" data-purpose="right-viewport-area">
+<!-- BEGIN: 1) TopTabBar (高度固定 32px) -->
+<header class="h-[32px] shrink-0 border-b-hairline border-[#CCCCCC] px-3 flex items-center justify-between bg-[#FFFFFF] text-[11px] select-none" data-purpose="top-navigation-tabs">
+<nav class="flex items-center gap-3.5 text-[#61666B]">
+<span class="text-[#0F1115] font-medium flex items-center gap-1 cursor-default">
+<svg class="w-3 h-3 stroke-current stroke-2" fill="none" viewbox="0 0 24 24">
+<path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+              首页
+            </span>
+<span class="hover:text-[#0F1115] cursor-pointer flex items-center gap-1">
+<svg class="w-3 h-3 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<rect height="14" rx="2" width="20" x="2" y="4"></rect>
+<path d="M8 20h8m-4-2v2" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+              产物库
+            </span>
+<span class="hover:text-[#0F1115] cursor-pointer flex items-center gap-1">
+<svg class="w-3 h-3 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+              同步
+            </span>
+<span class="hover:text-[#0F1115] cursor-pointer flex items-center gap-1">
+<svg class="w-3 h-3 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<rect height="16" rx="2" width="16" x="4" y="4"></rect>
+<path d="M9 9h6v6H9z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+              环境
+            </span>
+</nav>
+<!-- Right 4 quick action buttons (26px) -->
+<div class="flex items-center gap-1 text-[#81858C]">
+<span class="w-[26px] h-[26px] flex items-center justify-center text-[10px] font-mono border border-[#E6E6E6] rounded bg-[#FAFAFA] text-[#61666B]">⌘K</span>
+<button class="w-[26px] h-[26px] flex items-center justify-center hover:text-[#0F1115] rounded transition-colors" title="活动状态" type="button">
+<svg class="w-3.5 h-3.5 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</button>
+<button class="w-[26px] h-[26px] flex items-center justify-center hover:text-[#0F1115] rounded transition-colors" title="历史记录" type="button">
+<svg class="w-3.5 h-3.5 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="9"></circle>
+<path d="M12 7v5l3 3" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</button>
+<button class="w-[26px] h-[26px] flex items-center justify-center hover:text-[#0F1115] rounded transition-colors" title="关于" type="button">
+<svg class="w-3.5 h-3.5 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="9"></circle>
+<path d="M12 11v5m0-8h.01" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</button>
+</div>
+</header>
+<!-- END: TopTabBar -->
+<!-- BEGIN: 流程面板内部高密度排版 (恰好严丝合缝吃满 660px = 800 - 32 - 28) -->
+<section class="w-full h-[660px] flex flex-col bg-[#FFFFFF] overflow-hidden relative" data-purpose="full-width-task-panel">
+<!-- 1) 面板头 (固定高 40px，0.5px 下分隔线 #CCCCCC，px-3) -->
+<header class="h-[40px] px-3 border-b-hairline border-[#CCCCCC] flex items-center justify-between shrink-0 bg-[#FFFFFF]" data-purpose="panel-header">
+<button class="text-[11px] text-[#61666B] hover:text-[#0F1115] flex items-center gap-1 transition-colors" type="button">
+<span>← 返回首页</span>
+</button>
+<h1 class="text-[13px] font-bold text-[#0F1115] tracking-tight">导出备份</h1>
+<div class="flex items-center">
+<span class="text-[11px] text-[#81858C] bg-[#F5F5F5] px-[6px] py-[1px] rounded-[4px] font-normal border border-[#E6E6E6]">草稿</span>
+</div>
+</header>
+<!-- 面板内容滚动/自适应区 (紧密堆叠，吃满空间，无大空白) -->
+<div class="flex-1 flex flex-col overflow-hidden justify-between pt-2 pb-1" data-purpose="panel-content-body">
+<!-- 2) 选择条 (固定高 32px，px-3) -->
+<div class="h-[32px] mx-3 px-2.5 bg-[#FFFFFF] rounded-lg border-hairline border-[#CCCCCC] flex items-center justify-between shrink-0" data-purpose="selection-summary-bar">
+<span class="text-[11px] text-[#81858C] font-mono tracking-tight">已选 12 个分区 · 1,204 个文件 · 24.8 MB</span>
+<button class="h-[24px] px-2 text-[11px] text-[#0F1115] bg-[#FFFFFF] border-hairline border-[#CCCCCC] rounded-[6px] hover:bg-[#F3F4F6] transition-colors font-normal" type="button">
+                选择要导出的内容
+              </button>
+</div>
+<!-- 3) 「安全选项」分组 (px-3 py-2) -->
+<div class="px-3 py-2 flex flex-col shrink-0" data-purpose="security-options-group">
+<span class="text-[11px] text-[#81858C] font-semibold mb-1">安全选项</span>
+<!-- 行 1: 加密备份 (26px) -->
+<label class="h-[26px] flex items-center gap-2 cursor-pointer select-none">
+<input checked="" class="w-[14px] h-[14px] text-[#4176E6] rounded-[3px] border-[#CCCCCC] focus:ring-0 focus:ring-offset-0 transition-colors" type="checkbox"/>
+<span class="text-[12px] text-[#0F1115] font-normal">加密备份（AES-256-GCM）</span>
+</label>
+<!-- 行 2: 导出密钥 (26px) -->
+<label class="h-[26px] flex items-center gap-2 cursor-pointer select-none">
+<input class="w-[14px] h-[14px] text-[#4176E6] rounded-[3px] border-[#CCCCCC] focus:ring-0 focus:ring-offset-0 transition-colors" type="checkbox"/>
+<span class="text-[12px] text-[#0F1115] font-normal">导出密钥（含凭据，密钥绝不明文）</span>
+</label>
+<!-- 展开密码双列 (高 28px，圆角 8px，1px 描边 #E6E6E6) -->
+<div class="grid grid-cols-2 gap-2 mt-1.5" data-purpose="password-fields-container">
+<!-- 左列密码 -->
+<div class="h-[28px] border border-[#E6E6E6] rounded-[8px] px-2.5 text-[12px] flex items-center justify-between bg-white focus-within:border-[#4176E6] transition-all">
+<input class="w-full bg-transparent border-0 p-0 text-[12px] text-[#0F1115] tracking-widest focus:ring-0 focus:outline-none" placeholder="密码" type="password" value="••••••••••••"/>
+<button class="text-[#81858C] hover:text-[#61666B] transition-colors shrink-0 ml-1" type="button">
+<svg class="w-3.5 h-3.5 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<path d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</button>
+</div>
+<!-- 右列确认密码 -->
+<div class="h-[28px] border border-[#E6E6E6] rounded-[8px] px-2.5 text-[12px] flex items-center justify-between bg-white focus-within:border-[#4176E6] transition-all">
+<input class="w-full bg-transparent border-0 p-0 text-[12px] text-[#0F1115] tracking-widest focus:ring-0 focus:outline-none" placeholder="确认密码" type="password" value="••••••••••••"/>
+<button class="text-[#81858C] hover:text-[#61666B] transition-colors shrink-0 ml-1" type="button">
+<svg class="w-3.5 h-3.5 stroke-current stroke-[1.5]" fill="none" viewbox="0 0 24 24">
+<path d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</button>
+</div>
+</div>
+<!-- 下方提示 (mt-1) -->
+<div class="flex items-center gap-1.5 text-[11px] text-[#81858C] mt-1">
+<svg class="w-3 h-3 stroke-current stroke-[1.5] shrink-0" fill="none" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="9"></circle>
+<path d="M12 8v4m0 4h.01" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<span>密码只存在内存，关闭后需重新输入</span>
+</div>
+</div>
+<!-- 4) 「文件与备注」分组 (px-3 py-1.5) -->
+<div class="px-3 py-1 shrink-0" data-purpose="file-and-remark-group"><span class="text-[11px] text-[#81858C] font-semibold mb-1">文件与备注</span>
+<div class="grid grid-cols-2 gap-2">
+<!-- 左列：文件名 -->
+<div class="flex flex-col gap-0.5">
+<div class="h-[28px] border border-[#E6E6E6] rounded-[8px] px-2.5 text-[12px] font-mono text-[#0F1115] flex items-center bg-[#FAFAFA] focus-within:border-[#4176E6] focus-within:bg-white transition-all">
+<input class="w-full bg-transparent border-0 p-0 text-[12px] font-mono text-[#0F1115] focus:ring-0 focus:outline-none" type="text" value="backup-2026-11-10T2104.zip"/>
+</div>
+<span class="text-[11px] text-[#81858C] px-1 select-none">自动补全 .zip</span>
+</div>
+<!-- 右列：备注 -->
+<div class="flex flex-col gap-0.5">
+<div class="h-[28px] border border-[#E6E6E6] rounded-[8px] px-2.5 text-[12px] text-[#0F1115] flex items-center bg-white focus-within:border-[#4176E6] transition-all">
+<input class="w-full bg-transparent border-0 p-0 text-[12px] text-[#0F1115] placeholder-[#81858C] focus:ring-0 focus:outline-none" placeholder="例如：升级前" type="text" value="迁移前"/>
+</div>
+</div>
+</div>
+</div>
+<!-- 5) 进度块 (mx-3 my-1 p-2 rounded-[8px] border border-[#E6E6E6] bg-[#FAFAFA]) -->
+<div class="mx-3 my-1 p-2 rounded-[8px] border border-[#E6E6E6] bg-[#FAFAFA] flex flex-col gap-1 shrink-0" data-purpose="export-progress-panel">
+<div class="flex items-center gap-3">
+<div class="flex-1 bg-[#EBEEF2] rounded-[2px] h-[4px] overflow-hidden" data-purpose="progress-track">
+<div class="bg-[#4176E6] h-full rounded-[2px] transition-all duration-300" data-purpose="progress-fill" style="width: 48%;"></div>
+</div>
+<span class="text-[12px] font-semibold text-[#4176E6] font-mono tabular-nums shrink-0">导出中 48%</span>
+</div>
+<div class="text-[11px] text-[#81858C] font-mono">正在收集 sessions（742 MB）</div>
+</div>
+<!-- 6) 页尾构成卡「本次将导出」 (mx-3 flex-1 flex flex-col min-h-0 border border-[#E6E6E6] rounded-[12px] p-2.5 bg-white) -->
+<div class="mx-3 flex-1 flex flex-col min-h-0 border border-[#E6E6E6] rounded-[12px] p-2.5 bg-white overflow-hidden" data-purpose="partitions-summary-list">
+<!-- 卡头 -->
+<div class="flex items-center justify-between pb-1.5 border-b border-[#CCCCCC]/50 shrink-0">
+<h2 class="text-[13px] font-bold text-[#0F1115]">本次将导出</h2>
+<span class="text-[11px] text-[#81858C] font-mono tracking-tight">12 个分区 · 1,204 个文件</span>
+</div>
+<!-- 列表区域 (严格8行，行高28px，0.5px分隔线) -->
+<div class="flex-1 overflow-y-auto divide-y divide-[#CCCCCC]/40 pr-2 custom-scrollbar" data-purpose="partitions-table-rows">
+<div class="h-[28px] flex items-center justify-between text-[12px] px-1 hover:bg-black/[0.02]">
+<span class="text-[#0F1115] font-mono text-[12px]">settings</span>
+<span class="text-[11px] text-[#81858C] font-mono">41 个文件 · 1.2 MB</span>
+</div>
+<div class="h-[28px] flex items-center justify-between text-[12px] px-1 hover:bg-black/[0.02]">
+<span class="text-[#0F1115] font-mono text-[12px]">providers</span>
+<span class="text-[11px] text-[#81858C] font-mono">8 个 · 96 KB</span>
+</div>
+<div class="h-[28px] flex items-center justify-between text-[12px] px-1 hover:bg-black/[0.02]">
+<span class="text-[#0F1115] font-mono text-[12px]">plugins</span>
+<span class="text-[11px] text-[#81858C] font-mono">214 个 · 6.4 MB</span>
+</div>
+<div class="h-[28px] flex items-center justify-between text-[12px] px-1 hover:bg-black/[0.02]">
+<span class="text-[#0F1115] font-mono text-[12px]">mcp</span>
+<span class="text-[11px] text-[#81858C] font-mono">3 个 · 12 KB</span>
+</div>
+<div class="h-[28px] flex items-center justify-between text-[12px] px-1 hover:bg-black/[0.02]">
+<span class="text-[#0F1115] font-mono text-[12px]">skills</span>
+<span class="text-[11px] text-[#81858C] font-mono">26 个 · 412 KB</span>
+</div>
+<div class="h-[28px] flex items-center justify-between text-[12px] px-1 hover:bg-black/[0.02]">
+<span class="text-[#0F1115] font-mono text-[12px]">pluginData</span>
+<span class="text-[11px] text-[#81858C] font-mono">620 个 · 9.8 MB</span>
+</div>
+<div class="h-[28px] flex items-center justify-between text-[12px] px-1 hover:bg-black/[0.02]">
+<span class="text-[#0F1115] font-mono text-[12px]">sessions</span>
+<span class="text-[11px] text-[#81858C] font-mono">268 个 · 742 MB</span>
+</div>
+<div class="h-[28px] flex items-center justify-between text-[12px] px-1 hover:bg-black/[0.02]">
+<span class="text-[#0F1115] font-mono text-[12px]">workspace</span>
+<span class="text-[11px] text-[#81858C] font-mono">24 个 · 2.1 MB</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 7) 面板底栏 (固定高 48px，0.5px 上分隔线 #CCCCCC，px-3) -->
+<footer class="h-[48px] px-3 shrink-0 border-t-hairline border-[#CCCCCC] flex items-center justify-between bg-[#FFFFFF]" data-purpose="panel-action-bar">
+<button class="h-[28px] px-3 text-[12px] text-[#61666B] border-hairline border-[#CCCCCC] rounded-[8px] hover:text-[#0F1115] hover:bg-[#F3F4F6] transition-colors" type="button">
+              取消
+            </button>
+<button class="h-[28px] px-[14px] text-[12px] text-white font-medium bg-[#0F1115] rounded-[8px] hover:bg-black transition-colors flex items-center shadow-none active:scale-[0.99]" type="button">
+              开始导出
+            </button>
+</footer>
+</section>
+<!-- END: TaskWorkflowPanel -->
+<!-- BEGIN: BottomStatusBar (贴底固定 28px) -->
+<footer class="h-[28px] shrink-0 border-t-hairline border-[#CCCCCC] px-3 flex items-center justify-between bg-[#FFFFFF] text-[11px] text-[#81858C] select-none" data-purpose="window-bottom-status-bar">
+<div class="flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-[#10B981]"></span>
+<span class="text-[#61666B] font-medium">就绪</span>
+</div>
+<div class="font-mono text-[11px] text-[#81858C]">
+            v0.7.0 · DSH 2.4
+          </div>
+</footer>
+<!-- END: BottomStatusBar -->
+</main>
+<!-- END: MainContentArea -->
+</div>
+<!-- END: HostWindow -->
+</div>
+<!-- END: 1440x900 Canvas Wrapper -->
+</body></html>

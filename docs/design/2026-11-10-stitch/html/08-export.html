@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH Core - 导入备份流程面板</title>
+<!-- Material Symbols Outlined -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Fonts: Geist & JetBrains Mono -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS with Forms and Container Queries -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "surface-container-high": "#25293c",
+            "on-tertiary": "#00390c",
+            "surface-container-lowest": "#090d1f",
+            "on-surface-variant": "#d9c1c5",
+            "on-secondary": "#003062",
+            "background": "#0e1224",
+            "on-secondary-container": "#8fbaff",
+            "inverse-surface": "#dee1fb",
+            "surface-container-highest": "#303447",
+            "secondary": "#a8c8ff",
+            "inverse-primary": "#98415c",
+            "surface-bright": "#34384c",
+            "secondary-container": "#124988",
+            "tertiary-fixed-dim": "#99d595",
+            "on-primary-container": "#70223d",
+            "outline-variant": "#544246",
+            "surface-tint": "#ffb1c4",
+            "error-container": "#93000a",
+            "tertiary-container": "#7eb97b",
+            "on-primary-fixed-variant": "#7a2a45",
+            "on-primary-fixed": "#3f001a",
+            "error": "#ffb4ab",
+            "surface-container": "#1a1f31",
+            "on-tertiary-fixed": "#002205",
+            "on-secondary-fixed": "#001b3c",
+            "surface-container-low": "#161b2d",
+            "primary-container": "#f38ba8",
+            "surface": "#0e1224",
+            "on-tertiary-fixed-variant": "#19511f",
+            "tertiary-fixed": "#b4f2af",
+            "on-background": "#dee1fb",
+            "primary": "#ffb1c4",
+            "on-surface": "#dee1fb",
+            "tertiary": "#99d595",
+            "on-error-container": "#ffdad6",
+            "on-error": "#690005",
+            "inverse-on-surface": "#2b2f43",
+            "on-primary": "#5d122f",
+            "on-tertiary-container": "#104918",
+            "primary-fixed": "#ffd9e1",
+            "surface-dim": "#0e1224",
+            "outline": "#a18b8f",
+            "primary-fixed-dim": "#ffb1c4",
+            "secondary-fixed-dim": "#a8c8ff",
+            "on-secondary-fixed-variant": "#0e4685",
+            "surface-variant": "#303447",
+            "secondary-fixed": "#d5e3ff"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.125rem",
+            "lg": "0.25rem",
+            "xl": "0.5rem",
+            "full": "0.75rem"
+          },
+          "spacing": {
+            "space-xs": "0.125rem",
+            "space-xl": "1rem",
+            "margin": "1rem",
+            "space-lg": "0.75rem",
+            "gutter": "0.75rem",
+            "space-md": "0.5rem",
+            "space-sm": "0.25rem"
+          },
+          "fontFamily": {
+            "headline-md": ["Geist"],
+            "headline-sm": ["Geist"],
+            "body-sm": ["Geist"],
+            "code-inline": ["JetBrains Mono"],
+            "label-sm": ["JetBrains Mono"],
+            "code-sm": ["JetBrains Mono"],
+            "label-md": ["JetBrains Mono"],
+            "body-md": ["Geist"],
+            "headline-lg": ["Geist"]
+          },
+          "fontSize": {
+            "headline-md": ["16px", { "lineHeight": "22px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+            "headline-sm": ["14px", { "lineHeight": "18px", "letterSpacing": "-0.005em", "fontWeight": "600" }],
+            "body-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.005em", "fontWeight": "400" }],
+            "code-inline": ["12px", { "lineHeight": "16px", "letterSpacing": "0em", "fontWeight": "400" }],
+            "label-sm": ["10px", { "lineHeight": "12px", "letterSpacing": "0.05em", "fontWeight": "500" }],
+            "code-sm": ["11px", { "lineHeight": "14px", "letterSpacing": "0em", "fontWeight": "400" }],
+            "label-md": ["11px", { "lineHeight": "14px", "letterSpacing": "0.04em", "fontWeight": "500" }],
+            "body-md": ["13px", { "lineHeight": "18px", "letterSpacing": "0em", "fontWeight": "400" }],
+            "headline-lg": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.015em", "fontWeight": "600" }]
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+      display: inline-block;
+      vertical-align: middle;
+      line-height: 1;
+    }
+    /* Precision custom scrollbar for dense view */
+    .custom-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #313244;
+      border-radius: 2px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb:hover {
+      background: #45475a;
+    }
+  </style>
+</head>
+<body class="w-[1440px] h-[900px] overflow-hidden bg-[#F0F1F2] flex items-center justify-center font-body-md text-on-surface antialiased select-none">
+<!-- 800x800 Desktop App Shell Window (Obsidian Precision / Technical Devtools) -->
+<main class="w-[800px] h-[800px] bg-white text-[#11111B] rounded-[16px] border border-[#E6E6E6] shadow-[0_20px_60px_-15px_rgba(0,0,0,0.12),0_0_1px_rgba(0,0,0,0.15)] flex overflow-hidden relative">
+<!-- LEFT SIDE: Host Native Navigation Rail (width: 188px) -->
+<aside class="w-[188px] h-full bg-[#F7F8FA] border-r border-[#E6E6E6] flex flex-col justify-between shrink-0 py-3 px-2 z-10 select-none">
+<div class="flex flex-col gap-3">
+<!-- Window Traffic Lights & App Brand Anchor -->
+<div class="px-2 pt-1 pb-1">
+<div class="flex items-center gap-1.5 mb-3">
+<span class="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E]/40 inline-block"></span>
+<span class="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123]/40 inline-block"></span>
+<span class="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29]/40 inline-block"></span>
+</div>
+</div>
+<!-- Section Label -->
+<div class="px-2 pt-1 text-[10px] font-semibold text-[#8F9098] tracking-wider uppercase font-label-sm">
+          设置
+        </div>
+<!-- Rail Navigation List -->
+<nav class="flex flex-col gap-0.5">
+<!-- 1. 常规 / General -->
+<button class="w-full h-[30px] px-2.5 rounded-[6px] flex items-center gap-2 text-[12px] font-medium text-[#494A50] hover:bg-[#EFF0F3] hover:text-[#11111B] transition-colors duration-100 text-left">
+<span class="material-symbols-outlined text-[16px] text-[#71727A]">tune</span>
+<span>常规</span>
+</button>
+<!-- 2. 外观 / Appearance -->
+<button class="w-full h-[30px] px-2.5 rounded-[6px] flex items-center gap-2 text-[12px] font-medium text-[#494A50] hover:bg-[#EFF0F3] hover:text-[#11111B] transition-colors duration-100 text-left">
+<span class="material-symbols-outlined text-[16px] text-[#71727A]">palette</span>
+<span>外观</span>
+</button>
+<!-- 3. 模型 / Model -->
+<button class="w-full h-[30px] px-2.5 rounded-[6px] flex items-center gap-2 text-[12px] font-medium text-[#494A50] hover:bg-[#EFF0F3] hover:text-[#11111B] transition-colors duration-100 text-left">
+<span class="material-symbols-outlined text-[16px] text-[#71727A]">neurology</span>
+<span>模型</span>
+</button>
+<!-- 4. 插件 / Plugins -->
+<button class="w-full h-[30px] px-2.5 rounded-[6px] flex items-center gap-2 text-[12px] font-medium text-[#494A50] hover:bg-[#EFF0F3] hover:text-[#11111B] transition-colors duration-100 text-left">
+<span class="material-symbols-outlined text-[16px] text-[#71727A]">extension</span>
+<span>插件</span>
+</button>
+<!-- 5. 备份与迁移 / Backup and Migration (Active: 深色文字 + #EBEEF2 选中底) -->
+<button class="w-full h-[30px] px-2.5 rounded-[6px] flex items-center gap-2 text-[12px] font-semibold text-[#0F1115] bg-[#EBEEF2] shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] text-left">
+<span class="material-symbols-outlined text-[16px] text-[#0F1115]">settings_backup_restore</span>
+<span>备份与迁移</span>
+</button>
+<!-- 6. 关于 / About -->
+<button class="w-full h-[30px] px-2.5 rounded-[6px] flex items-center gap-2 text-[12px] font-medium text-[#494A50] hover:bg-[#EFF0F3] hover:text-[#11111B] transition-colors duration-100 text-left">
+<span class="material-symbols-outlined text-[16px] text-[#71727A]">info</span>
+<span>关于</span>
+</button>
+</nav>
+</div>
+<!-- Rail Footer Actions -->
+</aside>
+<!-- RIGHT SIDE: Plugin & Process Area (564px or fill, window height 800px) -->
+<section class="flex-1 h-full flex flex-col relative overflow-hidden bg-white">
+<!-- TOP: 32px Tab Bar (首页 / 产物库 / 同步 / 环境 + 右侧4个图标按钮) -->
+<header class="h-[32px] w-full bg-[#FAFAFA] border-b border-[#E6E6E6] px-3 flex items-center justify-between shrink-0 select-none z-10">
+<!-- Navigation Links -->
+<div class="flex items-center gap-4 text-[12px] font-body-sm h-full"><button class="text-[#0F1115] font-semibold flex items-center h-full px-2 py-0.5 rounded bg-[#EBEEF2]">首页</button>
+<button class="text-[#71727A] hover:text-[#11111B] transition-colors flex items-center h-full">产物库</button>
+<button class="text-[#71727A] hover:text-[#11111B] transition-colors flex items-center h-full">同步</button>
+<button class="text-[#71727A] hover:text-[#11111B] transition-colors flex items-center h-full">环境</button></div>
+<!-- Right Quick Action Icons (⌘K, 活动, 历史, 关于) -->
+<div class="flex items-center gap-1 text-[#71727A]">
+<button class="h-[22px] px-1.5 rounded-[4px] bg-[#EBECEF]/70 text-[#494A50] hover:bg-[#E2E3E7] hover:text-[#11111B] text-[10px] font-code-sm flex items-center gap-0.5 border border-[#DCDDE3]" title="命令面板 (⌘K)">
+<span>⌘</span><span>K</span>
+</button>
+<button class="w-6 h-6 rounded flex items-center justify-center hover:bg-[#EBECEF] hover:text-[#11111B] transition-colors" title="活动">
+<span class="material-symbols-outlined text-[15px]">trending_up</span>
+</button>
+<button class="w-6 h-6 rounded flex items-center justify-center hover:bg-[#EBECEF] hover:text-[#11111B] transition-colors" title="历史">
+<span class="material-symbols-outlined text-[15px]">history</span>
+</button>
+<button class="w-6 h-6 rounded flex items-center justify-center hover:bg-[#EBECEF] hover:text-[#11111B] transition-colors" title="关于插件">
+<span class="material-symbols-outlined text-[15px]">help_outline</span>
+</button>
+</div>
+</header>
+<!-- OVERLAY PROCESS PANEL: 564px wide, top tab bar to bottom status bar, 1px left border #E6E6E6, White BG -->
+<div class="flex-1 w-full bg-white flex flex-col justify-between overflow-hidden border-l border-[#E6E6E6] relative">
+<!-- 1) Panel Header (高 40px，0.5px 下分隔线) -->
+<div class="h-[40px] px-4 border-b border-[#E6E6E6]/80 flex items-center justify-between shrink-0 bg-white">
+<button class="flex items-center gap-1 text-[11px] text-[#71727A] hover:text-[#0F1115] transition-colors group">
+<span class="material-symbols-outlined text-[13px] group-hover:-translate-x-0.5 transition-transform">arrow_back</span>
+<span>返回首页</span>
+</button>
+<h2 class="text-[13px] font-semibold text-[#0F1115] font-headline-sm tracking-tight">导入备份</h2>
+<span class="text-[11px] font-label-md text-[#8F9098]">第 3 / 9 步</span>
+</div>
+<!-- 2) Stepper Bar (高 34px，横向 9 步，小圆点 + 11px 文字) -->
+<div class="h-[34px] px-3.5 bg-[#FAFBFD] border-b border-[#EAEBEC] flex items-center justify-between shrink-0 overflow-x-hidden select-none">
+<!-- 1. 选文件 (已完成) -->
+<div class="flex items-center gap-1 text-[11px] font-medium text-[#0F1115]"><span class="w-[6px] h-[6px] rounded-full bg-[#0F1115]"></span><span>1. 选文件</span></div>
+<span class="text-[#D0D2D8] text-[9px]">/</span>
+<!-- 2. 分析 (已完成) -->
+<div class="flex items-center gap-1 text-[11px] font-medium text-[#0F1115]"><span class="w-[6px] h-[6px] rounded-full bg-[#0F1115]"></span><span>2. 分析</span></div>
+<span class="text-[#D0D2D8] text-[9px]">/</span>
+<!-- 3. 兼容性 (当前步：#4176E6 点 + 深色文字 + 下方 2px 蓝底线高亮指示) -->
+<div class="relative h-full flex items-center gap-1 text-[11px] font-semibold text-[#0F1115]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#4176E6] ring-2 ring-[#4176E6]/20"></span>
+<span>3. 兼容性</span>
+<div class="absolute bottom-0 left-0 right-0 h-[2px] bg-[#4176E6] rounded-full"></div>
+</div>
+<span class="text-[#D0D2D8] text-[9px]">/</span>
+<!-- 4. 预览 (未到) -->
+<div class="flex items-center gap-1 text-[11px] text-[#9EA0A8]">
+<span class="w-[5px] h-[5px] rounded-full border border-[#9EA0A8]"></span>
+<span>4. 预览</span>
+</div>
+<span class="text-[#D0D2D8] text-[9px]">/</span>
+<!-- 5. 冲突 (灰色可能跳过) -->
+<div class="flex items-center gap-1 text-[11px] text-[#B8BAC2]">
+<span class="w-[5px] h-[5px] rounded-full border border-[#D0D2D8]"></span>
+<span>5. 冲突</span>
+</div>
+<span class="text-[#D0D2D8] text-[9px]">/</span>
+<!-- 6. 路径映射 (灰色可能跳过) -->
+<div class="flex items-center gap-1 text-[11px] text-[#B8BAC2]">
+<span class="w-[5px] h-[5px] rounded-full border border-[#D0D2D8]"></span>
+<span>6. 路径映射</span>
+</div>
+<span class="text-[#D0D2D8] text-[9px]">/</span>
+<!-- 7. 凭据 (灰色可能跳过) -->
+<div class="flex items-center gap-1 text-[11px] text-[#B8BAC2]">
+<span class="w-[5px] h-[5px] rounded-full border border-[#D0D2D8]"></span>
+<span>7. 凭据</span>
+</div>
+<span class="text-[#D0D2D8] text-[9px]">/</span>
+<!-- 8. 确认 (未到) -->
+<div class="flex items-center gap-1 text-[11px] text-[#B8BAC2]">
+<span class="w-[5px] h-[5px] rounded-full border border-[#D0D2D8]"></span>
+<span>8. 确认</span>
+</div>
+<span class="text-[#D0D2D8] text-[9px]">/</span>
+<!-- 9. 结果 (未到) -->
+<div class="flex items-center gap-1 text-[11px] text-[#B8BAC2]">
+<span class="w-[5px] h-[5px] rounded-full border border-[#D0D2D8]"></span>
+<span>9. 结果</span>
+</div>
+</div>
+<!-- MAIN SCROLLABLE/FITTED WORKSPACE AREA: 严格垂直撑满, 无无效留白 -->
+<div class="flex-1 flex flex-col gap-3 p-3.5 overflow-hidden justify-between">
+<!-- 3) 文件卡 (1px #E6E6E6 描边、圆角 12px、内边距 10px，单行) -->
+<div class="h-[44px] shrink-0 border border-[#E6E6E6] rounded-[12px] px-3 flex items-center justify-between bg-[#FCFCFD]">
+<div class="flex items-center gap-2.5 overflow-hidden">
+<div class="w-6 h-6 rounded-[6px] bg-[#EEF2FF] border border-[#C7D2FE] flex items-center justify-center text-[#4176E6] shrink-0">
+<span class="material-symbols-outlined text-[15px]">folder_zip</span>
+</div>
+<span class="text-[12px] font-code-inline text-[#0F1115] font-medium truncate">backup-2026-11-10T2104.zip</span>
+</div>
+<div class="text-[11px] text-[#8F9098] font-label-md shrink-0 flex items-center gap-1.5">
+<span>24.8 MB</span>
+<span class="text-[#C4C6CC]">·</span>
+<span>本机导出</span>
+</div>
+</div>
+<!-- 4) 兼容性卡 (1px #E6E6E6 描边、圆角 12px、内边距 12px) -->
+<div class="shrink-0 border border-[#E6E6E6] rounded-[12px] p-3 bg-white flex flex-col gap-1.5 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+<!-- 卡头 -->
+<div class="flex items-center justify-between pb-1.5 border-b border-[#F0F1F3]">
+<div class="flex items-center gap-1.5">
+<span class="text-[13px] font-semibold text-[#0F1115] font-headline-sm">兼容性</span>
+<span class="w-1.5 h-1.5 rounded-full bg-[#16a34a] inline-block animate-pulse"></span>
+</div>
+<!-- 绿色 tint 徽章「可导入 · 92%」 -->
+<span class="px-2 py-0.5 rounded-[6px] text-[11px] font-medium font-label-md flex items-center gap-1" style="background-color: rgba(34, 197, 94, 0.12); color: #16a34a;">
+<span class="material-symbols-outlined text-[12px]">check_circle</span>
+<span>可导入 · 92%</span>
+</span>
+</div>
+<!-- 4 行兼容性检查项 (每行 30px 高) -->
+<div class="flex flex-col">
+<!-- Item 1 -->
+<div class="h-[30px] flex items-center justify-between text-[12px] border-b border-[#F7F8F9]">
+<div class="flex items-center gap-2">
+<span class="text-[#16a34a] font-bold text-[13px]">✓</span>
+<span class="text-[#1F2024] font-medium">DSH 版本 2.4.0 <span class="text-[#71727A] font-normal">≥ 最低 2.0</span></span>
+</div>
+<span class="text-[11px] text-[#16a34a] font-label-md bg-[#F0FDF4] px-1.5 py-0.5 rounded border border-[#DCFCE7]">通过</span>
+</div>
+<!-- Item 2 -->
+<div class="h-[30px] flex items-center justify-between text-[12px] border-b border-[#F7F8F9]">
+<div class="flex items-center gap-2">
+<span class="text-[#16a34a] font-bold text-[13px]">✓</span>
+<span class="text-[#1F2024] font-medium">分区 12 个全部可识别</span>
+</div>
+<span class="text-[11px] text-[#16a34a] font-label-md bg-[#F0FDF4] px-1.5 py-0.5 rounded border border-[#DCFCE7]">通过</span>
+</div>
+<!-- Item 3 (Warning) -->
+<div class="h-[30px] flex items-center justify-between text-[12px] border-b border-[#F7F8F9] bg-[#FFFDF5] -mx-1 px-1 rounded-[4px]">
+<div class="flex items-center gap-2">
+<span class="text-[#D97706] font-bold text-[13px]">⚠</span>
+<span class="text-[#1F2024] font-medium">插件 14 个 <span class="text-[#B45309] font-normal">· 其中 2 个需重装</span></span>
+</div>
+<span class="text-[11px] text-[#D97706] font-label-md bg-[#FEF3C7] px-1.5 py-0.5 rounded border border-[#FDE68A]">提示</span>
+</div>
+<!-- Item 4 -->
+<div class="h-[30px] flex items-center justify-between text-[12px]">
+<div class="flex items-center gap-2">
+<span class="text-[#16a34a] font-bold text-[13px]">✓</span>
+<span class="text-[#1F2024] font-medium">会话格式 一致</span>
+</div>
+<span class="text-[11px] text-[#16a34a] font-label-md bg-[#F0FDF4] px-1.5 py-0.5 rounded border border-[#DCFCE7]">通过</span>
+</div>
+</div>
+<!-- 底部说明 (11px 弱化 text-tertiary) -->
+<div class="pt-1 border-t border-[#F0F1F3] text-[11px] text-[#8F9098] flex items-center gap-1 font-body-sm">
+<span class="material-symbols-outlined text-[13px] text-[#9EA0A8]">info</span>
+<span>需重装的插件会在确认页列出，导入后可一键补齐。</span>
+</div>
+</div>
+<!-- 5) 预览卡 (1px #E6E6E6 描边、圆角 12px、内边距 12px，吃满剩余垂直高度，卡内自滚动) -->
+<div class="flex-1 min-h-[220px] border border-[#E6E6E6] rounded-[12px] p-3 bg-white flex flex-col overflow-hidden shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+<!-- 卡头 -->
+<div class="flex items-center justify-between pb-2 border-b border-[#EAEBED] shrink-0">
+<span class="text-[13px] font-semibold text-[#0F1115] font-headline-sm">将写入的内容</span>
+<span class="text-[11px] text-[#8F9098] font-label-md">1,204 个文件 · 24.8 MB</span>
+</div>
+<!-- 7 行列表 (行高 28px，0.5px 分隔线，内部流畅滚动) -->
+<div class="flex-1 overflow-y-auto custom-scroll pr-1 mt-1 divide-y divide-[#F0F1F3]">
+<!-- Row 1: settings -->
+<div class="h-[28px] flex items-center justify-between text-[12px] hover:bg-[#F9FAFC] px-1.5 rounded transition-colors">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-[#71727A]">settings_suggest</span>
+<span class="font-code-inline text-[#11111B] text-[11.5px]">settings</span>
+</div>
+<div class="text-[11px] text-[#8F9098] font-label-md flex items-center gap-2">
+<span>41 个文件</span>
+<span class="text-[#D0D2D8]">/</span>
+<span class="w-[52px] text-right font-code-sm text-[#494A50]">1.2 MB</span>
+</div>
+</div>
+<!-- Row 2: providers -->
+<div class="h-[28px] flex items-center justify-between text-[12px] hover:bg-[#F9FAFC] px-1.5 rounded transition-colors">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-[#71727A]">hub</span>
+<span class="font-code-inline text-[#11111B] text-[11.5px]">providers</span>
+</div>
+<div class="text-[11px] text-[#8F9098] font-label-md flex items-center gap-2">
+<span>8 个文件</span>
+<span class="text-[#D0D2D8]">/</span>
+<span class="w-[52px] text-right font-code-sm text-[#494A50]">96 KB</span>
+</div>
+</div>
+<!-- Row 3: plugins -->
+<div class="h-[28px] flex items-center justify-between text-[12px] hover:bg-[#F9FAFC] px-1.5 rounded transition-colors">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-[#71727A]">extension</span>
+<span class="font-code-inline text-[#11111B] text-[11.5px]">plugins</span>
+</div>
+<div class="text-[11px] text-[#8F9098] font-label-md flex items-center gap-2">
+<span>214 个文件</span>
+<span class="text-[#D0D2D8]">/</span>
+<span class="w-[52px] text-right font-code-sm text-[#494A50]">6.4 MB</span>
+</div>
+</div>
+<!-- Row 4: mcp -->
+<div class="h-[28px] flex items-center justify-between text-[12px] hover:bg-[#F9FAFC] px-1.5 rounded transition-colors">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-[#71727A]">lan</span>
+<span class="font-code-inline text-[#11111B] text-[11.5px]">mcp</span>
+</div>
+<div class="text-[11px] text-[#8F9098] font-label-md flex items-center gap-2">
+<span>3 个文件</span>
+<span class="text-[#D0D2D8]">/</span>
+<span class="w-[52px] text-right font-code-sm text-[#494A50]">12 KB</span>
+</div>
+</div>
+<!-- Row 5: skills -->
+<div class="h-[28px] flex items-center justify-between text-[12px] hover:bg-[#F9FAFC] px-1.5 rounded transition-colors">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-[#71727A]">psychology</span>
+<span class="font-code-inline text-[#11111B] text-[11.5px]">skills</span>
+</div>
+<div class="text-[11px] text-[#8F9098] font-label-md flex items-center gap-2">
+<span>26 个文件</span>
+<span class="text-[#D0D2D8]">/</span>
+<span class="w-[52px] text-right font-code-sm text-[#494A50]">412 KB</span>
+</div>
+</div>
+<!-- Row 6: pluginData -->
+<div class="h-[28px] flex items-center justify-between text-[12px] hover:bg-[#F9FAFC] px-1.5 rounded transition-colors">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-[#71727A]">database</span>
+<span class="font-code-inline text-[#11111B] text-[11.5px]">pluginData</span>
+</div>
+<div class="text-[11px] text-[#8F9098] font-label-md flex items-center gap-2">
+<span>620 个文件</span>
+<span class="text-[#D0D2D8]">/</span>
+<span class="w-[52px] text-right font-code-sm text-[#494A50]">9.8 MB</span>
+</div>
+</div>
+<!-- Row 7: sessions -->
+<div class="h-[28px] flex items-center justify-between text-[12px] hover:bg-[#F9FAFC] px-1.5 rounded transition-colors">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-[#71727A]">forum</span>
+<span class="font-code-inline text-[#11111B] text-[11.5px]">sessions</span>
+</div>
+<div class="text-[11px] text-[#8F9098] font-label-md flex items-center gap-2">
+<span>268 个文件</span>
+<span class="text-[#D0D2D8]">/</span>
+<span class="w-[52px] text-right font-code-sm text-[#494A50]">742 MB</span>
+</div>
+</div>
+<div class="h-[28px] flex items-center justify-between text-[12px] hover:bg-[#F9FAFC] px-1.5 rounded transition-colors">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-[#71727A]">folder_open</span>
+<span class="font-code-inline text-[#11111B] text-[11.5px]">workspace</span>
+</div>
+<div class="text-[11px] text-[#8F9098] font-label-md flex items-center gap-2">
+<span>24 个文件</span>
+<span class="text-[#D0D2D8]">/</span>
+<span class="w-[52px] text-right font-code-sm text-[#494A50]">2.1 MB</span>
+</div>
+</div>
+<div class="h-[28px] flex items-center justify-between text-[12px] hover:bg-[#F9FAFC] px-1.5 rounded transition-colors">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-[#71727A]">storefront</span>
+<span class="font-code-inline text-[#11111B] text-[11.5px]">market</span>
+</div>
+<div class="text-[11px] text-[#8F9098] font-label-md flex items-center gap-2">
+<span>6 个文件</span>
+<span class="text-[#D0D2D8]">/</span>
+<span class="w-[52px] text-right font-code-sm text-[#494A50]">148 KB</span>
+</div>
+</div></div>
+</div>
+</div>
+<!-- 6) Panel Footer (贴底高 48px，0.5px 上边框线) -->
+<div class="h-[48px] px-4 border-t border-[#E6E6E6]/90 flex items-center justify-between shrink-0 bg-[#FAFAFC]"><button class="h-[28px] px-3 rounded-[8px] text-[12px] font-medium text-[#494A50] hover:text-[#0F1115] bg-white border border-[#D5D7DF] hover:bg-[#F2F3F5] transition-all flex items-center gap-1 shadow-sm"><span class="material-symbols-outlined text-[14px]">arrow_back</span><span>上一步</span></button><button class="h-[28px] px-4 rounded-[8px] text-[12px] font-medium bg-[#0F1115] hover:bg-[#20232B] text-white shadow-sm active:scale-[0.98] transition-all flex items-center gap-1.5"><span>继续</span><span class="material-symbols-outlined text-[14px]">arrow_forward</span></button></div>
+</div>
+<!-- BOTTOM: 28px Status Bar (左侧绿点 +「就绪」，右侧「v0.7.0 · DSH 2.4」) -->
+<footer class="h-[28px] w-full bg-[#F5F6F8] border-t border-[#E6E6E6] px-3 flex items-center justify-between shrink-0 select-none text-[11px] font-label-md z-10">
+<div class="flex items-center gap-1.5 text-[#323338]">
+<span class="w-[7px] h-[7px] rounded-full bg-[#10B981] inline-block shadow-[0_0_6px_rgba(16,185,129,0.5)]"></span>
+<span class="font-medium text-[#1F2024]">就绪</span>
+<span class="text-[#A0A2AB] ml-1">· 校验无冲突项</span>
+</div>
+<div class="text-[#71727A] font-code-sm">
+          v0.7.0 · DSH 2.4
+        </div>
+</footer>
+</section>
+</main>
+<script>
+    // Micro-interaction handlers for developer tool buttons
+    document.addEventListener('DOMContentLoaded', () => {
+      const continueBtn = document.querySelector('button:has(span:contains("继续"))') || document.querySelectorAll('button')[document.querySelectorAll('button').length - 1];
+      if (continueBtn) {
+        continueBtn.addEventListener('click', () => {
+          console.log('[DSH Migration Engine] Proceeding to Step 4: Preview validation.');
+        });
+      }
+    });
+  </script>
+</body></html>

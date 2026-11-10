@@ -5,7 +5,7 @@
 
 - Stitch 项目：`projects/3562749276376933419`（标题「DSH Config Manager — UI v4 探索」，PROJECT_DESIGN，DESKTOP）
 - 画布口径：1440×900 稿面，内含 800×800 宿主设置弹窗，插件内容区 564×720（与 DESIGN.md §画布一致）
-- 7 屏：首页 / 产物库 / 同步 / 环境·档案 / 环境·维护与诊断 / ⌘K 命令面板 / 恢复计划弹窗
+- 9 屏：首页 / 产物库 / 同步 / 环境·档案 / 环境·维护与诊断 / ⌘K 命令面板 / 恢复计划弹窗 / 导出备份流程 / 导入备份流程
 - 只做亮色；暗色未覆盖
 
 ## 文件
@@ -19,6 +19,8 @@
 | 05 环境·维护与诊断 | [05-env-maintenance.png](png/05-env-maintenance.png) | [05-env-maintenance.html](html/05-env-maintenance.html) |
 | 06 ⌘K 命令面板 | [06-command-palette.png](png/06-command-palette.png) | [06-command-palette.html](html/06-command-palette.html) |
 | 07 恢复计划弹窗 | [07-restore-plan.png](png/07-restore-plan.png) | [07-restore-plan.html](html/07-restore-plan.html) |
+| 08 导出备份流程 | [08-export.png](png/08-export.png) | [08-export.html](html/08-export.html) |
+| 09 导入备份流程 | [09-import.png](png/09-import.png) | [09-import.html](html/09-import.html) |
 
 HTML 是 Stitch 导出的单文件静态稿（内联样式、无 JS），只能看结构，**不要**当实现基线抄进 `config-manager.module.css`。
 色板与尺度见 [tokens.md](tokens.md)（取自真实 DSH 主题变量，不是 Stitch 自选色）。
@@ -32,7 +34,7 @@ HTML 是 Stitch 导出的单文件静态稿（内联样式、无 JS），只能�
 | 设计稿区域 | 真实实现 | 设计稿变化 |
 | --- | --- | --- |
 | 顶部状态行（备份文件 / 安全快照 / 定时备份 / 远程同步） | `src/client/home/HomePanel.tsx` 状态行；指标模型 `src/ui/overview-view.ts` 的 `buildOverviewMetrics` | 无（段可点击直达的行为沿用） |
-| 动作工具栏（新建备份 / 导出 ZIP / 导入 / 恢复快照） | `HomePanel.tsx` 动作工具栏 | 真实为 5 个动作（含「从其它 agent 导入」与「一键同步」），稿里收敛成 4 个 + 右侧「活动」入口；主按钮文案稿为「新建备份」，真实为「立即备份」 |
+| 动作工具栏（新建备份 / 导出 ZIP / 导入 / 从其他 agent 导入 / 一键同步） | `HomePanel.tsx` 动作工具栏 | 与真实 5 个动作一一对应（真实文案「立即备份 / 手动导出 / 导入 / 从其它 agent 导入 / 一键同步」）；主按钮文案稿为「新建备份」，真实为「立即备份」 |
 | 最近活动表（时间 / 类型 / 详情 / 结果，吃满剩余高度、自身内滚） | `overviewActivity()` + `SkeletonActivityRows` | 行数按画布填满（14 行），结果列改成状态点 + 「待处理」橙徽章 |
 | （未画）定时备份设置卡 | `src/client/home/BackupScheduleCard.tsx` | v3 已收进弹窗，首页不常驻 |
 | 底部状态栏（就绪 / 进度 / v0.7.0 · DSH 2.4） | `src/client/ConfigManagerSection.tsx` 状态栏 + `common/ProgressBar.tsx` | 无 |
@@ -93,6 +95,29 @@ HTML 是 Stitch 导出的单文件静态稿（内联样式、无 JS），只能�
 | 行展开双栏 diff（左当前 / 右快照，行高 20px，块头 `@@ -12,7 +12,9 @@`） | `src/client/common/DiffTable.tsx` + `src/ui/diff-view.ts` | 无（沿用 git 风格） |
 | 弹窗容器 | `src/client/common/Modal.tsx`（`.dialogCard` / `.dialogWide`） | 稿里 620px，超过 `.dialogCard` 的 `min(600px, …)`；落地建议直接用 `.dialogWide`（`min(720px, …)`） |
 
+### 08 导出备份流程（Task 面板）
+
+| 设计稿区域 | 真实实现 | 设计稿变化 |
+| --- | --- | --- |
+| 面板外壳（← 返回首页 / 标题 / 右侧徽章 / 贴底按钮行） | `src/client/task/TaskShell.tsx`（全宽覆盖 `.shellContent`，导航条与状态栏保留可见） | 无 |
+| 选择条（已选分区 · 文件数 · 体积 + 「选择要导出的内容」） | `src/client/export/ExportView.tsx` 工具栏 + `pickerSummary`（`src/ui/selection-model.ts`）；选择器 `common/ContentPicker.tsx` | 选择结果压成一条 32px 选择条，入口收成右侧 ghost 按钮 |
+| 安全选项（加密备份 / 导出密钥 + 密码双列） | `ExportView.tsx` 安全选项分组（AES-256-GCM；includeSecrets ⇒ encrypt 联动） | 密码双列内联展示 + 一行「只存在内存」提示；稿里勾选加密态 |
+| 文件与备注（文件名 + 备注双列） | `ExportView.tsx` 命名行（`normalizeExportFileName` 自动补 `.zip`） | 无 |
+| 进度块（进度条 + 当前阶段 + 正在收集的分区） | `ExportView.tsx` 进度条 + `common/ProgressBar.tsx` | 补了「正在收集 sessions（742 MB）」这一行阶段说明 |
+| 页尾「本次将导出」构成卡（吃满剩余高度、卡内滚动） | `ExportView.tsx` 的 `Card.fillViewport` + `common/SectionComposition.tsx` | 每行右侧补「文件数 · 体积」 |
+| （未画）结果报告 / 自动下载提示 / 选择器弹窗 | `ExportView.tsx` 结果区 + `ContentPicker.tsx` | 本轮未覆盖 |
+
+### 09 导入备份流程（Task 面板，第 3/9 步）
+
+| 设计稿区域 | 真实实现 | 设计稿变化 |
+| --- | --- | --- |
+| 面板头（← 返回首页 / 标题 / 第 N/9 步） | `src/client/task/TaskShell.tsx` | 步数指示从 Stepper 右侧挪到标题右侧 |
+| 9 步步骤条（选文件 → 分析 → 兼容性 → 预览 → 冲突 → 路径映射 → 凭据 → 确认 → 结果） | `src/ui/import-stepper.ts` 的 `importStepperModel` / `importStepperSource`，渲染于 `ImportWizardView.tsx` | 横向圆点式步骤条；可能跳过的三步（冲突 / 路径映射 / 凭据）显示为灰色 |
+| 文件卡（文件名 · 体积 · 来源） | `ImportWizardView.tsx` 选文件结果 + `api.upload` 回执 | 压成一行卡 |
+| 兼容性卡（评分徽章 + 4 项检查 + 说明） | `src/ui/import-wizard.ts` 的 `compatibilityLevel` / `compatibilityNotes` / `compatibilityBadgeKind`，文案 `common/compat-label.ts` | 四项检查各带「通过 / 提示」徽章 |
+| 预览卡「将写入的内容」（9 行分区，卡内滚动） | `ImportWizardView.tsx` 预览阶段 + `sectionsFromPlan` | 行右侧「文件数 / 体积」 |
+| （未画）冲突裁决 / 路径映射 / 凭据补录 / 确认 / 结果 | `common/ConflictList.tsx` / `import/PathMappingForm.tsx` / 凭据补录 / 确认页 / `common/ReportView.tsx` | 本轮未覆盖 |
+
 ## 与 DESIGN.md 的偏差（落地前必须消解）
 
 1. **外壳是示意**：稿里的 macOS 红绿灯、居中「设置」标题、左侧 6 项宿主导航都属宿主设置弹窗，不归本插件；插件只负责右侧 564×720 内容区。
@@ -100,7 +125,8 @@ HTML 是 Stitch 导出的单文件静态稿（内联样式、无 JS），只能�
 3. **新增卡**：环境·档案的「本机概况」「数据目录」两张卡在真实实现里没有对应组件，属探索性结构提案。
 4. **同步页密度**：四卡统一 108px 与真实「未配置矮态 56px」不一致；若采纳需同步改 `SyncChannelEntryCard` 与 DESIGN.md §同步。
 5. **文案**：首页主按钮「新建备份」与真实「立即备份」不同；命令面板快捷键提示尚未在 `src/ui/commands.ts` 定义。
-6. **只覆盖亮色**：暗色主题、错误 / 空 / 骨架态、超长文案截断、导入向导、导出流程、市场、任务面板、通道配置弹窗均未覆盖。
+6. **导出/导入面板**：真实 `ExportView` 的工具栏是「选择要导出的内容 + 开始导出」，稿把「开始导出」放到贴底按钮行、把选择入口收成选择条右侧按钮；`ImportWizardView` 真实 Stepper 是分组式的（`importStepperSource`），稿画成 9 点平铺，落地前需先确认步数展示口径。
+7. **只覆盖亮色**：暗色主题、错误 / 空 / 骨架态、超长文案截断、导入向导、导出流程、市场、任务面板、通道配置弹窗均未覆盖。
 
 ## 复现与迭代
 
@@ -110,13 +136,15 @@ HTML 是 Stitch 导出的单文件静态稿（内联样式、无 JS），只能�
 
 | 屏 | 首版 screen id | 修版 screen id |
 | --- | --- | --- |
-| 01 首页 | `3f9a17ad1ac74405a742605a64ef51ae` | `babdf10f3cab4f44aee71818710210de` |
+| 01 首页 | `3f9a17ad1ac74405a742605a64ef51ae` | `019e50be3733499ebe8d4679381a911a`（工具栏二次修正） |
 | 02 产物库 | `e272c6f0b718409ea2380925258dc518` | —（未修） |
 | 03 同步 | `33ecb4ab6d944ed79d35ce8bb61e2e96` | `9ac2b7e4c5fb4510b227b0778e279f8e` |
 | 04 环境·档案 | `7d7a521fe2cf4f1eb3a158c97794c2c5` | `c6a908356cac4596a11a2885f2b13c93` |
 | 05 环境·维护 | `4bb52983a9264e898731c5ea1e3c2888` | —（未修） |
 | 06 命令面板 | `06437178a2a8441c861c43b127c24206` | —（未修） |
 | 07 恢复计划 | `3e100b41ee984f539bdf972ee5bc410d` | `001a42d9f5ee4573ae6e44242112744d` |
+| 08 导出备份 | `adbbfddf40ce428fb0b9c60435a4bcb0` | `1399e668639c47458262e19cc13d505b` |
+| 09 导入备份 | `45d7ff837913450aa2681b7a8974cd76` | `3ec37327e9be4267b6978247aa6324a7` |
 
 - 项目里另有一屏 `595702238658715519`（780×1768，DESIGN.md 上传渲染产物），与设计稿无关，忽略即可。
-- 修版只修了 4 处明确缺陷：首页活动表填满高度、同步页卡内空白与第四卡裁切、档案页大片空区、恢复弹窗折叠行被按钮行压住。
+- 修版修的缺陷：首页活动表填满高度、同步页卡内空白与第四卡裁切、档案页大片空区、恢复弹窗折叠行被按钮行压住、首页工具栏（删掉产品里没有的「恢复快照」，补回「从其他 agent 导入」与「一键同步」）、导入面板页签高亮与左侧导航噪音。
