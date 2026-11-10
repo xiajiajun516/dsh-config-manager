@@ -26,15 +26,15 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > 体例细节、分组表、发版两道门禁与写后自检命令见项目 skill `.dsh/skills/changelog-writing/SKILL.md`（DSH 会自动发现并加载）。
 
-## [Unreleased]
+## [0.8.0] - 2026-11-10
 
-> **{{本版主题}}**：{{一句话中文主题}}
+> **远端删掉的插件，同步时也跟着删**：插件同步多了个默认关闭的开关，打开后远端删了什么、你这儿没改过的一并卸载，删掉的都能从当轮快照装回。
 >
-> **Theme**: {{one-line English theme}}
+> **Theme**: plugins deleted remotely can now be deleted here too — an off-by-default switch that removes untouched plugins during merge and auto-sync, and puts them back when you restore that round’s snapshot.
 
 ### 🆕 新增 · Added
 
-- **同步可以跟随远端删除插件（默认关）**：勾上开关后，远端删掉、你这边没改过的插件会在合并/自动同步时一起卸载，并在报告里逐项列明「已删除：包@版本」；被删的包会记进当轮快照，恢复快照时自动装回同一版本。
+- **同步可以跟随远端删除插件（默认关）**：勾上开关后，远端删掉、你这边没改过的插件会在合并/自动同步时一起卸载，并在报告里逐项列明「已删除：包@版本」；被删的包会记进当轮快照，恢复快照时自动装回同一版本。（issue #132）
   **Sync can now remove plugins that were deleted remotely (off by default)**: with the switch on, plugins that no longer exist remotely and were untouched locally get uninstalled during merge or auto-sync, each one listed in the report; every removal is recorded in that round's snapshot and reinstalled at the same version when you restore it.
 
 ## [0.7.0] - 2026-11-09
