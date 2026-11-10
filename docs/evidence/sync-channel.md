@@ -571,4 +571,22 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 
 **守卫**（`src/core/local-plugin-host.test.ts`）：源没变 → 第二轮 `calls()` 仍为 1 且字节逐字相同；改 `lib/index.js` 的 mtime → 重新打包；`packedCacheMaxBytes: 0` → 两轮都真打。
 
+## 跟随远端删除插件（issue #132 评估）：删除语义的现状、唯一可行闸门与缺口（2026-11-10，triage 期核实）
+
+**现状（逐条对照源码，非推测）**：
+
+- 导入计划只产三种插件项：未装 → `Install`、同版本 → `Skip`、版本不同 → `Conflict`（`src/adapters/plugins.ts:808-867`）；`applyItem` 只有安装/升级分支，没有卸载入口（`src/adapters/plugins.ts:995-1073`）。计划项种类的定义域是 `src/core/types.ts:652`（`'Create' | 'Update' | 'Skip' | 'Conflict' | 'Install' | …`），新增一个种类要连带改 `src/core/import-planning.ts:345`、`src/core/analyzer.ts:672/803`、`src/ui/backup-inspect.ts:44/69` 与字典键。
+- `plugins` 数组走通用 JSON 合并，数组两侧各自改即整分区冲突：`GRANULAR_MERGES` 只有 `workspaces`（`src/sync/merge.ts:299-301`）。workspaces 的先例说明「记录级三方合并」被明确允许在 ancestor 闸门**之前**执行（同文件 ③' 段）。
+- 本机卸载能力只有两条，都不是同步路径：① `runDshPlugin(profileDir, profile, ['remove', name])` + 失败分类（`src/core/restore.ts:429-442`，`desktop-profile-reserved` 分类见 `src/core/plugin-cli.ts:704/799`）；② 快照恢复的 `pluginRemove`，判据是「导入前基线没有、当前有 → 卸载」（`src/core/restore.ts:675-706`），**没有**「基线有、当前没有 → 重装」的反向分支。宿主 facade 只有 `ctx.target.plugins.install(name, target, signal)`（`src/adapters/plugins.ts:1029`），没有 `remove`。
+- 三方删除的原料齐备：共同祖先 = `sync-state.ancestorId` → `tryLoadAncestor`（`src/sync/ancestor.ts:41-52`；加密通道的祖先是密文单载荷，issue #107），引擎在 `src/sync/sync-engine.ts:1494-1498` 读取；读不到一律回落两方合并，天然满足「没有共同祖先就不删」。
+- 应用路径唯一：手动合并与自动同步最终都走「合成临时 ZIP → `analyzeImport` → `createImportPlan` → `executeImportPlan`」（`src/sync/sync-engine.ts:1229/1956/2089`），所以在 adapter 层加计划项种类会同时覆盖两条路径。**但 `analyzeImport` 也被普通「从文件导入」复用**：删除候选必须由调用方作为入参注入（例如 `removalCandidates` 名单），adapter 自己绝不推基线，否则「导入一份旧快照」会开始删本机插件。
+- 自动化闸门已经存在，不需要第二个开关：风险分级 = 注册表 `riskTier`（`src/sync/risk.ts:1-25`）+ `autoApplyTier`（缺省 `medium` 会把 plugins 自动落盘，`src/sync/autosync-config.ts:58-61`）；`high` 恒不自动应用。要让「删除永不自动」，把带删除项的合并结果判到阈值之上即可，与既有「high 永不自动」同一机制。
+- 产品裁决已有先例且口径很硬：G-20 明确「对端删除不代本机删除」= 有意不修，理由是不可回滚；并把将来要做的前置条件写成三条 —— 适配器删除能力 + 逐项确认 UI（**不得并入自动应用**）+ 与导入前快照的可回滚语义对齐（`docs/known-issues/known-gaps.md:108-115`）。会话不可回滚，故仍不破例；插件可回滚（`beforePlugins` 基线 + 重装通道），第三条对插件可满足 —— 这是插件能破例、会话不能的依据。
+
+**结论**：需求成立、技术可行、范围可控（adapter + merge + 一个计划项种类 + 开关持久化 + 回滚重装 + 字典/UI），不涉及新的同步协议。三处必须先拍板：① 做不做（不做则登记为 known-gaps 条目）；② v1 是否限定「手动合并 + 逐项确认、自动同步恒不删」——按 G-20 口径这是唯一与既有裁决相容的形态；③ `desktop` 档案不可用 CLI 卸载时按逐项失败（不阻断其余项）还是整票拒绝。
+
+**实现时必须一起改的回滚缺口**：`planRestore` 只算「导入期间新增 → 卸载」，删除项要可回滚必须补「基线有、当前没有 → 用 `name@version/spec` 装回」的 `pluginInstall` 分支；`pluginRemove` 记 `external=true`、不带指纹（`docs/known-issues/known-limits.md:77`），重装结果只能靠回读版本判成功。
+
+**待实现的守卫清单**（做的时候一条一个测试）：A 卸载 → B 删除；B 新装不删；B 改版不删且报冲突；开关关不删（降级 `Skip` 并写明原因）；`bundlesOnly`/本插件自身不删；祖先缺失不删；删除失败逐项 warning 不阻断；自动档恒不删（风险分级断言）；回滚能重装被删插件。
+
 
