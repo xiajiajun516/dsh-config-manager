@@ -104,7 +104,7 @@
 
 ## 已完成 / 未完成
 
-- **已完成**：53 张设计稿（PNG + HTML + 提示词 + 页面记录）、11 张真实实现对照截图、`pages.md` 全量清单、`consistency.md` 一致性报告。
+- **已完成**：54 屏设计稿（PNG + HTML + 提示词 + 页面记录）、11 张真实实现对照截图、`pages.md` 全量清单、`consistency.md` 一致性报告。
 - **未完成（有意留在阶段 F 之前）**：
   - 只有一件事：**落地代码（阶段 F）未获批准**，本轮只动 `.stitch-refactor/`，未碰 `src/**`。
   - `consistency.md` 的 C-01…C-21 **全部有结论**（2026-11-12 收口）：已闭合 = C-01、C-03（遮罩审计后 4 屏补真遮罩）、C-06、C-07、C-08、C-09、C-11、C-13、C-14、C-16、C-19、C-20；判非缺陷 = C-10（D-23 就是 `Modal wide` 台账）、C-12、C-15、C-21；按通用态取舍 = C-17；交阶段 F 决策 = C-05（ConfirmDialog 族与自绘 Footer 族的次序在真实代码里并存，DESIGN.md §7-30 只写了后者）。
@@ -114,7 +114,7 @@
 ## 环境
 
 - 截图实例：`dsh --profile web --no-open` 独立实例（端口 5802x）+ token URL + Chrome DevTools Protocol；插件根 `#dsh-config-manager-root` 在视口 1400×1100、dpr 1 下精确 564×722。
-- 本项目无法使用 `ops_bash`（`EXECUTOR_UNAVAILABLE`/awk.exe 硬链接失败），全部文件读写走 `run_code` + `node:fs`。
+- 命令行：本会话 `ops_bash` 可用（早先记录的 `EXECUTOR_UNAVAILABLE` 已不成立）；若再遇执行通道故障，回落 `run_code` + `node:child_process`。
 
 ## 第二轮回修（2026-11-11）
 
