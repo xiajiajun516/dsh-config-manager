@@ -65,7 +65,8 @@ export function extractMcpServers(lines: { lineId: string; raw: unknown; file?: 
       const c = config as Record<string, unknown>;
       const serverName = c['serverName'];
       if (typeof serverName !== 'string' || serverName === '') continue;
-      const type = typeof c['url'] === 'string' && c['url'] !== '' ? 'streamable-http' : 'stdio';
+      // transport 优先（写回时一定有）；老行没有该字段才回落「有 url = 远程」的猜测
+      const type = mcpTransportOf(c) ?? (typeof c['url'] === 'string' && c['url'] !== '' ? 'streamable-http' : 'stdio');
       servers.push({
         serverName,
         type,
@@ -107,6 +108,12 @@ export function stripMcpEntries(raw: unknown): unknown | undefined {
   return isMcpEntry(single[0]) ? undefined : raw;
 }
 
+/** `config.transport` 的合法取值；读不出来（缺字段/写错）返回 undefined，由调用方回落 url 判定。 */
+function mcpTransportOf(c: Record<string, unknown>): McpServerEntry['type'] | undefined {
+  const transport = c['transport'];
+  return transport === 'stdio' || transport === 'streamable-http' ? transport : undefined;
+}
+
 /** 单个 patch entry 是否是 MCP 服务器行（与 extractMcpServers 的判定同口径） */
 function isMcpEntry(entry: unknown): boolean {
   if (entry === null || typeof entry !== 'object') return false;
@@ -131,9 +138,22 @@ function entriesOf(raw: unknown): { id?: unknown; name?: unknown; config?: unkno
   return [];
 }
 
-/** 由导出条目构造写回 patch 行 raw（单行形态，与 dsh-mcp-client 组合 config 语义一致） */
+/**
+ * MCP server 行的包名（bundle id，**必须带 scope**）。
+ *
+ * 宿主按 bundle id 解析 patch 行的 `name`；裸名 `dsh-mcp-client` 是否被归一化未经验证，
+ * 而用户机上的真实行都是 `@deepseek-ai/dsh-mcp-client`（issue #133 报告的原始行）。
+ */
+const MCP_BUNDLE_NAME = '@deepseek-ai/dsh-mcp-client';
+
+/**
+ * 由导出条目构造写回 patch 行 raw（单行形态，与 dsh-mcp-client 组合 config 语义一致）。
+ *
+ * `config.transport` 必须显式写：读侧靠它判定 server 类型，只在「没有 transport 的旧行」
+ * 上才回落 url 猜测（issue #133：此前写回丢了这个字段，stdio/http 只能靠 url 有没有值猜）。
+ */
 export function buildMcpPatchLine(lineId: string, server: McpServerEntry): Record<string, unknown> {
-  const config: Record<string, unknown> = { serverName: server.serverName };
+  const config: Record<string, unknown> = { serverName: server.serverName, transport: server.type };
   if (server.type === 'streamable-http') {
     config['url'] = server.url;
     if (server.headers !== undefined) config['headers'] = server.headers;
@@ -143,7 +163,7 @@ export function buildMcpPatchLine(lineId: string, server: McpServerEntry): Recor
     if (server.env !== undefined) config['env'] = server.env;
     if (server.cwd !== undefined) config['cwd'] = server.cwd;
   }
-  return { id: lineId, name: 'dsh-mcp-client', config };
+  return { id: lineId, name: MCP_BUNDLE_NAME, config };
 }
 
 /** 连接器计划项的 id 前缀（导入时按前缀分派到 applyConnectorItem） */

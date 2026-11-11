@@ -80,5 +80,6 @@
 - **同一写路径的第二个缺陷（字段损失，独立于摊平）**：`buildMcpPatchLine()` 按白名单重建 patch 行，只输出 `serverName` + 按 type 分支的 `url/headers` 或 `command/args/env/cwd`，**不写 `transport`，`name` 也不带 `@deepseek-ai/` scope**（白名单本身写在 `docs/contracts/bundle-format-v1.md` 的 mcp 一节）。即使摊平修好，insert 成员的 `name` 与 `transport` 仍会被改写。
 - **为什么事务自检全绿**：patch 行项没有文件 `rel`，`analyzer` 按 `external: rel === null` 处理 ⇒ `beforeFp`/`afterFp` 恒 null，校验只能空过（既有可证限制，见 `docs/evidence/recovery-console.md` 的 external step 一节）。⇒ 这条写路径缺的不是指纹，而是**写后语义自检**（重读并断言「原本 insert 的 id 仍在 insert 里」）。
 - **未验证**：宿主是否接受裸名 `dsh-mcp-client` 解析到 `@deepseek-ai/dsh-mcp-client`（insert 路径读到的那段代码只对「带 id 的 insert」做校验，未读到 name 归一化逻辑）；报告者观察到的 7 处 `""` → `null` 归一化本机未复现。
+- **修复落点（2026-11-11，两提交）**：写回不再摊平 —— `src/core/patch-document.ts` 只按原文档的归属重排（insert 成员留在块里、`update` 不改归属），`applyPatchChanges` 落盘前做结构自检（`describePatchLayoutDrift`）与跨层提升守卫（`promotedTopLevelIds`），任一不过即零写入报码。MCP 写回同时补齐 `config.transport` 与 scoped 行名 `@deepseek-ai/dsh-mcp-client`，因此**不再依赖宿主对裸名的归一化**（上面那条未验证项对本插件已不构成风险）。
 
 

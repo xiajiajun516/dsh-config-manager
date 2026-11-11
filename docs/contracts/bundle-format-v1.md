@@ -699,7 +699,7 @@ THROW 备份 schema v2（高于当前 1，需升级插件），无法导入（�
 | `plugins.localTarballs` | `LocalPluginTarball[]` | 可选 | 本地源插件 tarball（base64）。**市场通道两端拒绝**；仅本地备份合法 | `src/schema/types.ts:131-157`、`src/market/security.ts` |
 | `plugins.patchFiles` | `{relativePath: string, base64: string}[]` | 可选 | `pnpmWorkspace.patchedDependencies` 引用的 `patches/**` 文件，`relativePath` 相对 **profile 目录**。**市场通道两端拒绝**；仅本地备份合法 | `src/schema/types.ts:158-171`、`src/market/security.ts`、`src/market/prepare.ts` |
 | `mcp.servers[]` | `serverName`/`type` | 必需 | `type ∈ {stdio, streamable-http}` | `src/schema/types.ts` 的 `McpServerEntry.serverName` / `.type` |
-| | `command`/`args`/`env`/`cwd`（stdio）或 `url`/`headers`（http） | 可选 | 写回时按白名单重建 patch 行 → **条目内未知字段会丢失** | `src/adapters/mcp.ts:86-98`（`buildMcpPatchLine`）、`src/adapters/mcp.ts:172-190`（`applyItem`） |
+| | `command`/`args`/`env`/`cwd`（stdio）或 `url`/`headers`（http） | 可选 | 写回时按白名单重建 patch 行 → **条目内未知字段会丢失**；`type` 映射为 patch 行的 `config.transport`（值为 `stdio` / `streamable-http`），行 `name` 恒为 scoped 的 `@deepseek-ai/dsh-mcp-client`（issue #133） | `src/adapters/mcp.ts` 的 `buildMcpPatchLine`、`src/adapters/mcp.ts` 的 `extractMcpServers` |
 | | `sourceLineId` / `sourceFile` | 可选 | **导出侧附加的来源定位**：`sourceLineId` = 来源 patch 行的 `lineId`（`sourceFile` 缺省时也用于判定目标行是否已被占用）；`sourceFile` = 来源 patch **层**，取值 = **相对 `$DSH_HOME` 的 POSIX 路径**（`cordis.patch.yml` = 用户层，`profiles/<name>/cordis.patch.yml` = 档案层）。导入侧按它把行写回**同语义层**（来源是档案层 → 落到**目标机当前档案**，不照抄 profile 名）。**旧包没有 `sourceFile` = 按用户层处理**（改造前行为，不猜）。两者都不进 patch 行本身，也不影响 `validateSectionData` | `src/adapters/mcp.ts:27-34`（`McpExportEntry.sourceFile`）、`src/adapters/mcp.ts:43-68`（`extractMcpServers` 记录来源层）、`src/adapters/mcp.ts:150` / `:164`（计划项带层） |
 | `prompts.prompts[]` | `id`/`name`/`kind`/`text` | 必需 | `kind ∈ {systemPrompt, planMode}` | `src/schema/types.ts` 的 `interface PromptEntry` |
 | | `sourceLineId` / `sourceLineName` / `sourceFile` | 可选 | 与 `mcp` 同口径的来源定位（`sourceLineName` = 来源 patch 行的 `name`，Create 重建行时用作行名；`sourceFile` 语义与缺省行为**同上**） | `src/adapters/prompts.ts:27-34`、`src/adapters/prompts.ts:215`（Create 写回层）、`src/adapters/prompts.ts:223-228`（Update 定位原行所在层） |
@@ -1100,7 +1100,7 @@ unsupportedSections= ["keybindings"]                                        ← 
 |---|---|---|---|
 | `settings` / `ui` | ❌ 否（分区级与 namespace 级未知字段均丢失） | `applyNamespaceItem` 只取 `data.namespaces[ref].value` 并整体替换目标 namespace | `src/adapters/settings.ts:107-126` |
 | `providers` | ⚠️ **分区级 / route 条目级 = 否；`raw` 内部 = 是** | 写回值是 `entry.raw ?? stripEntry(entry)`，`raw` 是**整个 namespace 值的深拷贝**，因此 `raw` 内部的未知字段随 namespace 一起落到目标；而 `stripEntry` 只取 8 个已知字段，故**无 `raw` 时**未知字段丢失 | `src/adapters/providers.ts:34-40`（`stripEntry` 白名单）、`src/adapters/providers.ts:131-145`（`const value = entry.raw ?? stripEntry(entry)`） |
-| `mcp` | ❌ 否（且**连条目自身的 `type` 字段都不写回**） | 写回时由白名单字段**重建** patch 行（`buildMcpPatchLine`），只输出 `serverName` + 按 `type` 分支的 `url/headers` 或 `command/args/env/cwd`；`type` 本身不进 patch 行 | `src/adapters/mcp.ts:86-98`（`buildMcpPatchLine`）、`src/adapters/mcp.ts:172-190`（`applyItem`） |
+| `mcp` | ❌ 否 | 写回时由白名单字段**重建** patch 行（`buildMcpPatchLine`），输出 `serverName` + `transport`（= 条目 `type`）+ 按类型分支的 `url/headers` 或 `command/args/env/cwd`；行 `name` 恒为 `@deepseek-ai/dsh-mcp-client` | `src/adapters/mcp.ts` 的 `buildMcpPatchLine`、`src/adapters/mcp.ts` 的 `applyItem` |
 | `prompts` | ❌ 否 | 写回走两条路径，都重建：Create → `buildPromptLine`（只写 `id/name/config.systemPrompt.persona` 或 `config.planMode.sections`）；Update → `mergePromptIntoLine`（只改 `persona` / `sections[].text`，其余取自**目标行**） | `src/adapters/prompts.ts:114-120`（`buildPromptLine`）、`src/adapters/prompts.ts:92-111`（`mergePromptIntoLine`）、`src/adapters/prompts.ts:202-232`（`applyItem`） |
 | `workspaces` | ✅ **是**（条目级未知字段原样落到目标记录） | `applyItem` 直接把 `data.workspaces.find(...)` 的**整个记录对象**交给 `ctx.target.workspace.writeRecord(rec)`，无字段过滤 | `src/adapters/workspaces.ts:67-77` |
 | `credentialsStatus` | ❌ 否（**该分区根本不写条目字段**） | `analyzeImport` 恒返回 `[]`；`applyItem` 只做 `credentials.set(ref, value)`，`value` 来自 `secretInputs` / `decryptedCredentials`，**从不读分区载荷里的条目字段** | `src/adapters/credentials.ts:105-118`、`src/core/analyzer.ts` 的 `executeImportPlan`（凭据写入路径；`ensureMissingSecrets` 只读 `ref` 与 `configured`） |
@@ -1145,9 +1145,9 @@ result.ok = true   failed = 0
 [ui]                 dst ns theme value          = {"mode":"dark","accent":"blue"}                      ← 'S'/'NS' 均未出现
 [providers]          dst ns llm-deepseek value   = {"apiKeyEnv":"DEEPSEEK_API_KEY","baseURL":"https://api.deepseek.com",
                                                     "model":"deepseek-chat","x-future-in-raw":"RAW"}    ← 仅 raw 内部的存活
-[mcp]                dst patch line probe-mcp    = {"id":"probe-mcp","name":"dsh-mcp-client",
-                                                    "config":{"serverName":"filesystem","command":"npx","args":["-y","x"]}}
-                                                                                                        ← 'I' 未出现；且条目原有的 type="stdio" 也未写回
+[mcp]                dst patch line probe-mcp    = {"id":"probe-mcp","name":"@deepseek-ai/dsh-mcp-client",
+                                                    "config":{"serverName":"filesystem","transport":"stdio","command":"npx","args":["-y","x"]}}
+                                                                                                        ← 'I' 未出现；type 以 config.transport 写回（issue #133 起）
 [prompts]            dst patch line probe-persona= {"id":"probe-persona","name":"@deepseek-ai/dsh-web",
                                                     "config":{"systemPrompt":{"persona":"You are a probe fixture."}}}
                                                                                                         ← 'I' 未出现（整行被重建）
@@ -1166,7 +1166,7 @@ result.ok = true   failed = 0
 
 1. **`workspaces[]` 条目级未知字段会原样写回目标记录**（`writeRecord(rec)` 无字段过滤）——与 `plugins.patch[].raw` 同类。
 2. **`providers` 的 `raw` 内部未知字段会写回**（因为 `raw` 承载的是整个 settings namespace 值）；但 `providers` 的**分区级**与 **route 条目级**未知字段丢失。
-3. 其余结构化分区（`settings` / `ui` / `mcp` / `prompts` / `credentialsStatus`）的未知字段**确实不写回**；`mcp` 更极端——连**已知字段 `type`** 都不写回（因为写回是白名单重建，不是字段合并）。
+3. 其余结构化分区（`settings` / `ui` / `mcp` / `prompts` / `credentialsStatus`）的未知字段**确实不写回**；`mcp` 写回是白名单重建（不是字段合并），已知字段 `type` 以 `config.transport` 写出。
 
 **判定**：对 importer 而言，**「未知字段是否写回」是分区相关的，不能一句话概括**。第三方实现**不得**声称「未知字段一律被保留」，也**不得**声称「一律被丢弃」——两种说法都会在真实 bundle 上给出错误的兼容性预期。就「导入配置」这一语义而言，本实现的真实取向是「**按已知语义重建**」，只有把「原始值整体搬过去」当成语义的分区（`workspaces` 记录、`plugins` patch 行、`providers.raw`）才会连带搬走未知字段。
 
@@ -1210,7 +1210,7 @@ errors   = []
 | 未知分区 id | 必须**显式告警**（说明「不受支持、已跳过、数据未导入」），不得复用「声明但缺失」的文案；不得因此拒绝整个 bundle |
 | 未知顶层 / 已知对象内未知字段 | **保留在内存解析结果中**，不要因未知字段报错；不要尝试解释它们 |
 | 已知分区内的未知字段 | **按分区对待**（实测见 §7.3）：`settings`/`ui`/`mcp`/`prompts`/`credentialsStatus` → 忽略；`workspaces[]` 记录、`plugins.patch[].raw`、`providers.raw` → 会随「整体搬运」落到目标。**不要因未知字段报错**，也**不要对外承诺「未知字段一定保留」或「一定丢弃」** |
-| 已知分区内的**已知**字段 | 注意 `mcp.servers[].type` 这类「读得到、写不回」的字段：本实现按白名单重建 patch 行，`type` 本身不进 patch 行（§7.3 实测）。第三方若需要 `type` 存续，必须自己扩展写回形状 |
+| 已知分区内的**已知**字段 | 注意 `mcp.servers[].type` 这类「换个名字写回」的字段：本实现按白名单重建 patch 行，`type` 落在 `config.transport`（§7.3 实测）。第三方若需要更多字段存续，必须自己扩展写回形状 |
 | 文件类分区条目名 | 归一化后再比对目标路径（§3.3.1 D）；拒绝中段反斜杠（比现状更严格） |
 | 未知 ZIP 条目 | 至少**计数并告警**（可参考 `src/core/backup-verify.ts:265-272` 的做法） |
 | 目录条目（尾随 `/`） | 跳过，不拒绝、不创建文件（§1.5.6） |

@@ -41,11 +41,31 @@ test('mcp: extractMcpServers 兼容单行与 insert 块', () => {
   assert.equal(http?.sourceLineId, 'mcp-http');
 });
 
-test('mcp: buildMcpPatchLine 构造写回行', () => {
+test('mcp: buildMcpPatchLine 构造写回行（scoped 包名 + 显式 transport）', () => {
   const line = buildMcpPatchLine('mcp-fs', { serverName: 'filesystem', type: 'stdio', command: 'npx', args: ['-y', 'x'] });
   assert.equal(line.id, 'mcp-fs');
-  assert.equal(line.name, 'dsh-mcp-client');
+  assert.equal(line.name, '@deepseek-ai/dsh-mcp-client', '宿主按 bundle id 解析 name，裸名不保证被接受（#133）');
+  assert.equal((line.config as Record<string, unknown>)['transport'], 'stdio', 'stdio 必须显式写 transport（此前只能靠 url 缺省猜）');
   assert.equal((line.config as Record<string, unknown>)['command'], 'npx');
+
+  const http = buildMcpPatchLine('mcp-remote', { serverName: 'remote', type: 'streamable-http', url: 'https://mcp.example.com/sse' });
+  const httpConfig = http.config as Record<string, unknown>;
+  assert.equal(httpConfig['transport'], 'streamable-http');
+  assert.equal(httpConfig['url'], 'https://mcp.example.com/sse');
+});
+
+test('mcp: extractMcpServers 以 transport 为准，缺该字段的旧行才回落 url 猜测', () => {
+  const withTransport = extractMcpServers([{
+    lineId: 'mcp-stdio-with-url',
+    raw: { id: 'mcp-stdio-with-url', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 's1', transport: 'stdio', command: 'node', url: 'http://127.0.0.1:1/mcp' } },
+  }]);
+  assert.equal(withTransport[0]?.type, 'stdio', 'transport 在就不该被 url 覆盖');
+
+  const legacy = extractMcpServers([{
+    lineId: 'legacy',
+    raw: { id: 'legacy', name: 'dsh-mcp-client', config: { serverName: 's2', url: 'https://mcp.example.com/sse' } },
+  }]);
+  assert.equal(legacy[0]?.type, 'streamable-http', '没有 transport 的旧行仍按原口径回落');
 });
 
 test('mcp: export 提取 + analyzeImport Create/Skip/Conflict + applyItem 写 patch（needsRestart）', async () => {
@@ -69,7 +89,7 @@ test('mcp: export 提取 + analyzeImport Create/Skip/Conflict + applyItem 写 pa
   assert.equal(r.ok, true);
   assert.equal(r.needsRestart, true, 'MCP 写 patch 必须重启生效');
   assert.ok(dst.patchFile.lines.has('mcp-fs'));
-  assert.equal((dst.patchFile.lines.get('mcp-fs')?.raw as Record<string, unknown>)['name'], 'dsh-mcp-client');
+  assert.equal((dst.patchFile.lines.get('mcp-fs')?.raw as Record<string, unknown>)['name'], '@deepseek-ai/dsh-mcp-client');
 
   // 幂等：同 serverName 同内容 → Skip
   items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
