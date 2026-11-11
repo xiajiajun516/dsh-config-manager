@@ -28,13 +28,19 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-11
+
+> **导入或同步过的 MCP 服务器，重启后不会整条消失**：以前合并远端或导入备份时，插件会把「只能新增」的 patch 条目改写成另一种形态，主程序重启后认不出来、直接丢掉；现在两种形态各按原样写回，从零新建的 MCP 行还补上了连接类型与完整包名。
+>
+> **Theme**: imported or synced MCP servers survive a restart — merging or importing no longer rewrites "add-only" patch entries into a shape the host cannot resolve, and newly written MCP rows now state their transport and full bundle name.
+
 ### 🐛 修复 · Fixed
 
-- **导入或同步备份后，MCP 服务器不再在重启时整条消失**：以前只要动过 patch 里的任意一行，插件就会把「只能新增」的条目改写成另一种形态，主程序重启后认不出来、直接丢掉（MCP 服务器最典型）；现在两种形态各按原样写回，导入过的 MCP 服务器照常出现。
+- **导入或同步备份后，MCP 服务器不再在重启时整条消失**：以前只要动过 patch 里的任意一行，插件就会把「只能新增」的条目改写成另一种形态，主程序重启后认不出来、直接丢掉（MCP 服务器最典型）；现在两种形态各按原样写回，导入过的 MCP 服务器照常出现。（issue #133）
   **MCP servers no longer vanish after a restart once you import or sync a backup**: touching any patch row used to rewrite "add-only" entries into the other shape, which the host cannot resolve and drops at startup (MCP servers were hit hardest); each shape is now written back as-is, so imported MCP servers keep working.
 
-- **导入的 MCP 服务器现在写明连接类型与包名**：以前写回的行只带服务器名和命令（或 URL），类型全靠「有没有 URL」猜，行名也少了 scope；现在每行都显式写 transport 与带 scope 的包名，本地命令与远程服务器导入后各按原类型生效。
-  **Imported MCP servers now record their transport and bundle name**: written rows used to carry only the server name plus a command or URL, with the type guessed from the presence of a URL and the row name missing its scope; each row now states transport and the scoped bundle name, so both local-command and remote servers come back with the type they were imported as.
+- **导入的 MCP 服务器现在写明连接类型与包名**：以前写回的行只带服务器名和命令（或 URL），连接类型全靠「有没有 URL」猜，包名也少了 scope；现在每行都写明连接类型与完整包名，本地命令与远程服务器导入后各按原类型生效。（issue #133）
+  **Imported MCP servers now record their transport and bundle name**: written rows used to carry only the server name plus a command or URL, with the type guessed from the presence of a URL and the bundle name missing its scope; each row now states its connection type and full bundle name, so both local-command and remote servers come back with the type they were imported as.
 
 ## [0.8.0] - 2026-11-10
 
