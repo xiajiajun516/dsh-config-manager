@@ -64,7 +64,7 @@
 <!-- 右侧4个图标 -->
 <div class="flex items-center space-x-[10px] text-[#81858C]">
 <!-- ⌘K -->
-<div class="flex items-center justify-center w-[14px] h-[14px] text-[11px] font-mono leading-none">⌘K</div>
+<div style="display:flex;align-items:center;gap:4px;flex:none;margin-left:4px;color:#61666B"><button type="button" aria-label="命令面板" title="⌘/Ctrl+K" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></button><button type="button" aria-label="活动" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button><button type="button" aria-label="迁移历史" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></button><button type="button" aria-label="关于" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></button></div>
 <!-- 活动 -->
 <svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
 <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
@@ -202,9 +202,8 @@
 </div>
 <!-- Footer: 两个按钮右对齐、间距 8px。左边「清理」危险主按钮，右边「取消」ghost -->
 <div class="pt-[10px] px-[16px] pb-[14px] border-t border-[#0000001A] flex items-center justify-end space-x-[8px] bg-white">
-<!-- 左边：确认在左（危险主按钮「清理」：#EC1313 实底、白字 13px、高 28px、圆角 8px、左右内距 12px） -->
+<!-- 左边：危险主按钮「清理」：#EC1313 实底、白字 13px、高 28px、圆角 8px、左右内距 12px） -->
 <button class="h-[28px] px-[12px] bg-white hover:bg-[#FFF1F1] border border-[#EC1313] text-[#EC1313] text-[12.5px] font-medium rounded-[8px] flex items-center justify-center transition-colors" style="border-color: rgba(236, 19, 19, 0.45);">清理</button>
-<!-- 右边：取消在右（ghost 按钮「取消」：白底、0.5px #0000001A 描边、文字 #0F1115、高 28px、圆角 8px、左右内距 12px） -->
 <button class="h-[28px] px-[12px] bg-white hover:bg-[#F5F5F5] border border-[#0000001A] text-[#0F1115] text-[12.5px] font-medium rounded-[8px] flex items-center justify-center transition-colors">取消</button>
 </div>
 </div>

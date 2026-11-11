@@ -106,10 +106,10 @@
 
 - **已完成**：53 张设计稿（PNG + HTML + 提示词 + 页面记录）、11 张真实实现对照截图、`pages.md` 全量清单、`consistency.md` 一致性报告。
 - **未完成（有意留在阶段 F 之前）**：
-  - `D-31` 终止运行确认：额度恢复后已补出图，残留遮罩未压暗 + 底部空白（详见 `pages/D-31.md`）。
-  - `consistency.md` 剩余未闭合行：C-02（P-01/P-03/P-04/P-05 右上控制区缺四个图标，P0）、C-04、C-05、C-08、C-09、C-10、C-11、C-16..C-21。已闭合：C-01（状态栏 54/54 + PNG 重渲）、C-03 的 D-08、C-06/C-07 的 T-05/T-06、C-19 的 T-06。
-  - 闭合这些行不再依赖 Stitch：`out/*.html` 是权威源，改 HTML 后用 `tools/render-cdp.mjs` 重渲 PNG 即成，无需额度。
-  - 落地代码：全部未动。
+  - 只有一件事：**落地代码（阶段 F）未获批准**，本轮只动 `.stitch-refactor/`，未碰 `src/**`。
+  - `consistency.md` 的 C-01…C-21 **全部有结论**（2026-11-12 收口）：已闭合 = C-01、C-03（遮罩审计后 4 屏补真遮罩）、C-06、C-07、C-08、C-09、C-11、C-13、C-14、C-16、C-19、C-20；判非缺陷 = C-10（D-23 就是 `Modal wide` 台账）、C-12、C-15、C-21；按通用态取舍 = C-17；交阶段 F 决策 = C-05（ConfirmDialog 族与自绘 Footer 族的次序在真实代码里并存，DESIGN.md §7-30 只写了后者）。
+  - `D-31` 的残留（弹窗下方约 250px 未画内容）已并入 C-08 口径：面板内无 >80px 内容死白，属居中弹窗的结构性留白。
+  - 闭合这些行不依赖 Stitch：`out/*.html` 是权威源，改 HTML 后用 `tools/render-cdp.mjs` 重渲 PNG 即成，不消耗生成额度。
 
 ## 环境
 
@@ -131,3 +131,10 @@
 - - **PNG 已同步重渲**：这 22 屏的 PNG 改用本地 headless Chromium 从 `out/<ID>.html` 重拍（管线 `.stitch-refactor/.render/cdp.mjs`，Chromium 走 CDP + `Page.captureScreenshot`）。取景对齐核验：面板包围盒与原图一致（差异框 X 710–1852 vs 原图 712–1850），逐像素 meanDiff 1.4–4.6%（差异集中在文字抗锯齿与状态栏本身）。原图备份在 `shots/.stitch-orig/`。
 - 重渲流程：`node .stitch-refactor/.render/cdp.mjs jobs.json`，jobs 里每屏给 `{url, out, vw: 1263, vh: 1010, dsf: H/1010}`；HTML 里的 `cdn.tailwindcss.com` 换成本地 `.render/tailwind.js`，Google Fonts 链接换成本地 `.render/fonts.css`（11 个 woff2 已落盘），否则离线渲染会掉样式/掉字重。
 - 复现/复测脚本口径见本节第一段，判定数据存 `.tmp/statusbar-final.json`。
+
+## 第三轮 C 行清扫（2026-11-12）
+
+- 按钮次序（C-05）：按**各自组件族**忠实呈现，不擅自统一；两族并存的原因与源码行号见 `consistency.md`。
+- 留白（C-08）：用 `tools/probe-gaps.mjs` 逐屏量，结论是面板内无 >80px 死白；真缺陷只有 D-33/D-37 被画成顶部锚定，已改绝对居中。
+- 遮罩审计：4 屏（D-14/D-14b/D-15/D-16）原来用「改灰 / opacity」假装压暗，已改为真实色 + `#0000003D` 遮罩；D-01/D-07/D-13 的 0.25 与 D-32 的 0.42 归一，D-32 另去掉 grayscale 滤镜。像素核验同族（`#B6…C5`）。
+- 主按钮唯一（C-19）：T-08 的 Star 由 primary 降为白底描边（产品真实是同屏两个 primary，见 `AboutPanel.tsx:186/219`）。

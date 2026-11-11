@@ -40,34 +40,7 @@
 <button class="px-[10px] py-[4px] rounded-[8px] text-12 font-medium bg-[#EBEEF2] border border-[#979DA6] text-[#0F1115]">环境</button>
 </nav>
 <!-- 右端 4 个 14px 线性图标按钮（⌘K、活动、历史、关于） -->
-<div class="flex items-center gap-[12px] text-[#61666B]">
-<button class="hover:text-[#0F1115] transition-colors" title="命令面板">
-<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
-<rect height="18" rx="4" width="18" x="3" y="3"></rect>
-<path d="M15 9h-6"></path>
-<path d="M9 9v6"></path>
-<path d="M15 15h-6"></path>
-</svg>
-</button>
-<button class="hover:text-[#0F1115] transition-colors" title="运行中心与活动">
-<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
-<path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
-</svg>
-</button>
-<button class="hover:text-[#0F1115] transition-colors" title="迁移历史">
-<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
-<circle cx="12" cy="12" r="10"></circle>
-<polyline points="12 6 12 12 16 14"></polyline>
-</svg>
-</button>
-<button class="hover:text-[#0F1115] transition-colors" title="关于与帮助">
-<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
-<circle cx="12" cy="12" r="10"></circle>
-<path d="M12 16v-4"></path>
-<path d="M12 8h.01"></path>
-</svg>
-</button>
-</div>
+<div style="display:flex;align-items:center;gap:4px;flex:none;margin-left:4px;color:#61666B"><button type="button" aria-label="命令面板" title="⌘/Ctrl+K" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></button><button type="button" aria-label="活动" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button><button type="button" aria-label="迁移历史" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></button><button type="button" aria-label="关于" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></button></div>
 </header>
 <!-- 中间内容区背景残影：环境页背景（灰底上低对比可见） -->
 <main class="flex-1 p-[16px] flex flex-col gap-[10px] overflow-hidden bg-[#EBEEF2]">
@@ -160,7 +133,6 @@
 <button class="h-[30px] px-[14px] rounded-[8px] bg-[#EC1313] hover:bg-[#EC1313] active:scale-[0.99] text-12 font-medium text-[#FFFFFF] transition-all flex items-center justify-center">
             停止
           </button>
-<!-- 右侧取消按钮：ghost（白底、1px #0000001A 描边、深色文字 #0F1115、带外扩 2px #979DA6 焦点环表达等待确认） -->
 <button class="h-[30px] px-[14px] rounded-[8px] bg-[#FFFFFF] border border-[#0000001A] hover:bg-[#EBEEF2] active:scale-[0.99] text-12 font-medium text-[#0F1115] ring-2 ring-[#979DA6] ring-offset-1 transition-all flex items-center justify-center">
             取消
           </button>

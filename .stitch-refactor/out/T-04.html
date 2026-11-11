@@ -79,20 +79,7 @@
         <span class="text-[12.5px] text-[#61666B] cursor-default font-normal">环境</span>
       </nav>
       <!-- 右侧 4 个 lucide 线性图标按钮（命令面板 / 活动 / 历史 / 关于）各 14px、间距 12px、颜色 #61666B、无激活底 -->
-      <div class="flex items-center space-x-[12px] text-[#61666B]">
-        <button class="w-[14px] h-[14px] flex items-center justify-center p-0 hover:text-[#0F1115] transition-colors" title="命令面板">
-          <i data-lucide="command" class="w-[14px] h-[14px]"></i>
-        </button>
-        <button class="w-[14px] h-[14px] flex items-center justify-center p-0 hover:text-[#0F1115] transition-colors" title="活动">
-          <i data-lucide="activity" class="w-[14px] h-[14px]"></i>
-        </button>
-        <button class="w-[14px] h-[14px] flex items-center justify-center p-0 hover:text-[#0F1115] transition-colors" title="历史">
-          <i data-lucide="history" class="w-[14px] h-[14px]"></i>
-        </button>
-        <button class="w-[14px] h-[14px] flex items-center justify-center p-0 hover:text-[#0F1115] transition-colors" title="关于">
-          <i data-lucide="help-circle" class="w-[14px] h-[14px]"></i>
-        </button>
-      </div>
+      <div style="display:flex;align-items:center;gap:4px;flex:none;margin-left:4px;color:#61666B"><button type="button" aria-label="命令面板" title="⌘/Ctrl+K" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></button><button type="button" aria-label="活动" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button><button type="button" aria-label="迁移历史" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></button><button type="button" aria-label="关于" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></button></div>
     </header>
 
     <!-- 2. 面板头：高 44px，左右内边距 16px，底部 1px 分隔线 -->

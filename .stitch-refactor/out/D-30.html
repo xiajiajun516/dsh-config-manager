@@ -138,50 +138,9 @@
 </div>
 </div>
 <!-- 2. 列表区（内边距 4px 6px，限高 280px，超出裁剪并留出被裁切的下一行） -->
-<div class="w-full h-[280px] px-[6px] py-[4px] overflow-hidden no-scrollbar flex flex-col bg-[#FFFFFF]" style="height: 336px;">
-<!-- 分组 1：前往 -->
-<div class="w-full flex flex-col">
-<!-- 分组标签「前往」（11px #81858C，左侧 6px 内缩，上下 6px） -->
-<div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none">前往</div>
-<!-- 4 行，每行 12.5px，行高 26px，首行「首页」为选中态（底色 #EBEEF2、左侧 2px #4176E6 竖条、文字 #0F1115） -->
-<div class="w-full h-[26px] bg-[#EBEEF2] rounded-md relative flex items-center px-2 cursor-pointer">
-<span class="absolute left-0 top-1 bottom-1 w-[2px] bg-[#4176E6] rounded-r-sm"></span>
-<span class="text-[12.5px] text-[#0F1115] font-medium leading-none pl-1">首页</span>
-</div>
-<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
-<span class="text-[12.5px] text-[#0F1115] leading-none">产物库</span>
-</div>
-<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
-<span class="text-[12.5px] text-[#0F1115] leading-none">同步</span>
-</div>
-<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
-<span class="text-[12.5px] text-[#0F1115] leading-none">环境</span>
-</div>
-</div>
-<!-- 分组 2：产物库 -->
-<div class="w-full flex flex-col mt-1">
-<!-- 分组标签「产物库」 -->
-<div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none">产物库</div>
-<!-- 5 行 —— 全部 / 本机快照 / 备份文件 / 远端快照 / 市场配置（纯标签 + 名称，无附注） -->
-<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
-<span class="text-[12.5px] text-[#0F1115] leading-none">全部</span>
-</div>
-<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
-<span class="text-[12.5px] text-[#0F1115] leading-none">本机快照</span>
-</div>
-<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
-<span class="text-[12.5px] text-[#0F1115] leading-none">备份文件</span>
-</div>
-<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
-<span class="text-[12.5px] text-[#0F1115] leading-none">远端快照</span>
-</div>
-<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
-<span class="text-[12.5px] text-[#0F1115] leading-none">市场配置</span>
-</div>
-</div>
-<!-- 分组 3：动作 -->
-<!-- 只露出第一行「发布到市场」与下一行的一部分（被 280px 裁切，暗示还能往下滚） -->
-<div class="w-full flex flex-col mt-1"><div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none">动作</div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">发布到市场</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">导出</span></div></div>
+<div class="w-full h-[280px] px-[6px] py-[4px] overflow-hidden no-scrollbar flex flex-col bg-[#FFFFFF]">
+<!-- 真实命令表：5 组 21 条（src/ui/commands.ts COMMANDS），空查询时按组列出，280px 限高内滚 -->
+<div class="w-full flex flex-col"><div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none">前往</div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">首页</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">产物库</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">同步</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">环境</span></div></div><div class="w-full flex flex-col mt-1"><div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none border-t border-[#0000001A] mt-1">产物库</div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">全部</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">本机快照</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">备份文件</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">远端快照</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">市场配置</span></div></div><div class="w-full flex flex-col mt-1"><div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none border-t border-[#0000001A] mt-1">动作</div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">市场</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">发布到市场</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">导出</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">导入</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">从其它 agent 导入</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">维护与诊断</span></div></div><div class="w-full flex flex-col mt-1"><div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none border-t border-[#0000001A] mt-1">视图</div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">活动记录</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">迁移历史</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">关于</span></div></div><div class="w-full flex flex-col mt-1"><div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none border-t border-[#0000001A] mt-1">处置</div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">事故恢复</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">救援模式</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">回滚点（工作区 + 会话回退）</span></div></div>
 </div>
 <!-- 3. 提示区 32px（上边框 1px #0000001A，11px 次要色居中） -->
 <!-- 提示区固定在浮层底部：44 + 280 + 32 加上微调填满 400px 外壳 -->

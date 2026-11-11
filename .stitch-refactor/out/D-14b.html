@@ -25,58 +25,40 @@
     }
   </style>
 </head>
-<body class="bg-[#EBEEF2] min-h-screen flex items-center justify-center p-0 m-0">
+<body class="bg-[#FFFFFF] min-h-screen flex items-center justify-center p-0 m-0">
 <!-- 564x720 完整插件画布 (外壳与内容压暗，浅灰 #EBEEF2) -->
-<div class="w-[564px] h-[720px] bg-[#EBEEF2] relative overflow-hidden flex flex-col justify-between border border-[#0000001A] shadow-none select-none">
+<div class="w-[564px] h-[720px] bg-[#FFFFFF] relative overflow-hidden flex flex-col justify-between border border-[#0000001A] shadow-none select-none">
 <!-- 1. 顶部导航条 (44px, 压暗态背景 #EBEEF2，文字与图标为 #61666B) -->
-<header class="w-full h-[44px] bg-[#EBEEF2] border-b border-[#0000001A] px-[16px] flex items-center justify-between z-0">
+<header class="w-full h-[44px] bg-[#FFFFFF] border-b border-[#0000001A] px-[16px] flex items-center justify-between z-0">
 <!-- 左侧页签 (纯文字) -->
 <nav class="flex items-center gap-[20px]">
-<span class="text-[12.5px] text-[#61666B] font-normal cursor-default">首页</span>
-<span class="text-[12.5px] text-[#61666B] font-normal cursor-default">产物库</span>
+<span class="text-[12.5px] text-[#0F1115] font-normal cursor-default">首页</span>
+<span class="text-[12.5px] text-[#0F1115] font-normal cursor-default">产物库</span>
 <div class="relative py-[11px]">
 <span class="text-[12.5px] text-[#0F1115] font-medium cursor-default">同步</span>
 <!-- 激活下划线 -->
 <div class="absolute bottom-0 left-0 right-0 h-[2px] bg-[#0F1115] rounded-full"></div>
 </div>
-<span class="text-[12.5px] text-[#61666B] font-normal cursor-default">环境</span>
+<span class="text-[12.5px] text-[#0F1115] font-normal cursor-default">环境</span>
 </nav>
 <!-- 右端 4 个图标按钮 (14px, #61666B) -->
-<div class="flex items-center gap-[12px] text-[#61666B]">
-<!-- ⌘K 命令面板 -->
-<span class="text-[11px] font-mono tracking-tight cursor-default">⌘K</span>
-<!-- 活动 (Activity 折线) -->
-<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
-<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-</svg>
-<!-- 历史 (时钟) -->
-<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
-<circle cx="12" cy="12" r="10"></circle>
-<polyline points="12 6 12 12 16 14"></polyline>
-</svg>
-<!-- 关于 (Info 圆圈) -->
-<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
-<circle cx="12" cy="12" r="10"></circle>
-<line x1="12" x2="12" y1="16" y2="12"></line>
-<line x1="12" x2="12.01" y1="8" y2="8"></line>
-</svg>
-</div>
+<div style="display:flex;align-items:center;gap:4px;flex:none;margin-left:4px;color:#61666B"><button type="button" aria-label="命令面板" title="⌘/Ctrl+K" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></button><button type="button" aria-label="活动" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button><button type="button" aria-label="迁移历史" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></button><button type="button" aria-label="关于" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></button></div>
 </header>
 <!-- 2. 中间底层内容区 (示意背景：通道卡片等被压暗淡出在底层) -->
-<main class="flex-1 w-full p-[16px] flex flex-col gap-[10px] bg-[#EBEEF2] opacity-40 pointer-events-none">
+<main class="flex-1 w-full p-[16px] flex flex-col gap-[10px] bg-[#FFFFFF] pointer-events-none">
 <div class="w-full h-[36px] bg-[#FFFFFF] border border-[#0000001A] rounded-[8px] flex items-center px-[12px] justify-between">
 <div class="flex items-center gap-[8px]">
-<span class="text-[12px] text-[#61666B]">Git 仓库</span>
+<span class="text-[12px] text-[#0F1115]">Git 仓库</span>
 <span class="text-[11px] bg-[color-mix(in srgb, #22C55E 12%, transparent)] text-[#22C55E] px-[6px] py-[1px] rounded-[4px]">已连接</span>
 </div>
-<span class="text-[11px] text-[#81858C]">上次同步 19:52</span>
+<span class="text-[11px] text-[#61666B]">上次同步 19:52</span>
 </div>
 <div class="w-full h-[120px] bg-[#FFFFFF] border border-[#0000001A] rounded-[12px]"></div>
 <div class="w-full h-[120px] bg-[#FFFFFF] border border-[#0000001A] rounded-[12px]"></div>
 <div class="w-full h-[120px] bg-[#FFFFFF] border border-[#0000001A] rounded-[12px]"></div>
 </main>
 <!-- 3. 底部状态栏 (28px, 压暗态背景 #EBEEF2) -->
-<footer class="w-full h-[28px] bg-[#EBEEF2] border-t border-[#0000001A] px-[16px] flex items-center justify-between text-[#61666B] z-0" style="width:calc(100% - 16px);margin:0 8px 8px;border:1px solid #0000001A;border-radius:8px;box-sizing:border-box">
+<footer class="w-full h-[28px] bg-[#FFFFFF] border-t border-[#0000001A] px-[16px] flex items-center justify-between text-[#0F1115] z-0" style="width:calc(100% - 16px);margin:0 8px 8px;border:1px solid #0000001A;border-radius:8px;box-sizing:border-box">
 <div class="flex items-center gap-[6px]">
 <span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
 <span class="text-[11px]">就绪</span>
@@ -84,6 +66,7 @@
 <span class="text-[11px] font-mono tracking-tight">v0.8.0 · DSH 2.4</span>
 </footer>
 <!-- 4. D-14b 弹窗本体 (纯白高亮，水平垂直居中，宽 541px，高约 540px，圆角 16px，1px #0000001A 描边，无投影) -->
+<div class="absolute inset-0 bg-[#0000003D] z-10 pointer-events-none"></div>
 <div class="absolute inset-0 flex items-center justify-center pointer-events-auto z-10 p-[12px]">
 <section class="w-[541px] bg-[#FFFFFF] rounded-[16px] border border-[#0000001A] flex flex-col overflow-hidden relative">
 <!-- 弹窗标题行 (40px, padding 12px 14px 0) -->

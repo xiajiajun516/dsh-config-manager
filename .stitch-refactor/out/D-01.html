@@ -42,25 +42,7 @@
 <span class="px-2 py-0.5 text-[#61666B] hover:text-[#0F1115] cursor-default">环境</span>
 </div>
 <!-- 右侧4个图标按钮 -->
-<div class="flex items-center gap-2.5 text-[#81858C]">
-<!-- ⌘K -->
-<span class="text-[11px] font-mono leading-none font-medium">⌘K</span>
-<!-- 活动 -->
-<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
-<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-</svg>
-<!-- 历史 -->
-<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
-<circle cx="12" cy="12" r="10"></circle>
-<polyline points="12 6 12 12 16 14"></polyline>
-</svg>
-<!-- 关于 -->
-<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
-<circle cx="12" cy="12" r="10"></circle>
-<line x1="12" x2="12" y1="16" y2="12"></line>
-<line x1="12" x2="12.01" y1="8" y2="8"></line>
-</svg>
-</div>
+<div style="display:flex;align-items:center;gap:4px;flex:none;margin-left:4px;color:#61666B"><button type="button" aria-label="命令面板" title="⌘/Ctrl+K" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></button><button type="button" aria-label="活动" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button><button type="button" aria-label="迁移历史" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></button><button type="button" aria-label="关于" style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:4px;background:none;color:inherit;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></button></div>
 </div>
 <!-- 首页内容区：状态条 + 工具栏 + 活动表 -->
 <div class="p-2.5 flex flex-col gap-2.5 flex-1 overflow-hidden">
@@ -130,7 +112,7 @@
 <!-- ========================================== -->
 <!-- 2. 24% 统一压暗黑色遮罩                     -->
 <!-- ========================================== -->
-<div class="absolute inset-0 bg-black/25 z-10 backdrop-blur-[0.5px]"></div>
+<div class="absolute inset-0 bg-[#0000003D] z-10 backdrop-blur-[0.5px]"></div>
 <!-- ========================================== -->
 <!-- 3. 定时备份弹窗本体 (Modal wide)           -->
 <!-- ========================================== -->
