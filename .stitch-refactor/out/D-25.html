@@ -1,21 +1,22 @@
 <!DOCTYPE html>
+
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <title>DSH 设置 — 备份与迁移 D-25 清理回滚点台账确认弹窗</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-25 清理回滚点台账确认弹窗</title>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
     tailwind.config = {
       theme: {
         extend: {
           colors: {
             surface: '#FFFFFF',
-            'surface-container': '#EBEEF2',
+            'surface-container': '#F5F5F5',
             'text-primary': '#0F1115',
             'text-secondary': '#61666B',
             'text-tertiary': '#81858C',
-            outline: '#EBEEF2',
+            outline: '#E6E6E6',
             danger: '#EC1313',
             'danger-hover': '#d01111',
             ghost: '#EBEEF2',
@@ -31,11 +32,11 @@
       }
     };
   </script>
-  <style>
+<style>
     body {
       margin: 0;
       padding: 0;
-      background-color: #EBEEF2;
+      background-color: #EBECEF;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
       display: flex;
@@ -56,131 +57,103 @@
   </style>
 </head>
 <body>
-
-  <!-- 主外壳：564 x 720 纯竖版插件视口 -->
-  <div class="relative w-[564px] h-[720px] bg-white overflow-hidden shadow-2xl flex flex-col select-none border border-black/10">
-
-    <!-- 1. 底层页面：环境 → 维护与诊断 (脱敏灰阶骨架轮廓) -->
-    <div class="absolute inset-0 flex flex-col bg-[#EBEEF2] pointer-events-none">
-      
-      <!-- 顶部 32px 页签条 -->
-      <div class="h-[32px] border-b border-black/10 px-4 flex items-center justify-between bg-white shrink-0">
-        <div class="flex items-center space-x-2">
-          <span class="text-[12px] text-[#81858C] px-1.5 py-0.5">首页</span>
-          <span class="text-[12px] text-[#81858C] px-1.5 py-0.5">产物库</span>
-          <span class="text-[12px] text-[#81858C] px-1.5 py-0.5">同步</span>
-          <!-- 激活态胶囊 -->
-          <span class="text-[12px] font-medium text-[#0F1115] bg-[#EBEEF2] border border-[#979DA6] rounded-8 px-2 py-0.5">环境</span>
-        </div>
-        <!-- 右侧 4 个线性图标轮廓 -->
-        <div class="flex items-center space-x-3 text-[#81858C]">
-          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 10h10M7 14h10"/></svg>
-          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-        </div>
-      </div>
-
-      <!-- 中间内容骨架区 (脱敏灰色轮廓) -->
-      <div class="p-3 space-y-2.5 flex-1 overflow-hidden">
-        
-        <!-- 分段控制骨架 -->
-        <div class="flex items-center justify-between">
-          <div class="w-12 h-4 bg-black/10 rounded-4"></div>
-          <div class="w-32 h-6 bg-black/5 border border-black/10 rounded-8"></div>
-        </div>
-
-        <!-- 状态卡骨架 -->
-        <div class="h-8 w-full bg-white border border-black/10 rounded-8 flex items-center px-3 space-x-2">
-          <div class="w-2 h-2 rounded-full bg-black/20"></div>
-          <div class="w-40 h-2.5 bg-black/10 rounded-4"></div>
-        </div>
-
-        <!-- 卡片骨架 1 -->
-        <div class="bg-white border border-black/10 rounded-12 p-3 space-y-2">
-          <div class="flex justify-between items-center">
-            <div class="w-20 h-3 bg-black/15 rounded-4"></div>
-            <div class="w-16 h-5 bg-black/10 rounded-8"></div>
-          </div>
-          <div class="w-full h-2 bg-black/5 rounded-4"></div>
-        </div>
-
-        <!-- 卡片骨架 2 (磁盘占用) -->
-        <div class="bg-white border border-black/10 rounded-12 p-3 space-y-2.5">
-          <div class="w-24 h-3 bg-black/15 rounded-4"></div>
-          <div class="space-y-1.5 pt-1">
-            <div class="h-4 w-full bg-black/5 rounded-4"></div>
-            <div class="h-4 w-full bg-black/5 rounded-4"></div>
-            <div class="h-4 w-full bg-black/5 rounded-4"></div>
-          </div>
-        </div>
-
-        <!-- 卡片骨架 3 (折叠台账卡) -->
-        <div class="bg-white border border-black/10 rounded-12 p-3 space-y-2">
-          <div class="flex justify-between items-center">
-            <div class="w-28 h-3.5 bg-black/20 rounded-4"></div>
-            <div class="w-12 h-3 bg-black/10 rounded-4"></div>
-          </div>
-          <div class="h-10 w-full bg-[#EBEEF2] border border-black/5 rounded-8"></div>
-        </div>
-
-      </div>
-
-      <!-- 底部 28px 状态栏骨架 -->
-      <div class="mx-2 mb-2 h-[28px] bg-white border border-black/10 rounded-8 px-3 flex items-center justify-between shrink-0">
-        <div class="flex items-center space-x-1.5">
-          <div class="w-2 h-2 rounded-full bg-black/20"></div>
-          <div class="w-12 h-2.5 bg-black/10 rounded-4"></div>
-        </div>
-        <div class="w-24 h-2.5 bg-black/10 rounded-4"></div>
-      </div>
-
-    </div>
-
-    <!-- 2. 全屏黑色遮罩 #0000003D (24% 深度遮罩，盖满整块 564x720) -->
-    <div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-4">
-
-      <!-- 3. 弹窗本体 (宽 519px，高约 250px 随内容严实包裹，纯白底，圆角 16px，1px #0000001A 描边，无阴影，无 ✕ 关闭按钮) -->
-      <div class="w-[519px] bg-white border border-[#0000001A] rounded-16 flex flex-col z-20 overflow-hidden">
-        
-        <!-- 3.1 标题栏 (padding 12px 16px 0，左「清理回滚点台账」13px/500 #0F1115，无 ✕) -->
-        <div class="pt-[12px] px-[16px] pb-0 flex items-center justify-between">
-          <h2 class="text-[13px] font-medium text-[#0F1115] leading-[1.25] tracking-tight">清理回滚点台账</h2>
-        </div>
-
-        <!-- 3.2 正文区 (padding 8px 16px 12px) -->
-        <div class="pt-[8px] px-[16px] pb-[12px] flex flex-col">
-          <!-- 第一段：12.5px #61666B 行高 1.5，两行说明 -->
-          <p class="text-[12.5px] text-[#61666B] leading-[1.5] m-0">
+<!-- 主外壳：564 x 720 纯竖版插件视口 -->
+<div class="relative w-[564px] h-[720px] bg-white overflow-hidden shadow-2xl flex flex-col select-none border border-black/10">
+<!-- 1. 底层页面：环境 → 维护与诊断 (脱敏灰阶骨架轮廓) -->
+<div class="absolute inset-0 flex flex-col bg-[#F8F9FA] pointer-events-none">
+<!-- 顶部 32px 页签条 -->
+<div class="h-[32px] border-b border-black/10 px-4 flex items-center justify-between bg-white shrink-0">
+<div class="flex items-center space-x-2">
+<span class="text-[12px] text-[#81858C] px-1.5 py-0.5">首页</span>
+<span class="text-[12px] text-[#81858C] px-1.5 py-0.5">产物库</span>
+<span class="text-[12px] text-[#81858C] px-1.5 py-0.5">同步</span>
+<!-- 激活态胶囊 -->
+<span class="text-[12px] font-medium text-[#0F1115] bg-[#EBEEF2] border border-[#979DA6] rounded-8 px-2 py-0.5">环境</span>
+</div>
+<!-- 右侧 4 个线性图标轮廓 -->
+<div class="flex items-center space-x-3 text-[#81858C]">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><rect height="18" rx="2" width="18" x="3" y="3"></rect><path d="M7 10h10M7 14h10"></path></svg>
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</div>
+</div>
+<!-- 中间内容骨架区 (脱敏灰色轮廓) -->
+<div class="p-3 space-y-2.5 flex-1 overflow-hidden">
+<!-- 分段控制骨架 -->
+<div class="flex items-center justify-between">
+<div class="w-12 h-4 bg-black/10 rounded-4"></div>
+<div class="w-32 h-6 bg-black/5 border border-black/10 rounded-8"></div>
+</div>
+<!-- 状态卡骨架 -->
+<div class="h-8 w-full bg-white border border-black/10 rounded-8 flex items-center px-3 space-x-2">
+<div class="w-2 h-2 rounded-full bg-black/20"></div>
+<div class="w-40 h-2.5 bg-black/10 rounded-4"></div>
+</div>
+<!-- 卡片骨架 1 -->
+<div class="bg-white border border-black/10 rounded-12 p-3 space-y-2">
+<div class="flex justify-between items-center">
+<div class="w-20 h-3 bg-black/15 rounded-4"></div>
+<div class="w-16 h-5 bg-black/10 rounded-8"></div>
+</div>
+<div class="w-full h-2 bg-black/5 rounded-4"></div>
+</div>
+<!-- 卡片骨架 2 (磁盘占用) -->
+<div class="bg-white border border-black/10 rounded-12 p-3 space-y-2.5">
+<div class="w-24 h-3 bg-black/15 rounded-4"></div>
+<div class="space-y-1.5 pt-1">
+<div class="h-4 w-full bg-black/5 rounded-4"></div>
+<div class="h-4 w-full bg-black/5 rounded-4"></div>
+<div class="h-4 w-full bg-black/5 rounded-4"></div>
+</div>
+</div>
+<!-- 卡片骨架 3 (折叠台账卡) -->
+<div class="bg-white border border-black/10 rounded-12 p-3 space-y-2">
+<div class="flex justify-between items-center">
+<div class="w-28 h-3.5 bg-black/20 rounded-4"></div>
+<div class="w-12 h-3 bg-black/10 rounded-4"></div>
+</div>
+<div class="h-10 w-full bg-[#F5F5F5] border border-black/5 rounded-8"></div>
+</div>
+</div>
+<!-- 底部 28px 状态栏骨架 -->
+<div class="absolute left-[8px] right-[8px] bottom-[8px] h-[28px] bg-white border border-[#0000001A] rounded-8 px-3 flex items-center justify-between z-0"><div class="flex items-center space-x-1.5"><div class="w-2 h-2 rounded-full bg-[#22C55E]"></div><span class="text-[11px] text-[#61666B]">就绪</span></div><div class="text-[11px] text-[#61666B] tabular-nums">v0.8.0 · DSH 2.4</div></div>
+</div>
+<!-- 2. 全屏黑色遮罩 #0000003D (24% 深度遮罩，盖满整块 564x720) -->
+<div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-4">
+<!-- 3. 弹窗本体 (宽 519px，高约 250px 随内容严实包裹，纯白底，圆角 16px，1px #0000001A 描边，无阴影，无 ✕ 关闭按钮) -->
+<div class="w-[519px] bg-white border border-[#0000001A] rounded-16 flex flex-col z-20 overflow-hidden">
+<!-- 3.1 标题栏 (padding 12px 16px 0，左「清理回滚点台账」13px/500 #0F1115，无 ✕) -->
+<div class="pt-[12px] px-[16px] pb-0 flex items-center justify-between">
+<h2 class="text-[13px] font-medium text-[#0F1115] leading-[1.25] tracking-tight">清理回滚点台账</h2>
+</div>
+<!-- 3.2 正文区 (padding 8px 16px 12px) -->
+<div class="pt-[8px] px-[16px] pb-[12px] flex flex-col">
+<!-- 第一段：12.5px #61666B 行高 1.5，两行说明 -->
+<p class="text-[12.5px] text-[#61666B] leading-[1.5] m-0">
             删除全部自动回滚点（救援点与受保护点按下面的勾选处置），并回收它们的内容副本。工作区文件与会话日志不会被改动。
           </p>
-
-          <!-- 复选行：隔 10px，未勾选状态 14px 方框 + 0.5px #979DA6 描边 + 圆角 4，右侧文字 12.5px #0F1115 -->
-          <div class="mt-[10px] flex items-center space-x-2 text-left">
-            <div class="w-[14px] h-[14px] rounded-4 border border-[#979DA6] bg-white shrink-0"></div>
-            <span class="text-[12.5px] text-[#0F1115] leading-[1.5]">
+<!-- 复选行：隔 10px，未勾选状态 14px 方框 + 0.5px #979DA6 描边 + 圆角 4，右侧文字 12.5px #0F1115 -->
+<div class="mt-[10px] flex items-center space-x-2 text-left">
+<div class="w-[14px] h-[14px] rounded-4 border border-[#979DA6] bg-white shrink-0"></div>
+<span class="text-[12.5px] text-[#0F1115] leading-[1.5]">
               同时删除救援点（回退前的自动救援点，删了不可撤销）
             </span>
-          </div>
-        </div>
-
-        <!-- 3.3 动作区 (padding 10px 16px 14px，上方 0.5px #0000001A 分隔线，gap 8，右对齐，顺序为确认在左、取消在最右) -->
-        <div class="pt-[10px] px-[16px] pb-[14px] border-t border-[#0000001A] flex items-center justify-end space-x-2">
-          <!-- 危险确认按钮：「清理台账」填充 #EC1313、白字 12.5px/500、高 28px、圆角 8、padding 0 12px -->
-          <button class="h-[28px] px-[12px] bg-[#EC1313] hover:bg-[#d01111] text-white text-[12.5px] font-medium rounded-8 transition-colors flex items-center justify-center outline-none">
+</div>
+</div>
+<!-- 3.3 动作区 (padding 10px 16px 14px，上方 0.5px #0000001A 分隔线，gap 8，右对齐，顺序为确认在左、取消在最右) -->
+<div class="pt-[10px] px-[16px] pb-[14px] border-t border-[#0000001A] flex items-center justify-end space-x-2">
+<!-- 危险确认按钮：「清理台账」填充 #EC1313、白字 12.5px/500、高 28px、圆角 8、padding 0 12px -->
+<button class="h-[28px] px-[12px] bg-[#EC1313] hover:bg-[#d01111] text-white text-[12.5px] font-medium rounded-8 transition-colors flex items-center justify-center outline-none">
             清理台账
           </button>
-          <!-- 取消按钮：ghost 白底 + 0.5px 描边 #979DA6/0000001A、字 #0F1115、高 28px、圆角 8、padding 0 12px -->
-          <button class="h-[28px] px-[12px] bg-white border border-[#979DA6] hover:bg-[#EBEEF2] text-[#0F1115] text-[12.5px] rounded-8 transition-colors flex items-center justify-center outline-none">
+<!-- 取消按钮：ghost 白底 + 0.5px 描边 #979DA6/0000001A、字 #0F1115、高 28px、圆角 8、padding 0 12px -->
+<button class="h-[28px] px-[12px] bg-white border border-[#979DA6] hover:bg-[#EBEEF2] text-[#0F1115] text-[12.5px] rounded-8 transition-colors flex items-center justify-center outline-none">
             取消
           </button>
-        </div>
-
-      </div>
-
-    </div>
-
-  </div>
-
+</div>
+</div>
+</div>
+</div>
 </body>
 </html>

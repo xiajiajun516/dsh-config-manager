@@ -30,52 +30,52 @@
 
 | ID | 页面 / 弹窗 | 真实实现入口 | 终态 screen id |
 | --- | --- | --- | --- |
-| D-01 | D-01 定时备份 | `src/client/home/BackupScheduleCard.tsx` | `1821188adb024788a3bce10bcd32570a` |
-| D-02 | D-02 恢复计划预览 | `src/client/library/RestorePlanView.tsx` | `afccbb899cac40be957d4c1537607254` |
-| D-03 | D-03 迁移前咨询 | `src/client/library/LibraryActions.tsx` | `fbc390ecd2e5454d8c1f33217ad0b9b6` |
-| D-04 | D-04 拉取远端快照（进行中） | `src/client/library/LibraryActions.tsx` | `14a43470e0d04ac2ae0a4d89baf3e35d` |
-| D-05 | D-05 查看 / 对比（备份内容查看） | `src/client/library/LibraryActions.tsx` | `f4bd30f7d8224c21836d5b1622102f75` |
-| D-06 | D-06 恢复报告 | `src/client/library/LibraryActions.tsx` | `8a6d42fbd63746b69108f28a81cceae4` |
+| D-01 | D-01 定时备份 | `src/client/home/BackupScheduleCard.tsx` | `fb50cee1463f45e59229418dd50610e3` |
+| D-02 | D-02 恢复计划预览 | `src/client/library/RestorePlanView.tsx` | `f85a3da3dcae4d6ea91b36450464d065` |
+| D-03 | D-03 迁移前咨询 | `src/client/library/LibraryActions.tsx` | `403f7adba9e44aa49888a7442ba57642` |
+| D-04 | D-04 拉取远端快照（进行中） | `src/client/library/LibraryActions.tsx` | `b6a0b89b7caf4b20a618902ee601e60d` |
+| D-05 | D-05 查看 / 对比（备份内容查看） | `src/client/library/LibraryActions.tsx` | `1875719e44e649e28208c2d4e83aedab` |
+| D-06 | D-06 恢复报告 | `src/client/library/LibraryActions.tsx` | `b8736f538ded42ab995b691dcc0e183d` |
 | D-07 | D-07 删除远端快照（确认） | `src/client/library/LibraryActions.tsx` | `2c670a9333bd4d3fa7a8283899569fea` |
 | D-08 | D-08 同步通道配置（Git 私有仓库） | `src/client/sync/SyncPanel.tsx` | `d43ae1db6a3c4265a42537228a326970` |
 | D-09 | D-09 断开同步通道配置（危险确认） | `src/client/sync/ChannelClearConfirmDialog.tsx` | `04609199e6f342cebdc69d93d765fb81` |
-| D-10 | D-10 从远端合并到本机（差异确认） | `src/client/sync/SyncPanel.tsx` | `1a4999f5a86d4a6e81a105476d2a781b` |
-| D-11 | D-11 确认推送（推送预览） | `src/client/sync/SyncPanel.tsx` | `e23f26410f494e41a1b59d0a62d76da6` |
-| D-12 | D-12 推送结果（结果报告） | `src/client/sync/SyncPanel.tsx` | `9d1c3b12c308445e86b8e63abc6b94d5` |
+| D-10 | D-10 从远端合并到本机（差异确认） | `src/client/sync/SyncPanel.tsx` | `274b2df2540f4118ad02e17bc660b546` |
+| D-11 | D-11 确认推送（推送预览） | `src/client/sync/SyncPanel.tsx` | `81c58f93408a455d8e4706883544e833` |
+| D-12 | D-12 推送结果（结果报告） | `src/client/sync/SyncPanel.tsx` | `2fbcfe85d9154174a5a0fddcce2681cd` |
 | D-13 | D-13 远程合并弹窗（裁决态） | `src/client/sync/MergeModal.tsx` | `0713b5b97e5741008af0601ca8616f4f` |
 | D-14 | D-14 选择同步分区 | `src/client/sync/SyncSectionPickerDialog.tsx` | `ede572d4801744248a8bda4f40bdec16` |
 | D-14b | D-14b 选择要同步的历史对话（D-14 第二视图） | `src/client/sync/SyncSectionPickerDialog.tsx` | `93e9170a8c1f406d8385d9b63ec16ea1` |
 | D-15 | D-15 重新克隆工作副本？（确认弹窗） | `src/client/sync/WorkDirCard.tsx` | `7538be6f73034bd2bd7e3de8f06c7db5` |
-| D-16 | D-16 档案详情：work（只读详情弹窗） | `src/client/environment/EnvironmentPanel.tsx` | `6478913acf5f44898f5a2cd55a2d9a5b` |
+| D-16 | D-16 档案详情：work（只读详情弹窗） | `src/client/environment/EnvironmentPanel.tsx` | `a954c129e9f84b02b3f6f2913d99c43e` |
 | D-17 | D-17 复制档案（带输入的表单确认弹窗） | `src/client/environment/EnvironmentPanel.tsx` | `407e49ca5cbe48c0909ebeb1d21a5739` |
 | D-18 | D-18 停止实例（危险确认弹窗） | `src/client/environment/EnvironmentPanel.tsx` | `9e94ec82ce4a4564ba27290ae95e2aff` |
 | D-19 | D-19 删除档案（物理删除危险确认 + 勾选校验） | `src/client/environment/EnvironmentPanel.tsx` | `3b311221481e4436bf0cb12e41fa1927` |
-| D-20 | D-20 环境恢复确认 | `src/client/recovery/RecoveryPanel.tsx` | `36c32809daca45ad819d4707bb5e3841` |
-| D-21 | D-21 恢复风险确认 | `src/client/recovery/RecoveryPanel.tsx` | `660d30cab7654de88dbeb594f8b51260` |
+| D-20 | D-20 环境恢复确认 | `src/client/recovery/RecoveryPanel.tsx` | `c54d61b12c5c44ebb1ba91c462baef23` |
+| D-21 | D-21 恢复风险确认 | `src/client/recovery/RecoveryPanel.tsx` | `2617d00fd04c4e0083a083c82a076918` |
 | D-22 | D-22 会话体检报告 | `src/client/recovery/SessionHealthDialog.tsx` | `b7f0332a673341dea443eca0d4c247c1` |
 | D-23 | D-23 回滚点预览（实为回滚点台账） | `src/client/recovery/RollbackCard.tsx` | `48f19c3c5bb34f43a321d453fc386c6f` |
 | D-24 | D-24 回滚确认（实为回退预览） | `src/client/recovery/RollbackCard.tsx` | `8904bf404e0744c1b447fd7958768072` |
-| D-25 | D-25 回滚三确认（画「清理回滚点台账」） | `src/client/recovery/RollbackCard.tsx` | `8f0c63cf954d4cc181acac8dd553ef66` |
-| D-26 | D-26 磁盘清理确认 | `src/client/environment/maintenance/DiskUsageCard.tsx` | `ab21d3245801463bb3faaf7c6905a66e` |
-| D-27 | D-27 版本更新 | `src/client/about/PluginUpdateDialog.tsx` | `b2486d16c34b46b5bd3f5346f0e2f3cd` |
-| D-28 | D-28 版本更新内容 | `src/client/about/ReleaseNotesDialog.tsx` | `47a7f703658f4834a8309014790422b4` |
-| D-29 | D-29 Star 引导弹窗 | `src/client/ConfigManagerSection.tsx` | `0e7da8141b634132ada3b2b579010755` |
+| D-25 | D-25 回滚三确认（画「清理回滚点台账」） | `src/client/recovery/RollbackCard.tsx` | `f92da1297883403daef778feb5f9b0d9` |
+| D-26 | D-26 磁盘清理确认 | `src/client/environment/maintenance/DiskUsageCard.tsx` | `8dca947046bf455e8012915ae095a039` |
+| D-27 | D-27 版本更新 | `src/client/about/PluginUpdateDialog.tsx` | `efda6921310e4e8d88cfaf8f9ab6a75a` |
+| D-28 | D-28 版本更新内容 | `src/client/about/ReleaseNotesDialog.tsx` | `e2de370305614c9ba1fec9dbebce30a5` |
+| D-29 | D-29 Star 引导弹窗 | `src/client/ConfigManagerSection.tsx` | `3455f1188a9648bea5dbfb165099f457` |
 | D-30 | D-30 ⌘K 命令面板 | `src/client/common/CommandPalette.tsx` | `ef844ed404a444b19a5f9ef8dd0add5d` |
 | D-31 | D-31 终止运行（危险确认） | `src/client/common/RunsCenter.tsx` | `a8df76a3d594459b882de4166e4d4bad` |
-| D-32 | D-32 内容选择（导出分区/条目树） | `src/client/export/ExportView.tsx` | `ea2e1eaab8e345afa23dc0fc207420a0` |
+| D-32 | D-32 内容选择（导出分区/条目树） | `src/client/export/ExportView.tsx` | `53bf3effdeb0460397e4221e62c98b32` |
 | D-33 | D-33 路径选择（本机目录） | `src/client/import/PathPickerDialog.tsx` | `946350e64cd6472590470fb201cb85f6` |
-| D-34 | D-34 市场免责确认（下载档） | `src/client/market/MarketPanel.tsx` | `cce18f89b420486192023e5e1fc179a7` |
-| D-35 | D-35 市场·回滚到导入前快照确认 | `src/client/market/MarketImportReview.tsx` | `b7bd93e3c8f34379844ee58f478bcff5` |
-| D-36 | D-36 我的配置·上传/更新向导（表单步） | `src/client/market/MyConfigsWizard.tsx` | `41d5ec4f01ee4e508b1ffcf29b4c629a` |
+| D-34 | D-34 市场免责确认（下载档） | `src/client/market/MarketPanel.tsx` | `aa244cb41a4a452aad1ec69796179862` |
+| D-35 | D-35 市场·回滚到导入前快照确认 | `src/client/market/MarketImportReview.tsx` | `c9ec9c79ca2748e0b2fc85cc16753457` |
+| D-36 | D-36 我的配置·上传/更新向导（表单步） | `src/client/market/MyConfigsWizard.tsx` | `6992a821ec17489390d8917d3ce3e72a` |
 | D-37 | D-37 市场·装回本地（导入复核确认步） | `src/client/market/MarketImportReview.tsx` | `9a353b34d84d4957b196f112cab7f013` |
-| D-38 | D-38 我的配置·删除条目二次确认 | `src/client/market/MyConfigsView.tsx` | `317bb8e059e34a91b2a07e3d73f1b0f0` |
+| D-38 | D-38 我的配置·删除条目二次确认 | `src/client/market/MyConfigsView.tsx` | `d4e802054fd64c298286a8a23ecdc5f9` |
 | P-01 | P-01 首页 | `src/client/home/HomePanel.tsx` | `b9f4bdea66014ea289f5ff9771c209a6` |
-| P-02 | P-02 产物库 | `src/client/library/LibraryPanel.tsx` | `0a8f79103b804750909c58d1500f363c` |
+| P-02 | P-02 产物库 | `src/client/library/LibraryPanel.tsx` | `72139ef0d9d24ad4911655e210a27770` |
 | P-03 | P-03 同步 | `src/client/sync/SyncPanel.tsx` | `1404e8c489d34dfbbbf3fd7d63b6be46` |
 | P-04 | P-04 环境 · 档案 | `src/client/environment/EnvironmentPanel.tsx` | `dccd7c003bf849a6b019ffe7c10cc9f9` |
-| P-05 | P-05 环境 · 维护与诊断 | `src/client/recovery/RecoveryPanel.tsx` | `47ae1e223aa8401183e948b213f432b6` |
+| P-05 | P-05 环境 · 维护与诊断 | `src/client/recovery/RecoveryPanel.tsx` | `63943492662b41d990a0c78c8598ffce` |
 | T-01 | T-01 导出面板 | `src/client/export/ExportView.tsx` | `941f823eb11c4d43affa45e55fc9ed85` |
-| T-02a | T-02a 导入向导 · 选择备份文件 | `src/client/import/ImportWizardView.tsx` | `f2e83b0072f44e5083902df27c85b556` |
+| T-02a | T-02a 导入向导 · 选择备份文件 | `src/client/import/ImportWizardView.tsx` | `6762f51dbce84d49b207402be7ebbd85` |
 | T-02b | T-02b 导入向导 · 兼容性与导入预览 | `src/client/import/ImportWizardView.tsx` | `24b3c09c5119431db51c1f56d831eeeb` |
 | T-02c | T-02c 导入向导 · 冲突裁决与确认闸门 | `src/client/import/import-wizard-steps.tsx` | `8d184486097e44589f6099720f2fec11` |
 | T-03 | T-03 从其它 agent 导入 | `src/client/import/ForeignImportView.tsx` | `dfdd9c37c8034c75b34bcc9bb067b383` |
@@ -121,3 +121,11 @@
 - T-08 关于页第 4 轮：`5600ea9ddb3041988678fdc04117dd89`（卡间距 10px、去掉自动编号、插件来源独立成行），五卡全落在 720 内。
 - 状态栏口径修正：44/55 屏已是内缩圆角盒（真实 `.statusBar` 形状），仅 11 屏仍通栏，清单见 `consistency.md` C-01；此前「全数通栏」的结论已撤销。
 - 新硬事实：对已含内缩状态栏的屏再发同一改造，Stitch 会判重只回文本、不产新屏（`consistency.md` S-1b）。
+
+## 状态栏（C-01）收口（2026-11-11 深夜）
+
+- **判定口径换成浏览器实测**：把每个 `out/*.html` 载入 Chromium，从「v0.8.0 · DSH 2.4」文本向上找最近的 28px 高、宽度 ≥480 的元素，量它的宽度、圆角、左右留白与父容器溢出量。真值 = 宽 546–548px、圆角 8px、左右各 8px、无溢出（对应 `.statusBar` 的 `margin: 0 8px 8px; border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--cm-r-3)`）。
+- **结果：54/54 合规**。其中 32 屏由 Stitch 出图时就是内缩圆角盒（含本轮回修的 D-10、D-12、D-20、D-25、D-27、D-29、D-34、D-35、D-36、P-02），22 屏在 HTML 层补了内联样式：
+  D-05、D-06、D-07、D-08、D-09、D-14、D-14b、D-15、D-17、D-18、D-19、D-22、D-23、D-24、D-33、T-01、T-02b、T-02c、T-04、T-05、T-06、T-07。
+- **这 22 屏的 PNG 仍是 Stitch 原图**（底部状态栏通栏），与修正后的 HTML 只在这一点不同：本机 `take_screenshot` 恒 60s 超时，无法本地重渲；Stitch 侧对「只改状态栏」的重复指令一律判重只回文本。要看修正后的状态栏，打开对应 `out/<ID>.html`。
+- 复现/复测脚本口径见本节第一段，判定数据存 `.tmp/statusbar-final.json`。

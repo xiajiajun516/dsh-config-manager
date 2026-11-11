@@ -17,7 +17,7 @@
   body {
     margin: 0;
     padding: 0;
-    background-color: #EBEEF2;
+    background-color: #EBECEF;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     color: #0F1115;
     display: flex;
@@ -49,7 +49,7 @@
 <!-- 564x720 插件外层容器 -->
 <div class="relative w-[564px] h-[720px] bg-white overflow-hidden shadow-none border border-[#0000001A] flex flex-col select-none">
 <!-- ================= 下层：被压暗的「产物库」页面 (纯灰阶/低对比度结构) ================= -->
-<div class="absolute inset-0 w-full h-full flex flex-col bg-[#EBEEF2] pointer-events-none">
+<div class="absolute inset-0 w-full h-full flex flex-col bg-[#FAFAFA] pointer-events-none">
 <!-- 顶部 32px 导航条 -->
 <div class="h-8 border-b border-[#0000001A] px-4 flex items-center justify-between bg-white shrink-0">
 <div class="flex items-center gap-3 text-[12px] text-[#81858C]">
@@ -88,7 +88,7 @@
 </div>
 </div>
 <!-- 底部状态栏 -->
-<div class="h-7 border-t border-[#0000001A] px-3 flex items-center justify-between text-[11px] text-[#81858C] bg-white shrink-0">
+<div class="h-7 mx-2 mb-2 border border-[#0000001A] rounded-[8px] px-2.5 flex items-center justify-between text-[11px] text-[#61666B] bg-white shrink-0">
 <div class="flex items-center gap-1.5">
 <span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
 <span>就绪 · 校验无冲突</span>
@@ -140,7 +140,7 @@
 <!-- ================= 分组 1: 将被还原 (计数 15, +184 −63) ================= -->
 <div class="flex flex-col border border-[#0000001A] rounded-[8px] overflow-hidden bg-white shrink-0">
 <!-- 分组表头 -->
-<div class="h-[30px] bg-[#EBEEF2] px-3 flex items-center justify-between border-b border-[#0000001A]">
+<div class="h-[30px] bg-[#FBFBFC] px-3 flex items-center justify-between border-b border-[#0000001A]">
 <div class="flex items-center gap-2">
 <span class="text-[12.5px] font-semibold text-[#0F1115]">将被还原</span>
 <span class="px-1.5 py-0.5 rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px] font-mono-code">15</span>
@@ -152,7 +152,7 @@
 <!-- 行 ①: 展开并双栏 diff -->
 <div class="flex flex-col border-b border-[#0000001A]">
 <!-- 行标题 (30px) -->
-<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer">
+<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#F8F9FA] cursor-pointer">
 <div class="flex items-center gap-2 overflow-hidden pr-2">
 <span class="h-5 px-2 rounded-full bg-[#4176E614] text-[#4176E6] text-[11px] font-medium flex items-center shrink-0">修改</span>
 <span class="font-mono-code text-[12px] text-[#0F1115] truncate">~/.dsh/settings.json</span>
@@ -168,7 +168,7 @@
 <!-- 双栏 diff 对照区 -->
 <div class="border-t border-[#0000001A] bg-white font-mono-code text-[11px] leading-[20px]">
 <!-- 列头: 本机 / 快照 (各半栏，中间 1px 竖线) -->
-<div class="grid grid-cols-2 bg-[#EBEEF2] border-b border-[#0000001A] text-[#61666B] text-[11px] font-medium">
+<div class="grid grid-cols-2 bg-[#F8F9FA] border-b border-[#0000001A] text-[#61666B] text-[11px] font-medium">
 <div class="px-3 py-1 border-r border-[#0000001A]">本机</div>
 <div class="px-3 py-1">快照</div>
 </div>
@@ -229,7 +229,7 @@
 </div>
 </div>
 <!-- 行 ②: 绿徽章「新增」 ~/.dsh/prompts/code-review.md +48 −0 (30px) -->
-<div class="h-[30px] px-3 flex items-center justify-between border-b border-[#0000001A] hover:bg-[#EBEEF2] cursor-pointer">
+<div class="h-[30px] px-3 flex items-center justify-between border-b border-[#0000001A] hover:bg-[#F8F9FA] cursor-pointer">
 <div class="flex items-center gap-2 overflow-hidden pr-2">
 <span class="h-5 px-2 rounded-full bg-[#22C55E14] text-[#22C55E] text-[11px] font-medium flex items-center shrink-0">新增</span>
 <span class="font-mono-code text-[12px] text-[#0F1115] truncate">~/.dsh/prompts/code-review.md</span>
@@ -242,7 +242,7 @@
 </div>
 </div>
 <!-- 行 ③: 蓝徽章「修改」 ~/.dsh/skills/obsidian-kb-capture/SKILL.md +23 −9 (30px) -->
-<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer">
+<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#F8F9FA] cursor-pointer">
 <div class="flex items-center gap-2 overflow-hidden pr-2">
 <span class="h-5 px-2 rounded-full bg-[#4176E614] text-[#4176E6] text-[11px] font-medium flex items-center shrink-0">修改</span>
 <span class="font-mono-code text-[12px] text-[#0F1115] truncate">~/.dsh/skills/obsidian-kb-capture/SKILL.md</span>
@@ -257,7 +257,7 @@
 </div>
 <!-- ================= 分组 2: 将被删除 (计数 2, +0 −43) ================= -->
 <div class="flex flex-col border border-[#0000001A] rounded-[8px] overflow-hidden bg-white shrink-0">
-<div class="h-[30px] bg-[#EBEEF2] px-3 flex items-center justify-between border-b border-[#0000001A]">
+<div class="h-[30px] bg-[#FBFBFC] px-3 flex items-center justify-between border-b border-[#0000001A]">
 <div class="flex items-center gap-2">
 <span class="text-[12.5px] font-semibold text-[#0F1115]">将被删除</span>
 <span class="px-1.5 py-0.5 rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px] font-mono-code">2</span>
@@ -267,7 +267,7 @@
 </div>
 </div>
 <!-- 行 1: 行数未统计「体积超上限」 (30px) -->
-<div class="h-[30px] px-3 flex items-center justify-between border-b border-[#0000001A] hover:bg-[#EBEEF2] cursor-pointer">
+<div class="h-[30px] px-3 flex items-center justify-between border-b border-[#0000001A] hover:bg-[#F8F9FA] cursor-pointer">
 <div class="flex items-center gap-2 overflow-hidden pr-2">
 <span class="h-5 px-2 rounded-full bg-[#EC131314] text-[#EC1313] text-[11px] font-medium flex items-center shrink-0">删除</span>
 <span class="font-mono-code text-[12px] text-[#0F1115] truncate">~/.dsh/mcp/servers.json</span>
@@ -278,7 +278,7 @@
 </div>
 </div>
 <!-- 行 2: patch-local.yml +0 −12 (30px) -->
-<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer">
+<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#F8F9FA] cursor-pointer">
 <div class="flex items-center gap-2 overflow-hidden pr-2">
 <span class="h-5 px-2 rounded-full bg-[#EC131314] text-[#EC1313] text-[11px] font-medium flex items-center shrink-0">删除</span>
 <span class="font-mono-code text-[12px] text-[#0F1115] truncate">~/.dsh/plugins/patch-local.yml</span>
@@ -293,13 +293,13 @@
 </div>
 <!-- ================= 分组 3: 卸载插件 (计数 1) ================= -->
 <div class="flex flex-col border border-[#0000001A] rounded-[8px] overflow-hidden bg-white shrink-0">
-<div class="h-[30px] bg-[#EBEEF2] px-3 flex items-center justify-between border-b border-[#0000001A]">
+<div class="h-[30px] bg-[#FBFBFC] px-3 flex items-center justify-between border-b border-[#0000001A]">
 <div class="flex items-center gap-2">
 <span class="text-[12.5px] font-semibold text-[#0F1115]">卸载插件</span>
 <span class="px-1.5 py-0.5 rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px] font-mono-code">1</span>
 </div>
 </div>
-<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer">
+<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#F8F9FA] cursor-pointer">
 <div class="flex items-center gap-2 overflow-hidden pr-2">
 <span class="h-5 px-2 rounded-full bg-[#F59E0B14] text-[#F59E0B] text-[11px] font-medium flex items-center shrink-0">卸载插件</span>
 <span class="font-mono-code text-[12px] text-[#0F1115] truncate">config-manager@0.8.0</span>
@@ -309,13 +309,13 @@
 </div>
 <!-- ================= 分组 4: 需人工处理 (计数 2) ================= -->
 <div class="flex flex-col border border-[#0000001A] rounded-[8px] overflow-hidden bg-white shrink-0">
-<div class="h-[30px] bg-[#EBEEF2] px-3 flex items-center justify-between border-b border-[#0000001A]">
+<div class="h-[30px] bg-[#FBFBFC] px-3 flex items-center justify-between border-b border-[#0000001A]">
 <div class="flex items-center gap-2">
 <span class="text-[12.5px] font-semibold text-[#0F1115]">需人工处理</span>
 <span class="px-1.5 py-0.5 rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px] font-mono-code">2</span>
 </div>
 </div>
-<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer">
+<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#F8F9FA] cursor-pointer">
 <div class="flex items-center gap-2 overflow-hidden pr-2">
 <span class="h-5 px-2 rounded-[4px] bg-[#F59E0B14] text-[#F59E0B] text-[11px] font-medium flex items-center shrink-0">人工提示</span>
 <span class="text-[12px] text-[#0F1115] truncate">凭据（3 项）· MCP 服务器（2 项）</span>
@@ -325,7 +325,7 @@
 </div>
 <!-- ================= 分组 5: 无动作 (计数 9) ================= -->
 <!-- 高度 28px，收折状态，小箭头 + 文本「无动作」+ 胶囊「9」，底侧露出一半以作为滚动暗示 -->
-<div class="h-7 border border-[#0000001A] rounded-[8px] bg-white px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer shrink-0">
+<div class="h-7 border border-[#0000001A] rounded-[8px] bg-white px-3 flex items-center justify-between hover:bg-[#F8F9FA] cursor-pointer shrink-0">
 <div class="flex items-center gap-2">
 <svg class="w-3 h-3 text-[#81858C] shrink-0" fill="none" stroke="currentColor" stroke-width="1.75" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
 <span class="text-[12.5px] font-semibold text-[#0F1115]">无动作</span>
@@ -334,16 +334,14 @@
 </div>
 </div>
 <!-- 3. 动作区 (56px, 上边框 1px #0000001A, 按钮右对齐) -->
-<div class="h-14 border-t border-[#0000001A] px-4 flex items-center justify-end gap-2.5 bg-white shrink-0">
-<!-- 取消 (ghost: 白底 1px #0000001A 描边, 文字 #0F1115, 高 30, 圆角 8) -->
-<button class="h-[30px] px-3.5 bg-white border border-[#0000001A] hover:bg-[#EBEEF2] active:bg-[#EBEEF2] rounded-[8px] text-[12px] font-medium text-[#0F1115] transition-colors">
-          取消
-        </button>
-<!-- 执行恢复 (危险色 #EC1313 白字, 高 30, 圆角 8) -->
-<button class="h-[30px] px-3.5 bg-[#EC1313] hover:bg-[#EC1313] active:bg-[#EC1313] rounded-[8px] text-[12px] font-medium text-white transition-colors">
-          执行恢复
-        </button>
-</div>
+<div class="h-14 border-t border-[#0000001A] px-4 flex items-center justify-end gap-2.5 bg-white shrink-0"><!-- 取消 (ghost: 白底 1px #0000001A 描边, 文字 #61666B, 高 28, 圆角 8, px 14px, 字号 12.5px) -->
+<button class="h-7 px-3.5 bg-white border border-[#0000001A] hover:bg-[#F8F9FA] active:bg-[#EBEEF2] rounded-[8px] text-[12.5px] font-medium text-[#61666B] transition-colors flex items-center justify-center">
+  取消
+</button>
+<!-- 执行恢复 (Primary: 纯黑底 #0F1115 白字, 高 28, 圆角 8, px 14px, 字号 12.5px) -->
+<button class="h-7 px-3.5 bg-[#0F1115] hover:opacity-90 active:opacity-80 rounded-[8px] text-[12.5px] font-medium text-white transition-colors flex items-center justify-center">
+  执行恢复
+</button></div>
 </div>
 </div>
 </div>

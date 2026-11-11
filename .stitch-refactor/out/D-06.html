@@ -37,7 +37,7 @@ tailwind.config = {
 body {
   margin: 0;
   padding: 0;
-  background-color: #EBEEF2;
+  background-color: #EBECEF;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   color: #0F1115;
 }
@@ -46,7 +46,7 @@ body {
 }
 </style>
 </head>
-<body class="w-screen h-screen flex items-center justify-center p-0 m-0 overflow-hidden bg-[#EBEEF2]">
+<body class="w-screen h-screen flex items-center justify-center p-0 m-0 overflow-hidden bg-[#EBECEF]">
 <!-- 564×720 插件容器 -->
 <div class="relative w-[564px] h-[720px] bg-white flex flex-col overflow-hidden shadow-none select-none text-[12.5px] leading-[1.5]">
 <!-- 遮罩下层：被压暗的「产物库」页（纯灰阶） -->
@@ -69,7 +69,7 @@ body {
 </div>
 </div>
 <!-- 产物库搜索与列表内容 -->
-<div class="flex-1 p-[12px] space-y-[10px] bg-[#EBEEF2]">
+<div class="flex-1 p-[12px] space-y-[10px] bg-[#F5F5F5]">
 <!-- 搜索框 -->
 <div class="h-[28px] bg-white border border-[#0000001A] rounded-[8px] px-[8px] flex items-center text-[11px] text-[#81858C]">
 <svg class="w-[12px] h-[12px] mr-[6px]" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
@@ -92,7 +92,7 @@ body {
 </div>
 </div>
 <!-- 状态栏 28px -->
-<div class="h-[28px] px-[16px] border-t border-black/[0.08] flex items-center justify-between bg-white text-[11px] text-[#81858C]">
+<div class="h-[28px] px-[16px] border-t border-black/[0.08] flex items-center justify-between bg-white text-[11px] text-[#81858C]" style="width:calc(100% - 16px);margin:0 8px 8px;border:1px solid #0000001A;border-radius:8px;box-sizing:border-box">
 <div class="flex items-center space-x-[6px]">
 <span class="w-[6px] h-[6px] rounded-full bg-[#81858C]"></span>
 <span>就绪 · 校验无冲突</span>
@@ -187,7 +187,7 @@ body {
 </div>
 </div>
 <!-- 3. 动作区 56px (上边框 1px #0000001A，单按钮右对齐) -->
-<div class="h-[48px] px-[16px] shrink-0 border-t border-[#0000001A] bg-white flex items-center justify-end z-30"><button class="h-[30px] px-[12px] rounded-[8px] bg-[#0F1115] hover:bg-[#43454A] text-white text-[12.5px] font-medium transition-colors flex items-center justify-center">完成</button></div>
+<div class="h-[48px] px-[16px] shrink-0 border-t border-[#0000001A] bg-white flex items-center justify-end z-30"><div class="flex items-center space-x-[8px]"><button class="h-[28px] px-[14px] rounded-[8px] border border-[#0000001A] bg-white hover:bg-black/[0.04] text-[#61666B] hover:text-[#0F1115] text-[12.5px] font-medium transition-colors flex items-center justify-center">关闭</button><button class="h-[28px] px-[14px] rounded-[8px] bg-[#0F1115] hover:bg-[#43454A] text-white text-[12.5px] font-medium transition-colors flex items-center justify-center">查看恢复后的环境</button></div></div>
 </div>
 </div>
 </body>

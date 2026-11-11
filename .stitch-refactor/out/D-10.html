@@ -1,9 +1,10 @@
 <!DOCTYPE html>
+
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <title>DSH 设置 — 备份与迁移 D-10 从远端合并到本机 差异确认弹窗</title>
-  <style>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-10 从远端合并到本机 差异确认弹窗</title>
+<style>
     * {
       box-sizing: border-box;
       margin: 0;
@@ -12,7 +13,7 @@
       -moz-osx-font-smoothing: grayscale;
     }
     body {
-      background-color: #EBEEF2;
+      background-color: #EBECEF;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       display: flex;
       align-items: center;
@@ -81,14 +82,14 @@
     .bg-content {
       flex: 1;
       padding: 12px 16px;
-      background: #EBEEF2;
+      background: #F5F5F5;
       display: flex;
       flex-direction: column;
       gap: 10px;
     }
     .bg-card {
       background: #FFFFFF;
-      border: 1px solid #EBEEF2;
+      border: 1px solid #E6E6E6;
       border-radius: 8px;
       padding: 12px 14px;
     }
@@ -194,15 +195,15 @@
     }
     .badge-success {
       background: rgba(34, 197, 94, 0.12);
-      color: #22C55E;
+      color: #15803D;
     }
     .badge-warning {
       background: rgba(245, 158, 11, 0.12);
-      color: #F59E0B;
+      color: #B45309;
     }
     .badge-error {
       background: rgba(236, 19, 19, 0.12);
-      color: #EC1313;
+      color: #DC2626;
     }
     .badge-gray {
       background: rgba(97, 102, 107, 0.12);
@@ -252,7 +253,7 @@
     }
     .confirm-item-card {
       background: #FFFFFF;
-      border: 1px solid #EBEEF2;
+      border: 1px solid #E6E6E6;
       border-radius: 8px;
       padding: 8px 10px;
       display: flex;
@@ -260,7 +261,7 @@
       gap: 6px;
     }
     .confirm-item-card.has-conflict {
-      border-color: #EBEEF2;
+      border-color: #E6E6E6;
       background: #FFFFFF;
     }
     .item-header-line {
@@ -313,15 +314,15 @@
     }
     .item-level-info {
       background: rgba(65, 118, 230, 0.12);
-      color: #4176E6;
+      color: #2563EB;
     }
     .item-level-error {
       background: rgba(236, 19, 19, 0.12);
-      color: #EC1313;
+      color: #DC2626;
     }
     .item-level-warning {
       background: rgba(245, 158, 11, 0.12);
-      color: #F59E0B;
+      color: #B45309;
     }
 
     .item-desc {
@@ -342,7 +343,7 @@
     .segmented-control {
       display: inline-flex;
       align-items: center;
-      background: #EBEEF2;
+      background: #F5F5F5;
       border-radius: 6px;
       padding: 2px;
       gap: 2px;
@@ -414,188 +415,166 @@
   </style>
 </head>
 <body>
-
-  <!-- 插件画布 564x720 -->
-  <div class="plugin-frame">
-    
-    <!-- 1. 被压暗的底板：顶部导航条 32px -->
-    <div class="bg-nav">
-      <div class="bg-tabs">
-        <span class="bg-tab">首页</span>
-        <span class="bg-tab">产物库</span>
-        <span class="bg-tab active">同步</span>
-        <span class="bg-tab">环境</span>
-      </div>
-      <div class="bg-nav-icons">
-        <!-- ⌘K 命令面板 -->
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
-        </svg>
-        <!-- 活动折线 -->
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-        </svg>
-        <!-- 历史钟表 -->
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/>
-          <polyline points="12 6 12 12 16 14"/>
-        </svg>
-        <!-- 关于信息 -->
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="16" x2="12" y2="12"/>
-          <line x1="12" y1="8" x2="12.01" y2="8"/>
-        </svg>
-      </div>
-    </div>
-
-    <!-- 2. 被压暗的底板：同步页面内容区卡片轮廓 -->
-    <div class="bg-content">
-      <div class="bg-card" style="height: 104px;">
-        <div style="font-size: 12.5px; font-weight: 500; color: #0F1115; margin-bottom: 6px;">Git 私有仓库 <span style="font-size: 11px; color: #22C55E; background: rgba(34,197,94,0.12); padding: 1px 6px; border-radius: 4px; margin-left: 6px;">已连接</span></div>
-        <div style="font-size: 11px; color: #61666B;" class="monospace">https://github.com/xiajiajun516/dsh-config.git</div>
-      </div>
-      <div class="bg-card" style="height: 72px;">
-        <div style="font-size: 12.5px; color: #61666B;">WebDAV <span style="font-size: 11px; color: #81858C; margin-left: 6px;">未配置</span></div>
-      </div>
-      <div class="bg-card" style="height: 72px;">
-        <div style="font-size: 12.5px; color: #61666B;">S3 对象存储 <span style="font-size: 11px; color: #81858C; margin-left: 6px;">未配置</span></div>
-      </div>
-      <div class="bg-card" style="flex: 1;">
-        <div style="font-size: 12.5px; color: #61666B;">GitHub Gist <span style="font-size: 11px; color: #81858C; margin-left: 6px;">未配置</span></div>
-      </div>
-    </div>
-
-    <!-- 3. 被压暗的底板：底部状态栏 28px -->
-    <div class="bg-statusbar">
-      <div><span class="status-dot"></span>就绪 · 远程可达</div>
-      <div>v0.8.0 · DSH 2.4</div>
-    </div>
-
-    <!-- 4. 全屏遮罩 rgba(0,0,0,0.24) 与 D-10 居中差异确认弹窗 -->
-    <div class="modal-overlay">
-      <div class="modal-container">
-        
-        <!-- 弹窗标题栏 48px -->
-        <div class="modal-header">
-          <div class="modal-title">从远端合并到本机</div>
-          <div class="close-btn">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </div>
-        </div>
-
-        <!-- 弹窗内容区 (无独立底栏，actionRow 在内容最底部) -->
-        <div class="modal-body">
-          
-          <!-- 1) 状态徽章行 (5 枚徽章) -->
-          <div class="badges-row">
-            <span class="badge badge-success">兼容性：良好（备份来自更旧的 DSH）</span>
-            <span class="badge badge-warning">需人工决策</span>
-            <span class="badge badge-success">采用远端 18/23</span>
-            <span class="badge badge-error">错误 × 2</span>
-            <span class="badge badge-warning">警告 × 3</span>
-          </div>
-
-          <!-- 2) 图例提示 -->
-          <div class="hint-legend">
+<!-- 插件画布 564x720 -->
+<div class="plugin-frame">
+<!-- 1. 被压暗的底板：顶部导航条 32px -->
+<div class="bg-nav">
+<div class="bg-tabs">
+<span class="bg-tab">首页</span>
+<span class="bg-tab">产物库</span>
+<span class="bg-tab active">同步</span>
+<span class="bg-tab">环境</span>
+</div>
+<div class="bg-nav-icons">
+<!-- ⌘K 命令面板 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+<!-- 活动折线 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史钟表 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于信息 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</div>
+<!-- 2. 被压暗的底板：同步页面内容区卡片轮廓 -->
+<div class="bg-content">
+<div class="bg-card" style="height: 104px;">
+<div style="font-size: 12.5px; font-weight: 500; color: #0F1115; margin-bottom: 6px;">Git 私有仓库 <span style="font-size: 11px; color: #22C55E; background: rgba(34,197,94,0.12); padding: 1px 6px; border-radius: 4px; margin-left: 6px;">已连接</span></div>
+<div class="monospace" style="font-size: 11px; color: #61666B;">https://github.com/xiajiajun516/dsh-config.git</div>
+</div>
+<div class="bg-card" style="height: 72px;">
+<div style="font-size: 12.5px; color: #61666B;">WebDAV <span style="font-size: 11px; color: #81858C; margin-left: 6px;">未配置</span></div>
+</div>
+<div class="bg-card" style="height: 72px;">
+<div style="font-size: 12.5px; color: #61666B;">S3 对象存储 <span style="font-size: 11px; color: #81858C; margin-left: 6px;">未配置</span></div>
+</div>
+<div class="bg-card" style="flex: 1;">
+<div style="font-size: 12.5px; color: #61666B;">GitHub Gist <span style="font-size: 11px; color: #81858C; margin-left: 6px;">未配置</span></div>
+</div>
+</div>
+<!-- 3. 被压暗的底板：底部状态栏 28px -->
+<div class="bg-statusbar" style="margin: 0 8px 8px 8px; border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; border-top: 1px solid rgba(0, 0, 0, 0.1);">
+<div><span class="status-dot"></span>就绪 · 远程可达</div>
+<div>v0.8.0 · DSH 2.4</div>
+</div>
+<!-- 4. 全屏遮罩 rgba(0,0,0,0.24) 与 D-10 居中差异确认弹窗 -->
+<div class="modal-overlay">
+<div class="modal-container">
+<!-- 弹窗标题栏 48px -->
+<div class="modal-header">
+<div class="modal-title">从远端合并到本机</div>
+<div class="close-btn">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</div>
+</div>
+<!-- 弹窗内容区 (无独立底栏，actionRow 在内容最底部) -->
+<div class="modal-body">
+<!-- 1) 状态徽章行 (5 枚徽章) -->
+<div class="badges-row">
+<span class="badge badge-success">兼容性：良好（备份来自更旧的 DSH）</span>
+<span class="badge badge-warning">需人工决策</span>
+<span class="badge badge-success">采用远端 18/23</span>
+<span class="badge badge-error">错误 × 2</span>
+<span class="badge badge-warning">警告 × 3</span>
+</div>
+<!-- 2) 图例提示 -->
+<div class="hint-legend">
             勾选 = 导入该项；取消 = 跳过 · 列表逐项确认 5 项 · 其余 18 项自动采用
           </div>
-
-          <!-- 3) 批量决策行 -->
-          <div class="bulk-action-row">
-            <button class="btn-ghost-sm" type="button">全部保留当前配置</button>
-            <button class="btn-ghost-sm" type="button">全部使用备份配置</button>
-            <span class="bulk-tail-hint">批量作用于上面 5 项 · 错误项需逐项处理</span>
-          </div>
-
-          <!-- 4) 逐项确认列表 (5项，含1项冲突裁决分段按钮与取消勾选态) -->
-          <div class="confirm-list">
-            
-            <!-- 项 1: ☑ 更新 · 徽章「信息」 -->
-            <div class="confirm-item-card">
-              <div class="item-header-line">
-                <span class="custom-checkbox checked">
-                  <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-                </span>
-                <span class="item-kind-title">更新</span>
-                <span class="item-level-tag item-level-info">信息</span>
-                <span class="item-desc">settings：theme、fontSize 将被远端值覆盖</span>
-              </div>
-            </div>
-
-            <!-- 项 2: ☑ 冲突 · 徽章「错误」+ 冲突裁决块 (两枚分段按钮「保留当前」「使用备份」+「差异」标签) -->
-            <div class="confirm-item-card has-conflict">
-              <div class="item-header-line">
-                <span class="custom-checkbox checked">
-                  <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-                </span>
-                <span class="item-kind-title">冲突</span>
-                <span class="item-level-tag item-level-error">错误</span>
-                <span class="item-desc">mcp：同名服务器 local-fs 的端点两侧都改过</span>
-              </div>
-              <div class="conflict-decision-row">
-                <div class="segmented-control">
-                  <div class="segmented-btn active">保留当前</div>
-                  <div class="segmented-btn">使用备份</div>
-                </div>
-                <div class="diff-toggle-link">
-                  <span>差异</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="6 9 12 15 18 9"/>
-                  </svg>
-                </div>
-              </div>
-            </div>
-
-            <!-- 项 3: ☐ 凭据迁移 · 徽章「警告」 -->
-            <div class="confirm-item-card">
-              <div class="item-header-line">
-                <span class="custom-checkbox"></span>
-                <span class="item-kind-title">凭据迁移</span>
-                <span class="item-level-tag item-level-warning">警告</span>
-                <span class="item-desc">credentials：3 项凭据在远端为密文，需本机补录</span>
-              </div>
-            </div>
-
-            <!-- 项 4: ☑ 路径映射 · 徽章「警告」 -->
-            <div class="confirm-item-card">
-              <div class="item-header-line">
-                <span class="custom-checkbox checked">
-                  <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-                </span>
-                <span class="item-kind-title">路径映射</span>
-                <span class="item-level-tag item-level-warning">警告</span>
-                <span class="item-desc monospace">workspaces：/Users/tianyi → C:\Users\yzbtdmz1</span>
-              </div>
-            </div>
-
-            <!-- 项 5: ☐ 缺依赖 · 徽章「错误」 -->
-            <div class="confirm-item-card">
-              <div class="item-header-line">
-                <span class="custom-checkbox"></span>
-                <span class="item-kind-title">缺依赖</span>
-                <span class="item-level-tag item-level-error">错误</span>
-                <span class="item-desc">plugins：config-manager@0.8.0 未安装，导入后需重启</span>
-              </div>
-            </div>
-
-          </div>
-
-          <!-- 5) 底部 actionRow (确认导入 + 取消，属于内容区末尾) -->
-          <div class="modal-action-row">
-            <button class="btn-ghost" type="button">取消</button>
-            <button class="btn-primary" type="button">确认导入</button>
-          </div>
-
-        </div>
-
-      </div>
-    </div>
-
-  </div>
-
+<!-- 3) 批量决策行 -->
+<div class="bulk-action-row">
+<button class="btn-ghost-sm" type="button">全部保留当前配置</button>
+<button class="btn-ghost-sm" type="button">全部使用备份配置</button>
+<span class="bulk-tail-hint">批量作用于上面 5 项 · 错误项需逐项处理</span>
+</div>
+<!-- 4) 逐项确认列表 (5项，含1项冲突裁决分段按钮与取消勾选态) -->
+<div class="confirm-list">
+<!-- 项 1: ☑ 更新 · 徽章「信息」 -->
+<div class="confirm-item-card">
+<div class="item-header-line">
+<span class="custom-checkbox checked">
+<svg viewbox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</span>
+<span class="item-kind-title">更新</span>
+<span class="item-level-tag item-level-info">信息</span>
+<span class="item-desc">settings：theme、fontSize 将被远端值覆盖</span>
+</div>
+</div>
+<!-- 项 2: ☑ 冲突 · 徽章「错误」+ 冲突裁决块 (两枚分段按钮「保留当前」「使用备份」+「差异」标签) -->
+<div class="confirm-item-card has-conflict">
+<div class="item-header-line">
+<span class="custom-checkbox checked">
+<svg viewbox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</span>
+<span class="item-kind-title">冲突</span>
+<span class="item-level-tag item-level-error">错误</span>
+<span class="item-desc">mcp：同名服务器 local-fs 的端点两侧都改过</span>
+</div>
+<div class="conflict-decision-row">
+<div class="segmented-control">
+<div class="segmented-btn active">保留当前</div>
+<div class="segmented-btn">使用备份</div>
+</div>
+<div class="diff-toggle-link">
+<span>差异</span>
+<svg fill="none" height="12" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="12">
+<polyline points="6 9 12 15 18 9"></polyline>
+</svg>
+</div>
+</div>
+</div>
+<!-- 项 3: ☐ 凭据迁移 · 徽章「警告」 -->
+<div class="confirm-item-card">
+<div class="item-header-line">
+<span class="custom-checkbox"></span>
+<span class="item-kind-title">凭据迁移</span>
+<span class="item-level-tag item-level-warning">警告</span>
+<span class="item-desc">credentials：3 项凭据在远端为密文，需本机补录</span>
+</div>
+</div>
+<!-- 项 4: ☑ 路径映射 · 徽章「警告」 -->
+<div class="confirm-item-card">
+<div class="item-header-line">
+<span class="custom-checkbox checked">
+<svg viewbox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</span>
+<span class="item-kind-title">路径映射</span>
+<span class="item-level-tag item-level-warning">警告</span>
+<span class="item-desc monospace">workspaces：/Users/tianyi → C:\Users\yzbtdmz1</span>
+</div>
+</div>
+<!-- 项 5: ☐ 缺依赖 · 徽章「错误」 -->
+<div class="confirm-item-card">
+<div class="item-header-line">
+<span class="custom-checkbox"></span>
+<span class="item-kind-title">缺依赖</span>
+<span class="item-level-tag item-level-error">错误</span>
+<span class="item-desc">plugins：config-manager@0.8.0 未安装，导入后需重启</span>
+</div>
+</div>
+</div>
+<!-- 5) 底部 actionRow (确认导入 + 取消，属于内容区末尾) -->
+<div class="modal-action-row">
+<button class="btn-ghost" type="button">取消</button>
+<button class="btn-primary" type="button">确认导入</button>
+</div>
+</div>
+</div>
+</div>
+</div>
 </body>
 </html>

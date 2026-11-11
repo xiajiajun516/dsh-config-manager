@@ -485,9 +485,9 @@
 </div>
 </div>
 <!-- 关于页内容区 -->
-<div class="about-content"><div class="about-card" style="gap: 14px;"><div class="about-title-row" style="justify-content: flex-start; gap: 8px; align-items: center;"><span class="about-title" style="font-size: 15px;">Config Manager</span><span class="about-badge" style="background: rgba(34, 197, 94, 0.12); color: #16a34a; font-weight: 500;">官方</span><span class="about-badge" style="background: rgba(65, 118, 230, 0.12); color: #4176e6; font-weight: 500;">版本 0.8.0</span><span class="about-badge" style="background: rgba(65, 118, 230, 0.12); color: #4176e6; font-weight: 500;">DSH 2.4</span></div><div style="display: flex; flex-direction: column; gap: 6px;"><div style="font-size: 11px; font-weight: 500; color: #81858c;">更新</div><div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #f8fafc; border: 1px solid rgba(0,0,0,0.06); border-radius: 8px;"><div style="display: flex; align-items: center; gap: 8px;"><span style="font-size: 12.5px; color: #0f1115; font-weight: 500;">当前版本 0.8.0</span><span class="about-badge" style="background: rgba(245, 158, 11, 0.12); color: #d97706; font-weight: 500;">有新版本 v0.9.0</span></div><div style="display: flex; align-items: center; gap: 6px;"><button class="about-ghost-btn" style="cursor: default;" type="button">重新检查</button><button class="btn-primary" style="height: 28px; font-size: 12px; padding: 0 10px; cursor: default;" type="button">立即更新</button></div></div></div><div style="display: flex; flex-direction: column; gap: 6px;"><div style="font-size: 11px; font-weight: 500; color: #81858c;">链接</div><div class="about-btn-row" style="flex-wrap: wrap; gap: 6px;"><div class="about-ghost-btn">Star</div><div class="about-ghost-btn">GitHub 仓库</div><div class="about-ghost-btn">文档</div><div class="about-ghost-btn">反馈</div><div class="about-ghost-btn">更新内容</div></div></div></div></div>
+<div class="about-content"><div class="about-card" style="gap: 14px;"><div class="about-title-row" style="justify-content: flex-start; gap: 8px; align-items: center;"><span class="about-title" style="font-size: 15px;">Config Manager</span><span class="about-badge" style="background: rgba(34, 197, 94, 0.12); color: #16a34a; font-weight: 500;">官方</span><span class="about-badge" style="background: rgba(65, 118, 230, 0.12); color: #4176e6; font-weight: 500;">版本 0.8.0</span><span class="about-badge" style="background: rgba(65, 118, 230, 0.12); color: #4176e6; font-weight: 500;">DSH 2.4</span></div><div style="display: flex; flex-direction: column; gap: 6px;"><div style="font-size: 11px; font-weight: 500; color: #81858c;">更新</div><div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #f8fafc; border: 1px solid rgba(0,0,0,0.06); border-radius: 8px;"><div style="display: flex; align-items: center; gap: 8px;"><span style="font-size: 12.5px; color: #0f1115; font-weight: 500;">当前版本 0.8.0</span><span class="about-badge" style="background: rgba(245, 158, 11, 0.12); color: #d97706; font-weight: 500;">有新版本 v0.9.0</span></div><div style="display: flex; align-items: center; gap: 6px;"><button class="about-ghost-btn" style="cursor: default;" type="button">重新检查</button><button class="about-ghost-btn" style="cursor: default;" type="button">立即更新</button></div></div></div><div style="display: flex; flex-direction: column; gap: 6px;"><div style="font-size: 11px; font-weight: 500; color: #81858c;">链接</div><div class="about-btn-row" style="flex-wrap: wrap; gap: 6px;"><div class="about-ghost-btn">Star</div><div class="about-ghost-btn">GitHub 仓库</div><div class="about-ghost-btn">文档</div><div class="about-ghost-btn">反馈</div><div class="about-ghost-btn">更新内容</div></div></div></div></div>
 <!-- 底部状态栏 -->
-<div class="status-bar">
+<div class="status-bar" style="position: absolute; bottom: 8px; left: 8px; right: 8px; height: 28px; background: #FFFFFF; border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; font-size: 11px; color: #61666B; box-sizing: border-box; z-index: 10;">
 <div class="status-left">
 <div class="status-dot"></div>
 <span>就绪</span>
@@ -513,7 +513,7 @@
 <div class="dialog-body">
 <!-- 版本行：弱色小字「当前版本 0.8.0」+ 14px 箭头「→」+ 强调色 13px / 600 的「0.9.0」 -->
 <div class="version-flow-row">
-<span class="version-prev">当前版本 0.8.0</span>
+<span class="version-prev" style="font-size: 12.5px; color: #81858C;">当前版本 0.8.0</span>
 <div class="version-arrow">
 <svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
 <line x1="5" x2="19" y1="12" y2="12"></line>
@@ -536,27 +536,17 @@
 <!-- 发布说明正文（13px / 行高 1.5 / 块间 6px） -->
 <div class="release-section">
 <!-- 1) 小标题「v0.8.0 · 2026-11-10」，12.5px / 600 / #61666B -->
-<div class="release-version-title">v0.8.0 · 2026-11-10</div>
+<div class="release-version-title">v0.9.0 · 2026-11-11</div>
 <!-- 2) 加粗导语「远端删掉的插件，同步时也跟着删」 -->
 <div class="release-lead">远端删掉的插件，同步时也跟着删</div>
 <!-- 3) 段落「插件同步多了个默认关闭的开关...」 -->
-<div class="release-paragraph">
+<div class="release-paragraph" style="font-size: 12.5px; line-height: 1.5; color: #0F1115;">
               插件同步多了个默认关闭的开关，打开后远端删了什么、你这儿没改过的一并卸载，删掉的都能从当轮快照装回。
             </div>
 <!-- 4) 无序列表两项（弱色 • 前导、文字左缩进 14px） -->
 <div class="release-list">
-<div class="release-list-item">
-<span class="list-bullet">•</span>
-<span class="list-text">
-<span class="list-bold">同步可以跟随远端删除插件（默认关）</span>：勾上开关后，远端删掉、你这边没改过的插件会在合并/自动同步时一起卸载，并在报告里逐项列明「已删除：包@版本」。
-                </span>
-</div>
-<div class="release-list-item">
-<span class="list-bullet">•</span>
-<span class="list-text">
-                  被删的包会记进当轮快照，恢复快照时自动装回同一版本。
-                </span>
-</div>
+<div class="release-list-item"><span class="list-bullet" style="margin-left: 2px; width: 12px;">•</span><span class="list-text" style="font-size: 12.5px; line-height: 1.5; color: #0F1115;"><span class="list-bold">同步可以跟随远端删除插件（默认关）：</span>勾上开关后，远端删掉、你这边没改过的插件会在合并/自动同步时一起卸载，并在报告里逐项列明「已删除：包@版本」。</span></div>
+<div class="release-list-item"><span class="list-bullet" style="margin-left: 2px; width: 12px;">•</span><span class="list-text" style="font-size: 12.5px; line-height: 1.5; color: #0F1115;">被删的包会记进当轮快照，恢复快照时自动装回同一版本。</span></div>
 </div>
 </div>
 <!-- 正文底部的两个链接按钮（上间距 10px，横向 gap 8px） -->

@@ -1,11 +1,12 @@
 <!DOCTYPE html>
+
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DSH 设置 — 备份与迁移 D-29 喜欢 Config Manager 吗 引导弹窗</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 D-29 喜欢 Config Manager 吗 引导弹窗</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
     * {
       box-sizing: border-box;
       -webkit-font-smoothing: antialiased;
@@ -206,121 +207,106 @@
   </style>
 </head>
 <body>
-
-  <!-- 画布尺寸严格固定为 564x720 -->
-  <div class="plugin-canvas">
-    
-    <!-- 底层页面结构（被遮罩压暗） -->
-    <div class="underlay">
-      <!-- 顶部 32px 导航条 -->
-      <div class="top-nav">
-        <div class="tab-group">
-          <div class="tab-item active">首页</div>
-          <div class="tab-item">产物库</div>
-          <div class="tab-item">同步</div>
-          <div class="tab-item">环境</div>
-        </div>
-        <div class="nav-actions">
-          <!-- ⌘K 命令面板图标 -->
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
-          </svg>
-          <!-- 活动图标 -->
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-          </svg>
-          <!-- 历史图标 -->
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <polyline points="12 6 12 12 16 14"/>
-          </svg>
-          <!-- 关于图标 -->
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="12" y1="16" x2="12" y2="12"/>
-            <line x1="12" y1="8" x2="12.01" y2="8"/>
-          </svg>
-        </div>
-      </div>
-
-      <!-- 内容区轮廓 -->
-      <div class="underlay-body">
-        <div class="mock-card" style="height: 104px;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <span style="display: inline-block; width: 6px; height: 6px; border-radius: 999px; background-color: #22C55E;"></span>
-              <span style="font-size: 12px; font-weight: 500; color: #0F1115;">通道状态</span>
-            </div>
-            <span style="font-size: 11px; color: #81858C;">已就绪</span>
-          </div>
-          <div style="height: 1px; background-color: #0000000D; margin: 4px 0;"></div>
-          <div style="font-size: 11px; color: #61666B; line-height: 1.5;">
+<!-- 画布尺寸严格固定为 564x720 -->
+<div class="plugin-canvas">
+<!-- 底层页面结构（被遮罩压暗） -->
+<div class="underlay">
+<!-- 顶部 32px 导航条 -->
+<div class="top-nav">
+<div class="tab-group">
+<div class="tab-item">首页</div>
+<div class="tab-item">产物库</div>
+<div class="tab-item active">同步</div>
+<div class="tab-item">环境</div>
+</div>
+<div class="nav-actions">
+<!-- ⌘K 命令面板图标 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+<!-- 活动图标 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史图标 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于图标 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</div>
+<!-- 内容区轮廓 -->
+<div class="underlay-body">
+<div class="mock-card" style="height: 104px;">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<div style="display: flex; align-items: center; gap: 6px;">
+<span style="display: inline-block; width: 6px; height: 6px; border-radius: 999px; background-color: #22C55E;"></span>
+<span style="font-size: 12px; font-weight: 500; color: #0F1115;">通道状态</span>
+</div>
+<span style="font-size: 11px; color: #81858C;">已就绪</span>
+</div>
+<div style="height: 1px; background-color: #0000000D; margin: 4px 0;"></div>
+<div style="font-size: 11px; color: #61666B; line-height: 1.5;">
             当前本地快照与远端节点保持一致，无未决冲突。<br/>
             上次验证时间：2026-11-10 21:04
           </div>
-        </div>
-
-        <div class="mock-card" style="flex: 1;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-size: 12px; font-weight: 500; color: #0F1115;">同步分区</span>
-            <span style="font-size: 11px; color: #81858C;">共 12 项</span>
-          </div>
-          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
-            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #61666B; padding-bottom: 6px; border-bottom: 0.5px solid #0000000D;">
-              <span>settings (基础配置与外观)</span>
-              <span style="color: #22C55E;">已对齐</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #61666B; padding-bottom: 6px; border-bottom: 0.5px solid #0000000D;">
-              <span>plugins (安装包与依赖)</span>
-              <span style="color: #22C55E;">已对齐</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #61666B; padding-bottom: 6px; border-bottom: 0.5px solid #0000000D;">
-              <span>mcp (模型上下文端点)</span>
-              <span style="color: #22C55E;">已对齐</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #61666B; padding-bottom: 6px; border-bottom: 0.5px solid #0000000D;">
-              <span>prompts (系统提示词集)</span>
-              <span style="color: #22C55E;">已对齐</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 底部 28px 内缩状态栏 -->
-      <div class="status-bar">
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <span style="width: 6px; height: 6px; border-radius: 999px; background-color: #22C55E;"></span>
-          <span>就绪 · 远程可选</span>
-        </div>
-        <div style="font-family: monospace; color: #81858C;">v0.8.0 · DSH 2.4</div>
-      </div>
-    </div>
-
-    <!-- 模态遮罩层 #0000003D 覆盖整个 564x720 面板 -->
-    <div class="modal-overlay">
-      <!-- 模态弹窗本体 D-29 ConfirmDialog (520px 宽，居中) -->
-      <div class="confirm-dialog">
-        <!-- 标题区 48px：仅标题，ConfirmDialog 无 ✕ -->
-        <div class="dialog-header">
-          <div class="dialog-title">喜欢 Config Manager 吗？</div>
-        </div>
-
-        <!-- 内容区：单段正文，行高 1.5，12.5px，色值 #0F1115 -->
-        <div class="dialog-content">
-          <p class="dialog-body-text">如果你觉得这个插件有用，欢迎到 GitHub 点个 ⭐ Star 支持一下——你的支持是持续维护的最大动力！</p>
-        </div>
-
-        <!-- 动作区 56px：上边框 1px #0000001A，按钮右对齐：ConfirmDialog 源码顺序为确认在左、取消在右 -->
-        <div class="dialog-footer">
-          <!-- 主按钮 primary: #0F1115 底、白字、高 30、圆角 8 -->
-          <div class="btn btn-primary">去点 Star</div>
-          <!-- 次按钮 ghost: 白底、1px 描边、深色字、高 30、圆角 8 -->
-          <div class="btn btn-ghost">不再提示</div>
-        </div>
-      </div>
-    </div>
-
-  </div>
-
+</div>
+<div class="mock-card" style="flex: 1;">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<span style="font-size: 12px; font-weight: 500; color: #0F1115;">同步分区</span>
+<span style="font-size: 11px; color: #81858C;">共 12 项</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
+<div style="display: flex; justify-content: space-between; font-size: 11px; color: #61666B; padding-bottom: 6px; border-bottom: 0.5px solid #0000000D;">
+<span>settings (基础配置与外观)</span>
+<span style="color: #22C55E;">已对齐</span>
+</div>
+<div style="display: flex; justify-content: space-between; font-size: 11px; color: #61666B; padding-bottom: 6px; border-bottom: 0.5px solid #0000000D;">
+<span>plugins (安装包与依赖)</span>
+<span style="color: #22C55E;">已对齐</span>
+</div>
+<div style="display: flex; justify-content: space-between; font-size: 11px; color: #61666B; padding-bottom: 6px; border-bottom: 0.5px solid #0000000D;">
+<span>mcp (模型上下文端点)</span>
+<span style="color: #22C55E;">已对齐</span>
+</div>
+<div style="display: flex; justify-content: space-between; font-size: 11px; color: #61666B; padding-bottom: 6px; border-bottom: 0.5px solid #0000000D;">
+<span>prompts (系统提示词集)</span>
+<span style="color: #22C55E;">已对齐</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 底部 28px 内缩状态栏 -->
+<div class="status-bar">
+<div style="display: flex; align-items: center; gap: 6px;">
+<span style="width: 6px; height: 6px; border-radius: 999px; background-color: #22C55E;"></span>
+<span>就绪 · 远程可选</span>
+</div>
+<div style="font-family: monospace; color: #81858C;">v0.8.0 · DSH 2.4</div>
+</div>
+</div>
+<!-- 模态遮罩层 #0000003D 覆盖整个 564x720 面板 -->
+<div class="modal-overlay">
+<!-- 模态弹窗本体 D-29 ConfirmDialog (520px 宽，居中) -->
+<div class="confirm-dialog">
+<!-- 标题区 48px：仅标题，ConfirmDialog 无 ✕ -->
+<div class="dialog-header" style="height: 48px; padding: 0 16px; display: flex; align-items: center; border-bottom: 0.5px solid #0000001A;">
+<div class="dialog-title">喜欢 Config Manager 吗？</div>
+</div>
+<!-- 内容区：单段正文，行高 1.5，12.5px，色值 #0F1115 -->
+<div class="dialog-content" style="padding: 16px 16px; min-height: auto;">
+<p class="dialog-body-text">如果你觉得这个插件有用，欢迎到 GitHub 点个 ⭐ Star 支持一下——你的支持是持续维护的最大动力！</p>
+</div>
+<!-- 动作区 56px：上边框 1px #0000001A，按钮右对齐：ConfirmDialog 源码顺序为确认在左、取消在右 -->
+<div class="dialog-footer" style="height: 52px; padding: 12px 16px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; border-top: 0.5px solid #0000001A; background-color: #FFFFFF;"><button class="btn btn-primary" style="height: 28px; padding: 0 14px; border-radius: 8px; font-size: 12.5px; font-weight: 500; background-color: #0F1115; color: #FFFFFF; border: 1px solid transparent; display: inline-flex; align-items: center; justify-content: center; cursor: default;">去点 Star</button><button class="btn btn-ghost" style="height: 28px; padding: 0 14px; border-radius: 8px; font-size: 12.5px; font-weight: 500; background-color: #FFFFFF; color: #61666B; border: 1px solid #0000001A; display: inline-flex; align-items: center; justify-content: center; cursor: default;">不再提示</button></div>
+</div>
+</div>
+</div>
 </body>
 </html>

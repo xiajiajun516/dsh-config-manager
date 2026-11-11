@@ -138,37 +138,7 @@
 </div>
 </div>
 <!-- 分区列表行 -->
-<div class="flex flex-col space-y-[5px] text-[11.5px] border-b border-[#0000001A] pb-[6px]">
-<div class="flex items-center justify-between">
-<span class="text-[#0F1115]">备份文件</span>
-<div class="flex items-center space-x-[8px]">
-<span class="text-[10.5px] text-[#81858C]">可释放 20.1 MB</span>
-<span class="font-mono text-[11px] text-[#0F1115]">20.1 MB</span>
-<span class="text-[10px] bg-[#EBEEF2] text-[#4176E6] px-[4px] py-[0.5px] rounded-[4px]">保留 30 天</span>
-</div>
-</div>
-<div class="flex items-center justify-between">
-<span class="text-[#0F1115]">导入前快照</span>
-<div class="flex items-center space-x-[8px]">
-<span class="font-mono text-[11px] text-[#0F1115]">302 KB</span>
-<span class="text-[10.5px] text-[#22C55E]">可随时重建</span>
-</div>
-</div>
-<div class="flex items-center justify-between">
-<span class="text-[#0F1115]">同步覆盖与工作副本</span>
-<div class="flex items-center space-x-[8px]">
-<span class="font-mono text-[11px] text-[#0F1115]">108.9 MB</span>
-<span class="text-[10.5px] text-[#22C55E]">可随时重建</span>
-</div>
-</div>
-<div class="flex items-center justify-between">
-<span class="text-[#0F1115]">遗留数据</span>
-<div class="flex items-center space-x-[8px]">
-<span class="font-mono text-[11px] text-[#0F1115]">56.9 MB</span>
-<span class="text-[10.5px] text-[#61666B]">受保护</span>
-</div>
-</div>
-</div>
+<div class="flex flex-col space-y-[5px] text-[11.5px] border-b border-[#0000001A] pb-[6px]"><div class="flex items-center justify-between"><span class="text-[#0F1115]">备份文件</span><div class="flex items-center space-x-[8px]"><span class="text-[10.5px] text-[#81858C]">可释放 20.1 MB</span><span class="font-mono text-[11px] text-[#0F1115]">20.1 MB</span><span class="text-[10px] bg-[#EBEEF2] text-[#4176E6] px-[4px] py-[0.5px] rounded-[4px]">保留 30 天</span></div></div><div class="flex items-center justify-between"><span class="text-[#0F1115]">导入前快照</span><div class="flex items-center space-x-[8px]"><span class="font-mono text-[11px] text-[#0F1115]">302 KB</span><span class="text-[10.5px] text-[#22C55E]">可随时重建</span></div></div><div class="flex items-center justify-between"><span class="text-[#0F1115]">同步覆盖与工作副本</span><div class="flex items-center space-x-[8px]"><span class="font-mono text-[11px] text-[#0F1115]">108.9 MB</span><span class="text-[10.5px] text-[#22C55E]">可随时重建</span></div></div><div class="flex items-center justify-between"><span class="text-[#0F1115]">临时构建与市场缓存</span><div class="flex items-center space-x-[8px]"><span class="font-mono text-[11px] text-[#0F1115]">3.0 MB</span><span class="text-[10.5px] text-[#22C55E]">可随时重建</span></div></div><div class="flex items-center justify-between"><span class="text-[#0F1115]">已失效导出与日志</span><div class="flex items-center space-x-[8px]"><span class="font-mono text-[11px] text-[#0F1115]">1.4 MB</span><span class="text-[10.5px] text-[#22C55E]">可随时重建</span></div></div><div class="flex items-center justify-between"><span class="text-[#0F1115]">遗留 checkpoints 数据</span><div class="flex items-center space-x-[8px]"><span class="font-mono text-[11px] text-[#0F1115]">56.9 MB</span><span class="text-[10.5px] text-[#61666B]">受保护</span></div></div></div>
 <!-- 释放空间分组 -->
 <div class="flex flex-col space-y-[6px]">
 <div class="text-[10.5px] text-[#61666B] leading-tight">
@@ -233,13 +203,9 @@
 <!-- Footer: 两个按钮右对齐、间距 8px。左边「清理」危险主按钮，右边「取消」ghost -->
 <div class="pt-[10px] px-[16px] pb-[14px] border-t border-[#0000001A] flex items-center justify-end space-x-[8px] bg-white">
 <!-- 左边：确认在左（危险主按钮「清理」：#EC1313 实底、白字 13px、高 28px、圆角 8px、左右内距 12px） -->
-<button class="h-[28px] px-[12px] bg-[#EC1313] hover:bg-[#d91111] text-white text-[13px] font-medium rounded-[8px] flex items-center justify-center transition-colors">
-            清理
-          </button>
+<button class="h-[28px] px-[12px] bg-white hover:bg-[#FFF1F1] border border-[#EC1313] text-[#EC1313] text-[12.5px] font-medium rounded-[8px] flex items-center justify-center transition-colors" style="border-color: rgba(236, 19, 19, 0.45);">清理</button>
 <!-- 右边：取消在右（ghost 按钮「取消」：白底、0.5px #0000001A 描边、文字 #0F1115、高 28px、圆角 8px、左右内距 12px） -->
-<button class="h-[28px] px-[12px] bg-white hover:bg-[#F5F5F5] border border-[#0000001A] text-[#0F1115] text-[13px] font-medium rounded-[8px] flex items-center justify-center transition-colors">
-            取消
-          </button>
+<button class="h-[28px] px-[12px] bg-white hover:bg-[#F5F5F5] border border-[#0000001A] text-[#0F1115] text-[12.5px] font-medium rounded-[8px] flex items-center justify-center transition-colors">取消</button>
 </div>
 </div>
 </div>

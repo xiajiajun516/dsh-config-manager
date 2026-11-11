@@ -15,7 +15,7 @@
     }
 
     body {
-      background-color: #EBEEF2;
+      background-color: #EBECEF;
       font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       color: #0F1115;
       display: flex;
@@ -177,7 +177,7 @@
 </div>
 </main>
 <!-- 底部状态栏 (28px 高度) -->
-<footer class="h-[28px] min-h-[28px] px-3 bg-white border-t border-[#0000001A] flex items-center justify-between text-[11px] text-[#81858C]">
+<footer class="mx-2 mb-2 h-[28px] min-h-[28px] px-3 bg-[#FFFFFF] border border-[#0000001A] rounded-[8px] flex items-center justify-between text-[11px] text-[#61666B]">
 <div class="flex items-center space-x-1.5">
 <span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
 <span class="text-[#0F1115]">就绪</span>
@@ -195,48 +195,89 @@
 <!-- ========================================== -->
 <!-- 弹窗主体 D-04: 520px x 280px，圆角 12px，白底 #FFFFFF -->
 <!-- ========================================== -->
-<div class="w-[520px] bg-white rounded-xl border border-[#EBEEF2] shadow-[0_8px_30px_rgb(0,0,0,0.12)] flex flex-col overflow-hidden h-[240px]">
-<!-- 1. 标题区 (48px 高度，px-4 = 16px) -->
-<div class="h-[48px] min-h-[48px] px-4 flex items-center justify-between border-b border-[#EBEEF2]">
-<!-- 标题 13px / 600 左对齐 -->
+<div class="w-[500px] bg-white rounded-xl border border-[#E6E6E6] shadow-[0_8px_30px_rgb(0,0,0,0.12)] flex flex-col overflow-hidden select-none">
+<!-- 标题区 (44px) -->
+<div class="h-[44px] min-h-[44px] px-4 flex items-center justify-between border-b border-[#E6E6E6]">
+<div class="flex items-center space-x-2">
 <h2 class="text-[13px] font-semibold text-[#0F1115] tracking-tight">拉取远端快照</h2>
-<!-- 右端关闭 ✕ 14px 线性图标，运行中禁用态 #81858C -->
-<div aria-label="关闭" class="w-[14px] h-[14px] flex items-center justify-center cursor-not-allowed text-[#81858C]" title="运行中不可关闭">
-<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<span class="px-1.5 py-0.2 bg-[#4176E6]/10 text-[#4176E6] text-[11px] rounded-[4px] border border-[#4176E6]/20 font-medium">同步中</span>
+</div>
+<button aria-label="关闭" class="w-[16px] h-[16px] flex items-center justify-center text-[#81858C] hover:text-[#0F1115] transition-colors" title="关闭" type="button">
+<svg class="w-[16px] h-[16px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
 <line x1="18" x2="6" y1="6" y2="18"></line>
 <line x1="6" x2="18" y1="6" y2="18"></line>
 </svg>
+</button>
 </div>
-</div>
-<!-- 2. 中间内容区 (flex-1，上下左右均衡，两行内容整体绝对居中对齐) -->
-<div class="h-[144px] px-4 flex flex-col items-center justify-center gap-3">
-<!-- 上一行：文件名提示 12px 主色 #0F1115 居中显示 -->
-<div class="text-[12px] text-[#0F1115] font-mono select-text text-center leading-none">
-            snapshot-2026-11-09T18-32.zip
-          </div>
-<!-- 下一行：水平居中排列的加载动画圆环 (16px) + 文案「正在拉取并导入…」(12.5px, #0F1115) -->
-<div class="flex items-center justify-center space-x-2">
-<!-- 加载圆环 (直径 16px，细描边 2px，浅灰底环 #0000001A + 一段 #4176E6 弧) -->
-<div class="relative w-[16px] h-[16px] shrink-0">
-<svg class="w-[16px] h-[16px] spinner" fill="none" viewbox="0 0 16 16">
-<!-- 底环 -->
+<!-- 内容区 (高密度、无多余大空白) -->
+<div class="p-4 flex flex-col space-y-3">
+<!-- 状态行与文件名 -->
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-2">
+<div class="relative w-[14px] h-[14px] shrink-0">
+<svg class="w-[14px] h-[14px] spinner" fill="none" viewbox="0 0 16 16">
 <circle cx="8" cy="8" r="7" stroke="#0000001A" stroke-width="2"></circle>
-<!-- 强调色弧线 -->
 <path d="M8 1a7 7 0 0 1 7 7" stroke="#4176E6" stroke-linecap="round" stroke-width="2"></path>
 </svg>
 </div>
-<!-- 状态文案 12.5px，主色 #0F1115 -->
-<span class="text-[12.5px] leading-tight text-[#0F1115] font-normal tracking-tight">
-              正在拉取并导入…
-            </span>
+<span class="text-[12.5px] font-medium text-[#0F1115]">正在拉取并导入…</span>
+</div>
+<span class="font-mono text-[11px] text-[#81858C] select-text">snapshot-2026-11-09T18-32.zip</span>
+</div>
+<!-- 进度条区 (3px 细条) -->
+<div class="space-y-1.5">
+<div class="w-full h-[4px] bg-[#0000000A] rounded-full overflow-hidden flex">
+<div class="h-full bg-[#4176E6] rounded-full" style="width: 68%;"></div>
+</div>
+<div class="flex items-center justify-between text-[11px] tabular text-[#81858C]">
+<div class="flex items-center space-x-1.5">
+<span>已拉取 <strong class="font-medium text-[#0F1115]">12/18</strong> 分区</span>
+<span>·</span>
+<span><strong class="font-medium text-[#0F1115]">1.4 MB</strong> / 2.1 MB</span>
+</div>
+<div class="flex items-center space-x-2">
+<span>68%</span>
+<span>·</span>
+<span>已耗时 <strong class="font-medium text-[#0F1115]">1.8s</strong></span>
 </div>
 </div>
-<!-- 3. 底部操作栏 (48px 高度，上边框 1px #EBEEF2，左右内边距 16px，单按钮右对齐) -->
-<div class="h-[48px] min-h-[48px] px-4 border-t border-[#EBEEF2] flex items-center justify-end bg-white">
-<!-- 单按钮「关闭」，禁用态（底 #EBEEF2、文字 #81858C、圆角 8px、高 30px、内边距 px-4、无投影） -->
-<button class="h-[30px] px-4 text-[#81858C] text-[12px] font-medium rounded-[8px] cursor-not-allowed select-none flex items-center justify-center bg-[#EBEEF2]" disabled="" type="button">
-            关闭
-          </button>
+</div>
+<!-- 分区拉取明细面板 (紧凑小盒) -->
+<div class="border border-[#0000001A] rounded-[8px] bg-[#EBEEF2]/40 divide-y divide-[#0000001A] overflow-hidden text-[11px]">
+<div class="px-2.5 py-1.5 flex items-center justify-between">
+<div class="flex items-center space-x-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span class="font-mono text-[#0F1115]">settings.json</span>
+</div>
+<span class="text-[#22C55E] font-medium">已校验 (340 KB)</span>
+</div>
+<div class="px-2.5 py-1.5 flex items-center justify-between">
+<div class="flex items-center space-x-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span class="font-mono text-[#0F1115]">prompts/registry.db</span>
+</div>
+<span class="text-[#22C55E] font-medium">已校验 (820 KB)</span>
+</div>
+<div class="px-2.5 py-1.5 flex items-center justify-between bg-[#FFFFFF]">
+<div class="flex items-center space-x-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] animate-pulse"></span>
+<span class="font-mono text-[#0F1115] font-medium">plugins/active_bundle.tar</span>
+</div>
+<span class="text-[#4176E6] font-medium flex items-center space-x-1">
+<span>正在解包...</span>
+</span>
+</div>
+</div>
+<!-- 说明提示文案 -->
+<div class="text-[11px] text-[#81858C] leading-normal">
+      拉取完成后将自动校验哈希并写入本机快照台账，不影响当前工作区。
+    </div>
+</div>
+<!-- 底部操作栏 (44px) -->
+<div class="h-[44px] min-h-[44px] px-4 border-t border-[#E6E6E6] flex items-center justify-end bg-white">
+<button class="h-[28px] px-3 border border-[#0000001A] text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2]/50 text-[12px] font-medium rounded-[8px] select-none flex items-center justify-center transition-colors" type="button">
+      关闭
+    </button>
 </div>
 </div>
 </div>

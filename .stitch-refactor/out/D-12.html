@@ -1,9 +1,10 @@
 <!DOCTYPE html>
+
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <title>DSH 设置 — 备份与迁移 D-12 推送结果弹窗</title>
-  <style>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-12 推送结果弹窗</title>
+<style>
     * {
       box-sizing: border-box;
       margin: 0;
@@ -332,130 +333,116 @@
   </style>
 </head>
 <body>
-
-  <div class="plugin-canvas">
-    <!-- 下层压暗的同步页三段外壳 -->
-    <header class="shell-header">
-      <nav class="shell-tabs">
-        <span class="shell-tab">首页</span>
-        <span class="shell-tab">产物库</span>
-        <span class="shell-tab active">同步</span>
-        <span class="shell-tab">环境</span>
-      </nav>
-      <div class="shell-tools">
-        <!-- ⌘K 图标 -->
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
-        </svg>
-        <!-- 活动图标 (折线) -->
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-        </svg>
-        <!-- 历史图标 (时钟) -->
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/>
-          <polyline points="12 6 12 12 16 14"/>
-        </svg>
-        <!-- 关于图标 (info) -->
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="16" x2="12" y2="12"/>
-          <line x1="12" y1="8" x2="12.01" y2="8"/>
-        </svg>
-      </div>
-    </header>
-
-    <main class="shell-content">
-      <!-- 极简灰阶轮廓卡片，无任何真实敏感文本 -->
-      <div class="bg-skeleton-card">
-        <div class="bg-skeleton-line" style="width: 32%;"></div>
-        <div class="bg-skeleton-line" style="width: 75%;"></div>
-        <div class="bg-skeleton-line" style="width: 50%;"></div>
-      </div>
-      <div class="bg-skeleton-card" style="opacity: 0.6;">
-        <div class="bg-skeleton-line" style="width: 24%;"></div>
-        <div class="bg-skeleton-line" style="width: 60%;"></div>
-      </div>
-    </main>
-
-    <footer class="shell-footer">
-      <div class="status-left">
-        <span class="status-dot"></span>
-        <span>就绪 · 远程可选</span>
-      </div>
-      <span>v0.8.0 · DSH 2.4</span>
-    </footer>
-
-    <!-- 全局遮罩层 #0000003D -->
-    <div class="modal-overlay">
-      <!-- D-12 推送结果 弹窗本体 (540 宽) -->
-      <div class="modal-dialog">
-        <!-- 标题区 48px -->
-        <div class="modal-header">
-          <h2 class="modal-title">推送结果</h2>
-          <button class="close-btn" aria-label="关闭">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-
-        <!-- 内容区 -->
-        <div class="modal-body">
-          <!-- 结果 Banner (success: #22C55E 12% 混色底 + 圆圈对勾图标) -->
-          <div class="result-banner">
-            <span class="result-banner-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <polyline points="9 12 11.5 14.5 15.5 9.5"/>
-              </svg>
-            </span>
-            <span class="result-banner-text">推送成功（快照 2026-11-09T18-32-07Z）</span>
-          </div>
-
-          <!-- 分组：同步分区 + info 徽章 -->
-          <div class="section-header">
-            <span class="section-label">同步分区</span>
-            <span class="badge-info">18 个分区</span>
-          </div>
-
-          <!-- 清单 7 行 (12.5px，行高 22px，无边框) -->
-          <div class="partition-list">
-            <div class="partition-item">settings<span class="item-count"> · 42 项</span></div>
-            <div class="partition-item">plugins<span class="item-count"> · 18 项</span></div>
-            <div class="partition-item">mcp<span class="item-count"> · 7 项</span></div>
-            <div class="partition-item">prompts<span class="item-count"> · 31 项</span></div>
-            <div class="partition-item">skills<span class="item-count"> · 12 项</span></div>
-            <div class="partition-item">workspaces<span class="item-count"> · 4 项</span></div>
-            <div class="partition-item">pluginData<span class="item-count"> · 6 项</span></div>
-          </div>
-
-          <!-- 分组：分区告警 -->
-          <div class="section-header" style="margin-top: 4px;">
-            <span class="section-label">分区告警</span>
-          </div>
-
-          <!-- 告警清单 2 行 (12px #61666B，左侧 3px 橙 #F59E0B 竖条) -->
-          <div class="warning-list">
-            <div class="warning-item">
-              <span class="warning-indicator"></span>
-              <span>pluginData：cache 目录已跳过（不入同步载荷）</span>
-            </div>
-            <div class="warning-item">
-              <span class="warning-indicator"></span>
-              <span>workspaces：2 个工作区目录不存在，已跳过</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 动作区 56px (上边框 1px #0000001A，按钮右对齐，仅一个「关闭」) -->
-        <div class="modal-footer">
-          <button class="btn-primary">关闭</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
+<div class="plugin-canvas">
+<!-- 下层压暗的同步页三段外壳 -->
+<header class="shell-header">
+<nav class="shell-tabs">
+<span class="shell-tab">首页</span>
+<span class="shell-tab">产物库</span>
+<span class="shell-tab active">同步</span>
+<span class="shell-tab">环境</span>
+</nav>
+<div class="shell-tools">
+<!-- ⌘K 图标 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+<!-- 活动图标 (折线) -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史图标 (时钟) -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于图标 (info) -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</header>
+<main class="shell-content">
+<!-- 极简灰阶轮廓卡片，无任何真实敏感文本 -->
+<div class="bg-skeleton-card">
+<div class="bg-skeleton-line" style="width: 32%;"></div>
+<div class="bg-skeleton-line" style="width: 75%;"></div>
+<div class="bg-skeleton-line" style="width: 50%;"></div>
+</div>
+<div class="bg-skeleton-card" style="opacity: 0.6;">
+<div class="bg-skeleton-line" style="width: 24%;"></div>
+<div class="bg-skeleton-line" style="width: 60%;"></div>
+</div>
+</main>
+<footer class="shell-footer" style="margin: 0 8px 8px 8px; border-radius: 8px; border: 1px solid #0000001A; height: 28px; background: #FFFFFF; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 11px; color: #61666B;">
+<div class="status-left"><span class="status-dot"></span><span>就绪</span></div>
+<span>v0.8.0 · DSH 2.4</span>
+</footer>
+<!-- 全局遮罩层 #0000003D -->
+<div class="modal-overlay">
+<!-- D-12 推送结果 弹窗本体 (540 宽) -->
+<div class="modal-dialog">
+<!-- 标题区 48px -->
+<div class="modal-header">
+<h2 class="modal-title">推送结果</h2>
+<button aria-label="关闭" class="close-btn">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</button>
+</div>
+<!-- 内容区 -->
+<div class="modal-body">
+<!-- 结果 Banner (success: #22C55E 12% 混色底 + 圆圈对勾图标) -->
+<div class="result-banner">
+<span class="result-banner-icon">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="9 12 11.5 14.5 15.5 9.5"></polyline>
+</svg>
+</span>
+<span class="result-banner-text">推送成功（快照 2026-11-09T18-32-07Z）</span>
+</div>
+<!-- 分组：同步分区 + info 徽章 -->
+<div class="section-header">
+<span class="section-label">同步分区</span>
+<span class="badge-info">18 个分区</span>
+</div>
+<!-- 清单 7 行 (12.5px，行高 22px，无边框) -->
+<div class="partition-list">
+<div class="partition-item">settings<span class="item-count"> · 42 项</span></div>
+<div class="partition-item">plugins<span class="item-count"> · 18 项</span></div>
+<div class="partition-item">mcp<span class="item-count"> · 7 项</span></div>
+<div class="partition-item">prompts<span class="item-count"> · 31 项</span></div>
+<div class="partition-item">skills<span class="item-count"> · 12 项</span></div>
+<div class="partition-item">workspaces<span class="item-count"> · 4 项</span></div>
+<div class="partition-item">pluginData<span class="item-count"> · 6 项</span></div>
+</div>
+<!-- 分组：分区告警 -->
+<div class="section-header" style="margin-top: 4px;">
+<span class="section-label">分区告警</span>
+</div>
+<!-- 告警清单 2 行 (12px #61666B，左侧 3px 橙 #F59E0B 竖条) -->
+<div class="warning-list">
+<div class="warning-item">
+<span class="warning-indicator"></span>
+<span>pluginData：cache 目录已跳过（不入同步载荷）</span>
+</div>
+<div class="warning-item">
+<span class="warning-indicator"></span>
+<span>workspaces：2 个工作区目录不存在，已跳过</span>
+</div>
+</div>
+</div>
+<!-- 动作区 56px (上边框 1px #0000001A，按钮右对齐，仅一个「关闭」) -->
+<div class="modal-footer">
+<button class="btn-primary">关闭</button>
+</div>
+</div>
+</div>
+</div>
 </body>
 </html>

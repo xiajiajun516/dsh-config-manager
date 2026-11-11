@@ -1,9 +1,10 @@
 <!DOCTYPE html>
+
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <title>DSH 设置 — 备份与迁移 D-38 删除条目确认弹窗</title>
-  <style>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-38 删除条目确认弹窗</title>
+<style>
     * {
       box-sizing: border-box;
       margin: 0;
@@ -312,88 +313,81 @@
   </style>
 </head>
 <body>
-
-  <div class="plugin-viewport">
-    <!-- 底层骨架：已被压暗脱敏 -->
-    <div class="bg-layout">
-      <!-- 顶部导航条 -->
-      <div class="top-nav">
-        <div class="nav-tabs">
-          <div class="nav-tab-placeholder"></div>
-          <div class="nav-tab-placeholder active"></div>
-          <div class="nav-tab-placeholder"></div>
-          <div class="nav-tab-placeholder"></div>
-        </div>
-        <div class="nav-actions">
-          <div class="nav-icon-placeholder"></div>
-          <div class="nav-icon-placeholder"></div>
-          <div class="nav-icon-placeholder"></div>
-          <div class="nav-icon-placeholder"></div>
-        </div>
-      </div>
-
-      <!-- 内容区骨架 -->
-      <div class="bg-content">
-        <div class="bg-title-bar">
-          <div class="bg-pill"></div>
-          <div class="bg-title-text"></div>
-        </div>
-        <div class="bg-meta-card">
-          <div class="bg-meta-row" style="width: 85%;"></div>
-          <div class="bg-meta-row" style="width: 60%;"></div>
-        </div>
-        <div class="bg-upload-card"></div>
-        <div class="bg-list-card">
-          <div class="bg-list-item">
-            <div class="bg-item-left"></div>
-            <div class="bg-item-right"></div>
-          </div>
-          <div class="bg-list-item">
-            <div class="bg-item-left" style="width: 50%;"></div>
-            <div class="bg-item-right"></div>
-          </div>
-          <div class="bg-list-item">
-            <div class="bg-item-left" style="width: 35%;"></div>
-            <div class="bg-item-right"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 底部内缩状态栏 -->
-      <div class="status-bar-wrapper">
-        <div class="status-bar">
-          <div class="status-left">
-            <div class="status-dot"></div>
-            <span class="status-text">就绪 · 市场已连接</span>
-          </div>
-          <div class="status-version">v0.8.0 · DSH 2.4</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 24% 黑色遮罩层与 D-38 弹窗本体 -->
-    <div class="modal-backdrop">
-      <div class="dialog-card">
-        <!-- Header -->
-        <div class="dialog-header">
-          <div class="dialog-title">删除条目</div>
-        </div>
-
-        <!-- Body -->
-        <div class="dialog-body">
-          <p class="dialog-desc">
-            确认删除？该操作会从配置仓库永久删除该条目的索引与文件<br>（不可恢复）
+<div class="plugin-viewport">
+<!-- 底层骨架：已被压暗脱敏 -->
+<div class="bg-layout">
+<!-- 顶部导航条 -->
+<div class="top-nav">
+<div class="nav-tabs">
+<div class="nav-tab-placeholder"></div>
+<div class="nav-tab-placeholder active"></div>
+<div class="nav-tab-placeholder"></div>
+<div class="nav-tab-placeholder"></div>
+</div>
+<div class="nav-actions">
+<div class="nav-icon-placeholder"></div>
+<div class="nav-icon-placeholder"></div>
+<div class="nav-icon-placeholder"></div>
+<div class="nav-icon-placeholder"></div>
+</div>
+</div>
+<!-- 内容区骨架 -->
+<div class="bg-content">
+<div class="bg-title-bar">
+<div class="bg-pill"></div>
+<div class="bg-title-text"></div>
+</div>
+<div class="bg-meta-card">
+<div class="bg-meta-row" style="width: 85%;"></div>
+<div class="bg-meta-row" style="width: 60%;"></div>
+</div>
+<div class="bg-upload-card"></div>
+<div class="bg-list-card">
+<div class="bg-list-item">
+<div class="bg-item-left"></div>
+<div class="bg-item-right"></div>
+</div>
+<div class="bg-list-item">
+<div class="bg-item-left" style="width: 50%;"></div>
+<div class="bg-item-right"></div>
+</div>
+<div class="bg-list-item">
+<div class="bg-item-left" style="width: 35%;"></div>
+<div class="bg-item-right"></div>
+</div>
+</div>
+</div>
+<!-- 底部内缩状态栏 -->
+<div class="status-bar-wrapper">
+<div class="status-bar">
+<div class="status-left">
+<div class="status-dot"></div>
+<span class="status-text">就绪</span>
+</div>
+<div class="status-version">v0.8.0 · DSH 2.4</div>
+</div>
+</div>
+</div>
+<!-- 24% 黑色遮罩层与 D-38 弹窗本体 -->
+<div class="modal-backdrop">
+<div class="dialog-card">
+<!-- Header -->
+<div class="dialog-header">
+<div class="dialog-title">删除条目</div>
+</div>
+<!-- Body -->
+<div class="dialog-body">
+<p class="dialog-desc">
+            确认删除？该操作会从配置仓库永久删除该条目的索引与文件<br/>（不可恢复）
           </p>
-        </div>
-
-        <!-- Footer -->
-        <div class="dialog-footer">
-          <button class="btn btn-danger" type="button">确认删除</button>
-          <button class="btn btn-ghost" type="button">取消</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
+</div>
+<!-- Footer -->
+<div class="dialog-footer">
+<button class="btn btn-danger" type="button">确认删除</button>
+<button class="btn btn-ghost" type="button">取消</button>
+</div>
+</div>
+</div>
+</div>
 </body>
 </html>

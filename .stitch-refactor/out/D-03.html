@@ -9,7 +9,7 @@
     body {
       margin: 0;
       padding: 0;
-      background-color: #EBEEF2;
+      background-color: #EBECEF;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
       display: flex;
@@ -52,7 +52,7 @@
 </div>
 </div>
 <!-- 产物库页面主内容 (背景浅灰+卡片) -->
-<div class="flex-1 p-3 flex flex-col gap-2.5 overflow-hidden bg-[#EBEEF2]">
+<div class="flex-1 p-3 flex flex-col gap-2.5 overflow-hidden bg-[#FAFAFA]">
 <!-- 搜索与工具条 -->
 <div class="flex items-center justify-between gap-2 h-7">
 <div class="h-7 flex-1 border border-[#0000001A] rounded px-2 flex items-center bg-white text-[12px] text-[#81858C]">
@@ -83,13 +83,7 @@
 </div>
 </div>
 <!-- 底部状态栏 28px -->
-<div class="h-7 px-3 border-t border-[#0000001A] flex items-center justify-between bg-white text-[11px] text-[#81858C] shrink-0">
-<div class="flex items-center gap-1.5">
-<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
-<span>就绪 · 校验无冲突</span>
-</div>
-<div>v0.8.0 · DSH 2.4</div>
-</div>
+<div class="h-7 border border-[#0000001A] rounded-[8px] flex items-center justify-between bg-white text-[11px] text-[#61666B] shrink-0" style="margin: 0 8px 8px 8px; padding: 0 10px;"><div class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span><span>就绪 · 校验无冲突</span></div><div>v0.8.0 · DSH 2.4</div></div>
 </div>
 <!-- ================= 遮罩层 (0000003D) ================= -->
 <div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-3">
@@ -100,7 +94,7 @@
 <div class="text-[13px] font-semibold leading-[1.25] text-[#0F1115]">
             迁移前咨询
           </div>
-<button aria-label="关闭" class="w-7 h-7 flex items-center justify-center text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2] rounded transition-colors">
+<button aria-label="关闭" class="w-7 h-7 flex items-center justify-center text-[#61666B] hover:text-[#0F1115] hover:bg-[#F5F5F5] rounded transition-colors">
 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
 <line x1="18" x2="6" y1="6" y2="18"></line>
 <line x1="6" x2="18" y1="6" y2="18"></line>
@@ -210,7 +204,7 @@
 </div>
 <!-- 3. 动作区 56px：上边框 1px #0000001A，单个按钮「关闭」右对齐 -->
 <div class="h-14 px-4 border-t border-[#0000001A] flex items-center justify-end shrink-0 bg-white">
-<button class="h-[30px] px-3 bg-[#0F1115] hover:bg-[#43454A] text-white text-[12px] font-medium rounded-[8px] transition-colors leading-none flex items-center justify-center">
+<button class="h-7 px-4 border border-[#0000001A] bg-transparent hover:bg-[#F5F5F5] text-[#61666B] hover:text-[#0F1115] text-[12.5px] font-medium rounded-[8px] transition-colors leading-none flex items-center justify-center cursor-pointer">
             关闭
           </button>
 </div>

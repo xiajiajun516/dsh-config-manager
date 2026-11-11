@@ -372,7 +372,7 @@
 </div>
 </main>
 <!-- 底部 28px 状态栏 -->
-<footer class="status-bar" style="margin: 8px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1); background: #FFFFFF; height: 26px; min-height: 26px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #81858C;"><div class="status-left"><span class="status-dot"></span><span>就绪</span></div><div class="status-right"><span>v0.8.0 · DSH 2.4</span></div></footer>
+<footer class="status-bar" style="margin: 0 8px 8px 8px; height: 28px; min-height: 28px; border-radius: 8px; border: 1px solid #0000001A; background: #FFFFFF; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #61666B;"><div class="status-left" style="display: flex; align-items: center; gap: 6px;"><span class="status-dot" style="width: 6px; height: 6px; border-radius: 999px; background: #22C55E;"></span><span>就绪</span></div><div class="status-right" style="font-family: 'JetBrains Mono', monospace, sans-serif;"><span>v0.8.0 · DSH 2.4</span></div></footer>
 <!-- 全局压暗遮罩 #0000003D -->
 <div class="modal-overlay">
 <!-- D-21 确认进入救援模式弹窗 -->
@@ -386,10 +386,8 @@
 <p class="dialog-desc">进入救援模式会改写 profile 的 cordis.patch.yml、置空 home 的 cordis.patch.yml，并把 dsh.profile.bundles 收窄为 DSH 核心与本插件（其它用户插件本次启动不挂载；包本身不删除）。退出时会从备份逐字节还原。请重启 DSH 使其生效。是否继续？</p>
 </div>
 <!-- 3) 动作区：padding 10px 16px 14px，上方 0.5px 分隔线，确认在左、取消在最右 -->
-<div class="dialog-footer">
-<button class="btn-danger" type="button">进入救援模式</button>
-<button class="btn-ghost" type="button">取消</button>
-</div>
+<div class="dialog-footer"><button class="btn-ghost" style="height: 28px; padding: 0 14px; background: #FFFFFF; color: #61666B; border: 1px solid #0000001A; border-radius: 8px; font-size: 12.5px; font-weight: 400; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;" type="button">取消</button>
+<button class="btn-danger" style="height: 28px; padding: 0 14px; background: #EC1313; color: #FFFFFF; border: none; border-radius: 8px; font-size: 12.5px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;" type="button">进入救援模式</button></div>
 </div>
 </div>
 </div>

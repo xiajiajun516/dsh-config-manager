@@ -383,7 +383,7 @@
 </div>
 </main>
 <!-- 底部 28px 状态栏 -->
-<footer class="status-bar">
+<footer class="status-bar" style="margin: 0 8px 8px 8px; height: 28px; border-radius: 8px; border: 1px solid #0000001A; background-color: #FFFFFF; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #81858C; flex-shrink: 0; box-shadow: 0 1px 2px rgba(0,0,0,0.02);">
 <div class="status-left">
 <div class="status-dot"></div>
 <span>就绪</span>
@@ -393,20 +393,15 @@
 </div>
 <!-- 2. Modal Overlay & Dialog Card (#0000003D / rgba(0,0,0,0.24)) -->
 <div class="modal-overlay">
-<div aria-labelledby="dialog-title" aria-modal="true" class="dialog-card" role="dialog">
+<div aria-labelledby="dialog-title" aria-modal="true" class="dialog-card" role="dialog" style="width: 496px; background-color: #FFFFFF; border: 1px solid #0000001A; border-radius: 12px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); display: flex; flex-direction: column; overflow: hidden; animation: dialogPop 0.15s ease-out;">
 <!-- 1) 标题区: padding 12px 16px 0, 标题「确认恢复」13px/600 #0F1115 左对齐, 无 ✕ -->
 <div class="dialog-header">
 <h2 class="dialog-title" id="dialog-title">确认恢复</h2>
 </div>
 <!-- 2) 正文区: padding 8px 16px 12px, 12.5px #0F1115, 行高 1.5, 逐字内容 -->
-<div class="dialog-body">
-<p class="dialog-desc">恢复/回滚是危险操作。确认执行？系统会先把当前文件备份到一个安全位置。</p>
-</div>
+<div class="dialog-body"><p class="dialog-desc" style="margin-bottom: 10px; color: #61666B; font-size: 12.5px; line-height: 1.5;">恢复/回滚是危险操作。确认执行？系统会先把当前文件备份到一个安全位置。</p><div style="background-color: #F8F9FA; border: 0.5px solid #0000001A; border-radius: 8px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; color: #61666B;"><div style="display: flex; align-items: center; gap: 8px;"><span style="color: #0F1115; font-weight: 500;">影响范围</span><span style="color: #D1D5DB;">|</span><span>本机配置 <strong style="color: #0F1115; font-weight: 500; font-family: monospace;">4.2 MB</strong></span><span>·</span><span>回滚点 <strong style="color: #0F1115; font-weight: 500;">9</strong> 个</span><span>·</span><span>会话 <strong style="color: #0F1115; font-weight: 500;">412</strong> 个</span></div><div style="font-size: 11px; color: #81858C;">最近备份 2026-11-10 21:04</div></div></div>
 <!-- 3) 动作区: padding 10px 16px 14px, 0.5px 分隔线, gap 8, 右对齐, 「执行恢复」在左、「取消」在右 -->
-<div class="dialog-footer">
-<button class="btn btn-danger" type="button">执行恢复</button>
-<button class="btn btn-ghost" type="button">取消</button>
-</div>
+<div class="dialog-footer"><button class="btn btn-danger" style="height: 28px; padding: 0 14px; border-radius: 8px; font-size: 12.5px; font-weight: 500; background-color: #EC1313; border: 1px solid #EC1313; color: #FFFFFF; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;" type="button">执行恢复</button><button class="btn btn-ghost" style="height: 28px; padding: 0 14px; border-radius: 8px; font-size: 12.5px; font-weight: 500; background-color: #FFFFFF; border: 1px solid #0000001A; color: #61666B; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;" type="button">取消</button></div>
 </div>
 </div>
 </div>

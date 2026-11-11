@@ -17,7 +17,7 @@
           "colors": {
             "inverse-surface": "#2b3138",
             "surface-tint": "#5d5e63",
-            "on-tertiary-container": "#61666B",
+            "on-tertiary-container": "#8d827a",
             "surface-container-low": "#eef4fe",
             "on-tertiary-fixed-variant": "#4e453f",
             "on-surface": "#161c23",
@@ -30,8 +30,8 @@
             "inverse-primary": "#c6c6cc",
             "surface-container-highest": "#dde3ed",
             "primary-container": "#1a1c20",
-            "on-tertiary-fixed": "#0F1115",
-            "tertiary-fixed": "#EBEEF2",
+            "on-tertiary-fixed": "#211a15",
+            "tertiary-fixed": "#eee0d7",
             "surface-variant": "#dde3ed",
             "surface": "#f7f9ff",
             "on-error": "#ffffff",
@@ -43,7 +43,7 @@
             "secondary-fixed-dim": "#b1c5ff",
             "on-tertiary": "#ffffff",
             "background": "#f7f9ff",
-            "on-secondary-fixed-variant": "#4176E6",
+            "on-secondary-fixed-variant": "#00419e",
             "primary-fixed": "#e2e2e8",
             "outline-variant": "#c6c6cb",
             "on-error-container": "#93000a",
@@ -52,12 +52,12 @@
             "on-primary-fixed": "#1a1c20",
             "tertiary-fixed-dim": "#d1c4bb",
             "secondary-fixed": "#dae2ff",
-            "on-secondary-fixed": "#0F1115",
-            "error": "#EC1313",
+            "on-secondary-fixed": "#001946",
+            "error": "#ba1a1a",
             "primary-fixed-dim": "#c6c6cc",
             "surface-container": "#e9eef8",
-            "secondary-container": "#4176E6",
-            "tertiary-container": "#0F1115",
+            "secondary-container": "#5a8cfe",
+            "tertiary-container": "#211a15",
             "tertiary": "#000000",
             "surface-container-high": "#e3e8f2",
             "surface-dim": "#d5dae4",
@@ -135,39 +135,88 @@
     }
   </style>
 </head>
-<body class="w-[1440px] h-[900px] min-w-[1440px] min-h-[900px] overflow-hidden flex items-center justify-center select-none bg-[#EBEEF2] m-0 p-0 font-body-md text-on-surface antialiased">
+<body class="w-[1440px] h-[900px] min-w-[1440px] min-h-[900px] overflow-hidden flex items-center justify-center select-none bg-[#EBECEF] m-0 p-0 font-body-md text-on-surface antialiased">
 <!-- 564x720 插件完整窗口 -->
 <div class="relative w-[564px] h-[720px] rounded-[12px] bg-[#FFFFFF] border border-[#0000001A] overflow-hidden flex flex-col box-border">
 <!-- 底层：压暗灰阶同步页 UI -->
-<div class="w-full h-full flex flex-col justify-between bg-surface-container-lowest">
-<!-- 插件顶部导航条 -->
-<div class="w-full h-[44px] px-[16px] border-b border-[#0000001A] flex items-center justify-between shrink-0">
+<div class="w-full h-full flex flex-col justify-between bg-surface-container-lowest"><!-- 插件顶部导航条 -->
+<div class="w-full h-[44px] px-[16px] border-b border-[#0000001A] flex items-center justify-between shrink-0 bg-[#FFFFFF]">
 <!-- 导航项群组 -->
 <div class="flex items-center space-x-[4px]">
-<span class="px-[8px] py-[4px] text-body-sm font-body-sm text-[#81858C]">首页</span>
-<span class="px-[8px] py-[4px] text-body-sm font-body-sm text-[#81858C]">产物库</span>
-<span class="px-[8px] py-[4px] text-body-sm font-body-sm font-medium text-[#0F1115] bg-[#EBEEF2] rounded-[6px]">同步</span>
-<span class="px-[8px] py-[4px] text-body-sm font-body-sm text-[#81858C]">环境</span>
+<span class="px-[8px] py-[4px] text-[12.5px] text-[#81858C]">首页</span>
+<span class="px-[8px] py-[4px] text-[12.5px] text-[#81858C]">产物库</span>
+<span class="px-[8px] py-[3px] text-[12.5px] font-medium text-[#0F1115] bg-[#EBEEF2] border border-[#979DA6] rounded-[6px]">同步</span>
+<span class="px-[8px] py-[4px] text-[12.5px] text-[#81858C]">环境</span>
 </div>
 <!-- 右侧线性图标群 -->
 <div class="flex items-center space-x-[8px] text-[#81858C]">
-<span class="w-[20px] h-[20px] flex items-center justify-center font-label-sm text-label-sm border border-[#0000001A] rounded-[4px]">⌘K</span>
+<span class="w-[20px] h-[20px] flex items-center justify-center text-[11px] font-medium border border-[#0000001A] rounded-[4px]">⌘K</span>
 <span class="material-symbols-outlined text-[14px]">bolt</span>
 <span class="material-symbols-outlined text-[14px]">history</span>
 <span class="material-symbols-outlined text-[14px]">info</span>
 </div>
 </div>
-<!-- 中间内容区被压暗底图 -->
-<div class="flex-1 p-[16px] flex flex-col space-y-[12px]"><div class="w-full p-[14px] rounded-[8px] border border-[#0000000D] bg-surface-container/30 h-[100px]"><div class="w-[120px] h-[12px] bg-[#0000000D] rounded mb-[10px]"></div><div class="w-[220px] h-[10px] bg-[#0000000D] rounded mb-[6px]"></div><div class="w-[180px] h-[10px] bg-[#0000000D] rounded"></div></div><div class="w-full p-[14px] rounded-[8px] border border-[#0000000D] bg-surface-container/30 h-[240px]"><div class="w-[140px] h-[12px] bg-[#0000000D] rounded mb-[10px]"></div><div class="w-full h-[1px] bg-[#0000000D] my-[8px]"></div><div class="w-[220px] h-[10px] bg-[#0000000D] rounded mb-[6px]"></div><div class="w-[180px] h-[10px] bg-[#0000000D] rounded"></div></div></div>
-<!-- 底部 28px 状态栏 -->
-<div class="w-full h-[28px] px-[16px] border-t border-[#0000001A] flex items-center justify-between text-label-sm font-label-sm text-[#81858C] shrink-0 bg-surface-container-lowest">
+<!-- 中间内容区：真实同步页面分区概览 -->
+<div class="flex-1 p-[16px] flex flex-col space-y-[10px] overflow-hidden bg-[#FFFFFF]">
+<!-- 状态概览卡片 -->
+<div class="p-[12px] rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] flex items-center justify-between">
+<div class="flex flex-col space-y-[2px]">
+<span class="text-[12.5px] font-medium text-[#0F1115]">远端同步仓库</span>
+<span class="text-[11px] text-[#61666B]">已连接 · 上次同步 10 分钟前</span>
+</div>
+<div class="h-[26px] px-[10px] rounded-[6px] border border-[#0000001A] bg-[#FFFFFF] text-[11px] font-medium text-[#0F1115] flex items-center justify-center">
+      检查更新
+    </div>
+</div>
+<!-- 分区列表展示 -->
+<div class="flex-1 p-[12px] rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] flex flex-col">
+<div class="text-[11px] font-medium text-[#81858C] mb-[8px]">已同步分区清单</div>
+<div class="flex flex-col space-y-[4px]">
+<div class="h-[28px] px-[8px] rounded-[4px] bg-[#EBEEF2] flex items-center justify-between text-[12px]">
+<span class="font-medium text-[#0F1115]">settings</span>
+<span class="text-[#61666B]">42 项</span>
+</div>
+<div class="h-[28px] px-[8px] rounded-[4px] bg-[#EBEEF2] flex items-center justify-between text-[12px]">
+<span class="font-medium text-[#0F1115]">plugins</span>
+<span class="text-[#61666B]">18 项</span>
+</div>
+<div class="h-[28px] px-[8px] rounded-[4px] bg-[#EBEEF2] flex items-center justify-between text-[12px]">
+<span class="font-medium text-[#0F1115]">mcp</span>
+<span class="text-[#61666B]">7 项</span>
+</div>
+<div class="h-[28px] px-[8px] rounded-[4px] bg-[#EBEEF2] flex items-center justify-between text-[12px]">
+<span class="font-medium text-[#0F1115]">prompts</span>
+<span class="text-[#61666B]">31 项</span>
+</div>
+<div class="h-[28px] px-[8px] rounded-[4px] flex items-center justify-between text-[12px]">
+<span class="text-[#0F1115]">skills</span>
+<span class="text-[#61666B]">12 项</span>
+</div>
+<div class="h-[28px] px-[8px] rounded-[4px] flex items-center justify-between text-[12px]">
+<span class="text-[#0F1115]">workspaces</span>
+<span class="text-[#61666B]">4 项</span>
+</div>
+<div class="h-[28px] px-[8px] rounded-[4px] flex items-center justify-between text-[12px]">
+<span class="text-[#81858C]">sessions</span>
+<span class="text-[#81858C]">0 项</span>
+</div>
+<div class="h-[28px] px-[8px] rounded-[4px] flex items-center justify-between text-[12px]">
+<span class="text-[#81858C]">pluginData</span>
+<span class="text-[#81858C]">0 项</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 底部状态栏（内缩圆角盒规范：左右各 8px、底 8px、高 28px、圆角 8px、1px 描边） -->
+<div class="p-[0_8px_8px_8px] shrink-0 bg-[#FFFFFF]">
+<div class="w-full h-[28px] px-[12px] border border-[#0000001A] rounded-[8px] bg-[#FFFFFF] flex items-center justify-between text-[11px] text-[#81858C]">
 <div class="flex items-center space-x-[6px]">
 <span class="text-[#22C55E]">●</span>
 <span>就绪 · 远程可选</span>
 </div>
 <div>v0.8.0 · DSH 2.4</div>
 </div>
-</div>
+</div></div>
 <!-- 黑色遮罩蒙层 (rgba(0,0,0,0.24) 即 #0000003D) -->
 <div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-[12px]">
 <!-- 弹窗本体 D-11「确认推送」（宽 540px，fit-content 高度） -->
@@ -202,12 +251,10 @@
 </div>
 </div>
 <!-- 3. 动作区（高度 56px，左右内边距 16px，顶部 1px #0000001A 边框，水平靠右） -->
-<div class="h-[56px] px-[16px] border-t border-[#0000001A] flex items-center justify-end space-x-[8px] shrink-0 bg-[#FFFFFF]">
-<!-- ghost 取消 -->
-<button class="h-[30px] px-[16px] rounded-[8px] bg-[#FFFFFF] border border-[#0000001A] text-[12px] font-medium text-[#0F1115] hover:bg-[#EBEEF2] transition-colors duration-100 ease-linear active:scale-[0.99] leading-none inline-flex items-center justify-center" type="button">取消</button>
+<div class="h-[56px] px-[16px] border-t border-[#0000001A] flex items-center justify-end space-x-[8px] shrink-0 bg-[#FFFFFF]"><!-- ghost 取消 -->
+<button class="h-[28px] px-[14px] rounded-[8px] bg-[#FFFFFF] border border-[#0000001A] text-[12px] font-medium text-[#61666B] hover:bg-[#EBEEF2] hover:text-[#0F1115] transition-colors duration-100 ease-linear active:scale-[0.99] leading-none inline-flex items-center justify-center" type="button">取消</button>
 <!-- primary 确认推送 -->
-<button class="h-[30px] px-[16px] rounded-[8px] bg-[#0F1115] text-[12px] font-medium text-[#FFFFFF] hover:bg-[#0F1115] transition-colors duration-100 ease-linear active:scale-[0.99] leading-none inline-flex items-center justify-center" onmouseout="this.style.backgroundColor='#0F1115'" onmouseover="this.style.backgroundColor='#43454A'" style="transition: background-color 100ms linear;" type="button">确认推送</button>
-</div>
+<button class="h-[28px] px-[16px] rounded-[8px] bg-[#0F1115] text-[12px] font-medium text-[#FFFFFF] hover:bg-[#23272F] transition-colors duration-100 ease-linear active:scale-[0.99] leading-none inline-flex items-center justify-center" onmouseout="this.style.backgroundColor='#0F1115'" onmouseover="this.style.backgroundColor='#23272F'" style="transition: background-color 100ms linear;" type="button">确认推送</button></div>
 </div>
 </div>
 </div>

@@ -89,7 +89,7 @@
 <!-- 全局遮罩层 #0000003D 盖满 564×720 画布 -->
 <div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-3">
 <!-- D-28 弹窗本体：540px 宽，最大高 85vh（约 600px），白底，1px 描边，圆角 12 -->
-<div class="w-[540px] bg-[#FFFFFF] border border-[#0000001A] rounded-[12px] flex flex-col overflow-hidden select-text">
+<div class="w-[540px] bg-[#FFFFFF] border border-[#0000001A] rounded-[12px] flex flex-col overflow-hidden select-text max-h-[600px]">
 <!-- 标题区 48px -->
 <div class="h-12 min-h-[48px] px-4 border-b border-[#0000001A] flex items-center justify-between bg-[#FFFFFF]">
 <h2 class="text-[13px] font-semibold text-[#0F1115] leading-none">版本更新内容</h2>
@@ -101,26 +101,19 @@
 </button>
 </div>
 <!-- 内容区（内边距 12px 16px，纵向 10px 间距，卡片流内滚） -->
-<div class="overflow-y-auto px-4 py-3 flex flex-col gap-2.5">
-<!-- 版本卡 1：v0.8.0 -->
+<div class="overflow-y-auto px-4 py-3 flex flex-col gap-2.5"><!-- 版本卡 1：v0.8.0 -->
 <article class="border border-[#0000001A] rounded-[8px] p-2.5 bg-[#FFFFFF] flex flex-col gap-2">
-<!-- 卡头 -->
 <div class="flex items-center justify-between">
 <div class="flex items-center gap-2">
 <span class="text-[13px] font-semibold text-[#0F1115] mono tabular-nums">v0.8.0</span>
-<!-- 最新徽章 (ok色 #22C55E，color-mix 12% 底，35% 描边) -->
-<span class="text-[11px] leading-none px-1.5 py-0.5 rounded-[4px] font-medium bg-[color-mix(in_srgb,#22C55E_12%,transparent)] text-[#22C55E] border border-[color-mix(in_srgb,#22C55E_35%,transparent)]">
-                  最新
-                </span>
+<span class="text-[11px] leading-none px-1.5 py-0.5 rounded-[4px] font-medium bg-[color-mix(in_srgb,#22C55E_12%,transparent)] text-[#22C55E] border border-[color-mix(in_srgb,#22C55E_35%,transparent)]">最新</span>
 <time class="text-[11px] text-[#81858C] mono tabular-nums">2026-11-09</time>
 </div>
-<!-- ghost 外链按钮 -->
 <a class="inline-flex items-center gap-1 text-[11px] text-[#61666B] hover:text-[#0F1115] px-2 py-1 rounded-[6px] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors leading-none" href="#">
 <span>在 GitHub 上查看此版本</span>
 <span class="text-[10px]">↗</span>
 </a>
 </div>
-<!-- 卡身 Markdown 要点行 -->
 <ul class="flex flex-col gap-1.5 pt-0.5">
 <li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
 <span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
@@ -138,19 +131,16 @@
 </article>
 <!-- 版本卡 2：v0.7.2 -->
 <article class="border border-[#0000001A] rounded-[8px] p-2.5 bg-[#FFFFFF] flex flex-col gap-2">
-<!-- 卡头 -->
 <div class="flex items-center justify-between">
 <div class="flex items-center gap-2">
 <span class="text-[13px] font-semibold text-[#0F1115] mono tabular-nums">v0.7.2</span>
 <time class="text-[11px] text-[#81858C] mono tabular-nums">2026-10-21</time>
 </div>
-<!-- ghost 外链按钮 -->
 <a class="inline-flex items-center gap-1 text-[11px] text-[#61666B] hover:text-[#0F1115] px-2 py-1 rounded-[6px] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors leading-none" href="#">
 <span>在 GitHub 上查看此版本</span>
 <span class="text-[10px]">↗</span>
 </a>
 </div>
-<!-- 卡身 Markdown 要点行 -->
 <ul class="flex flex-col gap-1.5 pt-0.5">
 <li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
 <span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
@@ -162,9 +152,96 @@
 </li>
 </ul>
 </article>
-<!-- 末尾居中 11px 次要色文字 -->
-<div class="pt-1 pb-1 flex items-center justify-center"><span class="text-[11px] text-[#61666B] leading-none">已加载全部版本记录</span></div>
+<!-- 版本卡 3：v0.7.1 -->
+<article class="border border-[#0000001A] rounded-[8px] p-2.5 bg-[#FFFFFF] flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="text-[13px] font-semibold text-[#0F1115] mono tabular-nums">v0.7.1</span>
+<time class="text-[11px] text-[#81858C] mono tabular-nums">2026-10-08</time>
 </div>
+<a class="inline-flex items-center gap-1 text-[11px] text-[#61666B] hover:text-[#0F1115] px-2 py-1 rounded-[6px] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors leading-none" href="#">
+<span>在 GitHub 上查看此版本</span>
+<span class="text-[10px]">↗</span>
+</a>
+</div>
+<ul class="flex flex-col gap-1.5 pt-0.5">
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>优化：Git 远端推送超时重试机制</span>
+</li>
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>修复：会话历史导出时时间戳偏移</span>
+</li>
+</ul>
+</article>
+<!-- 版本卡 4：v0.7.0 -->
+<article class="border border-[#0000001A] rounded-[8px] p-2.5 bg-[#FFFFFF] flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="text-[13px] font-semibold text-[#0F1115] mono tabular-nums">v0.7.0</span>
+<time class="text-[11px] text-[#81858C] mono tabular-nums">2026-09-25</time>
+</div>
+<a class="inline-flex items-center gap-1 text-[11px] text-[#61666B] hover:text-[#0F1115] px-2 py-1 rounded-[6px] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors leading-none" href="#">
+<span>在 GitHub 上查看此版本</span>
+<span class="text-[10px]">↗</span>
+</a>
+</div>
+<ul class="flex flex-col gap-1.5 pt-0.5">
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>新增：MCP 服务器环境与工具同步支持</span>
+</li>
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>优化：插件列表依赖校验算法</span>
+</li>
+</ul>
+</article>
+<!-- 版本卡 5：v0.6.9 -->
+<article class="border border-[#0000001A] rounded-[8px] p-2.5 bg-[#FFFFFF] flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="text-[13px] font-semibold text-[#0F1115] mono tabular-nums">v0.6.9</span>
+<time class="text-[11px] text-[#81858C] mono tabular-nums">2026-09-12</time>
+</div>
+<a class="inline-flex items-center gap-1 text-[11px] text-[#61666B] hover:text-[#0F1115] px-2 py-1 rounded-[6px] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors leading-none" href="#">
+<span>在 GitHub 上查看此版本</span>
+<span class="text-[10px]">↗</span>
+</a>
+</div>
+<ul class="flex flex-col gap-1.5 pt-0.5">
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>新增：多档案工作副本快速切换</span>
+</li>
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>修复：跨平台路径映射反斜杠兼容</span>
+</li>
+</ul>
+</article>
+<!-- 版本卡 6：v0.6.5 -->
+<article class="border border-[#0000001A] rounded-[8px] p-2.5 bg-[#FFFFFF] flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="text-[13px] font-semibold text-[#0F1115] mono tabular-nums">v0.6.5</span>
+<time class="text-[11px] text-[#81858C] mono tabular-nums">2026-08-30</time>
+</div>
+<a class="inline-flex items-center gap-1 text-[11px] text-[#61666B] hover:text-[#0F1115] px-2 py-1 rounded-[6px] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors leading-none" href="#">
+<span>在 GitHub 上查看此版本</span>
+<span class="text-[10px]">↗</span>
+</a>
+</div>
+<ul class="flex flex-col gap-1.5 pt-0.5">
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>初始版本架构：支持 DSH 基础设置与本地快照备份恢复</span>
+</li>
+</ul>
+</article>
+<!-- 末尾居中 11px 次要色文字 -->
+<div class="pt-1 pb-1 flex items-center justify-center"><span class="text-[11px] text-[#81858C] leading-none">已加载全部版本记录</span></div></div>
 <!-- 底部 actionRow：高 48px，上边框 1px #0000001A -->
 <div class="h-12 min-h-[48px] px-4 border-t border-[#0000001A] flex items-center justify-between bg-[#FFFFFF]">
 <!-- 左侧：查看全部 Releases 外链按钮 -->

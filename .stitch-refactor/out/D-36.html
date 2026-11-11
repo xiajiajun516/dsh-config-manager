@@ -376,47 +376,26 @@
 </div>
 </header>
 <!-- 下层内容区骨架（我的配置页轮廓） -->
-<div class="underlay-body"><div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-<div class="skeleton-bar" style="width: 96px; height: 18px;"></div>
-<div class="skeleton-bar" style="width: 68px; height: 24px; border-radius: 6px;"></div>
-</div>
-<div class="skeleton-card" style="padding: 10px; gap: 8px;">
-<div style="display: flex; align-items: center; gap: 10px;">
-<div class="skeleton-bar" style="width: 28px; height: 28px; border-radius: 999px;"></div>
-<div style="display: flex; flex-direction: column; gap: 4px; flex: 1;">
-<div class="skeleton-bar" style="width: 110px; height: 11px;"></div>
-<div class="skeleton-bar" style="width: 180px; height: 9px;"></div>
-</div>
-<div class="skeleton-bar" style="width: 52px; height: 20px; border-radius: 4px;"></div>
-</div>
-</div>
-<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
-<div class="skeleton-bar" style="width: 72px; height: 13px;"></div>
-<div class="skeleton-bar" style="width: 80px; height: 24px; border-radius: 6px;"></div>
-</div>
-<div class="skeleton-card" style="padding: 10px; gap: 8px;">
-<div style="display: flex; justify-content: space-between; align-items: center;">
+<div class="underlay-body">
+<div class="skeleton-bar" style="width: 120px; height: 16px;"></div>
+<div class="skeleton-card" style="height: 68px;">
 <div class="skeleton-bar" style="width: 140px; height: 12px;"></div>
-<div class="skeleton-bar" style="width: 48px; height: 12px; border-radius: 999px;"></div>
+<div class="skeleton-bar" style="width: 260px; height: 10px;"></div>
 </div>
-<div class="skeleton-bar" style="width: 240px; height: 10px;"></div>
-<div style="display: flex; gap: 6px; margin-top: 2px;">
-<div class="skeleton-bar" style="width: 46px; height: 14px; border-radius: 4px;"></div>
-<div class="skeleton-bar" style="width: 54px; height: 14px; border-radius: 4px;"></div>
+<div style="display: flex; justify-content: flex-end;">
+<div class="skeleton-bar" style="width: 88px; height: 28px; border-radius: 8px;"></div>
+</div>
+<div class="skeleton-card" style="height: 80px;">
+<div class="skeleton-bar" style="width: 160px; height: 12px;"></div>
+<div class="skeleton-bar" style="width: 220px; height: 10px;"></div>
+</div>
+<div class="skeleton-card" style="height: 80px;">
+<div class="skeleton-bar" style="width: 150px; height: 12px;"></div>
+<div class="skeleton-bar" style="width: 200px; height: 10px;"></div>
 </div>
 </div>
-<div class="skeleton-card" style="padding: 10px; gap: 8px;">
-<div style="display: flex; justify-content: space-between; align-items: center;">
-<div class="skeleton-bar" style="width: 125px; height: 12px;"></div>
-<div class="skeleton-bar" style="width: 48px; height: 12px; border-radius: 999px;"></div>
-</div>
-<div class="skeleton-bar" style="width: 210px; height: 10px;"></div>
-<div style="display: flex; gap: 6px; margin-top: 2px;">
-<div class="skeleton-bar" style="width: 50px; height: 14px; border-radius: 4px;"></div>
-</div>
-</div></div>
 <!-- 下层状态栏 -->
-<footer class="underlay-footer">
+<footer class="underlay-footer" style="margin: 0 8px 8px 8px; border-radius: 8px; border: 1px solid #0000001A; color: #61666B;">
 <div class="status-left">
 <span class="status-dot"></span>
 <span>就绪</span>
@@ -424,9 +403,9 @@
 <div>v0.8.0 · DSH 2.4</div>
 </footer>
 <!-- 遮罩覆盖整块 564x720 画布 -->
-<div class="modal-overlay" style="align-items: center; padding-top: 0;">
+<div class="modal-overlay">
 <!-- 宽版弹窗本体 (dialogWide) 541x600px -->
-<div class="dialog-wide" style="height: auto; max-height: 600px;">
+<div class="dialog-wide">
 <!-- ① Header: 高 44px, 标题「一键上传」13px 600, 右端 ⓘ 与 ✕ -->
 <div class="dialog-header">
 <div class="dialog-title">一键上传</div>
@@ -519,7 +498,7 @@
 </div>
 </div>
 <!-- ⑧ 最后一行按钮右对齐：#0F1115 实底白字「上传配置包」在左，ghost 白底描边「重新选择」在右 -->
-<div class="dialog-actions" style="margin-top: 16px; padding-top: 0;">
+<div class="dialog-actions">
 <button class="btn-primary" type="button">上传配置包</button>
 <button class="btn-ghost" type="button">重新选择</button>
 </div>

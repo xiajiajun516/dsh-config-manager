@@ -11,7 +11,7 @@
 <style>
     body {
       font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background-color: #EBEEF2;
+      background-color: #EBECEF;
       margin: 0;
       padding: 0;
       -webkit-font-smoothing: antialiased;
@@ -75,7 +75,7 @@
 <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
 <span>搜索快照、备注或分区...</span>
 </div>
-<span class="text-[11px] text-[#61666B] px-2 py-1 bg-[#EBEEF2] rounded border border-[#0000001A]">全部 (16)</span>
+<span class="text-[11px] text-[#61666B] px-2 py-1 bg-[#F5F5F5] rounded border border-[#0000001A]">全部 (16)</span>
 </div>
 <!-- 列表项示意 -->
 <div class="border border-[#0000001A] rounded-md divide-y divide-[#0000001A]">
@@ -106,7 +106,7 @@
 </div>
 </div>
 <!-- 底部 28px 状态栏（底盘） -->
-<div class="w-full h-7 px-3 border-t border-[#0000001A] flex items-center justify-between text-[11px] text-[#81858C] bg-[#FFFFFF] shrink-0">
+<div class="w-full h-7 px-3 border-t border-[#0000001A] flex items-center justify-between text-[11px] text-[#81858C] bg-[#FFFFFF] shrink-0" style="width:calc(100% - 16px);margin:0 8px 8px;border:1px solid #0000001A;border-radius:8px;box-sizing:border-box">
 <div class="flex items-center space-x-1.5">
 <span class="w-2 h-2 rounded-full bg-[#22C55E]"></span>
 <span class="text-[#0F1115]">就绪 · 校验无冲突</span>
@@ -117,12 +117,12 @@
 <!-- ==================== 遮罩层 #0000003D (564x720 盖满) ==================== -->
 <div class="absolute inset-0 bg-[#0000003D] flex items-center justify-center p-3 z-10">
 <!-- ==================== 540x620 弹窗主卡片 (无底栏、居中、底边自然裁切) ==================== -->
-<div class="w-[540px] h-[620px] bg-[#FFFFFF] rounded-[12px] border border-[#0000001A] shadow-xl flex flex-col overflow-hidden">
+<div class="w-[540px] bg-[#FFFFFF] rounded-[12px] border border-[#0000001A] shadow-xl flex flex-col overflow-hidden">
 <!-- 弹窗标题区 (固定 48px，1px 底描边) -->
 <div class="h-12 px-4 border-b border-[#0000001A] flex items-center justify-between shrink-0 bg-[#FFFFFF]">
 <h2 class="text-[13px] font-semibold text-[#0F1115] tracking-tight">查看 / 对比</h2>
 <!-- 右端 ✕ (14px lucide 图标，无 ⓘ) -->
-<button aria-label="关闭" class="w-6 h-6 flex items-center justify-center text-[#81858C] hover:text-[#0F1115] hover:bg-[#EBEEF2] rounded transition-colors">
+<button aria-label="关闭" class="w-6 h-6 flex items-center justify-center text-[#81858C] hover:text-[#0F1115] hover:bg-[#F5F5F5] rounded transition-colors">
 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
 <line x1="18" x2="6" y1="6" y2="18"></line>
 <line x1="6" x2="18" y1="6" y2="18"></line>
@@ -130,7 +130,7 @@
 </button>
 </div>
 <!-- 弹窗内容区 (内边距 12px 16px，纵向延伸到底边，无底部按钮区，底边缘自然截断) -->
-<div class="flex-1 overflow-hidden px-4 py-3 pr-2 flex flex-col space-y-[12px]">
+<div class="overflow-hidden px-4 py-3 pr-2 flex flex-col space-y-[12px]">
 <!-- 文件名提示行 (12px #61666B, 高 20px) -->
 <div class="h-5 flex items-center font-mono-code text-[12px] text-[#61666B] shrink-0">
             dsh-config-2026-11-08.zip
@@ -161,8 +161,7 @@
 <!-- 分组 3：变更明细（5 个子分组完整展示，底边自然裁切） -->
 <div class="flex flex-col space-y-2 flex-1">
 <h3 class="text-[12.5px] font-semibold text-[#0F1115] shrink-0">变更明细</h3>
-<div class="flex flex-col space-y-[14px] overflow-hidden pr-2">
-<!-- 子分组 1: 冲突（需决策） (红) -->
+<div class="flex flex-col space-y-[14px] overflow-hidden pr-2"><!-- 子分组 1: 冲突（需决策） (红) -->
 <div class="flex flex-col space-y-1 shrink-0">
 <div class="flex items-center justify-between">
 <span class="text-[12px] font-semibold text-[#0F1115]">冲突（需决策）</span>
@@ -177,7 +176,7 @@
 <div class="h-[22px] flex items-center space-x-1.5 truncate">
 <span class="w-[3px] h-[3px] rounded-full bg-[#EC1313] shrink-0"></span>
 <span class="text-[#EC1313] font-medium">mcp:</span>
-<span class="text-[#0F1115]">同名服务器的端点不一致</span>
+<span class="text-[#0F1115]">同名服务器的端点不一致（filesystem-server）</span>
 </div>
 </div>
 </div>
@@ -191,17 +190,22 @@
 <div class="h-[22px] flex items-center space-x-1.5 truncate">
 <span class="w-[3px] h-[3px] rounded-full bg-[#4176E6] shrink-0"></span>
 <span class="text-[#4176E6] font-medium">settings:</span>
-<span class="text-[#0F1115]">3 个键将更新</span>
+<span class="text-[#0F1115]">3 个键将更新（theme, fontSize, locale）</span>
 </div>
 <div class="h-[22px] flex items-center space-x-1.5 truncate">
 <span class="w-[3px] h-[3px] rounded-full bg-[#4176E6] shrink-0"></span>
 <span class="text-[#4176E6] font-medium">prompts:</span>
-<span class="text-[#0F1115]">新增 2 个提示词</span>
+<span class="text-[#0F1115]">新增 2 个提示词（code-review, commit-msg）</span>
 </div>
 <div class="h-[22px] flex items-center space-x-1.5 truncate">
 <span class="w-[3px] h-[3px] rounded-full bg-[#4176E6] shrink-0"></span>
 <span class="text-[#4176E6] font-medium">skills:</span>
-<span class="text-[#0F1115]">1 个技能版本变更</span>
+<span class="text-[#0F1115]">1 个技能版本变更（obsidian-kb-capture）</span>
+</div>
+<div class="h-[22px] flex items-center space-x-1.5 truncate">
+<span class="w-[3px] h-[3px] rounded-full bg-[#4176E6] shrink-0"></span>
+<span class="text-[#4176E6] font-medium">plugins:</span>
+<span class="text-[#0F1115]">6 个插件配置将被覆写</span>
 </div>
 </div>
 </div>
@@ -233,7 +237,7 @@
 </div>
 </div>
 </div>
-<!-- 子分组 5: 其他 (次色/灰，底部被弹窗下边框自然裁切以表达滚动暗示) -->
+<!-- 子分组 5: 其他 (次色/灰) -->
 <div class="flex flex-col space-y-1 shrink-0">
 <div class="flex items-center justify-between">
 <span class="text-[12px] font-semibold text-[#0F1115]">其他</span>
@@ -245,9 +249,13 @@
 <span class="text-[#61666B] font-medium">cache:</span>
 <span class="text-[#0F1115]">已跳过（不参与迁移）</span>
 </div>
+<div class="h-[22px] flex items-center space-x-1.5 truncate">
+<span class="w-[3px] h-[3px] rounded-full bg-[#81858C] shrink-0"></span>
+<span class="text-[#61666B] font-medium">tempLogs:</span>
+<span class="text-[#0F1115]">已过滤运行时临时日志</span>
 </div>
 </div>
-</div>
+</div></div>
 </div>
 </div>
 </div>
