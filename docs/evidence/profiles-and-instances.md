@@ -70,3 +70,15 @@
 - **用 curl 复现围栏三态**（都带 `--interface <LAN IP>` 保证源地址不是回环）：无 cookie → `401 {"error":"unauthorized: browser-session","code":"browser-session"}`；先 `curl -c jar "http://<host>:<port>/?token=…"` 拿 `dsh-auth-*` cookie → `200` 真实 payload；同一 cookie 换成外来 `Host: 10.9.9.9:3080` → `403 {"error":"forbidden: untrusted-authority"}`。
 - **坑**：`web` 档案若长期没跟宿主升级，会有一串 `skipping profile bundle … is incompatible with dsh 0.2.2-rc.1`（本例 7 条），只影响那些插件，不影响本插件的围栏结论。
 
+## profile patch 的 `insert` 与顶层行不等价（#133，2026-11-11 源码核实）
+
+- **宿主语义（读 asar 里内嵌的合并循环逐行核实）**：对每条 `{ id, insert, name, ...overrides }` —— 有 `insert` 时：带 `id` ⇒ 深拷贝其数组并 push 进**已存在** group 的 `config`（目标不存在打 `patch insert: entry %C not found`、非 group 打 `patch insert: entry %C is not a group`，都 `continue`）；**不带 `id` ⇒ `data.push(...clone)` + `buildMap(clone)`，这是唯一的新增路径**。无 `insert` 时：无 `id` ⇒ `patch: id is required for non-insert patches`；`entryMap` 查不到该 id ⇒ `patch: entry %C not found` 丢弃；`name` 与目标不一致 ⇒ `patch: name mismatch … skipping` 整行跳过。⇒ **顶层行只做覆盖、绝不新增**；「顶层 `{id,name}` 行 ≡ `- insert:` 成员」是不成立的前提。
+- **插件里的假前提**：`DshPatchFileFacade.applyPatchChanges` 载入时把 insert 块成员摊平进 `rows`/`order`，重建时统一输出顶层行，注释写「The loader treats a top-level { id, name } row exactly like an `- insert:` block member (dsh-base patch precedent), so the document stays semantically equal.」—— 与宿主源码直接冲突，是 issue #133 的根因。
+- **真机后果**：一次 `sync-merge-apply`（导入/合并共用这条写路径）后，profile patch 里所有纯新增条目（典型是 MCP server）变成顶层行 ⇒ DSH 每次加载 `patch: entry "…" not found` 并丢弃；bundle 层本来就有的条目因顶层行恰好合法而毫发无伤 —— 「只有纯新增条目全灭」正是这件事的指纹。
+- **单测级复现（无业务改动，`.tmp/repro-133.cjs`）**：用 `lib/index.js` 的 `DshPatchFileFacade` + `lib/adapters/mcp.js` 的 `buildMcpPatchLine`，在临时 home 写 1 个顶层行 + 1 个 insert 块（成员带 `name: '@deepseek-ai/dsh-mcp-client'`、`config.transport: stdio`）+ 一行注释，再跑一次 `update`：结果 insert=0、顶层 2 行、注释丢失、`name` 变裸名 `dsh-mcp-client`、`transport` 整行消失。**一条 update 就够，不需要多次合并**。
+- **修复判据（留给实现）**：重建文档时按「id 是否已存在于生效 patch 链（bundle 层 + 本文件之外的层）」分流 —— 已存在 ⇒ 顶层覆盖行；不存在 ⇒ 必须重新包回 `- insert:`。仓内已有正确形状可参照：`boot-rescue.ts` 写「新增挂载」时**只用** `- insert:` 块，包已在 bundles 时一行都不写（同 id 重复会让 loader 抛错）；`patchRowActivates()` 已兼容单行与 insert 成员，层身份解析在 `patch-layers.ts`。
+- **同一写路径的第二个缺陷（字段损失，独立于摊平）**：`buildMcpPatchLine()` 按白名单重建 patch 行，只输出 `serverName` + 按 type 分支的 `url/headers` 或 `command/args/env/cwd`，**不写 `transport`，`name` 也不带 `@deepseek-ai/` scope**（白名单本身写在 `docs/contracts/bundle-format-v1.md` 的 mcp 一节）。即使摊平修好，insert 成员的 `name` 与 `transport` 仍会被改写。
+- **为什么事务自检全绿**：patch 行项没有文件 `rel`，`analyzer` 按 `external: rel === null` 处理 ⇒ `beforeFp`/`afterFp` 恒 null，校验只能空过（既有可证限制，见 `docs/evidence/recovery-console.md` 的 external step 一节）。⇒ 这条写路径缺的不是指纹，而是**写后语义自检**（重读并断言「原本 insert 的 id 仍在 insert 里」）。
+- **未验证**：宿主是否接受裸名 `dsh-mcp-client` 解析到 `@deepseek-ai/dsh-mcp-client`（insert 路径读到的那段代码只对「带 id 的 insert」做校验，未读到 name 归一化逻辑）；报告者观察到的 7 处 `""` → `null` 归一化本机未复现。
+
+

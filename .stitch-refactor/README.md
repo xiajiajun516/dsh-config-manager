@@ -61,7 +61,7 @@
 | D-28 | D-28 版本更新内容 | `src/client/about/ReleaseNotesDialog.tsx` | `47a7f703658f4834a8309014790422b4` |
 | D-29 | D-29 Star 引导弹窗 | `src/client/ConfigManagerSection.tsx` | `0e7da8141b634132ada3b2b579010755` |
 | D-30 | D-30 ⌘K 命令面板 | `src/client/common/CommandPalette.tsx` | `ef844ed404a444b19a5f9ef8dd0add5d` |
-| D-31 | D-31 终止运行（危险确认）—— 被 Stitch 每日额度阻断 | `src/client/common/RunsCenter.tsx` | `53f469bf1eb94022b20534224e3661c1` |
+| D-31 | D-31 终止运行（危险确认） | `src/client/common/RunsCenter.tsx` | `a8df76a3d594459b882de4166e4d4bad` |
 | D-32 | D-32 内容选择（导出分区/条目树） | `src/client/export/ExportView.tsx` | `ea2e1eaab8e345afa23dc0fc207420a0` |
 | D-33 | D-33 路径选择（本机目录） | `src/client/import/PathPickerDialog.tsx` | `946350e64cd6472590470fb201cb85f6` |
 | D-34 | D-34 市场免责确认（下载档） | `src/client/market/MarketPanel.tsx` | `cce18f89b420486192023e5e1fc179a7` |
@@ -83,7 +83,7 @@
 | T-05 | T-05 市场 · 我的配置 | `src/client/market/MyConfigsView.tsx` | `e5cb0d3d340d4152af99603df6186dde` |
 | T-06 | T-06 活动记录（运行中心） | `src/client/common/RunsCenter.tsx` | `1f762f6aaf9446de9e7886ed6609bd2a` |
 | T-07 | T-07 迁移历史 | `src/client/history/HistoryPanel.tsx` | `6159f322548f41e2859f4295f0ee37a3` |
-| T-08 | T-08 关于 | `src/client/about/AboutPanel.tsx` | `96543ddf27ea4174bb2a281793544e43` |
+| T-08 | T-08 关于 | `src/client/about/AboutPanel.tsx` | `5600ea9ddb3041988678fdc04117dd89` |
 
 ## 怎么读这些稿
 
@@ -114,3 +114,10 @@
 
 - 截图实例：`dsh --profile web --no-open` 独立实例（端口 5802x）+ token URL + Chrome DevTools Protocol；插件根 `#dsh-config-manager-root` 在视口 1400×1100、dpr 1 下精确 564×722。
 - 本项目无法使用 `ops_bash`（`EXECUTOR_UNAVAILABLE`/awk.exe 硬链接失败），全部文件读写走 `run_code` + `node:fs`。
+
+## 第二轮回修（2026-11-11）
+
+- D-31 终止运行确认出图并二次修正遮罩：`a8df76a3d594459b882de4166e4d4bad`（底层真实页面压暗 + 进度卡 + 内容分区卡）。
+- T-08 关于页第 4 轮：`5600ea9ddb3041988678fdc04117dd89`（卡间距 10px、去掉自动编号、插件来源独立成行），五卡全落在 720 内。
+- 状态栏口径修正：44/55 屏已是内缩圆角盒（真实 `.statusBar` 形状），仅 11 屏仍通栏，清单见 `consistency.md` C-01；此前「全数通栏」的结论已撤销。
+- 新硬事实：对已含内缩状态栏的屏再发同一改造，Stitch 会判重只回文本、不产新屏（`consistency.md` S-1b）。
