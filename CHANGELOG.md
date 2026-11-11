@@ -26,6 +26,13 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > 体例细节、分组表、发版两道门禁与写后自检命令见项目 skill `.dsh/skills/changelog-writing/SKILL.md`（DSH 会自动发现并加载）。
 
+## [Unreleased]
+
+### 🐛 修复 · Fixed
+
+- **导入或同步备份后，MCP 服务器不再在重启时整条消失**：以前只要动过 patch 里的任意一行，插件就会把「只能新增」的条目改写成另一种形态，主程序重启后认不出来、直接丢掉（MCP 服务器最典型）；现在两种形态各按原样写回，导入过的 MCP 服务器照常出现。
+  **MCP servers no longer vanish after a restart once you import or sync a backup**: touching any patch row used to rewrite "add-only" entries into the other shape, which the host cannot resolve and drops at startup (MCP servers were hit hardest); each shape is now written back as-is, so imported MCP servers keep working.
+
 ## [0.8.0] - 2026-11-10
 
 > **远端删掉的插件，同步时也跟着删**：插件同步多了个默认关闭的开关，打开后远端删了什么、你这儿没改过的一并卸载，删掉的都能从当轮快照装回。

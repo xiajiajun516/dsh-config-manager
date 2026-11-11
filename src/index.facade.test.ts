@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1002,3 +1002,85 @@ test('#75 不存在的层仍按「本来就没有」处理（ENOENT 不是错误
     cleanup()
   }
 })
+
+/* --------------------- issue #133：顶层行 ≠ `- insert:` 块（摊平事故） --------------------- */
+
+/**
+ * 真机形态：顶层行 + `- insert:` 块 + 手写注释。宿主合并循环里顶层行按 id **覆盖**（查不到就
+ * `patch: entry "X" not found` 丢弃），只有 insert 块成员是**新增** —— 所以这两种形态在
+ * 语义上不等价，重建时必须原样分流。
+ */
+const INSERT_BLOCK_YAML = [
+  '# 手写注释（重建后本来就不保留，这里只用来确认真机形态）',
+  '- id: llm-pi-ai',
+  '  name: "@deepseek-ai/dsh-llm-pi-ai"',
+  '- insert:',
+  '    - id: mcp-a',
+  '      name: dsh-mcp-client',
+  '      config:',
+  '        transport: stdio',
+  '        command: npx',
+  '- id: plain-plugin',
+  '  disabled: true',
+  '',
+].join('\n')
+
+test('#133 applyPatchChanges：一条 update 不得把 insert 块摊平成顶层行', async () => {
+  const { home, cleanup } = patchHome()
+  try {
+    writeFileSync(join(home, USER_PATCH_FILE), INSERT_BLOCK_YAML, 'utf8')
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    await facade.applyPatchChanges(USER_PATCH_FILE, [
+      { lineId: 'mcp-a', raw: { id: 'mcp-a', name: 'dsh-mcp-client', config: { transport: 'stdio', command: 'uvx' } }, action: 'update' },
+    ])
+    const text = readFileSync(join(home, USER_PATCH_FILE), 'utf8')
+    assert.ok(text.includes('- insert:'), 'insert 块必须仍在（摊平 = 该条目重启后整条作废）: ' + text)
+    const lines = await facade.readPatchLines(USER_PATCH_FILE)
+    assert.deepEqual(lines.map((l) => l.lineId), ['llm-pi-ai', 'mcp-a', 'plain-plugin'])
+    const config = (lines[1]?.raw as { config?: Record<string, unknown> } | undefined)?.config
+    assert.equal(config?.['command'], 'uvx')
+  } finally {
+    cleanup()
+  }
+})
+
+test('#133 applyPatchChanges：新 id 走 insert 动作时落进 insert 块（新增语义）', async () => {
+  const { home, cleanup } = patchHome()
+  try {
+    writeFileSync(join(home, USER_PATCH_FILE), INSERT_BLOCK_YAML, 'utf8')
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    await facade.applyPatchChanges(USER_PATCH_FILE, [
+      { lineId: 'mcp-new', raw: { id: 'mcp-new', name: 'dsh-mcp-client', config: { transport: 'stdio', command: 'node' } }, action: 'insert' },
+    ])
+    const text = readFileSync(join(home, USER_PATCH_FILE), 'utf8')
+    assert.ok(text.includes('- insert:'), '新增必须落在 insert 块里: ' + text)
+    assert.equal(/^- id: mcp-new$/m.test(text), false, '新增绝不能写成顶层行（顶层行查不到就丢弃）')
+    const lines = await facade.readPatchLines(USER_PATCH_FILE)
+    assert.deepEqual(lines.map((l) => l.lineId), ['llm-pi-ai', 'mcp-a', 'plain-plugin', 'mcp-new'])
+  } finally {
+    cleanup()
+  }
+})
+
+test('#133 跨层提升：把另一层的 insert 成员写成顶层行必须拒写（文件不动）', async () => {
+  const { home, cleanup } = patchHome()
+  try {
+    mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
+    writeFileSync(join(home, 'profiles', 'web', 'cordis.patch.yml'), INSERT_BLOCK_YAML.replace('- id: llm-pi-ai\n  name: "@deepseek-ai/dsh-llm-pi-ai"\n', ''), 'utf8')
+    const profileLayer = join(home, 'profiles', 'web', 'cordis.patch.yml')
+    const before = readFileSync(profileLayer, 'utf8')
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+
+    // 用户层此时不存在：写一条与 profile 层 insert 成员同 id 的顶层行 = 跨层语义翻转
+    const err = await facade
+      .applyPatchChanges(USER_PATCH_FILE, [{ lineId: 'mcp-a', raw: { id: 'mcp-a', name: 'dsh-mcp-client' }, action: 'update' }])
+      .then(() => null, (e: unknown) => e as Error)
+    assert.ok(err !== null, '跨层提升必须拒写')
+    assert.match(String(err.message), /mcp-a/)
+    assert.equal(existsSync(join(home, USER_PATCH_FILE)), false, '拒写 = 用户层文件一个字节都没写')
+    assert.equal(readFileSync(profileLayer, 'utf8'), before, '另一层当然也不许动')
+  } finally {
+    cleanup()
+  }
+})
+

@@ -97,6 +97,7 @@ import { ImportUserSkippedError, type ConfigAdapter, type CredentialsFacade, typ
 import { PLUGIN_NPM_PACKAGE } from './core/update-check.ts'
 import { planSelfUpdate, runSelfUpdate, type SelfUpdateOutcome } from './core/self-update.ts'
 import { createAdapters } from './adapters/index.ts'
+import { describePatchDocument, describePatchLayoutDrift, planPatchDocument, promotedTopLevelIds } from './core/patch-document.ts'
 import { isPatchLayerRel, profilePatchRel, readEffectivePatchLines, USER_PATCH_FILE } from './core/patch-layers.ts'
 import { createLocalPluginPackHook } from './core/local-plugin-host.ts'
 import { ENCRYPTED_CONTAINER_CODE, createEncryptionProvider, readContainerKind, encryptArchive } from './security/index.ts'
@@ -1714,15 +1715,13 @@ export class DshPatchFileFacade implements PatchFileFacade {
   ): Promise<void> {
     const p = this.patchPath(file)
 
-    // 1. Load the current document into an ordered lineId → raw table.
+    // 1. Load the current document (the ordered table itself is built by planPatchDocument).
     //
     // 读不出来的既有内容**绝不能当作空文档**（issue #75 的数据丢失点）：重建后的文件只包含
     // 本次写入的行，等于把用户手写的其余行整段删掉。三种情况分开处理：
     //   - 真不存在（ENOENT）→ 空文档（首次创建，既有语义）；
     //   - 存在但读不到（EACCES/EBUSY/…）→ 抛错，不改写；
     //   - 存在但解析不了（含未知方言 / YAML 本身有错）→ 抛错，不改写。
-    const rows = new Map<string, unknown>()
-    const order: string[] = []
     let existing: string | null = null
     try {
       existing = await fs.readFile(p, 'utf8')
@@ -1739,54 +1738,45 @@ export class DshPatchFileFacade implements PatchFileFacade {
         throw new Error(this.msg('host.patchRefuseClobber', { file, reason: describePatchYamlError(err) }), { cause: err })
       }
     }
-    if (Array.isArray(doc)) {
-      for (const item of doc) {
-        if (item === null || typeof item !== 'object') continue
-        const obj = item as Record<string, unknown>
-        const insert = obj['insert']
-        if (Array.isArray(insert)) {
-          for (const entry of insert) {
-            if (entry === null || typeof entry !== 'object') continue
-            const id = (entry as Record<string, unknown>)['id']
-            if (typeof id === 'string' && id !== '' && !rows.has(id)) {
-              rows.set(id, entry)
-              order.push(id)
-            }
-          }
-          continue
-        }
-        const id = obj['id']
-        if (typeof id === 'string' && id !== '' && !rows.has(id)) {
-          rows.set(id, obj)
-          order.push(id)
-        }
-      }
-    }
 
-    // 2. Apply the changes.
-    for (const change of changes) {
-      if (change.action === 'remove') {
-        if (rows.delete(change.lineId)) {
-          const at = order.indexOf(change.lineId)
-          if (at >= 0) order.splice(at, 1)
-        }
-      } else if (change.action === 'insert' || change.action === 'update') {
-        if (!rows.has(change.lineId)) order.push(change.lineId)
-        rows.set(change.lineId, change.raw)
-      }
-    }
-
-    // 3. Rebuild: every id row is emitted as a top-level row. The loader treats
-    //    a top-level { id, name } row exactly like an `- insert:` block member
-    //    (dsh-base patch precedent), so the document stays semantically equal.
-    const out: unknown[] = []
-    for (const id of order) {
-      const raw = rows.get(id)
-      if (raw !== undefined) out.push(raw)
-    }
+    // 2. Rebuild through core/patch-document.ts (issue #133): the two shapes are **not**
+    //    equivalent on the host side. A top-level `- id: X` row *overrides* entry X and is
+    //    dropped with `patch: entry "X" not found` when X does not exist; only an
+    //    `- insert:` block member *adds* entries. Emitting every row top-level therefore
+    //    turned one update into "every insert-only entry (MCP servers, most notably) is
+    //    gone after restart".
+    const plan = planPatchDocument(doc, changes)
     const text = '# rewritten by dsh-config-manager import (original comments not preserved)\n'
-      + dumpPatchDocument(out)
+      + dumpPatchDocument(plan.items)
+
+    // 3. Post-write structure self-check, before anything touches the disk: re-parse the
+    //    text we just serialized and require both id sets to match the plan item by item.
+    //    A serializer or dialect change that flattens or swallows insert blocks stops here
+    //    (zero write) instead of silently degrading every patch row to an override.
+    const drift = describePatchLayoutDrift(plan, describePatchDocument(loadPatchDocument(text)))
+    if (drift !== null) {
+      throw new Error(this.msg('host.patchSemanticDrift', { file, detail: drift }))
+    }
+
+    // 4. 跨层提升守卫（issue #133）：待写的顶层 id 若是**另一层**的 insert 成员，写下去就从
+    //    「新增」变成「覆盖」（宿主查不到则丢弃）。对侧读不出来/解析不了只跳过守卫 —— 读护栏
+    //    已在各自层报错，损坏的兄弟文件不该永久阻塞本层写入。
+    const other = file === USER_PATCH_FILE ? profilePatchRel(this.profile) : USER_PATCH_FILE
+    const promoted = promotedTopLevelIds(await this.readPatchDocQuietly(other), plan.topLevelIds)
+    if (promoted.length > 0) {
+      throw new Error(this.msg('host.patchRefusePromote', { file, ids: promoted.join(', ') }))
+    }
+
     await atomicWriteFile(p, text)
+  }
+
+  /** 读另一层并解析；读不到/解析不了 → undefined（跨层守卫 fail-open，见 promotedTopLevelIds）。 */
+  private async readPatchDocQuietly(file: string): Promise<unknown> {
+    try {
+      return loadPatchDocument(await fs.readFile(resolve(this.homeDir, file), 'utf8'))
+    } catch {
+      return undefined
+    }
   }
 }
 
