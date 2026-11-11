@@ -127,5 +127,6 @@
 - **判定口径换成浏览器实测**：把每个 `out/*.html` 载入 Chromium，从「v0.8.0 · DSH 2.4」文本向上找最近的 28px 高、宽度 ≥480 的元素，量它的宽度、圆角、左右留白与父容器溢出量。真值 = 宽 546–548px、圆角 8px、左右各 8px、无溢出（对应 `.statusBar` 的 `margin: 0 8px 8px; border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--cm-r-3)`）。
 - **结果：54/54 合规**。其中 32 屏由 Stitch 出图时就是内缩圆角盒（含本轮回修的 D-10、D-12、D-20、D-25、D-27、D-29、D-34、D-35、D-36、P-02），22 屏在 HTML 层补了内联样式：
   D-05、D-06、D-07、D-08、D-09、D-14、D-14b、D-15、D-17、D-18、D-19、D-22、D-23、D-24、D-33、T-01、T-02b、T-02c、T-04、T-05、T-06、T-07。
-- **这 22 屏的 PNG 仍是 Stitch 原图**（底部状态栏通栏），与修正后的 HTML 只在这一点不同：本机 `take_screenshot` 恒 60s 超时，无法本地重渲；Stitch 侧对「只改状态栏」的重复指令一律判重只回文本。要看修正后的状态栏，打开对应 `out/<ID>.html`。
+- - **PNG 已同步重渲**：这 22 屏的 PNG 改用本地 headless Chromium 从 `out/<ID>.html` 重拍（管线 `.stitch-refactor/.render/cdp.mjs`，Chromium 走 CDP + `Page.captureScreenshot`）。取景对齐核验：面板包围盒与原图一致（差异框 X 710–1852 vs 原图 712–1850），逐像素 meanDiff 1.4–4.6%（差异集中在文字抗锯齿与状态栏本身）。原图备份在 `shots/.stitch-orig/`。
+- 重渲流程：`node .stitch-refactor/.render/cdp.mjs jobs.json`，jobs 里每屏给 `{url, out, vw: 1263, vh: 1010, dsf: H/1010}`；HTML 里的 `cdn.tailwindcss.com` 换成本地 `.render/tailwind.js`，Google Fonts 链接换成本地 `.render/fonts.css`（11 个 woff2 已落盘），否则离线渲染会掉样式/掉字重。
 - 复现/复测脚本口径见本节第一段，判定数据存 `.tmp/statusbar-final.json`。

@@ -1,0 +1,4 @@
+# 本地渲染产物与依赖（可重建，不入库）
+.render/
+shots/.stitch-orig/
+tmp-*.json

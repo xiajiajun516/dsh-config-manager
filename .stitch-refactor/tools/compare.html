@@ -1,0 +1,23 @@
+<!DOCTYPE html><html><body style="margin:0;background:#222">
+<canvas id="c"></canvas>
+<script>
+window.cmp = async (a, b) => {
+  const load = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("load " + src)); i.src = src; });
+  const [ia, ib] = await Promise.all([load(a), load(b)]);
+  const W = Math.min(ia.naturalWidth, ib.naturalWidth), H = Math.min(ia.naturalHeight, ib.naturalHeight);
+  const cv = document.getElementById('c'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(ia, 0, 0); const da = ctx.getImageData(0, 0, W, H).data;
+  ctx.clearRect(0,0,W,H); ctx.drawImage(ib, 0, 0); const db = ctx.getImageData(0, 0, W, H).data;
+  let sum = 0, big = 0, n = 0, cols = new Uint32Array(W), rows = new Uint32Array(H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4;
+    const d = (Math.abs(da[i]-db[i]) + Math.abs(da[i+1]-db[i+1]) + Math.abs(da[i+2]-db[i+2])) / 3;
+    sum += d; n++; if (d > 24) { big++; cols[x]++; rows[y]++; }
+  }
+  let x0 = W, x1 = 0, y0 = H, y1 = 0;
+  for (let x = 0; x < W; x++) if (cols[x] > 2) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); }
+  for (let y = 0; y < H; y++) if (rows[y] > 2) { y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  return JSON.stringify({ W, H, meanDiff: +(sum / n).toFixed(2), bigPct: +(100 * big / n).toFixed(2), diffBox: [x0, y0, x1, y1] });
+};
+</script></body></html>
