@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 定时备份设置弹窗 (规范版)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+    * {
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #E6E8EB;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      color: #0F1115;
+    }
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+    .font-mono {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+  </style>
+</head>
+<body class="w-[1440px] h-[900px] flex items-center justify-center overflow-hidden select-none">
+<!-- 插件内容区画布 564x720 严格规格居中 -->
+<div class="relative w-[564px] h-[720px] bg-white rounded-xl shadow-2xl border border-[#0000001A] flex flex-col overflow-hidden">
+<!-- ========================================== -->
+<!-- 1. 底层页面：首页结构（被遮罩压暗的背景层） -->
+<!-- ========================================== -->
+<div class="absolute inset-0 flex flex-col bg-[#EBEEF2] z-0">
+<!-- 顶部 32px 页签条 -->
+<div class="h-8 px-3.5 bg-white border-b border-[#0000001A] flex items-center justify-between shrink-0">
+<!-- 4个页签 -->
+<div class="flex items-center gap-1 text-[12px]">
+<span class="px-2 py-0.5 rounded-[8px] bg-[#EBEEF2] border border-[#979DA6] text-[#0F1115] font-medium leading-[1.25]">首页</span>
+<span class="px-2 py-0.5 text-[#61666B] hover:text-[#0F1115] cursor-default">产物库</span>
+<span class="px-2 py-0.5 text-[#61666B] hover:text-[#0F1115] cursor-default">同步</span>
+<span class="px-2 py-0.5 text-[#61666B] hover:text-[#0F1115] cursor-default">环境</span>
+</div>
+<!-- 右侧4个图标按钮 -->
+<div class="flex items-center gap-2.5 text-[#81858C]">
+<!-- ⌘K -->
+<span class="text-[11px] font-mono leading-none font-medium">⌘K</span>
+<!-- 活动 -->
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史 -->
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于 -->
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</div>
+<!-- 首页内容区：状态条 + 工具栏 + 活动表 -->
+<div class="p-2.5 flex flex-col gap-2.5 flex-1 overflow-hidden">
+<!-- 状态条 5 段单行 -->
+<div class="h-8 bg-white border border-[#0000001A] rounded-[8px] flex items-center divide-x divide-[#0000001A] px-1 text-[11px]">
+<div class="flex-1 flex items-center justify-center gap-1.5 px-1 truncate">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span class="font-medium text-[#0F1115]">健康</span>
+<span class="text-[#81858C]">最近 21:04</span>
+</div>
+<div class="flex-1 flex items-center justify-center gap-1.5 px-1 truncate">
+<span class="text-[#81858C]">备份文件</span>
+<span class="font-medium text-[#0F1115] tabular-nums">12</span>
+</div>
+<div class="flex-1 flex items-center justify-center gap-1.5 px-1 truncate">
+<span class="text-[#81858C]">安全快照</span>
+<span class="font-medium text-[#0F1115] tabular-nums">37</span>
+</div>
+<div class="flex-1 flex items-center justify-center gap-1.5 px-1 truncate">
+<span class="text-[#81858C]">定时备份</span>
+<span class="font-medium text-[#0F1115]">开启</span>
+</div>
+<div class="flex-1 flex items-center justify-center gap-1.5 px-1 truncate">
+<span class="text-[#81858C]">远程同步</span>
+<span class="font-medium text-[#0F1115]">已配置</span>
+</div>
+</div>
+<!-- 动作工具栏 5 按钮 + 右侧活动入口 -->
+<div class="flex items-center justify-between gap-1 text-[12px]">
+<div class="flex items-center gap-1.5">
+<button class="h-7 px-2.5 bg-[#0F1115] text-white rounded-[6px] font-medium flex items-center gap-1">
+<span>立即备份</span>
+</button>
+<button class="h-7 px-2 bg-white border border-[#0000001A] text-[#0F1115] rounded-[6px] flex items-center"><span>导出 ZIP</span></button>
+<button class="h-7 px-2 bg-white border border-[#0000001A] text-[#0F1115] rounded-[6px] flex items-center">
+<span>导入</span>
+</button>
+<button class="h-7 px-2 bg-white border border-[#0000001A] text-[#0F1115] rounded-[6px] flex items-center">
+<span>从其它 agent 导入</span>
+</button>
+<button class="h-7 px-2 bg-white border border-[#0000001A] text-[#0F1115] rounded-[6px] flex items-center">
+<span>一键同步</span>
+</button>
+</div>
+<div class="text-[11px] text-[#61666B] flex items-center gap-0.5 cursor-default pr-1">
+<span>活动</span>
+<svg class="w-3 h-3 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24">
+<path d="M7 17l9.2-9.2M17 17V7H7"></path>
+</svg>
+</div>
+</div>
+<!-- 最近活动卡片（底面模糊感） -->
+<div class="bg-white border border-[#0000001A] rounded-[10px] p-2 flex flex-col flex-1 overflow-hidden"><div class="flex items-center justify-between pb-2 border-b border-[#0000001A] text-[12px]"><div class="flex items-center gap-1.5"><span class="font-medium text-[#0F1115]">最近活动</span><span class="px-1.5 py-0.2 bg-[#EBEEF2] text-[#61666B] rounded text-[11px]">18 记录</span></div><span class="text-[11px] text-[#61666B] cursor-pointer hover:text-[#0F1115]">活动中心 ›</span></div><div class="flex flex-col divide-y divide-[#0000000D] text-[11.5px] mt-1 flex-1 justify-between"><div class="h-[34px] flex items-center justify-between text-[#81858C]"><span class="w-16 shrink-0">12 分钟前</span><span class="px-1.5 py-0.5 rounded bg-[#EBEEF2] text-[#0F1115] text-[10px] shrink-0">备份</span><span class="font-mono text-[#0F1115] truncate flex-1 mx-2">backup-2026-11-10T2104.zip</span><span class="inline-flex items-center px-1.5 py-0.5 rounded-[4px] bg-[#22C55E]/10 text-[#22C55E] text-[10px] font-medium shrink-0">成功</span></div><div class="h-[34px] flex items-center justify-between text-[#81858C]"><span class="w-16 shrink-0">35 分钟前</span><span class="px-1.5 py-0.5 rounded bg-[#EBEEF2] text-[#0F1115] text-[10px] shrink-0">快照</span><span class="font-mono text-[#0F1115] truncate flex-1 mx-2">before-import · 1,204 文件</span><span class="inline-flex items-center px-1.5 py-0.5 rounded-[4px] bg-[#22C55E]/10 text-[#22C55E] text-[10px] font-medium shrink-0">成功</span></div><div class="h-[34px] flex items-center justify-between text-[#81858C]"><span class="w-16 shrink-0">1 小时前</span><span class="px-1.5 py-0.5 rounded bg-[#EBEEF2] text-[#0F1115] text-[10px] shrink-0">同步</span><span class="font-mono text-[#0F1115] truncate flex-1 mx-2">Git · 推送远程仓库超时 (网络异常)</span><span class="inline-flex items-center px-1.5 py-0.5 rounded-[4px] bg-[#ffdad6] text-[#EC1313] text-[10px] font-medium shrink-0">失败</span></div><div class="h-[34px] flex items-center justify-between text-[#81858C]"><span class="w-16 shrink-0">3 小时前</span><span class="px-1.5 py-0.5 rounded bg-[#EBEEF2] text-[#0F1115] text-[10px] shrink-0">定时</span><span class="font-mono text-[#0F1115] truncate flex-1 mx-2">schedule-auto-clean · 移除 2 份过期</span><span class="inline-flex items-center px-1.5 py-0.5 rounded-[4px] bg-[#22C55E]/10 text-[#22C55E] text-[10px] font-medium shrink-0">完成</span></div><div class="h-[34px] flex items-center justify-between text-[#81858C]"><span class="w-16 shrink-0">昨天 18:30</span><span class="px-1.5 py-0.5 rounded bg-[#EBEEF2] text-[#0F1115] text-[10px] shrink-0">导出</span><span class="font-mono text-[#0F1115] truncate flex-1 mx-2">export-release-v0.8.zip (42.8 MB)</span><span class="inline-flex items-center px-1.5 py-0.5 rounded-[4px] bg-[#22C55E]/10 text-[#22C55E] text-[10px] font-medium shrink-0">成功</span></div><div class="h-[34px] flex items-center justify-between text-[#81858C]"><span class="w-16 shrink-0">3 天前</span><span class="px-1.5 py-0.5 rounded bg-[#EBEEF2] text-[#0F1115] text-[10px] shrink-0">校验</span><span class="font-mono text-[#0F1115] truncate flex-1 mx-2">SHA256 完整性哈希校验通过</span><span class="inline-flex items-center px-1.5 py-0.5 rounded-[4px] bg-[#22C55E]/10 text-[#22C55E] text-[10px] font-medium shrink-0">正常</span></div></div></div>
+</div>
+<!-- 底部 28px 状态栏（内缩样式） -->
+<div class="mx-2 mb-2 h-7 px-3 bg-white border border-[#0000001A] rounded-[8px] flex items-center justify-between text-[11px] text-[#81858C] shrink-0">
+<div class="flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span class="text-[#0F1115]">就绪</span>
+<span class="text-[#81858C]">· 校验无冲突项</span>
+</div>
+<div class="font-mono text-[#81858C] tabular-nums">
+          v0.8.0 · DSH 2.4
+        </div>
+</div>
+</div>
+<!-- ========================================== -->
+<!-- 2. 24% 统一压暗黑色遮罩                     -->
+<!-- ========================================== -->
+<div class="absolute inset-0 bg-black/25 z-10 backdrop-blur-[0.5px]"></div>
+<!-- ========================================== -->
+<!-- 3. 定时备份弹窗本体 (Modal wide)           -->
+<!-- ========================================== -->
+<div class="absolute inset-0 m-auto w-[536px] h-fit z-20 bg-white rounded-[12px] border border-[#0000001A] shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+<!-- 弹窗头：标题「定时备份」+ 右端 ✕ 关闭 -->
+<div class="h-10 px-4 border-b border-[#0000001A] flex items-center justify-between shrink-0">
+<div class="text-[13px] font-semibold text-[#0F1115] leading-[1.25]">定时备份</div>
+<button class="w-6 h-6 rounded-[6px] hover:bg-[#EBEEF2] flex items-center justify-center text-[#81858C] hover:text-[#0F1115] transition-colors" title="关闭">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</button>
+</div>
+<!-- 弹窗内容区：内边距 16px，自然贴合内容高度 -->
+<div class="p-4 flex flex-col gap-3.5">
+<!-- a) 分组行：「定时备份设置」+ ⓘ；右端两颗按钮（立即备份 ghost / 保存 primary） -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="text-[12px] font-bold text-[#0F1115] leading-[1.25]">定时备份设置</span>
+<svg class="w-3.5 h-3.5 text-[#81858C] cursor-help" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+<div class="flex items-center gap-2">
+<!-- 立即备份 ghost（带 ▶ 图标） -->
+<button class="h-7 px-2.5 bg-white border border-[#0000001A] hover:bg-[#EBEEF2] text-[#0F1115] text-[12px] rounded-[8px] font-medium flex items-center gap-1.5 transition-colors">
+<svg class="w-3 h-3 text-[#61666B] fill-current" viewbox="0 0 24 24">
+<polygon points="5 3 19 12 5 21 5 3"></polygon>
+</svg>
+<span>立即备份</span>
+</button>
+<!-- 保存 primary 深色（带 ✓） -->
+<button class="h-7 px-3 bg-[#0F1115] hover:bg-[#43454A] text-white text-[12px] rounded-[8px] font-medium flex items-center gap-1.5 shadow-sm transition-colors">
+<svg class="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" viewbox="0 0 24 24">
+<polyline points="20 6 9 17 4 12"></polyline>
+</svg>
+<span>保存</span>
+</button>
+</div>
+</div>
+<!-- b) 事实网格（1px 描边、圆角 8px，两列两行） -->
+<div class="border border-[#0000001A] rounded-[8px] overflow-hidden divide-y divide-[#0000001A] text-[12px] bg-white">
+<!-- 行 1：状态 | 间隔 -->
+<div class="flex divide-x divide-[#0000001A]">
+<div class="w-1/2 p-2.5 flex flex-col justify-center gap-1">
+<span class="text-[11px] text-[#81858C] leading-none">状态</span>
+<div class="flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-[#22C55E]"></span>
+<span class="font-medium text-[#0F1115]">已开启</span>
+</div>
+</div>
+<div class="w-1/2 p-2.5 flex flex-col justify-center gap-1">
+<span class="text-[11px] text-[#81858C] leading-none">间隔</span>
+<span class="font-medium text-[#0F1115]">每周 周一 03:00</span>
+</div>
+</div>
+<!-- 行 2：上次运行 -->
+<div class="p-2.5 flex flex-col justify-center gap-1 bg-[#EBEEF2]/50">
+<span class="text-[11px] text-[#81858C] leading-none">上次运行</span>
+<div class="flex items-center gap-2">
+<span class="inline-flex items-center px-1.5 py-0.5 rounded-[4px] bg-[#22C55E]/10 text-[#22C55E] text-[11px] font-medium leading-none">成功</span>
+<span class="font-mono text-[#0F1115] text-[12px] tabular-nums">2026-11-10 21:04</span>
+</div>
+</div>
+</div>
+<!-- c) 启用行：☑ 启用定时备份 + ⓘ；右端间隔下拉「每周 ▾」（宽 96） -->
+<div class="h-10 px-3 border border-[#0000001A] rounded-[8px] flex items-center justify-between bg-white">
+<label class="flex items-center gap-2 cursor-pointer select-none">
+<!-- 勾选复选框 -->
+<div class="w-4 h-4 rounded-[4px] bg-[#0F1115] flex items-center justify-center text-white">
+<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" viewbox="0 0 24 24">
+<polyline points="20 6 9 17 4 12"></polyline>
+</svg>
+</div>
+<span class="text-[12.5px] font-medium text-[#0F1115]">启用定时备份</span>
+<svg class="w-3.5 h-3.5 text-[#81858C] cursor-help" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</label>
+<!-- 间隔下拉框（宽 96） -->
+<div class="w-24 h-7 px-2.5 border border-[#0000001A] rounded-[6px] bg-white flex items-center justify-between text-[12px] text-[#0F1115] hover:border-[#81858C] cursor-pointer">
+<span>每周</span>
+<svg class="w-3.5 h-3.5 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24">
+<polyline points="6 9 12 15 18 9"></polyline>
+</svg>
+</div>
+</div>
+<!-- d) 保留策略分组标题 + ⓘ；右端 11px 次色说明 -->
+<div class="flex items-center justify-between pt-0.5">
+<div class="flex items-center gap-1.5">
+<span class="text-[12px] font-bold text-[#0F1115] leading-[1.25]">保留策略</span>
+<svg class="w-3.5 h-3.5 text-[#81858C] cursor-help" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+<span class="text-[11px] text-[#61666B]">未启用层级时保留全部</span>
+</div>
+<!-- e) 三个并排数字卡（各占 1/3，1px 描边、圆角 8px、内边距 10px） -->
+<!-- 三张标题必须不同：最近保留 (份) / 每月保留 (个月) / 每年保留 (年) -->
+<div class="grid grid-cols-3 gap-2.5">
+<!-- 卡 1：最近保留 -->
+<div class="border border-[#0000001A] rounded-[8px] p-2.5 bg-white flex flex-col justify-between h-[68px]">
+<span class="text-[11px] text-[#61666B] leading-none">最近保留</span>
+<div class="flex items-center justify-end gap-1.5">
+<input class="w-16 h-7 px-2 border border-[#0000001A] rounded-[6px] text-right font-mono text-[12.5px] font-medium text-[#0F1115] bg-[#EBEEF2] focus:outline-none" readonly="" type="text" value="10"/>
+<span class="text-[11px] text-[#81858C] shrink-0">份</span>
+</div>
+</div>
+<!-- 卡 2：每月保留 -->
+<div class="border border-[#0000001A] rounded-[8px] p-2.5 bg-white flex flex-col justify-between h-[68px]">
+<span class="text-[11px] text-[#61666B] leading-none">每月保留</span>
+<div class="flex items-center justify-end gap-1.5">
+<input class="w-16 h-7 px-2 border border-[#0000001A] rounded-[6px] text-right font-mono text-[12.5px] font-medium text-[#0F1115] bg-[#EBEEF2] focus:outline-none" readonly="" type="text" value="6"/>
+<span class="text-[11px] text-[#81858C] shrink-0">个月</span>
+</div>
+</div>
+<!-- 卡 3：每年保留 -->
+<div class="border border-[#0000001A] rounded-[8px] p-2.5 bg-white flex flex-col justify-between h-[68px]">
+<span class="text-[11px] text-[#61666B] leading-none">每年保留</span>
+<div class="flex items-center justify-end gap-1.5">
+<input class="w-16 h-7 px-2 border border-[#0000001A] rounded-[6px] text-right font-mono text-[12.5px] font-medium text-[#0F1115] bg-[#EBEEF2] focus:outline-none" readonly="" type="text" value="2"/>
+<span class="text-[11px] text-[#81858C] shrink-0">年</span>
+</div>
+</div>
+</div>
+<!-- f) 底部提示行 11px 次色 + ⓘ -->
+<div class="flex items-center gap-1 text-[11px] text-[#61666B] leading-[1.5] pt-0.5">
+<svg class="w-3.5 h-3.5 text-[#81858C] shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+<span>仅对自动备份生效。手动导出及外部快照不受上述生命周期与清理策略影响。</span>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

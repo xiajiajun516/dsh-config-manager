@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 市场 我的配置 (T-05)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://cdn.jsdelivr.net/npm/lucide-static@0.344.0/font/lucide.min.css" rel="stylesheet"/>
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'text-primary': '#0F1115',
+            'text-secondary': '#61666B',
+            'text-tertiary': '#81858C',
+            'border-base': '#0000001A',
+            'accent': '#4176E6',
+            'success': '#22C55E',
+            'warning': '#F59E0B',
+            'danger': '#EC1313',
+            'ghost-active-bg': '#EBEEF2',
+            'ghost-active-border': '#979DA6',
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', '"PingFang SC"', '"Hiragino Sans GB"', '"Microsoft YaHei"', 'sans-serif'],
+            mono: ['"SF Mono"', 'Menlo', 'Monaco', 'Consolas', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBEEF2;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    /* 564x720 plugin frame */
+    .plugin-window {
+      width: 564px;
+      height: 720px;
+      background-color: #FFFFFF;
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+    .lucide {
+      display: inline-block;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+<!-- 564x720 纯白面插件内容区 -->
+<div class="plugin-window">
+<!-- 1. 顶部导航条 44px -->
+<header class="h-[44px] shrink-0 border-b border-[#0000001A] px-4 flex items-center justify-between bg-white">
+<!-- 左起四个页签，全部不激活，13px #61666B -->
+<nav class="flex items-center space-x-4 text-[13px] text-[#61666B]">
+<span class="cursor-pointer hover:text-[#0F1115] transition-colors">首页</span>
+<span class="cursor-pointer hover:text-[#0F1115] transition-colors">产物库</span>
+<span class="cursor-pointer hover:text-[#0F1115] transition-colors">同步</span>
+<span class="cursor-pointer hover:text-[#0F1115] transition-colors">环境</span>
+</nav>
+<!-- 右端 4 个 14px lucide 图标，全部不激活 #81858C -->
+<div class="flex items-center space-x-[14px] text-[#81858C]"><button class="hover:text-[#0F1115] transition-colors p-0 flex items-center justify-center bg-transparent border-0 cursor-pointer" title="命令面板 (⌘K)"><svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path></svg></button><button class="hover:text-[#0F1115] transition-colors p-0 flex items-center justify-center bg-transparent border-0 cursor-pointer" title="活动"><svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg></button><button class="hover:text-[#0F1115] transition-colors p-0 flex items-center justify-center bg-transparent border-0 cursor-pointer" title="历史"><svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><polyline points="3 3 3 8 8 8"></polyline><line x1="12" x2="12" y1="7" y2="12"></line><line x1="12" x2="16" y1="12" y2="14"></line></svg></button><button class="hover:text-[#0F1115] transition-colors p-0 flex items-center justify-center bg-transparent border-0 cursor-pointer" title="关于"><svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" x2="12.01" y1="17" y2="17"></line></svg></button></div>
+</header>
+<!-- 2. TaskShell 面板头 44px -->
+<div class="h-[44px] shrink-0 border-b border-[#0000001A] px-4 flex items-center justify-between bg-white">
+<div class="flex items-center space-x-2">
+<button class="flex items-center text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[8px] px-2 py-1 transition-colors leading-none gap-1"><svg fill="none" height="12" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="12"><polyline points="15 18 9 12 15 6"></polyline></svg><span>返回产物库</span></button>
+<h1 class="text-[13px] font-semibold text-[#0F1115] ml-1">逛市场</h1>
+</div>
+<div></div>
+</div>
+<!-- 3. 内容区：padding 14px 16px 0，吃满中间高度，flex-1 -->
+<main class="flex-1 px-4 pt-[14px] pb-3 flex flex-col space-y-[10px] overflow-hidden bg-white">
+<!-- 4. 页签行 32px -->
+<div class="h-[32px] flex items-center space-x-2 shrink-0">
+<button class="text-[12px] text-[#61666B] px-2 py-1 hover:text-[#0F1115] transition-colors">
+          浏览市场
+        </button>
+<button class="text-[12px] font-semibold text-[#0F1115] bg-[#EBEEF2] border border-[#979DA6] rounded-[8px] px-3 py-[5px]">
+          我的配置
+        </button>
+</div>
+<!-- 5. SectionTitle 行 22px -->
+<div class="h-[22px] flex items-center shrink-0">
+<h2 class="text-[13px] font-semibold text-[#0F1115] leading-none">我的配置</h2>
+</div>
+<!-- 6. 登录卡: py-[12px] px-4 space-y-[6px] -->
+<div class="border border-[#0000001A] rounded-[12px] px-4 py-[12px] flex flex-col space-y-[6px] shrink-0 bg-white">
+<div class="flex items-center">
+<span class="inline-flex items-center text-[12px] text-[#22C55E] bg-[#22C55E]/10 rounded-full px-2 py-[2px] leading-tight font-normal">
+            已登录：xiajiajun516
+          </span>
+</div>
+<div class="flex items-center">
+<span class="inline-flex items-center text-[12px] text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[2px] leading-tight font-normal">
+            收录目标（固定）：xiajiajun516/dsh-config-manager
+          </span>
+</div>
+<div class="flex items-center">
+<span class="inline-flex items-center text-[12px] text-[#22C55E] bg-[#22C55E]/10 rounded-full px-2 py-[2px] leading-tight font-normal">
+            配置仓库：xiajiajun516/dsh-configs
+          </span>
+</div>
+</div>
+<!-- 7. 上传卡: py-[10px] h-[50px] -->
+<div class="border border-[#0000001A] rounded-[12px] px-4 py-[10px] h-[50px] flex items-center shrink-0 bg-white">
+<button class="h-[30px] px-3 py-0 bg-[#0F1115] hover:bg-[#43454A] text-white text-[12.5px] font-medium rounded-[8px] inline-flex items-center justify-center whitespace-nowrap transition-colors shrink-0 w-auto" style="padding-left: 12px; padding-right: 12px;">上传配置包</button>
+</div>
+<!-- 8. 已上传列表卡: 让第4行完整容纳在卡片内不被遮挡 -->
+<div class="border border-[#0000001A] rounded-[12px] flex flex-col overflow-hidden bg-white pb-[12px]">
+<div class="h-[34px] px-3 pt-2.5 pb-2 border-b border-[#0000001A] flex items-center justify-between shrink-0 bg-white">
+<span class="text-[12px] font-semibold text-[#61666B]">已上传</span>
+<div class="flex items-center space-x-2"><span class="text-[11px] text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[2px] leading-tight shrink-0">共 4 条 · 2 已收录 · 1 待审核 · 1 未收录</span><button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-tight shrink-0">刷新</button></div>
+</div>
+<div class="flex-1 flex flex-col overflow-y-auto divide-y divide-[#0000001A]">
+<div class="px-3 py-[6px] flex flex-col justify-between shrink-0 bg-white">
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-1.5">
+<span class="text-[12.5px] font-semibold text-[#0F1115] leading-[1.25]">前端工程规范</span>
+<span class="text-[11px] text-[#4176E6] bg-[#4176E6]/10 rounded-full px-1.5 py-[1px] leading-[1.25] font-mono">1.4.0</span>
+</div>
+<div class="flex items-center space-x-1">
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">更新</button>
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">装回本地</button>
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">打开仓库</button>
+<button class="text-[12px] text-[#EC1313] hover:text-[#EC1313]/80 border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">删除</button>
+</div>
+</div>
+<div class="flex items-center space-x-1.5 text-[11px] mt-[4px]">
+<span class="text-[#22C55E] bg-[#22C55E]/10 rounded-full px-2 py-[1px] leading-[1.25]">已收录</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">⭐ 128</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25] font-mono">xiajiajun516</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">2 天前</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">前端</span>
+</div>
+</div>
+<div class="px-3 py-[6px] flex flex-col justify-between shrink-0 bg-white">
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-1.5">
+<span class="text-[12.5px] font-semibold text-[#0F1115] leading-[1.25]">终端工作流</span>
+<span class="text-[11px] text-[#4176E6] bg-[#4176E6]/10 rounded-full px-1.5 py-[1px] leading-[1.25] font-mono">0.9.2</span>
+</div>
+<div class="flex items-center space-x-1">
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">更新</button>
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">装回本地</button>
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">打开仓库</button>
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">查看收录 PR</button>
+<button class="text-[12px] text-[#EC1313] hover:text-[#EC1313]/80 border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">删除</button>
+</div>
+</div>
+<div class="flex items-center space-x-1.5 text-[11px] mt-[4px]">
+<span class="text-[#F59E0B] bg-[#F59E0B]/10 rounded-full px-2 py-[1px] leading-[1.25]">PR 待审核</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">⭐ 46</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25] font-mono">devtools-lab</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">5 小时前</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">终端</span>
+</div>
+</div>
+<div class="px-3 py-[6px] flex flex-col justify-between shrink-0 bg-white">
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-1.5">
+<span class="text-[12.5px] font-semibold text-[#0F1115] leading-[1.25]">代码评审技能包</span>
+<span class="text-[11px] text-[#4176E6] bg-[#4176E6]/10 rounded-full px-1.5 py-[1px] leading-[1.25] font-mono">2.1.0</span>
+</div>
+<div class="flex items-center space-x-1">
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">更新</button>
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">装回本地</button>
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">打开仓库</button>
+<button class="text-[12px] text-[#EC1313] hover:text-[#EC1313]/80 border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">删除</button>
+</div>
+</div>
+<div class="flex items-center space-x-1.5 text-[11px] mt-[4px]">
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">未收录</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">⭐ 96</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25] font-mono">xiajiajun516</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">3 天前</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">技能</span>
+</div>
+</div>
+<div class="px-3 py-[6px] flex flex-col justify-between shrink-0 bg-white">
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-1.5">
+<span class="text-[12.5px] font-semibold text-[#0F1115] leading-[1.25]">中文写作指令集</span>
+<span class="text-[11px] text-[#4176E6] bg-[#4176E6]/10 rounded-full px-1.5 py-[1px] leading-[1.25] font-mono">1.0.0</span>
+</div>
+<div class="flex items-center space-x-1">
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">更新</button>
+<button class="text-[12px] text-[#61666B] hover:text-[#0F1115] border border-[#0000001A] rounded-[6px] px-2 py-[2px] transition-colors leading-[1.25]">装回本地</button>
+</div>
+</div>
+<div class="flex items-center space-x-1.5 text-[11px] mt-[4px]">
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">未收录</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25] font-mono">xiajiajun516</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">4 天前</span>
+<span class="text-[#4176E6] bg-[#4176E6]/10 rounded-full px-2 py-[1px] leading-[1.25]">写作</span>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- 9. 底部状态栏 28px -->
+<footer class="h-[28px] shrink-0 border-t border-[#0000001A] px-4 flex items-center justify-between bg-white text-[11px]">
+<div class="flex items-center space-x-1.5">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span class="text-[12px] text-[#61666B]">就绪</span>
+</div>
+<span class="text-[11px] text-[#81858C] font-mono">v0.8.0 · DSH 2.4</span>
+</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 T-07 迁移历史</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Geist', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            primary: '#0F1115',
+            secondary: '#61666B',
+            tertiary: '#81858C',
+            accent: '#4176E6',
+            success: '#22C55E',
+            warning: '#F59E0B',
+            danger: '#EC1313',
+            borderSubtle: '#0000001A',
+            ghostActive: '#EBEEF2',
+            ghostBorder: '#979DA6',
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBEEF2;
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    * {
+      box-sizing: border-box;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+<!-- 插件内容区画布 564×720 纯白面 居中展示 -->
+<div class="w-[564px] h-[720px] bg-white flex flex-col relative overflow-hidden shadow-[0_4px_24px_rgba(0,0,0,0.06)]">
+<!-- 1. 顶部导航条 44px -->
+<header class="h-[44px] shrink-0 border-b border-borderSubtle px-4 flex items-center justify-between bg-white z-10">
+<!-- 左侧 4 个页签（均不激活） -->
+<nav class="flex items-center gap-5 text-[12px] text-secondary">
+<span class="cursor-pointer hover:text-primary transition-colors">首页</span>
+<span class="cursor-pointer hover:text-primary transition-colors">产物库</span>
+<span class="cursor-pointer hover:text-primary transition-colors">同步</span>
+<span class="cursor-pointer hover:text-primary transition-colors">环境</span>
+</nav>
+<!-- 右端 4 个 14px lucide 线性图标按钮，其中「历史」图标激活 -->
+<div class="flex items-center gap-1">
+<!-- ⌘K 命令面板 -->
+<button class="w-7 h-7 flex items-center justify-center rounded-[8px] text-tertiary hover:bg-black/5 hover:text-primary transition-colors" title="命令面板">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+</button>
+<!-- 活动 (activity 折线) -->
+<button class="w-7 h-7 flex items-center justify-center rounded-[8px] text-tertiary hover:bg-black/5 hover:text-primary transition-colors" title="活动记录">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+</button>
+<!-- 历史 (clock) 激活态：#0F1115 图标 + #EBEEF2 圆角 8px 底 -->
+<button class="w-7 h-7 flex items-center justify-center rounded-[8px] bg-ghostActive text-primary" title="迁移历史">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+</button>
+<!-- 关于 (info 圆圈) -->
+<button class="w-7 h-7 flex items-center justify-center rounded-[8px] text-tertiary hover:bg-black/5 hover:text-primary transition-colors" title="关于">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</button>
+</div>
+</header>
+<!-- 2. 面板头 44px -->
+<div class="h-[44px] shrink-0 border-b border-borderSubtle px-4 flex items-center gap-2 bg-white z-10">
+<button class="h-7 px-2 flex items-center gap-1 text-[12px] text-secondary hover:text-primary hover:bg-black/5 rounded-[8px] transition-colors border border-borderSubtle">
+<svg class="w-[12px] h-[12px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<line x1="19" x2="5" y1="12" y2="12"></line>
+<polyline points="12 19 5 12 12 5"></polyline>
+</svg>
+<span>返回首页</span>
+</button>
+<h1 class="text-[13px] font-semibold text-primary leading-none ml-1">迁移历史</h1>
+</div>
+<!-- 3. 内容区：padding 14px 16px 0，纵向间距 10px -->
+<div class="flex-1 px-4 pt-[14px] pb-0 flex flex-col gap-[10px] overflow-hidden">
+<!-- 4. 统计行 24px：四颗徽章 + 14px ⓘ，单行不换行 -->
+<div class="h-[24px] shrink-0 flex items-center gap-[6px] whitespace-nowrap">
+<span class="inline-flex items-center px-[8px] py-[3px] text-[12px] font-medium rounded-full bg-[#4176E6]/10 text-[#4176E6]">
+          总数: 128
+        </span>
+<span class="inline-flex items-center px-[8px] py-[3px] text-[12px] font-medium rounded-full bg-[#22C55E]/10 text-[#22C55E]">
+          成功: 119
+        </span>
+<span class="inline-flex items-center px-[8px] py-[3px] text-[12px] font-medium rounded-full bg-[#EC1313]/10 text-[#EC1313]">
+          失败: 5
+        </span>
+<span class="inline-flex items-center px-[8px] py-[3px] text-[12px] font-medium rounded-full bg-[#F59E0B]/10 text-[#F59E0B]">
+          跳过: 4
+        </span>
+<div class="text-tertiary ml-1 flex items-center" title="统计说明">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</div>
+<!-- 5. 损坏条目 Banner ~40px：浅橙底（#F59E0B 8%）、0.5px 橙描边、圆角 8px、padding 8px 10px -->
+<div class="shrink-0 rounded-[8px] bg-[#F59E0B]/[0.08] border border-[#F59E0B]/40 px-[10px] py-[8px] flex items-center justify-between">
+<div class="flex items-center gap-2">
+<svg class="w-[14px] h-[14px] text-[#F59E0B] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+<line x1="12" x2="12" y1="9" y2="13"></line>
+<line x1="12" x2="12.01" y1="17" y2="17"></line>
+</svg>
+<span class="text-[12px] text-primary">检测到无法读取/可能被篡改的历史条目</span>
+</div>
+<span class="inline-flex items-center px-[8px] py-[2px] text-[11px] font-medium rounded-full bg-[#F59E0B]/15 text-[#F59E0B] whitespace-nowrap">
+          2 条已跳过 · 不参与导出
+        </span>
+</div>
+<!-- 6. 自动清理卡 ~52px：白面 1px 描边圆角 12px、padding 10px 12px，单行不换行 -->
+<div class="shrink-0 bg-white border border-borderSubtle rounded-[12px] px-[12px] py-[10px] flex items-center justify-between whitespace-nowrap">
+<div class="flex items-center gap-[6px]">
+<span class="text-[12px] font-semibold text-secondary">自动清理</span>
+<svg class="w-[14px] h-[14px] text-tertiary" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+<div class="w-[8px]"></div>
+<!-- Select 下拉框 -->
+<div class="h-[28px] px-2.5 bg-white border border-borderSubtle rounded-[8px] flex items-center gap-1.5 text-[12px] text-primary cursor-pointer hover:border-ghostBorder transition-colors">
+<span>1,000 条</span>
+<svg class="w-[12px] h-[12px] text-tertiary" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<polyline points="6 9 12 15 18 9"></polyline>
+</svg>
+</div>
+<!-- 橙色徽章「磁盘上 1,284 条」 -->
+<span class="inline-flex items-center px-[8px] py-[3px] text-[11px] font-medium rounded-full bg-[#F59E0B]/10 text-[#F59E0B]">
+            磁盘上 1,284 条
+          </span>
+</div>
+<!-- 右端 ghost 按钮「立即清理」 -->
+<button class="h-[28px] px-3 border border-borderSubtle rounded-[8px] text-[12px] text-primary bg-transparent hover:bg-black/5 transition-colors">
+          立即清理
+        </button>
+</div>
+<!-- 7. 过滤/导出卡 ~86px：同款卡片、padding 10px 12px，两行间距 8px -->
+<div class="shrink-0 bg-white border border-borderSubtle rounded-[12px] p-[10px] flex flex-col gap-[8px]">
+<!-- 第一行：三个 Select + 一个搜索框 -->
+<div class="flex items-center gap-[6px] h-[28px]">
+<!-- Select: 操作类型 -->
+<div class="h-[28px] px-2 bg-white border border-borderSubtle rounded-[8px] flex items-center justify-between gap-1 text-[11px] text-secondary cursor-pointer hover:border-ghostBorder transition-colors shrink-0">
+<span>操作类型: 全部</span>
+<svg class="w-[10px] h-[10px] text-tertiary" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<polyline points="6 9 12 15 18 9"></polyline>
+</svg>
+</div>
+<!-- Select: 结果 -->
+<div class="h-[28px] px-2 bg-white border border-borderSubtle rounded-[8px] flex items-center justify-between gap-1 text-[11px] text-secondary cursor-pointer hover:border-ghostBorder transition-colors shrink-0">
+<span>结果: 全部</span>
+<svg class="w-[10px] h-[10px] text-tertiary" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<polyline points="6 9 12 15 18 9"></polyline>
+</svg>
+</div>
+<!-- Select: 时间范围 -->
+<div class="h-[28px] px-2 bg-white border border-borderSubtle rounded-[8px] flex items-center justify-between gap-1 text-[11px] text-secondary cursor-pointer hover:border-ghostBorder transition-colors shrink-0">
+<span>时间范围: 全部</span>
+<svg class="w-[10px] h-[10px] text-tertiary" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<polyline points="6 9 12 15 18 9"></polyline>
+</svg>
+</div>
+<!-- 搜索框 -->
+<div class="flex-1 h-[28px] px-2 bg-white border border-borderSubtle rounded-[8px] flex items-center gap-1.5 focus-within:border-ghostBorder transition-colors">
+<svg class="w-[12px] h-[12px] text-tertiary shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<circle cx="11" cy="11" r="8"></circle>
+<line x1="21" x2="16.65" y1="21" y2="16.65"></line>
+</svg>
+<input class="w-full bg-transparent border-none outline-none text-[11px] text-primary placeholder-tertiary leading-none p-0" placeholder="搜索摘要 / 错误 / 分区…" type="text"/>
+</div>
+</div>
+<!-- 第二行：右对齐三颗 ghost 按钮 -->
+<div class="flex items-center justify-end gap-[6px] h-[28px]">
+<button class="h-[28px] px-2.5 border border-borderSubtle rounded-[8px] text-[11px] text-primary bg-transparent hover:bg-black/5 transition-colors flex items-center gap-1">刷新</button>
+<button class="h-[28px] px-2.5 border border-borderSubtle rounded-[8px] text-[11px] text-primary bg-transparent hover:bg-black/5 transition-colors">
+            导出 JSON
+          </button>
+<button class="h-[28px] px-2.5 border border-borderSubtle rounded-[8px] text-[11px] text-primary bg-transparent hover:bg-black/5 transition-colors">
+            导出 Markdown
+          </button>
+</div>
+</div>
+<!-- 8. 分组列表卡：同款卡片，padding 12px，占剩余高度，底部被状态栏裁切 -->
+<div class="flex-1 bg-white border border-borderSubtle rounded-t-[12px] p-[12px] flex flex-col gap-[12px] overflow-hidden relative">
+<!-- 分组 1：导入 -->
+<div class="flex flex-col">
+<!-- 分组 1 徽章行：蓝色「导入」+ 蓝色「6」 -->
+<div class="flex items-center gap-1.5 mb-[6px]">
+<span class="inline-flex items-center px-[8px] py-[2px] text-[11px] font-medium rounded-full bg-[#4176E6]/10 text-[#4176E6]">
+              导入
+            </span>
+<span class="inline-flex items-center px-[6px] py-[2px] text-[11px] font-medium rounded-full bg-[#4176E6]/10 text-[#4176E6]">
+              6
+            </span>
+</div>
+<!-- 行 1 -->
+<div class="py-[8px] border-b border-borderSubtle flex flex-col gap-[3px]">
+<div class="flex items-center gap-2">
+<span class="text-[12px] text-tertiary">11-10 14:32</span>
+<span class="inline-flex items-center px-[6px] py-[1px] text-[11px] font-medium rounded-full bg-[#22C55E]/10 text-[#22C55E]">
+                成功
+              </span>
+<span class="text-[11px] text-tertiary">配置 / 插件</span>
+</div>
+<div class="text-[12px] text-primary leading-snug">
+              导入 12 个分区，已创建快照 snap-2026-11-10-1432
+            </div>
+</div>
+<!-- 行 2 -->
+<div class="py-[8px] border-b border-borderSubtle flex flex-col gap-[3px]">
+<div class="flex items-center gap-2">
+<span class="text-[12px] text-tertiary">11-10 11:08</span>
+<span class="inline-flex items-center px-[6px] py-[1px] text-[11px] font-medium rounded-full bg-[#EC1313]/10 text-[#EC1313]">
+                失败
+              </span>
+<span class="text-[11px] text-tertiary">设置</span>
+</div>
+<div class="text-[12px] text-primary leading-snug">
+              导入失败：写入 settings.json 被拒（意外的文件锁）
+            </div>
+</div>
+<!-- 行 3 -->
+<div class="py-[8px] border-b border-borderSubtle flex flex-col gap-[3px]">
+<div class="flex items-center gap-2">
+<span class="text-[12px] text-tertiary">11-09 20:15</span>
+<span class="inline-flex items-center px-[6px] py-[1px] text-[11px] font-medium rounded-full bg-[#F59E0B]/10 text-[#F59E0B]">
+                跳过
+              </span>
+<span class="text-[11px] text-tertiary">会话</span>
+</div>
+<div class="text-[12px] text-primary leading-snug">
+              用户跳过 3 个分区：sessions / workspaces / mcp
+            </div>
+</div>
+</div>
+<!-- 分组 2：自动同步 -->
+<div class="flex flex-col">
+<!-- 分组 2 徽章行：蓝色「自动同步」+ 蓝色「4」 -->
+<div class="flex items-center gap-1.5 mb-[6px]">
+<span class="inline-flex items-center px-[8px] py-[2px] text-[11px] font-medium rounded-full bg-[#4176E6]/10 text-[#4176E6]">
+              自动同步
+            </span>
+<span class="inline-flex items-center px-[6px] py-[2px] text-[11px] font-medium rounded-full bg-[#4176E6]/10 text-[#4176E6]">
+              4
+            </span>
+</div>
+<!-- 行 1 -->
+<div class="py-[8px] border-b border-borderSubtle flex flex-col gap-[3px]">
+<div class="flex items-center gap-2">
+<span class="text-[12px] text-tertiary">11-09 09:02</span>
+<span class="inline-flex items-center px-[6px] py-[1px] text-[11px] font-medium rounded-full bg-[#22C55E]/10 text-[#22C55E]">
+                成功
+              </span>
+<span class="text-[11px] text-tertiary">同步</span>
+</div>
+<div class="text-[12px] text-primary leading-snug">
+              推送 2 个分区，远端 4be1c2a
+            </div>
+</div>
+<!-- 行 2 (底部被状态栏裁切，露出一半以表达内部滚动) -->
+<div class="py-[8px] flex flex-col gap-[3px] opacity-90">
+<div class="flex items-center gap-2">
+<span class="text-[12px] text-tertiary">11-08 18:40</span>
+<span class="inline-flex items-center px-[6px] py-[1px] text-[11px] font-medium rounded-full bg-[#22C55E]/10 text-[#22C55E]">
+                成功
+              </span>
+<span class="text-[11px] text-tertiary">同步</span>
+</div>
+<div class="text-[12px] text-primary leading-snug">
+              拉取远端变更：无差异
+            </div>
+</div>
+</div>
+</div>
+</div>
+<!-- 9. 底部状态栏 28px：左侧状态点 + 「就绪」，右侧「v0.8.0 · DSH 2.4」 -->
+<footer class="h-[28px] shrink-0 border-t border-borderSubtle px-4 flex items-center justify-between bg-white z-20">
+<div class="flex items-center gap-1.5">
+<span class="w-[6px] h-[6px] rounded-full bg-success"></span>
+<span class="text-[12px] text-secondary">就绪</span>
+</div>
+<span class="text-[11px] text-tertiary font-mono tracking-tight">v0.8.0 · DSH 2.4</span>
+</footer>
+</div>
+</body>
+</html>

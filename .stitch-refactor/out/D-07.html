@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>D-07 删除远端快照 - DSH Core</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "on-tertiary": "#ffffff",
+            "surface-bright": "#f7f9ff",
+            "inverse-primary": "#c6c6cc",
+            "tertiary-container": "#0F1115",
+            "inverse-on-surface": "#ebf1fb",
+            "on-background": "#161c23",
+            "on-secondary-container": "#002663",
+            "on-secondary": "#ffffff",
+            "on-error-container": "#93000a",
+            "outline": "#76777b",
+            "tertiary-fixed": "#EBEEF2",
+            "surface-container-highest": "#dde3ed",
+            "primary": "#000000",
+            "on-secondary-fixed": "#0F1115",
+            "on-error": "#ffffff",
+            "secondary-fixed": "#dae2ff",
+            "on-surface": "#161c23",
+            "on-primary": "#ffffff",
+            "surface": "#f7f9ff",
+            "on-secondary-fixed-variant": "#4176E6",
+            "surface-container-high": "#e3e8f2",
+            "on-surface-variant": "#45474b",
+            "surface-variant": "#dde3ed",
+            "outline-variant": "#c6c6cb",
+            "on-primary-fixed-variant": "#45474b",
+            "secondary-fixed-dim": "#b1c5ff",
+            "background": "#f7f9ff",
+            "tertiary-fixed-dim": "#d1c4bb",
+            "on-tertiary-fixed-variant": "#4e453f",
+            "primary-fixed-dim": "#c6c6cc",
+            "surface-tint": "#5d5e63",
+            "surface-container-low": "#eef4fe",
+            "surface-dim": "#d5dae4",
+            "tertiary": "#000000",
+            "surface-container-lowest": "#ffffff",
+            "on-primary-fixed": "#1a1c20",
+            "secondary": "#1758c7",
+            "on-tertiary-container": "#61666B",
+            "secondary-container": "#4176E6",
+            "on-primary-container": "#828489",
+            "on-tertiary-fixed": "#0F1115",
+            "surface-container": "#e9eef8",
+            "inverse-surface": "#2b3138",
+            "error-container": "#ffdad6",
+            "error": "#EC1313",
+            "primary-fixed": "#e2e2e8",
+            "primary-container": "#1a1c20"
+          },
+          fontFamily: {
+            "headline-lg": ["Geist", "sans-serif"],
+            "label-sm": ["JetBrains Mono", "monospace"],
+            "label-lg": ["JetBrains Mono", "monospace"],
+            "body-sm": ["Geist", "sans-serif"],
+            "headline-sm": ["Geist", "sans-serif"],
+            "body-lg": ["Geist", "sans-serif"],
+            "body-md": ["Geist", "sans-serif"],
+            "label-md": ["JetBrains Mono", "monospace"],
+            "headline-md": ["Geist", "sans-serif"]
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-family: 'Material Symbols Outlined';
+      font-weight: 300;
+      font-style: normal;
+      font-size: 14px;
+      line-height: 1;
+      display: inline-block;
+      text-transform: none;
+      letter-spacing: normal;
+      word-wrap: normal;
+      white-space: nowrap;
+      direction: ltr;
+      vertical-align: middle;
+      font-feature-settings: 'liga';
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBEEF2;
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+  </style>
+</head>
+<body class="min-h-screen w-full flex items-center justify-center p-8 bg-[#EBEEF2] select-none text-[#0F1115]">
+<!-- 564x720 核心独立插件窗口容器 -->
+<div class="relative w-[564px] min-w-[564px] max-w-[564px] h-[720px] min-h-[720px] max-h-[720px] bg-white rounded-[8px] border border-[#EBEEF2] shadow-lg overflow-hidden flex flex-col">
+<!-- 底层内容：产物库页面全貌 -->
+<div class="w-full h-full flex flex-col bg-[#EBEEF2]">
+<!-- 顶部 32px 导航条 -->
+<div class="h-[32px] px-[12px] bg-[#FFFFFF] border-b border-[#0000000D] flex items-center justify-between shrink-0">
+<div class="flex items-center gap-[6px]">
+<span class="text-[12px] text-[#61666B] px-[8px] py-[2px] cursor-pointer">首页</span>
+<span class="text-[12px] font-medium text-[#0F1115] bg-[#EBEEF2] border border-[#979DA6] rounded-full px-[8px] py-[2px] leading-tight">产物库</span>
+<span class="text-[12px] text-[#61666B] px-[8px] py-[2px] cursor-pointer">同步</span>
+<span class="text-[12px] text-[#61666B] px-[8px] py-[2px] cursor-pointer">环境</span>
+</div>
+<div class="flex items-center gap-[10px] text-[#81858C]">
+<span class="text-[11px] font-mono tracking-tighter">⌘K</span>
+<span class="material-symbols-outlined text-[14px]">show_chart</span>
+<span class="material-symbols-outlined text-[14px]">history</span>
+<span class="material-symbols-outlined text-[14px]">info</span>
+</div>
+</div>
+<!-- 中间产物库列表区 -->
+<div class="flex-1 p-[14px] flex flex-col gap-[10px] overflow-hidden">
+<!-- 搜索与筛选工具栏 -->
+<div class="flex items-center gap-[8px]">
+<div class="flex-1 h-[28px] bg-[#FFFFFF] border border-[#0000001A] rounded-[4px] px-[8px] flex items-center gap-[6px]">
+<span class="material-symbols-outlined text-[13px] text-[#81858C]">search</span>
+<span class="text-[11px] font-mono text-[#81858C]">过滤快照哈希或时间戳...</span>
+</div>
+<div class="flex items-center gap-[4px] text-[11px] text-[#61666B]">
+<span class="bg-[#FFFFFF] border border-[#0000001A] rounded-full px-[6px] py-[2px] font-mono text-[#0F1115]">全部</span>
+<span class="px-[6px] py-[2px] font-mono cursor-pointer">备份文件</span>
+<span class="px-[6px] py-[2px] font-mono cursor-pointer">本机快照</span>
+<span class="px-[6px] py-[2px] font-mono text-[#0F1115] font-semibold cursor-pointer">远端快照</span>
+</div>
+</div>
+<!-- 产物列表条目集 -->
+<div class="flex-1 flex flex-col gap-[6px] overflow-hidden">
+<!-- 行 1: 远端快照（标记当前基线） -->
+<div class="h-[44px] bg-[#FFFFFF] border border-[#0000001A] rounded-[4px] px-[10px] flex items-center justify-between">
+<div class="flex items-center gap-[8px]">
+<span class="material-symbols-outlined text-[14px] text-[#4176E6]">cloud_done</span>
+<div class="flex flex-col">
+<div class="flex items-center gap-[6px]">
+<span class="text-[12.5px] font-mono text-[#0F1115]">2026-11-09 18:32</span>
+<span class="text-[11px] font-mono bg-[rgba(65,118,230,0.12)] text-[#4176E6] border border-[rgba(65,118,230,0.35)] px-[6px] py-[0.5px] rounded-full">当前基线</span>
+</div>
+<span class="text-[11px] font-mono text-[#81858C]">hash: 8f9b2d...c301 · 1.4 MB · 远端源 origin/main</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-[14px] text-[#81858C] hover:text-[#EC1313] cursor-pointer">delete</span>
+</div>
+<!-- 行 2: 本机快照 -->
+<div class="h-[44px] bg-[#FFFFFF] border border-[#0000000D] rounded-[4px] px-[10px] flex items-center justify-between">
+<div class="flex items-center gap-[8px]">
+<span class="material-symbols-outlined text-[14px] text-[#81858C]">laptop_mac</span>
+<div class="flex flex-col">
+<span class="text-[12.5px] font-mono text-[#0F1115]">2026-11-08 14:10</span>
+<span class="text-[11px] font-mono text-[#81858C]">hash: 4c2a1e...99b2 · 1.3 MB · 本机持久化</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-[14px] text-[#81858C] cursor-pointer">more_horiz</span>
+</div>
+<!-- 行 3: 归档备份 -->
+<div class="h-[44px] bg-[#FFFFFF] border border-[#0000000D] rounded-[4px] px-[10px] flex items-center justify-between">
+<div class="flex items-center gap-[8px]">
+<span class="material-symbols-outlined text-[14px] text-[#81858C]">archive</span>
+<div class="flex flex-col">
+<span class="text-[12.5px] font-mono text-[#0F1115]">2026-11-01 09:00</span>
+<span class="text-[11px] font-mono text-[#81858C]">hash: 1a8f09...de71 · 12.8 MB · 完整全量备份</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-[14px] text-[#81858C] cursor-pointer">more_horiz</span>
+</div>
+<!-- 行 4: 早期快照 -->
+<div class="h-[44px] bg-[#FFFFFF] border border-[#0000000D] rounded-[4px] px-[10px] flex items-center justify-between opacity-60">
+<div class="flex items-center gap-[8px]">
+<span class="material-symbols-outlined text-[14px] text-[#81858C]">cloud_queue</span>
+<div class="flex flex-col">
+<span class="text-[12.5px] font-mono text-[#0F1115]">2026-10-24 19:45</span>
+<span class="text-[11px] font-mono text-[#81858C]">hash: 7d6c33...55a0 · 1.2 MB · 远端归档节点</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-[14px] text-[#81858C] cursor-pointer">more_horiz</span>
+</div>
+</div>
+</div>
+<!-- 底部 28px 状态栏 -->
+<div class="h-[28px] px-[12px] bg-[#FFFFFF] border-t border-[#0000000D] flex items-center justify-between shrink-0">
+<div class="flex items-center gap-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span class="text-[11px] font-mono text-[#61666B]">就绪 · 校验无冲突</span>
+</div>
+<span class="text-[11px] font-mono text-[#81858C]">v0.8.0 · DSH 2.4</span>
+</div>
+</div>
+<!-- 全量黑色半透明遮罩与 D-07 确认弹窗 -->
+<div class="absolute inset-0 bg-black/25 backdrop-blur-[0.5px] z-20 flex items-center justify-center p-4">
+<!-- 弹窗本体：宽度精确为 500px，高度紧凑自适应 -->
+<div class="w-[500px] bg-white rounded-[12px] border border-black/10 flex flex-col shadow-2xl overflow-hidden">
+<!-- 1. 标题区 (44px) -->
+<div class="h-[44px] px-[16px] border-b border-black/10 flex items-center justify-between shrink-0">
+<span class="text-[13px] font-semibold text-[#0F1115] leading-none">删除远端快照</span>
+<button class="w-[20px] h-[20px] flex items-center justify-center text-[#81858C] hover:text-[#0F1115] transition-colors rounded cursor-pointer">
+<span class="material-symbols-outlined text-[14px]">close</span>
+</button>
+</div>
+<!-- 2. 内容区 (紧凑垂直间距: 上下各 12px, 段间 10px) -->
+<div class="px-[16px] py-[12px] flex flex-col gap-[10px]">
+<!-- 第 1 段：深色确认正文 -->
+<p class="text-[12.5px] leading-[1.5] text-[#0F1115] m-0">
+            确认删除远端快照 <span class="font-mono text-[#0F1115]">2026-11-09 18:32</span>？该文件将从远端仓库中删除，不可恢复。
+          </p>
+<!-- 第 2 段：注意提示文本与前置图标 -->
+<div class="flex items-start gap-[8px] bg-[rgba(245,158,11,0.12)] border border-[rgba(245,158,11,0.35)] rounded-[6px] p-[8px]">
+<span class="material-symbols-outlined text-[14px] text-[#F59E0B] shrink-0 mt-[1px]">warning</span>
+<p class="text-[11px] leading-[1.5] text-[#61666B] m-0">
+              注意：这是当前的同步基线（本机上次同步到的那份）。删除不会改动本机配置，但下次同步会重新比对远端最新快照。
+            </p>
+</div>
+</div>
+<!-- 3. 动作区 (48px) -->
+<div class="h-[48px] px-[16px] border-t border-black/10 flex items-center justify-end gap-x-[8px] shrink-0"><button class="h-[28px] px-[14px] bg-[#EC1313] hover:bg-[#EC1313] text-[#FFFFFF] text-[12.5px] font-medium rounded-[6px] flex items-center justify-center transition-colors cursor-pointer border-none outline-none">
+            删除
+          </button>
+<button class="h-[28px] px-[14px] bg-[#FFFFFF] hover:bg-[#EBEEF2] text-[#0F1115] text-[12.5px] font-medium border border-[#0000001A] rounded-[6px] flex items-center justify-center transition-colors cursor-pointer outline-none">
+            取消
+          </button></div>
+</div>
+</div>
+</div>
+</body></html>

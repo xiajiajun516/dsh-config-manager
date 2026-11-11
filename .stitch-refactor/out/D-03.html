@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 迁移前咨询弹窗 (D-03)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBEEF2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      color: #0F1115;
+    }
+    .custom-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #D1D5DB;
+      border-radius: 999px;
+    }
+  </style>
+</head>
+<body>
+<!-- 插件内容区画布 564x720 严格尺寸居中 -->
+<div class="relative w-[564px] h-[720px] bg-white overflow-hidden flex flex-col select-none border border-[#0000001A]">
+<!-- ================= 底层：被压暗的产物库页面 (灰阶结构) ================= -->
+<div class="absolute inset-0 flex flex-col filter grayscale pointer-events-none opacity-80">
+<!-- 顶部导航条 32px -->
+<div class="h-8 px-4 border-b border-[#0000001A] flex items-center justify-between bg-white shrink-0">
+<div class="flex items-center gap-4 text-[12.5px] leading-none text-[#61666B]">
+<span class="cursor-pointer hover:text-[#0F1115]">首页</span>
+<span class="px-2 py-1 bg-[#EBEEF2] border border-[#979DA6] rounded text-[#0F1115] font-medium text-[12px]">产物库</span>
+<span class="cursor-pointer hover:text-[#0F1115]">同步</span>
+<span class="cursor-pointer hover:text-[#0F1115]">环境</span>
+</div>
+<div class="flex items-center gap-3 text-[#81858C]">
+<!-- ⌘K, activity, history, info -->
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path></svg>
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</div>
+</div>
+<!-- 产物库页面主内容 (背景浅灰+卡片) -->
+<div class="flex-1 p-3 flex flex-col gap-2.5 overflow-hidden bg-[#EBEEF2]">
+<!-- 搜索与工具条 -->
+<div class="flex items-center justify-between gap-2 h-7">
+<div class="h-7 flex-1 border border-[#0000001A] rounded px-2 flex items-center bg-white text-[12px] text-[#81858C]">
+            搜索产物文件名、备注...
+          </div>
+<div class="h-7 px-2.5 border border-[#0000001A] rounded flex items-center text-[11px] text-[#61666B] bg-white">
+            全部 (12)
+          </div>
+</div>
+<!-- 产物列表条目 -->
+<div class="border border-[#0000001A] rounded bg-white p-2.5 flex flex-col gap-2">
+<div class="flex items-center justify-between text-[12px]">
+<span class="font-medium text-[#0F1115]">dsh-config-2026-11-08.zip</span>
+<span class="text-[#81858C] text-[11px]">24.8 MB · 2026-11-08 21:04</span>
+</div>
+<div class="text-[11px] text-[#61666B]">包含设置、会话、技能、MCP、插件数据等 12 分区</div>
+<div class="flex items-center justify-end gap-2 pt-1 border-t border-[#0000001A]">
+<span class="text-[11px] px-2 py-0.5 rounded border border-[#0000001A]">迁移前咨询</span>
+<span class="text-[11px] px-2 py-0.5 rounded border border-[#0000001A]">恢复快照</span>
+</div>
+</div>
+<div class="border border-[#0000001A] rounded bg-white p-2.5 flex flex-col gap-2 opacity-60">
+<div class="flex items-center justify-between text-[12px]">
+<span class="font-medium text-[#0F1115]">manual-daily.zip</span>
+<span class="text-[#81858C] text-[11px]">22.4 MB · 2026-11-04 18:20</span>
+</div>
+<div class="text-[11px] text-[#61666B]">常规日度整机快照</div>
+</div>
+</div>
+<!-- 底部状态栏 28px -->
+<div class="h-7 px-3 border-t border-[#0000001A] flex items-center justify-between bg-white text-[11px] text-[#81858C] shrink-0">
+<div class="flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span>就绪 · 校验无冲突</span>
+</div>
+<div>v0.8.0 · DSH 2.4</div>
+</div>
+</div>
+<!-- ================= 遮罩层 (0000003D) ================= -->
+<div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-3">
+<!-- ================= 弹窗 D-03「迁移前咨询」(540×620) ================= -->
+<div class="w-[540px] bg-white rounded-[12px] border border-[#0000001A] flex flex-col overflow-hidden z-20" style="height: auto; max-height: calc(100vh - 40px);">
+<!-- 1. 标题区 48px：标题 13px/600 左对齐，右端只有 ✕ 14px，无 ⓘ -->
+<div class="h-12 px-4 border-b border-[#0000001A] flex items-center justify-between shrink-0 bg-white">
+<div class="text-[13px] font-semibold leading-[1.25] text-[#0F1115]">
+            迁移前咨询
+          </div>
+<button aria-label="关闭" class="w-7 h-7 flex items-center justify-center text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2] rounded transition-colors">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</button>
+</div>
+<!-- 2. 内容区可滚动 (内边距 12px 16px，右侧 gutter 8px) -->
+<div class="flex-1 overflow-y-auto px-4 pt-3 pb-3 custom-scroll flex flex-col gap-2">
+<!-- 文件名提示行 (12px 次色 #61666B，高 20px) -->
+<div class="h-5 flex items-center text-[12px] text-[#61666B] leading-none shrink-0">
+            dsh-config-2026-11-08.zip
+          </div>
+<!-- 报告卡 (白底 1px #0000001A 描边、圆角 8、内边距 12px) -->
+<div class="border border-[#0000001A] rounded-[8px] bg-white flex flex-col shrink-0" style="padding: 10px;">
+<!-- 卡标题 (12.5px/600) -->
+<div class="text-[12.5px] font-semibold leading-[1.25] text-[#0F1115] mb-1.5">
+  迁移前咨询
+</div>
+<!-- 徽章行四枚 (gap 6px) 高 20px、11px 字、圆角 999、浅底同色文字 -->
+<div class="flex flex-wrap items-center gap-1.5 mb-2.5">
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#4176E61F] text-[#4176E6] leading-none">健康评分 89</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#F59E0B1F] text-[#F59E0B] leading-none">建议：需人工确认</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#F59E0B1F] text-[#F59E0B] leading-none">2 项需处理</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#4176E61F] text-[#4176E6] leading-none">只读分析</span>
+</div>
+<!-- 建议依据条 (浅灰底 #F6F7F9、圆角 8、内边距 10px) -->
+<div class="bg-[#F6F7F9] rounded-[8px] p-2.5 flex flex-col gap-1 mb-2.5">
+<div class="text-[12.5px] font-semibold leading-[1.25] text-[#0F1115]">
+    建议依据
+  </div>
+<div class="flex flex-col gap-0.5 text-[12px] text-[#0F1115] leading-[1.35]">
+<div class="flex items-center gap-1.5">
+<span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] shrink-0"></span>
+<span>分区 sessions 体积较大（约 412 MB）</span>
+</div>
+<div class="flex items-center gap-1.5">
+<span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] shrink-0"></span>
+<span>2 个会话引用了不存在的父会话</span>
+</div>
+<div class="flex items-center gap-1.5">
+<span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] shrink-0"></span>
+<span>插件清单版本低于当前宿主（0.7.2 → 0.8.0）</span>
+</div>
+</div>
+</div>
+<!-- 「将应用」小节：小节名 12.5px/600，右侧四枚徽章 -->
+<div class="flex items-center justify-between pb-2.5 border-b border-[#0000001A]">
+<div class="text-[12.5px] font-semibold leading-none text-[#0F1115]">
+    将应用
+  </div>
+<div class="flex items-center gap-1.5">
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#4176E61F] text-[#4176E6] leading-none">6 个分区</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#4176E61F] text-[#4176E6] leading-none">148 项</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#EC13131F] text-[#EC1313] leading-none">2 个冲突</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#F59E0B1F] text-[#F59E0B] leading-none">3 个风险</span>
+</div>
+</div>
+<!-- 「评分维度」小节：6 行完整展示无裁切 -->
+<div class="flex flex-col pt-2.5">
+<div class="text-[12.5px] font-semibold leading-[1.25] text-[#0F1115] mb-1.5">
+    评分维度
+  </div>
+<div class="flex flex-col">
+<!-- 维度 1: 版本 / 平台兼容性 92 (绿) -->
+<div class="flex items-center justify-between border-b border-[#0000001A]" style="min-height: 26px; padding: 2px 0;">
+<span class="text-[12px] text-[#0F1115]">版本 / 平台兼容性</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#22C55E1F] text-[#22C55E] leading-none">92</span>
+</div>
+<!-- 维度 2: 结构完整性 100 (绿) -->
+<div class="flex items-center justify-between border-b border-[#0000001A]" style="min-height: 26px; padding: 2px 0;">
+<span class="text-[12px] text-[#0F1115]">结构完整性</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#22C55E1F] text-[#22C55E] leading-none">100</span>
+</div>
+<!-- 维度 3: 分区完整性 95 (绿) -->
+<div class="flex items-center justify-between border-b border-[#0000001A]" style="min-height: 26px; padding: 2px 0;">
+<span class="text-[12px] text-[#0F1115]">分区完整性</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#22C55E1F] text-[#22C55E] leading-none">95</span>
+</div>
+<!-- 维度 4: 一致性 74 (橙) + 一行 11px 灰字说明 -->
+<div class="flex flex-col justify-center border-b border-[#0000001A]" style="padding: 3px 0;">
+<div class="flex items-center justify-between" style="min-height: 20px;">
+<span class="text-[12px] text-[#0F1115]">一致性</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#F59E0B1F] text-[#F59E0B] leading-none">74</span>
+</div>
+<div class="text-[11px] leading-[16px] text-[#81858C]">
+        2 个会话引用了不存在的父会话
+      </div>
+</div>
+<!-- 维度 5: 敏感暴露 60 (橙) + 一行 11px 灰字说明 -->
+<div class="flex flex-col justify-center border-b border-[#0000001A]" style="padding: 3px 0;">
+<div class="flex items-center justify-between" style="min-height: 20px;">
+<span class="text-[12px] text-[#0F1115]">敏感暴露</span>
+<span class="h-5 px-2 rounded-full inline-flex items-center text-[11px] font-medium bg-[#F59E0B1F] text-[#F59E0B] leading-none">60</span>
+</div>
+<div class="text-[11px] leading-[16px] text-[#81858C]">
+        3 处凭据状态分区含敏感值，恢复后需重新录入
+      </div>
+</div>
+<!-- 维度 6: 可迁移性 82 (绿) -->
+<div class="flex items-center justify-between" style="min-height: 26px; padding: 2px 0;">
+<span class="text-[12px] text-[#0F1115]">可迁移性</span>
+<span class="h-5 px-2 rounded inline-flex items-center text-[11px] font-medium bg-[#22C55E1F] text-[#22C55E] leading-none font-mono">82</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- 3. 动作区 56px：上边框 1px #0000001A，单个按钮「关闭」右对齐 -->
+<div class="h-14 px-4 border-t border-[#0000001A] flex items-center justify-end shrink-0 bg-white">
+<button class="h-[30px] px-3 bg-[#0F1115] hover:bg-[#43454A] text-white text-[12px] font-medium rounded-[8px] transition-colors leading-none flex items-center justify-center">
+            关闭
+          </button>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

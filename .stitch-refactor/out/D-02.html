@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 恢复计划预览 (D-02 精准规范版)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<style>
+  * {
+    box-sizing: border-box;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #EBEEF2;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #0F1115;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .font-mono-code {
+    font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  /* 自定义滚动条 (8px gutter) */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #00000026;
+    border-radius: 999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #00000040;
+  }
+</style>
+</head>
+<body>
+<!-- 564x720 插件外层容器 -->
+<div class="relative w-[564px] h-[720px] bg-white overflow-hidden shadow-none border border-[#0000001A] flex flex-col select-none">
+<!-- ================= 下层：被压暗的「产物库」页面 (纯灰阶/低对比度结构) ================= -->
+<div class="absolute inset-0 w-full h-full flex flex-col bg-[#EBEEF2] pointer-events-none">
+<!-- 顶部 32px 导航条 -->
+<div class="h-8 border-b border-[#0000001A] px-4 flex items-center justify-between bg-white shrink-0">
+<div class="flex items-center gap-3 text-[12px] text-[#81858C]">
+<span>首页</span>
+<span class="text-[#0F1115] font-medium bg-[#EBEEF2] border border-[#979DA6] px-2 py-0.5 rounded-[8px]">产物库</span>
+<span>同步</span>
+<span>环境</span>
+</div>
+<div class="flex items-center gap-3 text-[#81858C]"><!-- ⌘K 命令面板图标 -->
+<div class="flex items-center justify-center border border-[#0000001A] rounded px-1 h-4 text-[10px] font-mono-code leading-none text-[#81858C]">⌘K</div>
+<!-- 活动图标 (Activity) -->
+<svg class="w-3.5 h-3.5 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+<!-- 历史图标 (Clock) -->
+<svg class="w-3.5 h-3.5 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+<!-- 关于图标 (Info) -->
+<svg class="w-3.5 h-3.5 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 8h.01M12 12v4" stroke-linecap="round"></path></svg></div>
+</div>
+<!-- 产物库灰阶列表骨架 -->
+<div class="p-3 flex-1 flex flex-col gap-2">
+<div class="h-7 border border-[#0000001A] rounded-[8px] bg-white px-2.5 flex items-center text-[12px] text-[#81858C]">
+        搜索产物文件名、备注...
+      </div>
+<div class="flex-1 border border-[#0000001A] rounded-[12px] bg-white p-2.5 flex flex-col gap-2 opacity-50">
+<div class="h-9 border-b border-[#0000001A] flex items-center justify-between text-[11px] text-[#61666B]">
+<span>backup-2026-11-10T2104.zip</span>
+<span class="px-2 py-0.5 rounded bg-[#EBEEF2]">恢复</span>
+</div>
+<div class="h-9 border-b border-[#0000001A] flex items-center justify-between text-[11px] text-[#61666B]">
+<span>before-import.snap</span>
+<span class="px-2 py-0.5 rounded bg-[#EBEEF2]">恢复</span>
+</div>
+<div class="h-9 border-b border-[#0000001A] flex items-center justify-between text-[11px] text-[#61666B]">
+<span>full-export.zip</span>
+<span class="px-2 py-0.5 rounded bg-[#EBEEF2]">恢复</span>
+</div>
+</div>
+</div>
+<!-- 底部状态栏 -->
+<div class="h-7 border-t border-[#0000001A] px-3 flex items-center justify-between text-[11px] text-[#81858C] bg-white shrink-0">
+<div class="flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span>就绪 · 校验无冲突</span>
+</div>
+<span>v0.8.0 · DSH 2.4</span>
+</div>
+</div>
+<!-- ================= 遮罩层 (#0000003D 盖满 564x720) ================= -->
+<div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-3">
+<!-- ================= 弹窗宽版 Modal (540x620) ================= -->
+<div class="w-[540px] h-[620px] bg-white rounded-[12px] border border-[#0000001A] shadow-none flex flex-col overflow-hidden text-[#0F1115]">
+<!-- 1. 标题区 (48px) -->
+<div class="h-12 border-b border-[#0000001A] px-4 flex items-center justify-between shrink-0 bg-white">
+<span class="text-[13px] font-semibold tracking-tight text-[#0F1115]">恢复计划预览</span>
+<div class="flex items-center gap-3 text-[#81858C]">
+<!-- ⓘ 14px -->
+<svg class="w-3.5 h-3.5 hover:text-[#0F1115] cursor-pointer transition-colors" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="9"></circle>
+<path d="M12 8h.01M12 12v4" stroke-linecap="round"></path>
+</svg>
+<!-- ✕ 14px -->
+<svg class="w-3.5 h-3.5 hover:text-[#0F1115] cursor-pointer transition-colors" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24">
+<path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</div>
+</div>
+<!-- 2. 内容区 (自身可滚动，内边距 12px 16px，右侧滚动 gutter 8px) -->
+<div class="flex-1 overflow-y-auto px-4 pt-2.5 pb-2 custom-scrollbar flex flex-col gap-2.5">
+<!-- 摘要条 (6 徽章 + +184 −63) -->
+<div class="flex items-center justify-between shrink-0 flex-wrap gap-1.5 pb-0.5">
+<div class="flex items-center gap-1.5 flex-wrap text-[11px] font-medium leading-none">
+<!-- 蓝徽章：将被还原 12 -->
+<span class="px-2 py-1 rounded-[4px] bg-[#4176E614] text-[#4176E6] border border-[#4176E626]">将被还原 12</span>
+<!-- 绿：新增 3 -->
+<span class="px-2 py-1 rounded-[4px] bg-[#22C55E14] text-[#22C55E] border border-[#22C55E26]">新增 3</span>
+<!-- 红：将被删除 2 -->
+<span class="px-2 py-1 rounded-[4px] bg-[#EC131314] text-[#EC1313] border border-[#EC131326]">将被删除 2</span>
+<!-- 橙：卸载插件 1 -->
+<span class="px-2 py-1 rounded-[4px] bg-[#F59E0B14] text-[#F59E0B] border border-[#F59E0B26]">卸载插件 1</span>
+<!-- 橙：需人工处理 2 -->
+<span class="px-2 py-1 rounded-[4px] bg-[#F59E0B14] text-[#F59E0B] border border-[#F59E0B26]">需人工处理 2</span>
+<!-- 蓝：无动作 9 -->
+<span class="px-2 py-1 rounded-[4px] bg-[#4176E614] text-[#4176E6] border border-[#4176E626]">无动作 9</span>
+</div>
+<div class="text-[11px] font-mono-code font-medium tracking-tight text-[#81858C] shrink-0">
+<span class="text-[#22C55E]">+184</span> <span class="text-[#EC1313]">−63</span>
+</div>
+</div>
+<!-- ================= 分组 1: 将被还原 (计数 15, +184 −63) ================= -->
+<div class="flex flex-col border border-[#0000001A] rounded-[8px] overflow-hidden bg-white shrink-0">
+<!-- 分组表头 -->
+<div class="h-[30px] bg-[#EBEEF2] px-3 flex items-center justify-between border-b border-[#0000001A]">
+<div class="flex items-center gap-2">
+<span class="text-[12.5px] font-semibold text-[#0F1115]">将被还原</span>
+<span class="px-1.5 py-0.5 rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px] font-mono-code">15</span>
+</div>
+<div class="text-[11px] font-mono-code text-[#81858C]">
+<span class="text-[#22C55E]">+184</span> <span class="text-[#EC1313]">−63</span>
+</div>
+</div>
+<!-- 行 ①: 展开并双栏 diff -->
+<div class="flex flex-col border-b border-[#0000001A]">
+<!-- 行标题 (30px) -->
+<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer">
+<div class="flex items-center gap-2 overflow-hidden pr-2">
+<span class="h-5 px-2 rounded-full bg-[#4176E614] text-[#4176E6] text-[11px] font-medium flex items-center shrink-0">修改</span>
+<span class="font-mono-code text-[12px] text-[#0F1115] truncate">~/.dsh/settings.json</span>
+</div>
+<div class="flex items-center gap-2 shrink-0">
+<div class="font-mono-code text-[11px] text-[#81858C]">
+<span class="text-[#22C55E]">+12</span> <span class="text-[#EC1313]">−4</span>
+</div>
+<!-- chevron 朝下 (12px) -->
+<svg class="w-3 h-3 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.75" viewbox="0 0 24 24"><path d="M19 9l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+</div>
+<!-- 双栏 diff 对照区 -->
+<div class="border-t border-[#0000001A] bg-white font-mono-code text-[11px] leading-[20px]">
+<!-- 列头: 本机 / 快照 (各半栏，中间 1px 竖线) -->
+<div class="grid grid-cols-2 bg-[#EBEEF2] border-b border-[#0000001A] text-[#61666B] text-[11px] font-medium">
+<div class="px-3 py-1 border-r border-[#0000001A]">本机</div>
+<div class="px-3 py-1">快照</div>
+</div>
+<!-- 块头行: 两栏各一份「@@ -12,7 +12,9 @@」(底 #F6F7F9) -->
+<div class="grid grid-cols-2 bg-[#F6F7F9] border-b border-[#0000001A] text-[#81858C] text-[11px]">
+<div class="px-3 py-0.5 border-r border-[#0000001A]">@@ -12,7 +12,9 @@</div>
+<div class="px-3 py-0.5">@@ -12,7 +12,9 @@</div>
+</div>
+<!-- 正文 4 行对照代码 -->
+<!-- 第 1 行: 12 "theme": "dark", -->
+<div class="grid grid-cols-2 border-b border-[#0000000D] h-[20px] items-center text-[11px]">
+<div class="flex items-center h-full border-r border-[#0000001A] overflow-hidden">
+<span class="w-8 shrink-0 text-center text-[#81858C] select-none">12</span>
+<span class="text-[#0F1115] truncate pl-1">"theme": "dark",</span>
+</div>
+<div class="flex items-center h-full overflow-hidden">
+<span class="w-8 shrink-0 text-center text-[#81858C] select-none">12</span>
+<span class="text-[#0F1115] truncate pl-1">"theme": "dark",</span>
+</div>
+</div>
+<!-- 第 2 行: 13 scale (左红底红条 / 右绿底绿条) -->
+<div class="grid grid-cols-2 border-b border-[#0000000D] h-[20px] items-center text-[11px]">
+<div class="flex items-center h-full border-r border-[#0000001A] bg-[#EC131314] overflow-hidden relative">
+<span class="absolute left-0 top-0 bottom-0 w-[3px] bg-[#EC1313]"></span>
+<span class="w-8 shrink-0 text-center text-[#EC1313] select-none">13</span>
+<span class="text-[#EC1313] truncate pl-1">- "scale": 1.0,</span>
+</div>
+<div class="flex items-center h-full bg-[#22C55E14] overflow-hidden relative">
+<span class="absolute left-0 top-0 bottom-0 w-[3px] bg-[#22C55E]"></span>
+<span class="w-8 shrink-0 text-center text-[#22C55E] select-none">13</span>
+<span class="text-[#22C55E] truncate pl-1">+ "scale": 1.15,</span>
+</div>
+</div>
+<!-- 第 3 行: 14 "fontSize": 13, -->
+<div class="grid grid-cols-2 border-b border-[#0000000D] h-[20px] items-center text-[11px]">
+<div class="flex items-center h-full border-r border-[#0000001A] overflow-hidden">
+<span class="w-8 shrink-0 text-center text-[#81858C] select-none">14</span>
+<span class="text-[#0F1115] truncate pl-1">"fontSize": 13,</span>
+</div>
+<div class="flex items-center h-full overflow-hidden">
+<span class="w-8 shrink-0 text-center text-[#81858C] select-none">14</span>
+<span class="text-[#0F1115] truncate pl-1">"fontSize": 13,</span>
+</div>
+</div>
+<!-- 第 4 行: 15 sidebar (左红底红条 / 右绿底绿条) -->
+<div class="grid grid-cols-2 h-[20px] items-center text-[11px]">
+<div class="flex items-center h-full border-r border-[#0000001A] bg-[#EC131314] overflow-hidden relative">
+<span class="absolute left-0 top-0 bottom-0 w-[3px] bg-[#EC1313]"></span>
+<span class="w-8 shrink-0 text-center text-[#EC1313] select-none">15</span>
+<span class="text-[#EC1313] truncate pl-1">- "sidebar": "compact",</span>
+</div>
+<div class="flex items-center h-full bg-[#22C55E14] overflow-hidden relative">
+<span class="absolute left-0 top-0 bottom-0 w-[3px] bg-[#22C55E]"></span>
+<span class="w-8 shrink-0 text-center text-[#22C55E] select-none">15</span>
+<span class="text-[#22C55E] truncate pl-1">+ "sidebar": "wide",</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 行 ②: 绿徽章「新增」 ~/.dsh/prompts/code-review.md +48 −0 (30px) -->
+<div class="h-[30px] px-3 flex items-center justify-between border-b border-[#0000001A] hover:bg-[#EBEEF2] cursor-pointer">
+<div class="flex items-center gap-2 overflow-hidden pr-2">
+<span class="h-5 px-2 rounded-full bg-[#22C55E14] text-[#22C55E] text-[11px] font-medium flex items-center shrink-0">新增</span>
+<span class="font-mono-code text-[12px] text-[#0F1115] truncate">~/.dsh/prompts/code-review.md</span>
+</div>
+<div class="flex items-center gap-2 shrink-0">
+<div class="font-mono-code text-[11px]">
+<span class="text-[#22C55E]">+48</span> <span class="text-[#81858C]">−0</span>
+</div>
+<svg class="w-3 h-3 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.75" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+</div>
+<!-- 行 ③: 蓝徽章「修改」 ~/.dsh/skills/obsidian-kb-capture/SKILL.md +23 −9 (30px) -->
+<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer">
+<div class="flex items-center gap-2 overflow-hidden pr-2">
+<span class="h-5 px-2 rounded-full bg-[#4176E614] text-[#4176E6] text-[11px] font-medium flex items-center shrink-0">修改</span>
+<span class="font-mono-code text-[12px] text-[#0F1115] truncate">~/.dsh/skills/obsidian-kb-capture/SKILL.md</span>
+</div>
+<div class="flex items-center gap-2 shrink-0">
+<div class="font-mono-code text-[11px]">
+<span class="text-[#22C55E]">+23</span> <span class="text-[#EC1313]">−9</span>
+</div>
+<svg class="w-3 h-3 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.75" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+</div>
+</div>
+<!-- ================= 分组 2: 将被删除 (计数 2, +0 −43) ================= -->
+<div class="flex flex-col border border-[#0000001A] rounded-[8px] overflow-hidden bg-white shrink-0">
+<div class="h-[30px] bg-[#EBEEF2] px-3 flex items-center justify-between border-b border-[#0000001A]">
+<div class="flex items-center gap-2">
+<span class="text-[12.5px] font-semibold text-[#0F1115]">将被删除</span>
+<span class="px-1.5 py-0.5 rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px] font-mono-code">2</span>
+</div>
+<div class="text-[11px] font-mono-code text-[#81858C]">
+<span class="text-[#81858C]">+0</span> <span class="text-[#EC1313]">−43</span>
+</div>
+</div>
+<!-- 行 1: 行数未统计「体积超上限」 (30px) -->
+<div class="h-[30px] px-3 flex items-center justify-between border-b border-[#0000001A] hover:bg-[#EBEEF2] cursor-pointer">
+<div class="flex items-center gap-2 overflow-hidden pr-2">
+<span class="h-5 px-2 rounded-full bg-[#EC131314] text-[#EC1313] text-[11px] font-medium flex items-center shrink-0">删除</span>
+<span class="font-mono-code text-[12px] text-[#0F1115] truncate">~/.dsh/mcp/servers.json</span>
+</div>
+<div class="flex items-center gap-2 shrink-0">
+<span class="text-[11px] text-[#81858C]">体积超上限</span>
+<svg class="w-3 h-3 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.75" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+</div>
+<!-- 行 2: patch-local.yml +0 −12 (30px) -->
+<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer">
+<div class="flex items-center gap-2 overflow-hidden pr-2">
+<span class="h-5 px-2 rounded-full bg-[#EC131314] text-[#EC1313] text-[11px] font-medium flex items-center shrink-0">删除</span>
+<span class="font-mono-code text-[12px] text-[#0F1115] truncate">~/.dsh/plugins/patch-local.yml</span>
+</div>
+<div class="flex items-center gap-2 shrink-0">
+<div class="font-mono-code text-[11px]">
+<span class="text-[#81858C]">+0</span> <span class="text-[#EC1313]">−12</span>
+</div>
+<svg class="w-3 h-3 text-[#81858C]" fill="none" stroke="currentColor" stroke-width="1.75" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+</div>
+</div>
+<!-- ================= 分组 3: 卸载插件 (计数 1) ================= -->
+<div class="flex flex-col border border-[#0000001A] rounded-[8px] overflow-hidden bg-white shrink-0">
+<div class="h-[30px] bg-[#EBEEF2] px-3 flex items-center justify-between border-b border-[#0000001A]">
+<div class="flex items-center gap-2">
+<span class="text-[12.5px] font-semibold text-[#0F1115]">卸载插件</span>
+<span class="px-1.5 py-0.5 rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px] font-mono-code">1</span>
+</div>
+</div>
+<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer">
+<div class="flex items-center gap-2 overflow-hidden pr-2">
+<span class="h-5 px-2 rounded-full bg-[#F59E0B14] text-[#F59E0B] text-[11px] font-medium flex items-center shrink-0">卸载插件</span>
+<span class="font-mono-code text-[12px] text-[#0F1115] truncate">config-manager@0.8.0</span>
+</div>
+<svg class="w-3 h-3 text-[#81858C] shrink-0" fill="none" stroke="currentColor" stroke-width="1.75" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+</div>
+<!-- ================= 分组 4: 需人工处理 (计数 2) ================= -->
+<div class="flex flex-col border border-[#0000001A] rounded-[8px] overflow-hidden bg-white shrink-0">
+<div class="h-[30px] bg-[#EBEEF2] px-3 flex items-center justify-between border-b border-[#0000001A]">
+<div class="flex items-center gap-2">
+<span class="text-[12.5px] font-semibold text-[#0F1115]">需人工处理</span>
+<span class="px-1.5 py-0.5 rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px] font-mono-code">2</span>
+</div>
+</div>
+<div class="h-[30px] px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer">
+<div class="flex items-center gap-2 overflow-hidden pr-2">
+<span class="h-5 px-2 rounded-[4px] bg-[#F59E0B14] text-[#F59E0B] text-[11px] font-medium flex items-center shrink-0">人工提示</span>
+<span class="text-[12px] text-[#0F1115] truncate">凭据（3 项）· MCP 服务器（2 项）</span>
+</div>
+<svg class="w-3 h-3 text-[#81858C] shrink-0" fill="none" stroke="currentColor" stroke-width="1.75" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+</div>
+</div>
+<!-- ================= 分组 5: 无动作 (计数 9) ================= -->
+<!-- 高度 28px，收折状态，小箭头 + 文本「无动作」+ 胶囊「9」，底侧露出一半以作为滚动暗示 -->
+<div class="h-7 border border-[#0000001A] rounded-[8px] bg-white px-3 flex items-center justify-between hover:bg-[#EBEEF2] cursor-pointer shrink-0">
+<div class="flex items-center gap-2">
+<svg class="w-3 h-3 text-[#81858C] shrink-0" fill="none" stroke="currentColor" stroke-width="1.75" viewbox="0 0 24 24"><path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+<span class="text-[12.5px] font-semibold text-[#0F1115]">无动作</span>
+<span class="px-1.5 py-0.5 rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px] font-mono-code leading-none">9</span>
+</div>
+</div>
+</div>
+<!-- 3. 动作区 (56px, 上边框 1px #0000001A, 按钮右对齐) -->
+<div class="h-14 border-t border-[#0000001A] px-4 flex items-center justify-end gap-2.5 bg-white shrink-0">
+<!-- 取消 (ghost: 白底 1px #0000001A 描边, 文字 #0F1115, 高 30, 圆角 8) -->
+<button class="h-[30px] px-3.5 bg-white border border-[#0000001A] hover:bg-[#EBEEF2] active:bg-[#EBEEF2] rounded-[8px] text-[12px] font-medium text-[#0F1115] transition-colors">
+          取消
+        </button>
+<!-- 执行恢复 (危险色 #EC1313 白字, 高 30, 圆角 8) -->
+<button class="h-[30px] px-3.5 bg-[#EC1313] hover:bg-[#EC1313] active:bg-[#EC1313] rounded-[8px] text-[12px] font-medium text-white transition-colors">
+          执行恢复
+        </button>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

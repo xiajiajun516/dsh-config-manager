@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 D-18 停止实例确认弹窗</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .font-mono-code {
+      font-family: 'Geist Mono', monospace;
+    }
+    /* 严格限制字号只在 11 / 12 / 12.5 / 13px */
+    .text-11 { font-size: 11px; line-height: 1.5; }
+    .text-12 { font-size: 12px; line-height: 1.5; }
+    .text-12-5 { font-size: 12.5px; line-height: 1.5; }
+    .text-13 { font-size: 13px; line-height: 1.25; }
+  </style>
+</head>
+<body class="bg-[#EBEEF2] min-h-screen flex items-center justify-center p-0 m-0">
+<!-- 564x720 插件面板容器：整块底板统一为 #EBEEF2 灰，禁止纯白 -->
+<div class="relative w-[564px] h-[720px] bg-[#EBEEF2] rounded-[16px] border border-[#0000001A] overflow-hidden flex flex-col justify-between select-none shadow-none">
+<!-- 顶部导航条（44px，#EBEEF2 背景，外壳文字图标 #61666B） -->
+<header class="h-[44px] px-[16px] bg-[#EBEEF2] border-b border-[#0000001A] flex items-center justify-between shrink-0 z-0">
+<nav class="flex items-center gap-[6px]">
+<button class="px-[8px] py-[4px] rounded-[8px] text-12 font-normal text-[#61666B] hover:text-[#0F1115] transition-colors">首页</button>
+<button class="px-[8px] py-[4px] rounded-[8px] text-12 font-normal text-[#61666B] hover:text-[#0F1115] transition-colors">产物库</button>
+<button class="px-[8px] py-[4px] rounded-[8px] text-12 font-normal text-[#61666B] hover:text-[#0F1115] transition-colors">同步</button>
+<!-- 环境页签：当前激活态 -->
+<button class="px-[10px] py-[4px] rounded-[8px] text-12 font-medium bg-[#EBEEF2] border border-[#979DA6] text-[#0F1115]">环境</button>
+</nav>
+<!-- 右端 4 个 14px 线性图标按钮（⌘K、活动、历史、关于） -->
+<div class="flex items-center gap-[12px] text-[#61666B]">
+<button class="hover:text-[#0F1115] transition-colors" title="命令面板">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<rect height="18" rx="4" width="18" x="3" y="3"></rect>
+<path d="M15 9h-6"></path>
+<path d="M9 9v6"></path>
+<path d="M15 15h-6"></path>
+</svg>
+</button>
+<button class="hover:text-[#0F1115] transition-colors" title="运行中心与活动">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+</svg>
+</button>
+<button class="hover:text-[#0F1115] transition-colors" title="迁移历史">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+</button>
+<button class="hover:text-[#0F1115] transition-colors" title="关于与帮助">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<path d="M12 16v-4"></path>
+<path d="M12 8h.01"></path>
+</svg>
+</button>
+</div>
+</header>
+<!-- 中间内容区背景残影：环境页背景（灰底上低对比可见） -->
+<main class="flex-1 p-[16px] flex flex-col gap-[10px] overflow-hidden bg-[#EBEEF2]">
+<!-- 顶部环境子页签条 -->
+<div class="flex items-center justify-between pb-[2px]">
+<div class="flex items-center gap-[4px] bg-[#EBEEF2] p-[2px] rounded-[8px] border border-[#0000001A]">
+<span class="px-[8px] py-[2px] rounded-[6px] text-11 font-medium bg-[#FFFFFF] text-[#0F1115]">档案</span>
+<span class="px-[8px] py-[2px] rounded-[6px] text-11 text-[#61666B]">维护与诊断</span>
+</div>
+<span class="text-11 text-[#81858C]">已配置 3 个档案</span>
+</div>
+<!-- 背景残影卡片 1：「运行中实例」卡片（带绿徽章与 work 信息） -->
+<div class="bg-[#EBEEF2] rounded-[12px] border border-[#0000001A] p-[12px] flex flex-col gap-[8px]"><div class="flex items-center justify-between pb-[4px]">
+<span class="text-11 text-[#81858C]">运行状态</span>
+</div>
+<div class="flex items-center justify-between py-[2px]">
+<span class="text-12-5 font-medium text-[#0F1115] font-mono-code">work</span>
+<div class="flex items-center gap-[8px]">
+<span class="text-11 text-[#81858C]">端口 4317 · 本插件启动</span>
+<button class="px-[8px] py-[2px] rounded-[6px] text-11 text-[#61666B] bg-[#FFFFFF] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors">打开</button>
+<button class="px-[8px] py-[2px] rounded-[6px] text-11 text-[#EC1313] bg-[#FFFFFF] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors">停止</button>
+</div>
+</div></div>
+<!-- 背景残影卡片 2：「已配置档案」列表卡片 -->
+<div class="bg-[#EBEEF2] rounded-[12px] border border-[#0000001A] p-[12px] flex flex-col gap-[8px]">
+<div class="flex items-center justify-between pb-[4px] border-b border-[#0000001A]">
+<span class="text-12 font-medium text-[#0F1115]">已配置档案</span>
+<span class="text-11 text-[#81858C]">+ 新建档案</span>
+</div>
+<div class="flex items-center justify-between py-[4px] border-b border-[#0000000D]">
+<div class="flex items-center gap-[6px]">
+<span class="text-12 font-medium text-[#0F1115] font-mono-code">default</span>
+<span class="px-[4px] py-[1px] rounded-[4px] text-11 bg-[#EBEEF2] text-[#61666B]">系统默认</span>
+</div>
+<span class="text-11 text-[#81858C]">~/ .dsh/profiles/default</span>
+</div>
+<div class="flex items-center justify-between py-[4px]">
+<div class="flex items-center gap-[6px]">
+<span class="text-12 font-medium text-[#0F1115] font-mono-code">work</span>
+<span class="px-[4px] py-[1px] rounded-[4px] text-11 bg-[#4176E61F] text-[#4176E6]">当前使用</span>
+</div>
+<span class="text-11 text-[#81858C]">~/ .dsh/profiles/work · 8 个 bundle</span>
+</div>
+</div>
+<!-- 背景残影卡片 3：磁盘与实例占用卡片 -->
+<div class="bg-[#EBEEF2] rounded-[12px] border border-[#0000001A] p-[12px] flex flex-col gap-[6px] opacity-75">
+<div class="flex items-center justify-between">
+<span class="text-12 font-medium text-[#0F1115]">当前实例数据</span>
+<span class="text-11 text-[#81858C]">本机 · Windows</span>
+</div>
+<div class="text-11 text-[#61666B] font-mono-code">
+<span>DSH 2.4.19 · 数据目录 C:\Users\me\.dsh</span>
+</div>
+</div>
+</main>
+<!-- 底部状态栏（28px，#EBEEF2 背景，两端对齐） -->
+<footer class="h-[28px] px-[16px] bg-[#EBEEF2] border-t border-[#0000001A] flex items-center justify-between text-11 text-[#61666B] shrink-0 z-0">
+<div class="flex items-center gap-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span>就绪</span>
+</div>
+<span class="font-mono-code text-[#81858C]">v0.8.0 · DSH 2.4</span>
+</footer>
+<!-- 全屏半透明遮罩（#0000003D，压暗外壳与背景） -->
+<div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-[16px]">
+<!-- D-18「停止实例」确认弹窗本体（ConfirmDialog danger）
+           规格要求：
+           - 水平垂直居中
+           - 宽度 519px（min(600px, 92%)）
+           - 高度约 230px 自适应紧凑贴合
+           - 圆角 16px
+           - 1px #0000001A 描边，无投影
+           - 纯白 #FFFFFF 背景
+           - 三段结构：标题行 -> 正文 -> 底部操作栏
+      -->
+<div class="w-[519px] bg-[#FFFFFF] rounded-[16px] border border-[#0000001A] shadow-none flex flex-col overflow-hidden">
+<!-- 标题行：padding 16px 16px 0，13px 500 #0F1115，无 ✕、无 ⓘ -->
+<div class="px-[16px] pt-[16px] pb-0">
+<h2 class="text-13 font-medium text-[#0F1115] tracking-tight">停止实例</h2>
+</div>
+<!-- 正文：padding 8px 16px 12px，12.5px / 1.5 / #61666B，一句话完整不断行成两段，文案逐字严格一致 -->
+<div class="px-[16px] pt-[8px] pb-[12px]">
+<p class="text-12-5 text-[#61666B] leading-[1.5]">
+            确认停止档案「work」的实例（端口 4317）？该实例里正在进行的会话会被中断。
+          </p>
+</div>
+<!-- 底栏：顶部 0.5px #0000001A，padding 10px 16px 14px，右对齐两按钮：左红底「停止」、右 ghost「取消」（带默认焦点环） -->
+<div class="px-[16px] pt-[10px] pb-[14px] border-t border-[#0000001A] flex items-center justify-end gap-[8px] bg-[#FFFFFF]">
+<!-- 左侧危险操作主按钮：停止（#EC1313 填充、白字、高 30px、圆角 8px、内边距 14px） -->
+<button class="h-[30px] px-[14px] rounded-[8px] bg-[#EC1313] hover:bg-[#EC1313] active:scale-[0.99] text-12 font-medium text-[#FFFFFF] transition-all flex items-center justify-center">
+            停止
+          </button>
+<!-- 右侧取消按钮：ghost（白底、1px #0000001A 描边、深色文字 #0F1115、带外扩 2px #979DA6 焦点环表达等待确认） -->
+<button class="h-[30px] px-[14px] rounded-[8px] bg-[#FFFFFF] border border-[#0000001A] hover:bg-[#EBEEF2] active:scale-[0.99] text-12 font-medium text-[#0F1115] ring-2 ring-[#979DA6] ring-offset-1 transition-all flex items-center justify-center">
+            取消
+          </button>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

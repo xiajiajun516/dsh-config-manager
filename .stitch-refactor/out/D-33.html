@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 D-33 选择本机路径弹窗</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            textPrimary: '#0F1115',
+            textSecondary: '#61666B',
+            textTertiary: '#81858C',
+            accent: '#4176E6',
+            success: '#22C55E',
+            warning: '#F59E0B',
+            danger: '#EC1313',
+            surfaceContainer: '#EBEEF2',
+            ghostActive: '#EBEEF2',
+            ghostBorder: '#979DA6',
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      background-color: #EBEEF2;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .custom-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  </style>
+</head>
+<body>
+<!-- 插件内容区画布 564x720 像素，居中展示 -->
+<div class="relative w-[564px] h-[720px] bg-white rounded-2xl overflow-hidden flex flex-col justify-between border border-black/10 shadow-sm">
+<!-- ==================== 下层导入页结构 (通过遮罩统一压暗) ==================== -->
+<div class="absolute inset-0 flex flex-col justify-between pointer-events-none select-none z-0"><!-- 顶部导航条 (32px) -->
+<div class="h-8 border-b border-black/10 px-4 flex items-center justify-between bg-white">
+<div class="flex items-center space-x-4 text-[12px]">
+<span class="text-[#0F1115] font-medium px-2 py-0.5 rounded-lg bg-[#EBEEF2] border border-black/10">首页</span>
+<span class="text-[#61666B]">产物库</span>
+<span class="text-[#61666B]">同步</span>
+<span class="text-[#61666B]">环境</span>
+</div>
+<div class="flex items-center space-x-3 text-[#81858C]">
+<!-- ⌘K -->
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-width="1.5" viewbox="0 0 24 24">
+<rect height="18" rx="2" width="18" x="3" y="3"></rect>
+<path d="M8 9h2m-2 6h2m4-6h2m-2 6h2"></path>
+</svg>
+<!-- 活动折线 -->
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-width="1.5" viewbox="0 0 24 24">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史时钟 -->
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-width="1.5" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于 -->
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-width="1.5" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</div>
+<!-- 导入页下层内容区（灰阶占位块） -->
+<div class="flex-1 p-4 flex flex-col space-y-3 bg-[#EBEEF2]">
+<div class="h-6 w-32 bg-white rounded"></div>
+<div class="h-10 w-full bg-white rounded-lg border border-black/10"></div>
+<div class="h-28 w-full bg-white rounded-xl border border-black/10 p-3 space-y-2">
+<div class="h-4 w-28 bg-[#EBEEF2] rounded"></div>
+<div class="h-4 w-full bg-[#EBEEF2] rounded"></div>
+<div class="h-4 w-3/4 bg-[#EBEEF2] rounded"></div>
+</div>
+<div class="h-44 w-full bg-white rounded-xl border border-black/10 p-3 space-y-3">
+<div class="h-4 w-36 bg-[#EBEEF2] rounded"></div>
+<div class="h-8 w-full bg-[#EBEEF2] rounded-lg"></div>
+<div class="h-8 w-full bg-[#EBEEF2] rounded-lg"></div>
+</div>
+</div>
+<!-- 底部状态栏 (28px) -->
+<div class="h-7 border-t border-black/10 px-4 flex items-center justify-between text-[11px] text-[#81858C] bg-white">
+<div class="flex items-center space-x-2">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span>就绪 · 待选择路径</span>
+</div>
+<div class="font-mono">v0.8.0 · DSH 2.4</div>
+</div></div>
+<!-- ==================== 全局遮罩压暗层 (#0000003D) ==================== -->
+<div class="absolute inset-0 bg-black/[0.24] z-10 pointer-events-auto"></div>
+<!-- ==================== 弹窗 D-33 选择本机路径本体 (宽 541px, 上边距 96px) ==================== -->
+<div class="relative z-20 w-[541px] mx-auto mt-[96px] bg-white rounded-xl border border-black/10 flex flex-col overflow-hidden" style="max-height: 524px;"><!-- 1. Header (高 44px, 左右内边距 16px) -->
+<div class="h-[44px] px-4 flex items-center justify-between border-b border-black/10 shrink-0">
+<h2 class="text-[13px] font-semibold text-[#0F1115] leading-none tracking-tight">选择本机路径</h2>
+<button class="text-[#81858C] hover:text-[#0F1115] transition-colors p-1 flex items-center justify-center rounded" type="button">
+<!-- lucide X 图标 14px -->
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</button>
+</div>
+<!-- 2. Body (内边距 16px, 纵向排列) -->
+<div class="p-4 flex flex-col space-y-3 shrink-0">
+<!-- 面包屑路径条 (圆角 8, 0.5px 描边, 内边距 8px 10px) -->
+<div class="flex items-center space-x-2 px-[10px] py-2 rounded-lg border border-black/15 bg-white shrink-0">
+<!-- lucide 文件夹图标 14px -->
+<svg class="w-3.5 h-3.5 text-[#61666B] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24">
+<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+</svg>
+<div class="text-[12px] leading-none flex items-center flex-wrap overflow-hidden select-text">
+<span class="text-[#61666B]">此电脑</span>
+<span class="mx-1.5 text-[#81858C] font-normal">›</span>
+<span class="text-[#61666B]">D:</span>
+<span class="mx-1.5 text-[#81858C] font-normal">›</span>
+<span class="text-[#61666B]">Projects</span>
+<span class="mx-1.5 text-[#81858C] font-normal">›</span>
+<span class="text-[#61666B]">personal</span>
+<span class="mx-1.5 text-[#81858C] font-normal">›</span>
+<span class="text-[#61666B]">dsh-config-manager</span>
+<span class="mx-1.5 text-[#81858C] font-normal">›</span>
+<span class="text-[#0F1115] font-medium">config</span>
+</div>
+</div>
+<!-- 目录与文件列表 (无外框, 行高 34px, 行间 1px 分隔线) -->
+<div class="flex flex-col custom-scrollbar overflow-y-auto max-h-[300px]">
+<!-- 行 1: upload -->
+<div class="h-[34px] flex items-center space-x-2.5 px-1 border-b border-black/10 hover:bg-[#EBEEF2] transition-colors cursor-pointer">
+<svg class="w-3.5 h-3.5 text-[#61666B] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24">
+<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+</svg>
+<span class="text-[12.5px] text-[#0F1115] leading-none">upload</span>
+</div>
+<!-- 行 2: agent -->
+<div class="h-[34px] flex items-center space-x-2.5 px-1 border-b border-black/10 hover:bg-[#EBEEF2] transition-colors cursor-pointer">
+<svg class="w-3.5 h-3.5 text-[#61666B] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24">
+<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+</svg>
+<span class="text-[12.5px] text-[#0F1115] leading-none">agent</span>
+</div>
+<!-- 行 3: prompts -->
+<div class="h-[34px] flex items-center space-x-2.5 px-1 border-b border-black/10 hover:bg-[#EBEEF2] transition-colors cursor-pointer">
+<svg class="w-3.5 h-3.5 text-[#61666B] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24">
+<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+</svg>
+<span class="text-[12.5px] text-[#0F1115] leading-none">prompts</span>
+</div>
+<!-- 行 4: plugins -->
+<div class="h-[34px] flex items-center space-x-2.5 px-1 border-b border-black/10 hover:bg-[#EBEEF2] transition-colors cursor-pointer">
+<svg class="w-3.5 h-3.5 text-[#61666B] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24">
+<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+</svg>
+<span class="text-[12.5px] text-[#0F1115] leading-none">plugins</span>
+</div>
+<!-- 行 5: settings -->
+<div class="h-[34px] flex items-center space-x-2.5 px-1 border-b border-black/10 hover:bg-[#EBEEF2] transition-colors cursor-pointer">
+<svg class="w-3.5 h-3.5 text-[#61666B] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24">
+<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+</svg>
+<span class="text-[12.5px] text-[#0F1115] leading-none">settings</span>
+</div>
+<!-- 行 6: sessions -->
+<div class="h-[34px] flex items-center space-x-2.5 px-1 border-b border-black/10 hover:bg-[#EBEEF2] transition-colors cursor-pointer">
+<svg class="w-3.5 h-3.5 text-[#61666B] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24">
+<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+</svg>
+<span class="text-[12.5px] text-[#0F1115] leading-none">sessions</span>
+</div>
+<!-- 行 7: config.yaml (文件行) -->
+<div class="h-[34px] flex items-center space-x-2.5 px-1 hover:bg-[#EBEEF2] transition-colors cursor-pointer">
+<svg class="w-3.5 h-3.5 text-[#61666B] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24">
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+<polyline points="14 2 14 8 20 8"></polyline>
+<line x1="16" x2="8" y1="13" y2="13"></line>
+<line x1="16" x2="8" y1="17" y2="17"></line>
+<polyline points="10 9 9 9 8 9"></polyline>
+</svg>
+<span class="text-[12.5px] text-[#0F1115] leading-none font-mono">config.yaml</span>
+</div>
+</div>
+</div>
+<!-- 3. Footer (高 48px, 内边距 12px 16px, 四颗按钮在同一行右对齐，间距 8px) -->
+<div class="h-[48px] px-4 py-3 flex items-center justify-end space-x-2 border-t border-black/10 bg-white shrink-0">
+<!-- 按钮 1: 上一层 (ghost) -->
+<button class="h-7 px-3 rounded-lg border border-black/15 bg-white text-[12px] text-[#0F1115] hover:bg-[#EBEEF2] active:bg-[#EBEEF2] transition-colors flex items-center justify-center" type="button">
+          上一层
+        </button>
+<!-- 按钮 2: 主目录 (ghost) -->
+<button class="h-7 px-3 rounded-lg border border-black/15 bg-white text-[12px] text-[#0F1115] hover:bg-[#EBEEF2] active:bg-[#EBEEF2] transition-colors flex items-center justify-center" type="button">
+          主目录
+        </button>
+<!-- 按钮 3: 取消 (ghost) -->
+<button class="h-7 px-3 rounded-lg border border-black/15 bg-white text-[12px] text-[#0F1115] hover:bg-[#EBEEF2] active:bg-[#EBEEF2] transition-colors flex items-center justify-center" type="button">
+          取消
+        </button>
+<!-- 按钮 4: 使用当前目录 (primary: #0F1115 填充白字) -->
+<button class="h-7 px-3 rounded-lg bg-[#0F1115] hover:bg-[#0F1115]/80 active:bg-black text-[12px] font-medium text-white transition-colors flex items-center justify-center" type="button">
+          使用当前目录
+        </button>
+</div></div>
+</div>
+</body>
+</html>

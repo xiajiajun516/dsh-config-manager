@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DSH 设置 — 备份与迁移 T-02b 导入向导 (兼容性与预览)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Geist', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace']
+          },
+          colors: {
+            brand: {
+              main: '#0F1115',
+              secondary: '#61666B',
+              tertiary: '#81858C',
+              surface: '#FFFFFF',
+              border: 'rgba(0, 0, 0, 0.1)',
+              accent: '#4176E6',
+              success: '#22C55E',
+              warning: '#F59E0B',
+              danger: '#EC1313'
+            }
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBEEF2;
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .custom-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #D1D5DB;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+  <!-- 插件独立画布: 严格 564x720px -->
+  <div class="w-[564px] h-[720px] bg-white border border-[#0000001A] rounded-xl flex flex-col justify-between overflow-hidden relative shadow-sm">
+
+    <!-- 顶部固定外壳: 导航条 (高 32px 规范) -->
+    <header class="h-8 px-4 flex items-center justify-between border-b border-[#0000001A] shrink-0 bg-white">
+      <!-- 纯文字页签: 首页激活带下划线 -->
+      <nav class="flex items-center space-x-4 h-full text-[12px]">
+        <div class="relative h-full flex items-center font-medium text-[#0F1115] cursor-pointer">
+          <span>首页</span>
+          <span class="absolute bottom-0 left-0 right-0 h-[2px] bg-[#0F1115]"></span>
+        </div>
+        <div class="h-full flex items-center text-[#61666B] hover:text-[#0F1115] cursor-pointer">
+          <span>产物库</span>
+        </div>
+        <div class="h-full flex items-center text-[#61666B] hover:text-[#0F1115] cursor-pointer">
+          <span>同步</span>
+        </div>
+        <div class="h-full flex items-center text-[#61666B] hover:text-[#0F1115] cursor-pointer">
+          <span>环境</span>
+        </div>
+      </nav>
+
+      <!-- 右端 4 个图标按钮: ⌘K、活动、历史、关于 -->
+      <div class="flex items-center space-x-[14px] text-[#81858C]">
+        <button class="hover:text-[#0F1115] transition-colors" title="命令面板" aria-label="命令面板">
+          <svg class="w-[14px] h-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
+          </svg>
+        </button>
+        <button class="hover:text-[#0F1115] transition-colors" title="活动" aria-label="活动">
+          <svg class="w-[14px] h-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </button>
+        <button class="hover:text-[#0F1115] transition-colors" title="历史" aria-label="历史">
+          <svg class="w-[14px] h-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+        </button>
+        <button class="hover:text-[#0F1115] transition-colors" title="关于" aria-label="关于">
+          <svg class="w-[14px] h-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 中间流程面板内容区 (宽 564，左右内边距 16，单列垂直排列) -->
+    <main class="flex-1 flex flex-col px-4 pt-2 pb-2 overflow-y-auto custom-scroll" role="main">
+
+      <!-- ① 面板头 44px: 「← 返回首页」ghost 小按钮 + 标题「导入备份」 -->
+      <div class="h-[44px] flex items-center justify-between shrink-0 mb-1">
+        <div class="flex items-center space-x-2">
+          <button class="h-6 px-2 flex items-center space-x-1 text-[12px] text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2] rounded-[8px] transition-colors border border-transparent hover:border-[#979DA6]/30" aria-label="返回首页">
+            <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="19" y1="12" x2="5" y2="12"/>
+              <polyline points="12 19 5 12 12 5"/>
+            </svg>
+            <span>返回首页</span>
+          </button>
+          <span class="text-[13px] font-bold text-[#0F1115]">导入备份</span>
+        </div>
+      </div>
+
+      <!-- ② 步进器行 36px: 六段「选择 / 分析 / 预览与决策 / 确认 / 执行 / 完成」 -->
+      <div class="h-[36px] flex items-center justify-between px-1 mb-2 shrink-0 border-b border-[#0000001A]/40" aria-label="流程步进">
+        <!-- 1 选择 (已完成) -->
+        <div class="flex items-center space-x-1.5 text-[11px] text-[#61666B]">
+          <div class="w-3.5 h-3.5 rounded-full bg-[#61666B] flex items-center justify-center text-white">
+            <svg class="w-2 h-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <span>选择</span>
+        </div>
+        <div class="flex-1 h-[1px] bg-[#0000001A] mx-2"></div>
+
+        <!-- 2 分析 (已完成) -->
+        <div class="flex items-center space-x-1.5 text-[11px] text-[#61666B]">
+          <div class="w-3.5 h-3.5 rounded-full bg-[#61666B] flex items-center justify-center text-white">
+            <svg class="w-2 h-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <span>分析</span>
+        </div>
+        <div class="flex-1 h-[1px] bg-[#0000001A] mx-2"></div>
+
+        <!-- 3 预览与决策 (当前段) -->
+        <div class="flex items-center space-x-1.5 text-[11px] font-semibold text-[#0F1115]">
+          <div class="w-3.5 h-3.5 rounded-full bg-[#4176E6] flex items-center justify-center">
+            <div class="w-1.5 h-1.5 rounded-full bg-white"></div>
+          </div>
+          <span class="text-[#4176E6]">预览与决策</span>
+        </div>
+        <div class="flex-1 h-[1px] bg-[#0000001A] mx-2"></div>
+
+        <!-- 4 确认 (未开始) -->
+        <div class="flex items-center space-x-1.5 text-[11px] text-[#81858C]">
+          <div class="w-3 h-3 rounded-full border border-[#81858C]"></div>
+          <span>确认</span>
+        </div>
+        <div class="flex-1 h-[1px] bg-[#0000001A] mx-2"></div>
+
+        <!-- 5 执行 (未开始) -->
+        <div class="flex items-center space-x-1.5 text-[11px] text-[#81858C]">
+          <div class="w-3 h-3 rounded-full border border-[#81858C]"></div>
+          <span>执行</span>
+        </div>
+        <div class="flex-1 h-[1px] bg-[#0000001A] mx-2"></div>
+
+        <!-- 6 完成 (未开始) -->
+        <div class="flex items-center space-x-1.5 text-[11px] text-[#81858C]">
+          <div class="w-3 h-3 rounded-full border border-[#81858C]"></div>
+          <span>完成</span>
+        </div>
+      </div>
+
+      <!-- 主干流动区: 间距 12px -->
+      <div class="flex-1 flex flex-col space-y-3">
+
+        <!-- ③ 兼容性块: 标题行 + 6 枚徽章横排 -->
+        <div class="flex flex-col space-y-1.5">
+          <div class="flex items-center space-x-1 text-[13px] font-bold text-[#0F1115]">
+            <span>兼容性</span>
+            <svg class="w-3.5 h-3.5 text-[#81858C] cursor-pointer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+          </div>
+          <!-- 六枚徽章横排，允许换行，间距 6 -->
+          <div class="flex flex-wrap gap-1.5">
+            <!-- 警告色徽章: 兼容性评分：部分兼容 -->
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] font-medium text-[#F59E0B] bg-[#FEF3C7] border border-[#F59E0B]/30 rounded-full">
+              兼容性评分：部分兼容
+            </span>
+            <!-- info 徽章: 6 个分区 -->
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] font-medium text-[#4176E6] bg-[#EFF6FF] border border-[#BFDBFE] rounded-full">
+              6 个分区
+            </span>
+            <!-- info 徽章: 已装 2 · 待装 1 -->
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] font-medium text-[#4176E6] bg-[#EFF6FF] border border-[#BFDBFE] rounded-full">
+              已装 2 · 待装 1
+            </span>
+            <!-- 警告徽章: 2 项路径处理 -->
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] font-medium text-[#F59E0B] bg-[#FEF3C7] border border-[#F59E0B]/30 rounded-full">
+              2 项路径处理
+            </span>
+            <!-- 警告徽章: 1 项密钥补录 -->
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] font-medium text-[#F59E0B] bg-[#FEF3C7] border border-[#F59E0B]/30 rounded-full">
+              1 项密钥补录
+            </span>
+            <!-- 错误色徽章: 🔒 加密备份 -->
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] font-medium text-[#EC1313] bg-[#FEF2F2] border border-[#FECACA] rounded-full">
+              🔒 加密备份
+            </span>
+          </div>
+        </div>
+
+        <!-- ④ 来源卡 (白卡，1px #0000001A 描边，圆角 8，内边距 12) -->
+        <div class="bg-white border border-[#0000001A] rounded-[8px] p-3 flex flex-col space-y-2.5">
+          <!-- 第一段: 来源与兼容性 -->
+          <div>
+            <div class="text-[11px] font-medium text-[#61666B] mb-1.5">来源与兼容性</div>
+            <div class="flex flex-wrap gap-1.5">
+              <span class="inline-flex items-center h-[18px] px-2 text-[11px] text-[#0F1115] bg-[#EBEEF2] border border-[#EBEEF2] rounded-full">
+                DSH 版本：2.4.0 → 本机 2.4.0
+              </span>
+              <span class="inline-flex items-center h-[18px] px-2 text-[11px] text-[#0F1115] bg-[#EBEEF2] border border-[#EBEEF2] rounded-full">
+                平台：win32 → 本机 darwin
+              </span>
+              <span class="inline-flex items-center h-[18px] px-2 text-[11px] text-[#0F1115] bg-[#EBEEF2] border border-[#EBEEF2] rounded-full">
+                备份格式：v3
+              </span>
+            </div>
+          </div>
+
+          <!-- 第二段: 判定依据 -->
+          <div class="pt-1.5 border-t border-[#0000001A]/40">
+            <div class="text-[11px] font-medium text-[#61666B] mb-1">判定依据</div>
+            <div class="space-y-1">
+              <div class="flex items-center space-x-2 text-[12px] text-[#0F1115]">
+                <span class="w-1 h-1 rounded-full bg-[#0F1115] shrink-0"></span>
+                <span>跨平台：备份来自 win32，本机是 darwin</span>
+              </div>
+              <div class="flex items-center space-x-2 text-[12px] text-[#0F1115]">
+                <span class="w-1 h-1 rounded-full bg-[#0F1115] shrink-0"></span>
+                <span>备份声明但包内缺失 1 个分区：mcp</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ⑤ 导入预览块: 标题行 + 6 枚预览徽章行 -->
+        <div class="flex flex-col space-y-1.5">
+          <div class="flex items-center space-x-1 text-[13px] font-bold text-[#0F1115]">
+            <span>导入预览</span>
+            <svg class="w-3.5 h-3.5 text-[#81858C] cursor-pointer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+          </div>
+          <!-- 徽章行: 将变更 34 项 / 已一致跳过 12 项 / 设置更新 8 / 插件待安装 1 / MCP 新增 2 / 冲突 3 (警告色) -->
+          <div class="flex flex-wrap gap-1.5">
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] text-[#0F1115] bg-[#EBEEF2] border border-[#EBEEF2] rounded-full">
+              将变更 34 项
+            </span>
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] text-[#6B7280] bg-[#F9FAFB] border border-[#EBEEF2] rounded-full">
+              已一致跳过 12 项
+            </span>
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] text-[#4176E6] bg-[#EFF6FF] border border-[#BFDBFE] rounded-full">
+              设置更新 8
+            </span>
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] text-[#4176E6] bg-[#EFF6FF] border border-[#BFDBFE] rounded-full">
+              插件待安装 1
+            </span>
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] text-[#4176E6] bg-[#EFF6FF] border border-[#BFDBFE] rounded-full">
+              MCP 新增 2
+            </span>
+            <span class="inline-flex items-center h-[18px] px-2 text-[11px] font-medium text-[#F59E0B] bg-[#FEF3C7] border border-[#F59E0B]/30 rounded-full">
+              冲突 3
+            </span>
+          </div>
+        </div>
+
+        <!-- ⑥ 分区勾选表 (白卡，1px 描边，圆角 8，5行数据) -->
+        <div class="bg-white border border-[#0000001A] rounded-[8px] overflow-hidden flex flex-col">
+          <!-- 表头 -->
+          <div class="h-7 px-3 bg-[#EBEEF2] border-b border-[#0000001A]/60 flex items-center justify-between text-[11px] font-medium text-[#61666B]">
+            <div class="w-[180px]">分区</div>
+            <div class="w-[100px] text-right pr-6">条目</div>
+            <div class="w-[80px] text-right">状态</div>
+          </div>
+          <!-- 5 行列表数据，每行高 32px -->
+          <div class="divide-y divide-[#0000001A]/30 text-[12.5px]">
+            <!-- 行 1: 设置 18 已选 -->
+            <div class="h-8 px-3 flex items-center justify-between hover:bg-[#F9FAFB] transition-colors">
+              <div class="w-[180px] text-[#0F1115] font-medium">设置</div>
+              <div class="w-[100px] text-right pr-6 font-mono text-[12px] text-[#61666B]">18</div>
+              <div class="w-[80px] flex items-center justify-end space-x-1.5">
+                <div class="w-3.5 h-3.5 rounded-[3px] bg-[#0F1115] flex items-center justify-center text-white">
+                  <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                </div>
+                <span class="text-[11px] text-[#61666B]">已选</span>
+              </div>
+            </div>
+
+            <!-- 行 2: 提示词 6 已选 -->
+            <div class="h-8 px-3 flex items-center justify-between hover:bg-[#F9FAFB] transition-colors">
+              <div class="w-[180px] text-[#0F1115] font-medium">提示词</div>
+              <div class="w-[100px] text-right pr-6 font-mono text-[12px] text-[#61666B]">6</div>
+              <div class="w-[80px] flex items-center justify-end space-x-1.5">
+                <div class="w-3.5 h-3.5 rounded-[3px] bg-[#0F1115] flex items-center justify-center text-white">
+                  <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                </div>
+                <span class="text-[11px] text-[#61666B]">已选</span>
+              </div>
+            </div>
+
+            <!-- 行 3: 技能 4 已选 -->
+            <div class="h-8 px-3 flex items-center justify-between hover:bg-[#F9FAFB] transition-colors">
+              <div class="w-[180px] text-[#0F1115] font-medium">技能</div>
+              <div class="w-[100px] text-right pr-6 font-mono text-[12px] text-[#61666B]">4</div>
+              <div class="w-[80px] flex items-center justify-end space-x-1.5">
+                <div class="w-3.5 h-3.5 rounded-[3px] bg-[#0F1115] flex items-center justify-center text-white">
+                  <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                </div>
+                <span class="text-[11px] text-[#61666B]">已选</span>
+              </div>
+            </div>
+
+            <!-- 行 4: MCP / 工具 3 已选 -->
+            <div class="h-8 px-3 flex items-center justify-between hover:bg-[#F9FAFB] transition-colors">
+              <div class="w-[180px] text-[#0F1115] font-medium">MCP / 工具</div>
+              <div class="w-[100px] text-right pr-6 font-mono text-[12px] text-[#61666B]">3</div>
+              <div class="w-[80px] flex items-center justify-end space-x-1.5">
+                <div class="w-3.5 h-3.5 rounded-[3px] bg-[#0F1115] flex items-center justify-center text-white">
+                  <svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                </div>
+                <span class="text-[11px] text-[#61666B]">已选</span>
+              </div>
+            </div>
+
+            <!-- 行 5: 插件与扩展 3 部分 (黑底一横杠) -->
+            <div class="h-8 px-3 flex items-center justify-between hover:bg-[#F9FAFB] transition-colors">
+              <div class="w-[180px] text-[#0F1115] font-medium">插件与扩展</div>
+              <div class="w-[100px] text-right pr-6 font-mono text-[12px] text-[#61666B]">3</div>
+              <div class="w-[80px] flex items-center justify-end space-x-1.5">
+                <div class="w-3.5 h-3.5 rounded-[3px] bg-[#0F1115] flex items-center justify-center text-white">
+                  <div class="w-2 h-[2px] bg-white rounded-sm"></div>
+                </div>
+                <span class="text-[11px] text-[#61666B]">部分</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ⑦ 底部操作行: ghost「重新选择」(白底 1px 描边) 与 primary「下一步」(黑底白字) 右对齐，行高 28，与状态栏留 12 -->
+      <div class="h-7 mt-3 mb-3 flex items-center justify-end space-x-2 shrink-0">
+        <button class="h-7 px-3 bg-white hover:bg-[#EBEEF2] text-[#0F1115] border border-[#0000001A] rounded-[8px] text-[12px] font-medium transition-colors">
+          重新选择
+        </button>
+        <button class="h-7 px-3.5 bg-[#0F1115] hover:bg-[#43454A] text-white rounded-[8px] text-[12px] font-medium transition-colors flex items-center space-x-1">
+          <span>下一步</span>
+        </button>
+      </div>
+
+    </main>
+
+    <!-- 底部固定外壳: 状态栏 (高 28px 规范) -->
+    <footer class="h-7 px-4 border-t border-[#0000001A] flex items-center justify-between text-[11px] bg-white shrink-0">
+      <div class="flex items-center space-x-1.5">
+        <span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+        <span class="text-[#0F1115] font-medium">就绪 · 分析完成</span>
+      </div>
+      <div class="font-mono text-[#81858C] text-[11px]">
+        v0.8.0 · DSH 2.4
+      </div>
+    </footer>
+
+  </div>
+
+</body>
+</html>

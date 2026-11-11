@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 D-26 磁盘清理确认弹窗</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-sans/style.css" rel="stylesheet"/>
+<link href="https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-mono/style.css" rel="stylesheet"/>
+<script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: '#FFFFFF',
+            'surface-container': '#F5F5F5',
+            'text-primary': '#0F1115',
+            'text-secondary': '#61666B',
+            'text-tertiary': '#81858C',
+            outline: '#E6E6E6',
+            divider: '#CCCCCC',
+            accent: '#4176E6',
+            success: '#22C55E',
+            warning: '#F59E0B',
+            danger: '#EC1313'
+          },
+          fontFamily: {
+            sans: ['Geist', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['Geist Mono', 'ui-monospace', 'monospace']
+          }
+        }
+      }
+    };
+  </script>
+<style>
+    * {
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBECEF;
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #0F1115;
+    }
+  </style>
+</head>
+<body class="min-h-screen w-full flex items-center justify-center p-6 m-0 bg-[#EBECEF] select-none">
+<!-- 插件容器 (固定 564x720 居中) -->
+<div class="relative w-[564px] h-[720px] bg-white rounded-[12px] border border-[#0000001A] overflow-hidden flex flex-col justify-between shadow-lg">
+<!-- 底层：环境页（完整外壳，排满720无下部虚空） -->
+<div class="w-full h-full flex flex-col justify-between bg-white text-[#0F1115]">
+<!-- 1. 顶部导航条 (32px) -->
+<div class="w-full h-[32px] px-[12px] border-b border-[#0000001A] flex items-center justify-between bg-white shrink-0">
+<!-- 左侧页签 -->
+<div class="flex items-center space-x-[8px] text-[12px]">
+<span class="text-[#61666B] px-[6px] py-[2px]">首页</span>
+<span class="text-[#61666B] px-[6px] py-[2px]">产物库</span>
+<span class="text-[#61666B] px-[6px] py-[2px]">同步</span>
+<!-- 环境 激活胶囊 -->
+<span class="bg-[#EBEEF2] border border-[#979DA6] text-[#0F1115] font-medium px-[8px] py-[2px] rounded-[6px]">环境</span>
+</div>
+<!-- 右侧4个图标 -->
+<div class="flex items-center space-x-[10px] text-[#81858C]">
+<!-- ⌘K -->
+<div class="flex items-center justify-center w-[14px] h-[14px] text-[11px] font-mono leading-none">⌘K</div>
+<!-- 活动 -->
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史 -->
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于 -->
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</div>
+<!-- 2. 中间内容区（紧凑完整填充） -->
+<div class="flex-1 px-[12px] py-[8px] flex flex-col space-y-[8px] overflow-hidden">
+<!-- 顶部二级标题与分段控件 -->
+<div class="flex items-center justify-between shrink-0">
+<span class="text-[13px] font-semibold text-[#0F1115]">环境</span>
+<!-- 分段控件 (高 24px) -->
+<div class="flex items-center h-[24px] bg-[#F5F5F5] border border-[#0000001A] p-[2px] rounded-[6px] text-[11px]">
+<span class="px-[8px] py-[1px] text-[#61666B]">档案</span>
+<span class="bg-white border border-[#979DA6] text-[#0F1115] font-medium px-[8px] py-[1px] rounded-[4px] shadow-xs">维护与诊断</span>
+</div>
+</div>
+<!-- 小节：恢复与刷新 -->
+<div class="flex items-center justify-between shrink-0 pt-[2px]">
+<span class="text-[12px] font-semibold text-[#0F1115]">恢复</span>
+<button class="flex items-center space-x-[4px] text-[11px] text-[#61666B] hover:text-[#0F1115]">
+<svg class="w-[12px] h-[12px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+</svg>
+<span>刷新</span>
+</button>
+</div>
+<!-- 空态提示卡 -->
+<div class="border border-[#0000001A] rounded-[8px] bg-[#FAFAFA] px-[10px] py-[7px] flex items-center space-x-[6px] text-[11.5px] shrink-0">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span class="text-[#61666B]">当前没有待处理的恢复事项</span>
+</div>
+<!-- 救援模式卡 -->
+<div class="border border-[#0000001A] rounded-[8px] bg-white p-[10px] flex items-center justify-between shrink-0">
+<div class="flex flex-col space-y-[2px]">
+<div class="flex items-center space-x-[4px] text-[12px] font-medium text-[#0F1115]">
+<span>救援模式</span>
+<svg class="w-[12px] h-[12px] text-[#81858C]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+<span class="text-[11px] text-[#81858C] font-normal">未开启</span>
+</div>
+<div class="text-[11px] text-[#81858C]">停用依赖校验，仅在插件自身无法启动时使用</div>
+</div>
+<button class="h-[24px] px-[8px] border border-[#EC1313] text-[#EC1313] text-[11px] rounded-[6px] hover:bg-[#FFF1F1]">
+进入救援模式
+</button>
+</div>
+<!-- 磁盘占用卡 (1px 描边，圆角 12px) -->
+<div class="border border-[#0000001A] rounded-[10px] bg-white p-[10px] flex flex-col space-y-[8px] shrink-0">
+<!-- 卡片头 -->
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-[4px]">
+<span class="text-[12.5px] font-semibold text-[#0F1115]">磁盘占用</span>
+<svg class="w-[12px] h-[12px] text-[#81858C]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</div>
+<div class="flex items-center space-x-[6px]">
+<span class="text-[11px] text-[#81858C] font-mono">合计 1652.9 MB · 49150 个文件</span>
+<svg class="w-[12px] h-[12px] text-[#81858C]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+</svg>
+</div>
+</div>
+<!-- 分区列表行 -->
+<div class="flex flex-col space-y-[5px] text-[11.5px] border-b border-[#0000001A] pb-[6px]">
+<div class="flex items-center justify-between">
+<span class="text-[#0F1115]">备份文件</span>
+<div class="flex items-center space-x-[8px]">
+<span class="text-[10.5px] text-[#81858C]">可释放 20.1 MB</span>
+<span class="font-mono text-[11px] text-[#0F1115]">20.1 MB</span>
+<span class="text-[10px] bg-[#EBEEF2] text-[#4176E6] px-[4px] py-[0.5px] rounded-[4px]">保留 30 天</span>
+</div>
+</div>
+<div class="flex items-center justify-between">
+<span class="text-[#0F1115]">导入前快照</span>
+<div class="flex items-center space-x-[8px]">
+<span class="font-mono text-[11px] text-[#0F1115]">302 KB</span>
+<span class="text-[10.5px] text-[#22C55E]">可随时重建</span>
+</div>
+</div>
+<div class="flex items-center justify-between">
+<span class="text-[#0F1115]">同步覆盖与工作副本</span>
+<div class="flex items-center space-x-[8px]">
+<span class="font-mono text-[11px] text-[#0F1115]">108.9 MB</span>
+<span class="text-[10.5px] text-[#22C55E]">可随时重建</span>
+</div>
+</div>
+<div class="flex items-center justify-between">
+<span class="text-[#0F1115]">遗留数据</span>
+<div class="flex items-center space-x-[8px]">
+<span class="font-mono text-[11px] text-[#0F1115]">56.9 MB</span>
+<span class="text-[10.5px] text-[#61666B]">受保护</span>
+</div>
+</div>
+</div>
+<!-- 释放空间分组 -->
+<div class="flex flex-col space-y-[6px]">
+<div class="text-[10.5px] text-[#61666B] leading-tight">
+              只清理可重建的缓存与暂存；快照与同步数据永不在此处删除。
+            </div>
+<div class="flex items-center justify-between pt-[2px]">
+<div class="flex flex-col space-y-[3px]">
+<label class="flex items-center space-x-[6px] text-[11.5px] text-[#0F1115]">
+<input checked="" class="w-[12px] h-[12px] rounded-[2px] accent-[#0F1115]" disabled="" type="checkbox"/>
+<span>清理临时与市场缓存</span>
+</label>
+<label class="flex items-center space-x-[6px] text-[11.5px] text-[#0F1115]">
+<input checked="" class="w-[12px] h-[12px] rounded-[2px] accent-[#0F1115]" disabled="" type="checkbox"/>
+<span>包含已过期备份文件</span>
+</label>
+</div>
+<!-- 右下角操作区域 -->
+<div class="flex items-center space-x-[8px]">
+<span class="text-[10.5px] text-[#61666B]">可立即释放 <span class="font-mono font-medium text-[#0F1115]">3.0 MB</span></span>
+<button class="h-[26px] px-[10px] bg-[#0F1115] text-white text-[11px] rounded-[6px] font-medium">
+                  立即清理
+                </button>
+</div>
+</div>
+</div>
+</div>
+<!-- 其它诊断折叠卡 -->
+<div class="border border-[#0000001A] rounded-[8px] bg-white px-[10px] py-[8px] flex items-center justify-between shrink-0">
+<span class="text-[12px] text-[#0F1115]">会话体检</span>
+<span class="text-[11px] text-[#81858C]">上次检查：从未 ∨</span>
+</div>
+<div class="border border-[#0000001A] rounded-[8px] bg-white px-[10px] py-[8px] flex items-center justify-between shrink-0">
+<span class="text-[12px] text-[#0F1115]">工作区与会话回滚</span>
+<span class="text-[11px] text-[#81858C]">9 个回滚点 ∨</span>
+</div>
+</div>
+<!-- 3. 底部状态栏 (28px 内缩) -->
+<div class="px-[8px] pb-[8px] shrink-0">
+<div class="w-full h-[28px] px-[10px] bg-white border border-[#0000001A] rounded-[8px] flex items-center justify-between text-[11px]">
+<div class="flex items-center space-x-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span class="text-[#0F1115]">就绪</span>
+</div>
+<span class="text-[#81858C] font-mono">v0.8.0 · DSH 2.4</span>
+</div>
+</div>
+</div>
+<!-- 遮罩层 #0000003D (24% 黑色压暗覆盖整块 564x720) -->
+<div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-[20px]">
+<!-- D-26「磁盘清理确认」弹窗 (ConfirmDialog, danger 态) 垂直居中 -->
+<div class="w-[500px] bg-white rounded-[12px] border border-[#0000001A] flex flex-col overflow-hidden select-text shadow-xl z-20">
+<!-- Header: 只有一行标题「清理磁盘占用」，13px / 600 / #0F1115，左对齐；无图标，无关闭叉 -->
+<div class="pt-[14px] px-[16px] pb-0 flex items-center justify-between">
+<h2 class="text-[13px] font-semibold text-[#0F1115] leading-[1.25] m-0">清理磁盘占用</h2>
+</div>
+<!-- Body: 逐字文案，12.5px，行高 1.5，使用全角标点 -->
+<div class="pt-[8px] px-[16px] pb-[14px]">
+<p class="text-[12.5px] text-[#61666B] leading-[1.5] m-0">
+            将删除可重建的缓存与暂存，以及已过期的备份文件；快照与同步数据不受影响。此操作不可撤销，但被删内容都可重新生成。
+          </p>
+</div>
+<!-- Footer: 两个按钮右对齐、间距 8px。左边「清理」危险主按钮，右边「取消」ghost -->
+<div class="pt-[10px] px-[16px] pb-[14px] border-t border-[#0000001A] flex items-center justify-end space-x-[8px] bg-white">
+<!-- 左边：确认在左（危险主按钮「清理」：#EC1313 实底、白字 13px、高 28px、圆角 8px、左右内距 12px） -->
+<button class="h-[28px] px-[12px] bg-[#EC1313] hover:bg-[#d91111] text-white text-[13px] font-medium rounded-[8px] flex items-center justify-center transition-colors">
+            清理
+          </button>
+<!-- 右边：取消在右（ghost 按钮「取消」：白底、0.5px #0000001A 描边、文字 #0F1115、高 28px、圆角 8px、左右内距 12px） -->
+<button class="h-[28px] px-[12px] bg-white hover:bg-[#F5F5F5] border border-[#0000001A] text-[#0F1115] text-[13px] font-medium rounded-[8px] flex items-center justify-center transition-colors">
+            取消
+          </button>
+</div>
+</div>
+</div>
+</div>
+</body></html>

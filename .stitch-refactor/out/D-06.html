@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 恢复报告 D-06 弹窗</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        'dsh-text-primary': '#0F1115',
+        'dsh-text-secondary': '#61666B',
+        'dsh-text-tertiary': '#81858C',
+        'dsh-divider': 'rgba(0, 0, 0, 0.1)',
+        'dsh-border': '#0000001A',
+        'dsh-danger': '#EC1313',
+        'dsh-accent': '#4176E6',
+        'dsh-btn-dark': '#0F1115',
+        'dsh-ghost-bg': '#EBEEF2',
+        'dsh-ghost-border': '#979DA6',
+      },
+      fontFamily: {
+        sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
+        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace']
+      }
+    }
+  }
+}
+</script>
+<style>
+* {
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+}
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #EBEEF2;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: #0F1115;
+}
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+</style>
+</head>
+<body class="w-screen h-screen flex items-center justify-center p-0 m-0 overflow-hidden bg-[#EBEEF2]">
+<!-- 564×720 插件容器 -->
+<div class="relative w-[564px] h-[720px] bg-white flex flex-col overflow-hidden shadow-none select-none text-[12.5px] leading-[1.5]">
+<!-- 遮罩下层：被压暗的「产物库」页（纯灰阶） -->
+<div class="absolute inset-0 flex flex-col bg-[#FFFFFF] filter grayscale opacity-90 pointer-events-none select-none z-0">
+<!-- 顶部页签条 32px -->
+<div class="h-[32px] px-[16px] border-b border-black/[0.08] flex items-center justify-between bg-white text-[12px]">
+<div class="flex items-center space-x-[16px]">
+<span class="text-[#81858C]">首页</span>
+<!-- 产物库激活态 (幽灵胶囊) -->
+<span class="bg-[#EBEEF2] border border-[#979DA6] px-[8px] py-[1.5px] rounded-[6px] text-[#0F1115] font-medium">产物库</span>
+<span class="text-[#81858C]">同步</span>
+<span class="text-[#81858C]">环境</span>
+</div>
+<!-- 右侧4个图标 -->
+<div class="flex items-center space-x-[10px] text-[#81858C]">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><path d="M9 3v2m6-2v2M9 19v2m6-2v2M3 9h2m-2 6h2m16-6h2m-2 6h2M7 7h10v10H7z" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</div>
+</div>
+<!-- 产物库搜索与列表内容 -->
+<div class="flex-1 p-[12px] space-y-[10px] bg-[#EBEEF2]">
+<!-- 搜索框 -->
+<div class="h-[28px] bg-white border border-[#0000001A] rounded-[8px] px-[8px] flex items-center text-[11px] text-[#81858C]">
+<svg class="w-[12px] h-[12px] mr-[6px]" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+        搜索快照、备注或分区...
+      </div>
+<!-- 产物列表项 -->
+<div class="bg-white border border-[#0000001A] rounded-[8px] p-[10px] space-y-[8px]">
+<div class="flex items-center justify-between text-[12px]">
+<span class="font-medium text-[#0F1115]">dsh-config-2026-11-08.zip</span>
+<span class="text-[11px] text-[#81858C]">刚刚</span>
+</div>
+<div class="text-[11px] text-[#61666B]">包含 6 个分区 · 24.8 MB</div>
+</div>
+<div class="bg-white border border-[#0000001A] rounded-[8px] p-[10px] space-y-[8px]">
+<div class="flex items-center justify-between text-[12px]">
+<span class="font-medium text-[#0F1115]">snapshot-2026-11-07.snap</span>
+<span class="text-[11px] text-[#81858C]">昨天</span>
+</div>
+<div class="text-[11px] text-[#61666B]">安全快照 · 1,204 文件</div>
+</div>
+</div>
+<!-- 状态栏 28px -->
+<div class="h-[28px] px-[16px] border-t border-black/[0.08] flex items-center justify-between bg-white text-[11px] text-[#81858C]">
+<div class="flex items-center space-x-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#81858C]"></span>
+<span>就绪 · 校验无冲突</span>
+</div>
+<span>v0.8.0 · DSH 2.4</span>
+</div>
+</div>
+<!-- 遮罩层 #0000003D 盖满 564×720 -->
+<div class="absolute inset-0 bg-black/[0.24] z-10"></div>
+<!-- 弹窗 D-06「恢复报告」：540×620，居中，圆角 12，白底，1px 描边 #0000001A -->
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[540px] bg-white rounded-[12px] border border-[#0000001A] flex flex-col overflow-hidden z-20">
+<!-- 1. 标题区 48px -->
+<div class="h-[48px] px-[16px] shrink-0 flex items-center justify-between border-b border-[#0000001A] bg-white">
+<div class="text-[13px] font-semibold text-[#0F1115] tracking-tight">
+        恢复报告
+      </div>
+<button class="w-[24px] h-[24px] flex items-center justify-center text-[#61666B] hover:text-[#0F1115] hover:bg-black/[0.04] rounded-[6px] transition-colors" title="关闭">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</button>
+</div>
+<!-- 2. 内容区 (高度 516px，内边距 12px 16px，右侧 gutter 8px，底边自然裁切内容提供滚动暗示) -->
+<div class="flex-1 overflow-y-auto pt-[12px] pl-[16px] pr-[8px] bg-white space-y-[14px]" style="padding-bottom: 12px;">
+<!-- 分组 1: 已还原（18） -->
+<div class="flex flex-col">
+<div class="text-[12.5px] font-semibold text-[#0F1115] leading-[1.5] mb-[8px]">
+          已还原（18）
+        </div>
+<div class="flex flex-col"><div class="h-[22px] flex items-center text-[12px] text-[#0F1115] font-mono leading-none"><span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] mr-[8px] shrink-0"></span><span class="truncate">settings.json</span></div><div class="h-[22px] flex items-center text-[12px] text-[#0F1115] font-mono leading-none"><span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] mr-[8px] shrink-0"></span><span class="truncate">mcp/servers.json</span></div><div class="h-[22px] flex items-center text-[12px] text-[#0F1115] font-mono leading-none"><span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] mr-[8px] shrink-0"></span><span class="truncate">prompts/code-review.md</span></div><div class="h-[22px] flex items-center text-[12px] text-[#0F1115] font-mono leading-none"><span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] mr-[8px] shrink-0"></span><span class="truncate">prompts/changelog-writing.md</span></div><div class="h-[22px] flex items-center text-[12px] text-[#0F1115] font-mono leading-none"><span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] mr-[8px] shrink-0"></span><span class="truncate">skills/obsidian-kb-capture/SKILL.md</span></div><div class="h-[22px] flex items-center text-[12px] text-[#0F1115] font-mono leading-none"><span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] mr-[8px] shrink-0"></span><span class="truncate">mcp/servers.design.json</span></div></div>
+</div>
+<!-- 分组 2: 已卸载插件（1） -->
+<div class="flex flex-col">
+<div class="text-[12.5px] font-semibold text-[#0F1115] leading-[1.5] mb-[8px]">
+          已卸载插件（1）
+        </div>
+<div class="flex flex-col">
+<div class="h-[22px] flex items-center text-[12px] text-[#0F1115] font-mono leading-none">
+<span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] mr-[8px] shrink-0"></span>
+<span class="truncate">config-manager@0.8.0</span>
+</div>
+</div>
+</div>
+<!-- 分组 3: 需人工处理（2）（红色标题） -->
+<div class="flex flex-col">
+<div class="text-[12.5px] font-semibold text-[#EC1313] leading-[1.5] mb-[8px]">
+          需人工处理（2）
+        </div>
+<div class="flex flex-col">
+<div class="h-[22px] flex items-center text-[12px] text-[#0F1115] leading-none">
+<span class="w-[3px] h-[3px] rounded-full bg-[#EC1313] mr-[8px] shrink-0"></span>
+<span class="truncate"><span class="font-medium">凭据</span>: 3 项需重新填写</span>
+</div>
+<div class="h-[22px] flex items-center text-[12px] text-[#0F1115] leading-none">
+<span class="w-[3px] h-[3px] rounded-full bg-[#EC1313] mr-[8px] shrink-0"></span>
+<span class="truncate"><span class="font-medium">MCP 服务器</span>: 宿主无管理 API，需重新导入</span>
+</div>
+</div>
+</div>
+<!-- 分组 4: 失败（1）（红色标题） -->
+<div class="flex flex-col">
+<div class="text-[12.5px] font-semibold text-[#EC1313] leading-[1.5] mb-[8px]">
+          失败（1）
+        </div>
+<div class="flex flex-col">
+<div class="h-[22px] flex items-center text-[12px] text-[#0F1115] leading-none">
+<span class="w-[3px] h-[3px] rounded-full bg-[#EC1313] mr-[8px] shrink-0"></span>
+<span class="truncate"><span class="font-mono">skills/obsidian-kb-capture/SKILL.md</span>: 目标路径被占用</span>
+</div>
+</div>
+</div>
+<!-- 分组 5: 跳过（3）（位置刚好在底边裁切，形成滚动暗示） -->
+<div class="flex flex-col">
+<div class="text-[12.5px] font-semibold text-[#0F1115] leading-[1.5] mb-[8px]">
+          跳过（3）
+        </div>
+<div class="flex flex-col">
+<div class="h-[22px] flex items-center text-[12px] text-[#0F1115] leading-none">
+<span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] mr-[8px] shrink-0"></span>
+<span class="truncate"><span class="font-mono">sessions</span>: 与快照一致</span>
+</div>
+<div class="h-[22px] flex items-center text-[12px] text-[#0F1115] leading-none">
+<span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] mr-[8px] shrink-0"></span>
+<span class="truncate"><span class="font-mono">cache</span>: 不在恢复范围</span>
+</div>
+<div class="h-[22px] flex items-center text-[12px] text-[#0F1115] leading-none">
+<span class="w-[3px] h-[3px] rounded-full bg-[#0F1115] mr-[8px] shrink-0"></span>
+<span class="truncate"><span class="font-mono">pluginData</span>: 未勾选</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 3. 动作区 56px (上边框 1px #0000001A，单按钮右对齐) -->
+<div class="h-[48px] px-[16px] shrink-0 border-t border-[#0000001A] bg-white flex items-center justify-end z-30"><button class="h-[30px] px-[12px] rounded-[8px] bg-[#0F1115] hover:bg-[#43454A] text-white text-[12.5px] font-medium transition-colors flex items-center justify-center">完成</button></div>
+</div>
+</div>
+</body>
+</html>

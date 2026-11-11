@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DSH 设置 — 备份与迁移 T-02a 导入向导 (选择备份文件)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background-color: #EBEEF2;
+      color: #0F1115;
+      font-feature-settings: "tnum" 1;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .custom-dashed {
+      border: 1px dashed #979DA6;
+    }
+  </style>
+</head>
+<body class="w-[1440px] h-[900px] flex items-center justify-center overflow-hidden bg-[#EBEEF2]">
+
+  <!-- 插件独立画布容器：严格 564×720px，白底，无投影，无外层非宿主侧栏 -->
+  <div class="w-[564px] h-[720px] bg-[#FFFFFF] flex flex-col justify-between overflow-hidden relative select-none">
+
+    <!-- 顶部固定结构区 -->
+    <div class="flex-none w-full">
+      
+      <!-- 1. 顶部 32px 导航条（纯文字页签，右侧 4 个 14px 线性图标） -->
+      <header class="w-full h-[32px] px-4 flex items-center justify-between border-b border-[#0000001A] bg-[#FFFFFF]">
+        <!-- 左侧纯文字页签：首页 / 产物库 / 同步 / 环境，激活「首页」带下划线 -->
+        <nav class="flex items-center gap-6 h-full text-[12px]">
+          <a href="#" class="h-full flex items-center font-medium text-[#0F1115] border-b-2 border-[#0F1115] cursor-default">首页</a>
+          <a href="#" class="h-full flex items-center text-[#61666B] hover:text-[#0F1115] transition-colors cursor-default">产物库</a>
+          <a href="#" class="h-full flex items-center text-[#61666B] hover:text-[#0F1115] transition-colors cursor-default">同步</a>
+          <a href="#" class="h-full flex items-center text-[#61666B] hover:text-[#0F1115] transition-colors cursor-default">环境</a>
+        </nav>
+        
+        <!-- 右端 4 个 14px lucide 线性图标按钮：⌘K、活动、历史、关于 -->
+        <div class="flex items-center gap-3 text-[#81858C]">
+          <!-- ⌘K 命令面板图标 -->
+          <button class="hover:text-[#0F1115] transition-colors p-0.5" title="命令面板 (⌘K)">
+            <svg class="w-[14px] h-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
+            </svg>
+          </button>
+          <!-- 活动图标 Activity / Pulse -->
+          <button class="hover:text-[#0F1115] transition-colors p-0.5" title="活动">
+            <svg class="w-[14px] h-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+          </button>
+          <!-- 历史图标 History -->
+          <button class="hover:text-[#0F1115] transition-colors p-0.5" title="历史记录">
+            <svg class="w-[14px] h-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+              <path d="M3 3v5h5"/>
+              <path d="M12 7v5l4 2"/>
+            </svg>
+          </button>
+          <!-- 关于图标 Info -->
+          <button class="hover:text-[#0F1115] transition-colors p-0.5" title="关于">
+            <svg class="w-[14px] h-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="16" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 2. 面板头 44px（1px 底边线，左侧 ghost 小按钮「← 返回首页」，其后标题「导入备份」） -->
+      <div class="w-full h-[44px] px-4 flex items-center gap-2 border-b border-[#0000001A] bg-[#FFFFFF]">
+        <button class="h-[24px] px-2 flex items-center gap-1 rounded-[8px] bg-transparent hover:bg-[rgba(38,49,72,0.06)] text-[12px] text-[#61666B] transition-colors border border-transparent">
+          <svg class="w-[12px] h-[12px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="19" y1="12" x2="5" y2="12"/>
+            <polyline points="12 19 5 12 12 5"/>
+          </svg>
+          <span>返回首页</span>
+        </button>
+        <span class="text-[13px] font-semibold text-[#0F1115] ml-1">导入备份</span>
+      </div>
+
+      <!-- 3. 步进器行 36px：六段「选择 / 分析 / 预览与决策 / 确认 / 执行 / 完成」，段间用 1px 短连接线 -->
+      <div class="w-full h-[36px] px-4 flex items-center justify-between border-b border-[#0000001A] bg-[#EBEEF2]">
+        
+        <!-- Step 1: 选择 (当前激活) -->
+        <div class="flex items-center gap-1.5 shrink-0">
+          <span class="w-[7px] h-[7px] rounded-full bg-[#4176E6]"></span>
+          <span class="text-[11px] font-medium text-[#0F1115]">选择</span>
+        </div>
+        <div class="w-4 h-[1px] bg-[#0000001A] shrink-0"></div>
+
+        <!-- Step 2: 分析 -->
+        <div class="flex items-center gap-1.5 shrink-0">
+          <span class="w-[7px] h-[7px] rounded-full border border-[#81858C] bg-transparent"></span>
+          <span class="text-[11px] text-[#61666B]">分析</span>
+        </div>
+        <div class="w-4 h-[1px] bg-[#0000001A] shrink-0"></div>
+
+        <!-- Step 3: 预览与决策 -->
+        <div class="flex items-center gap-1.5 shrink-0">
+          <span class="w-[7px] h-[7px] rounded-full border border-[#81858C] bg-transparent"></span>
+          <span class="text-[11px] text-[#61666B]">预览与决策</span>
+        </div>
+        <div class="w-4 h-[1px] bg-[#0000001A] shrink-0"></div>
+
+        <!-- Step 4: 确认 -->
+        <div class="flex items-center gap-1.5 shrink-0">
+          <span class="w-[7px] h-[7px] rounded-full border border-[#81858C] bg-transparent"></span>
+          <span class="text-[11px] text-[#61666B]">确认</span>
+        </div>
+        <div class="w-4 h-[1px] bg-[#0000001A] shrink-0"></div>
+
+        <!-- Step 5: 执行 -->
+        <div class="flex items-center gap-1.5 shrink-0">
+          <span class="w-[7px] h-[7px] rounded-full border border-[#81858C] bg-transparent"></span>
+          <span class="text-[11px] text-[#61666B]">执行</span>
+        </div>
+        <div class="w-4 h-[1px] bg-[#0000001A] shrink-0"></div>
+
+        <!-- Step 6: 完成 -->
+        <div class="flex items-center gap-1.5 shrink-0">
+          <span class="w-[7px] h-[7px] rounded-full border border-[#81858C] bg-transparent"></span>
+          <span class="text-[11px] text-[#61666B]">完成</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 中间内容区（宽 564，左右内边距 16，单列垂直排列，flex 撑满剩余高度） -->
+    <div class="flex-1 w-full px-4 pt-3 pb-3 flex flex-col justify-between overflow-hidden">
+      
+      <!-- 上半部：标题、说明、投放框与已选文件行 -->
+      <div class="flex flex-col gap-2.5 flex-1 min-h-0">
+        
+        <!-- 标题行 + 说明行 -->
+        <div class="flex flex-col gap-1 flex-none">
+          <div class="flex items-center gap-1.5">
+            <h1 class="text-[13px] font-bold text-[#0F1115] leading-[1.25]">选择备份文件</h1>
+            <svg class="w-[14px] h-[14px] text-[#81858C] cursor-default" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="16" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+          </div>
+          <p class="text-[12px] text-[#61666B] leading-[18px]">
+            选择本机导出的 dsh-config-*.zip 备份文件开始导入。分析阶段只读，不会修改任何配置。
+          </p>
+        </div>
+
+        <!-- ⑤ 投放框：flex 撑满剩余高度，虚线边框（1px dashed #979DA6，圆角 12，白底），框内垂直水平居中 -->
+        <div class="flex-1 min-h-[96px] w-full rounded-[12px] custom-dashed bg-[#FFFFFF] flex flex-col items-center justify-center p-3">
+          <!-- upload 线性图标 28px（#81858C） -->
+          <svg class="w-[28px] h-[28px] text-[#81858C] mb-3 stroke-[1.75]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <!-- 主按钮「选择 ZIP 文件」：黑底 #0F1115、白字 13px、高 28、圆角 8 -->
+          <button class="h-[28px] px-4 rounded-[8px] bg-[#0F1115] hover:bg-[#43454A] active:scale-[0.99] text-[#FFFFFF] text-[13px] font-medium flex items-center justify-center transition-all">
+            选择 ZIP 文件
+          </button>
+        </div>
+
+        <!-- ⑥ 已选文件行：白卡（1px #0000001A 描边、圆角 8、高 44、左右内边距 12）：左徽章，右两枚按钮 -->
+        <div class="w-full h-[44px] px-3 rounded-[8px] bg-[#FFFFFF] border border-[#0000001A] flex items-center justify-between flex-none">
+          <!-- info 蓝灰底徽章 -->
+          <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-[4px] bg-[#EBEEF2] border border-[#979DA6]/40">
+            <svg class="w-[12px] h-[12px] text-[#4176E6]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+            <span class="text-[11px] font-mono font-medium text-[#0F1115]">已选择：dsh-config-2026-11-10.zip</span>
+          </div>
+          <!-- 右端 primary「重新选择」（黑底白字，高 24）+ ghost「取消选择」（白底 1px 描边，高 24） -->
+          <div class="flex items-center gap-2">
+            <button class="h-[24px] px-2.5 rounded-[4px] bg-[#0F1115] hover:bg-[#43454A] text-[#FFFFFF] text-[11px] font-medium flex items-center justify-center transition-colors">
+              重新选择
+            </button>
+            <button class="h-[24px] px-2.5 rounded-[4px] bg-[#FFFFFF] hover:bg-[rgba(38,49,72,0.06)] border border-[#0000001A] text-[#61666B] hover:text-[#0F1115] text-[11px] font-medium flex items-center justify-center transition-colors">
+              取消选择
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ⑦ 解锁卡：白卡（1px 描边、圆角 8、内边距 12），与已选文件行间距 12，卡片底部与状态栏之间留 12 -->
+      <div class="w-full rounded-[8px] bg-[#FFFFFF] border border-[#0000001A] p-3 flex flex-col gap-2.5 flex-none mt-3">
+        
+        <!-- 第一行：错误色徽章「🔒 加密备份」（#EC1313 系 8% 底 + 描边） -->
+        <div class="flex items-center">
+          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-[4px] bg-[#EC1313]/[0.08] border border-[#EC1313]/30 text-[#EC1313] text-[11px] font-medium">
+            <svg class="w-[11px] h-[11px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <span>加密备份</span>
+          </span>
+        </div>
+
+        <!-- 第二行：11px 次色分组标签「解锁加密备份」+ ⓘ -->
+        <div class="flex items-center gap-1">
+          <span class="text-[11px] font-medium text-[#61666B]">解锁加密备份</span>
+          <svg class="w-[12px] h-[12px] text-[#81858C] cursor-default" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="16" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+        </div>
+
+        <!-- 第三行：密码输入框（高 28、1px 描边、圆角 8、掩码点），占位文字逐字「输入备份加密密码」 -->
+        <div class="w-full relative">
+          <input 
+            type="password" 
+            placeholder="输入备份加密密码" 
+            class="w-full h-[28px] px-2.5 rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] text-[12px] text-[#0F1115] placeholder-[#81858C] outline-none focus:border-[#4176E6] transition-colors"
+          />
+        </div>
+
+        <!-- 第四行：11px 次色说明（最多四行、行高 16），文案逐字 -->
+        <p class="text-[11px] text-[#61666B] leading-[16px]">
+          此备份已整体加密（整个文件被密码保护）。输入导出时设置的密码即可解密并继续导入——备份内的加密凭据也会用同一密码自动恢复，全程只需输入这一次密码；密码仅本次使用，绝不落盘。
+        </p>
+
+        <!-- 第五行：全宽主按钮「解锁并继续」，密码为空 ⇒ 置灰禁用态（#EBEEF2 底、#81858C 字），仍占满宽度 -->
+        <button disabled class="w-full h-[28px] rounded-[8px] bg-[#EBEEF2] text-[#81858C] text-[12.5px] font-medium flex items-center justify-center cursor-not-allowed">
+          解锁并继续
+        </button>
+
+      </div>
+
+    </div>
+
+    <!-- 底部 28px 状态栏（左侧状态点 + 文案，右侧「v0.8.0 · DSH 2.4」） -->
+    <footer class="w-full h-[28px] px-4 flex items-center justify-between border-t border-[#0000001A] bg-[#EBEEF2] flex-none">
+      <div class="flex items-center gap-1.5">
+        <span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+        <span class="text-[11px] text-[#61666B]">就绪 · 等待选择备份文件</span>
+      </div>
+      <div class="text-[11px] text-[#81858C] font-mono">
+        v0.8.0 · DSH 2.4
+      </div>
+    </footer>
+
+  </div>
+
+</body>
+</html>

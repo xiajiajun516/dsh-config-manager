@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DSH 设置 — 备份与迁移 D-19 删除档案确认弹窗</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    body {
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background-color: #EBEEF2;
+      color: #0F1115;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 主插件窗口 564x720 纯竖版规格居中 -->
+  <div class="relative w-[564px] h-[720px] bg-[#EBEEF2] rounded-[16px] border border-[#0000001A] overflow-hidden flex flex-col justify-between shadow-none select-none">
+    
+    <!-- 1. 顶部导航条 44px (灰底外壳 #EBEEF2) -->
+    <header class="w-full h-[44px] bg-[#EBEEF2] px-[16px] flex items-center justify-between border-b border-[#0000001A] shrink-0 z-0">
+      <div class="flex items-center gap-[16px]">
+        <button type="button" class="text-[12px] text-[#61666B] hover:text-[#0F1115] transition-colors">首页</button>
+        <button type="button" class="text-[12px] text-[#61666B] hover:text-[#0F1115] transition-colors">产物库</button>
+        <button type="button" class="text-[12px] text-[#61666B] hover:text-[#0F1115] transition-colors">同步</button>
+        <!-- 环境激活态：#EBEEF2 底 + 0.5px 描边 #979DA6 + 深色字 -->
+        <button type="button" class="text-[12px] text-[#0F1115] font-medium px-[10px] py-[3px] bg-[#EBEEF2] border border-[#979DA6] rounded-[8px]">环境</button>
+      </div>
+
+      <!-- 右端 4 个 14px 线性图标按钮：⌘K、活动、历史、关于 -->
+      <div class="flex items-center gap-[12px] text-[#61666B]">
+        <!-- ⌘K 图标 -->
+        <svg class="w-[14px] h-[14px] stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+          <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
+        </svg>
+        <!-- 活动折线图标 -->
+        <svg class="w-[14px] h-[14px] stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+        </svg>
+        <!-- 历史时钟图标 -->
+        <svg class="w-[14px] h-[14px] stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <!-- 关于圆圈 i 图标 -->
+        <svg class="w-[14px] h-[14px] stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="16" x2="12" y2="12"/>
+          <line x1="12" y1="8" x2="12.01" y2="8"/>
+        </svg>
+      </div>
+    </header>
+
+    <!-- 2. 中间内容区背景残影（环境页真实内容，灰底压暗可见） -->
+    <main class="flex-1 px-[16px] pt-[14px] overflow-hidden flex flex-col gap-[12px] text-[#61666B]">
+      <!-- 分区标题与分段控件 -->
+      <div class="flex items-center justify-between">
+        <span class="text-[13px] font-medium text-[#0F1115]">环境</span>
+        <div class="inline-flex p-[2px] bg-[#EBEEF2] rounded-[6px] border border-[#0000001A]">
+          <span class="px-[8px] py-[2px] text-[11px] bg-[#FFFFFF] text-[#0F1115] font-medium rounded-[4px] shadow-sm">档案</span>
+          <span class="px-[8px] py-[2px] text-[11px] text-[#61666B]">维护与诊断</span>
+        </div>
+      </div>
+
+      <!-- 概览指标卡 -->
+      <div class="w-full bg-[#FFFFFF] rounded-[12px] border border-[#0000001A] p-[12px] grid grid-cols-2 gap-[8px]">
+        <div>
+          <div class="text-[11px] text-[#81858C]">DSH 版本</div>
+          <div class="text-[12.5px] font-medium text-[#0F1115] font-mono">2.4.0</div>
+        </div>
+        <div>
+          <div class="text-[11px] text-[#81858C]">已配置档案</div>
+          <div class="text-[12.5px] font-medium text-[#0F1115]">3 个</div>
+        </div>
+      </div>
+
+      <!-- 背景残影：已配置档案 卡片 -->
+      <div class="w-full bg-[#FFFFFF] rounded-[12px] border border-[#0000001A] p-[12px] flex flex-col gap-[10px]">
+        <div class="flex items-center justify-between pb-[6px] border-b border-[#0000001A]">
+          <span class="text-[12px] font-medium text-[#0F1115]">已配置档案</span>
+          <span class="text-[11px] text-[#61666B] cursor-pointer">+ 新建档案</span>
+        </div>
+
+        <!-- 档案 1: default -->
+        <div class="flex items-center justify-between py-[6px] border-b border-[#0000000D]">
+          <div class="flex items-center gap-[6px]">
+            <span class="text-[12px] font-medium text-[#0F1115] font-mono">default</span>
+            <span class="text-[11px] px-[6px] py-[1px] bg-[#EBEEF2] text-[#61666B] rounded-[4px]">系统默认</span>
+          </div>
+          <span class="text-[11px] text-[#81858C] font-mono">~/.dsh/profiles/default</span>
+        </div>
+
+        <!-- 档案 2: work (正在被触发删除的目标行) -->
+        <div class="flex items-center justify-between py-[6px]">
+          <div class="flex items-center gap-[6px]">
+            <span class="text-[12px] font-medium text-[#0F1115] font-mono">work</span>
+            <span class="text-[11px] px-[6px] py-[1px] bg-[color-mix(in srgb, #4176E6 10%, #FFFFFF)] text-[#4176E6] rounded-[4px]">当前使用</span>
+            <span class="text-[11px] text-[#81858C] font-mono ml-[4px]">~/.dsh/profiles/work · 8 个 bundle</span>
+          </div>
+          <!-- 行右端三颗 14px 线性图标（复制 / 铅笔 / 垃圾桶） -->
+          <div class="flex items-center gap-[8px] text-[#81858C]">
+            <!-- 复制 -->
+            <svg class="w-[14px] h-[14px] stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            <!-- 铅笔 -->
+            <svg class="w-[14px] h-[14px] stroke-current fill-none stroke-[1.5]" viewBox="0 0 24 24">
+              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+            </svg>
+            <!-- 垃圾桶 (激活态) -->
+            <svg class="w-[14px] h-[14px] stroke-[#EC1313] fill-none stroke-[1.5]" viewBox="0 0 24 24">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- 3. 底部状态栏 28px (灰底外壳 #EBEEF2) -->
+    <footer class="w-full h-[28px] bg-[#EBEEF2] px-[16px] flex items-center justify-between border-t border-[#0000001A] shrink-0 text-[11px] z-0">
+      <div class="flex items-center gap-[6px]">
+        <span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+        <span class="text-[#61666B]">就绪</span>
+      </div>
+      <div class="text-[#81858C] font-mono">v0.8.0 · DSH 2.4</div>
+    </footer>
+
+    <!-- 4. 遮罩层 #0000003D (严密覆盖整张 564x720 画布) -->
+    <div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-[20px]">
+
+      <!-- 5. 危险确认弹窗本体 (纯白 #FFFFFF，宽 519px，圆角 16px，1px #0000001A 描边，无投影) -->
+      <div class="w-[519px] bg-[#FFFFFF] rounded-[16px] border border-[#0000001A] overflow-hidden flex flex-col z-20">
+        
+        <!-- 弹窗标题行 (padding: 16px 16px 0, 13px 500 #0F1115, 无 ✕, 无 ⓘ) -->
+        <div class="px-[16px] pt-[16px] pb-0">
+          <h2 class="text-[13px] font-medium text-[#0F1115] leading-[1.25]">删除档案</h2>
+        </div>
+
+        <!-- 弹窗正文区 (padding: 8px 16px 14px) -->
+        <div class="px-[16px] pt-[8px] pb-[14px] flex flex-col">
+          <!-- 正文第一段 (12.5px / 1.5 / #61666B) -->
+          <p class="text-[12.5px] leading-[1.5] text-[#61666B]">
+            确认删除档案「work」？将物理删除整个目录（含 node_modules），不可恢复。
+          </p>
+
+          <!-- 空一行后的第二段 (与第一段间距 12px，独立后果警告) -->
+          <p class="text-[12.5px] leading-[1.5] text-[#61666B] mt-[12px]">
+            这是当前运行中的档案：删除后本次运行仍可用，但重启会失败。
+          </p>
+
+          <!-- 复选框 (第二段下方 12px，已勾选状态) -->
+          <label class="flex items-center gap-[8px] mt-[12px] cursor-pointer select-none">
+            <!-- 16px 勾选框：黑色 #0F1115 实心 + 白色对勾 + 圆角 4px -->
+            <span class="w-[16px] h-[16px] bg-[#0F1115] rounded-[4px] flex items-center justify-center shrink-0">
+              <svg class="w-[10px] h-[10px] text-white stroke-current fill-none stroke-[2.2]" viewBox="0 0 24 24">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </span>
+            <!-- 文案：12.5px #0F1115 -->
+            <span class="text-[12.5px] text-[#0F1115] leading-normal font-normal">仍要删除当前档案</span>
+          </label>
+        </div>
+
+        <!-- 弹窗底栏 (顶部 0.5px #0000001A 分隔线，padding: 10px 16px 14px，两按钮右对齐) -->
+        <div class="w-full border-t border-[#0000001A] px-[16px] pt-[10px] pb-[14px] flex items-center justify-end gap-[8px]">
+          <!-- 左红底危险确认按钮「删除」(#EC1313 填充、白字、高 30px、圆角 8px、无 loading) -->
+          <button type="button" class="h-[30px] px-[16px] bg-[#EC1313] hover:bg-[#EC1313] text-[#FFFFFF] text-[12.5px] font-medium rounded-[8px] transition-colors flex items-center justify-center">
+            删除
+          </button>
+          <!-- 右 ghost 按钮「取消」(白底 1px #0000001A 描边、深色文字 #0F1115) -->
+          <button type="button" class="h-[30px] px-[16px] bg-[#FFFFFF] hover:bg-[#EBEEF2] border border-[#0000001A] text-[#0F1115] text-[12.5px] font-medium rounded-[8px] transition-colors flex items-center justify-center">
+            取消
+          </button>
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DSH 设置 — 备份与迁移 D-34 免责声明弹窗</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      background-color: #EBEEF2;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      color: #0F1115;
+    }
+
+    /* 插件固定视口 564x720 */
+    .plugin-viewport {
+      position: relative;
+      width: 564px;
+      height: 720px;
+      background-color: #FFFFFF;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #0000001A;
+      border-radius: 8px;
+    }
+
+    /* 下层被压暗的宿主与市场页灰阶骨架 */
+    .underlay-header {
+      height: 32px;
+      border-bottom: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      background-color: #FFFFFF;
+    }
+
+    .underlay-tabs {
+      display: flex;
+      gap: 16px;
+    }
+
+    .underlay-tab {
+      font-size: 12px;
+      color: #81858C;
+    }
+
+    .underlay-tab.active {
+      color: #0F1115;
+    }
+
+    .underlay-icons {
+      display: flex;
+      gap: 12px;
+      color: #81858C;
+      font-size: 11px;
+    }
+
+    .underlay-content {
+      flex: 1;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background-color: #FFFFFF;
+    }
+
+    .underlay-bar {
+      height: 28px;
+      background-color: #EBEEF2;
+      border-radius: 8px;
+      border: 1px solid #0000001A;
+    }
+
+    .underlay-card {
+      height: 110px;
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      background-color: #FFFFFF;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .underlay-line {
+      height: 14px;
+      background-color: #EBEEF2;
+      border-radius: 4px;
+    }
+
+    .underlay-btn {
+      width: 76px;
+      height: 26px;
+      background-color: #EBEEF2;
+      border-radius: 8px;
+      align-self: flex-end;
+    }
+
+    .underlay-footer {
+      height: 28px;
+      border-top: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      font-size: 11px;
+      color: #81858C;
+      background-color: #FFFFFF;
+    }
+
+    /* 遮罩全覆盖 564x720 */
+    .modal-backdrop {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 564px;
+      height: 720px;
+      background-color: #0000003D;
+      z-index: 10;
+    }
+
+    /* 弹窗本体 D-34 免责声明 */
+    .dialog-card {
+      position: absolute;
+      top: 110px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 519px;
+      background-color: #FFFFFF;
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Header */
+    .dialog-header {
+      height: 44px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+    }
+
+    .dialog-title {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.25;
+      color: #0F1115;
+    }
+
+    /* Body */
+    .dialog-body {
+      padding: 0 16px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .text-p1 {
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #0F1115;
+      margin-bottom: 8px;
+    }
+
+    .text-p2 {
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #61666B;
+      margin-bottom: 8px;
+    }
+
+    .text-items {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 16px;
+    }
+
+    .text-item-line {
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #61666B;
+    }
+
+    /* Checkbox Row */
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+      padding-bottom: 16px;
+    }
+
+    .custom-checkbox {
+      width: 14px;
+      height: 14px;
+      border: 1px solid #00000029;
+      border-radius: 4px;
+      background-color: #FFFFFF;
+      flex-shrink: 0;
+    }
+
+    .checkbox-label {
+      font-size: 12px;
+      line-height: 1.5;
+      color: #61666B;
+    }
+
+    /* Footer */
+    .dialog-footer {
+      height: 48px;
+      padding: 0 16px;
+      border-top: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .btn {
+      height: 28px;
+      padding: 0 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      border: none;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      background-color: #0F1115;
+      color: #FFFFFF;
+      font-weight: 500;
+    }
+
+    .btn-primary:hover {
+      background-color: #0F1115;
+    }
+
+    .btn-ghost {
+      background-color: #FFFFFF;
+      color: #0F1115;
+      border: 0.5px solid #00000029;
+    }
+
+    .btn-ghost:hover {
+      background-color: #EBEEF2;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="plugin-viewport">
+    <!-- 下层压暗背景：市场条目结构 -->
+    <div class="underlay-header">
+      <div class="underlay-tabs">
+        <span class="underlay-tab">首页</span>
+        <span class="underlay-tab">产物库</span>
+        <span class="underlay-tab">同步</span>
+        <span class="underlay-tab">环境</span>
+      </div>
+      <div class="underlay-icons">
+        <span>⌘K</span>
+        <span>活动</span>
+        <span>历史</span>
+        <span>关于</span>
+      </div>
+    </div>
+
+    <div class="underlay-content">
+      <div class="underlay-bar"></div>
+      <div class="underlay-card">
+        <div class="underlay-line" style="width: 45%;"></div>
+        <div class="underlay-line" style="width: 80%;"></div>
+        <div class="underlay-line" style="width: 60%;"></div>
+        <div class="underlay-btn"></div>
+      </div>
+      <div class="underlay-card">
+        <div class="underlay-line" style="width: 50%;"></div>
+        <div class="underlay-line" style="width: 75%;"></div>
+        <div class="underlay-line" style="width: 65%;"></div>
+        <div class="underlay-btn"></div>
+      </div>
+      <div class="underlay-card">
+        <div class="underlay-line" style="width: 40%;"></div>
+        <div class="underlay-line" style="width: 70%;"></div>
+        <div class="underlay-line" style="width: 55%;"></div>
+        <div class="underlay-btn"></div>
+      </div>
+    </div>
+
+    <div class="underlay-footer">
+      <span>● 就绪 · 市场已连接</span>
+      <span>v0.8.0 · DSH 2.4</span>
+    </div>
+
+    <!-- 遮罩全量覆盖 564x720 -->
+    <div class="modal-backdrop"></div>
+
+    <!-- 弹窗本体 D-34 免责声明 -->
+    <div class="dialog-card">
+      <div class="dialog-header">
+        <div class="dialog-title">免责声明</div>
+      </div>
+
+      <div class="dialog-body">
+        <div class="text-p1">你即将从公共网络市场下载配置并导入本地。</div>
+        <div class="text-p2">下载内容属于不可信输入：未经官方审核、可能包含风险（安装插件 / 写入文件 / 修改设置）。</div>
+        
+        <div class="text-items">
+          <div class="text-item-line">· 选择内容页逐项列出「本次将改动什么」，并就地标出高风险分区，请核对后再确认；</div>
+          <div class="text-item-line">· 各分区（含高风险）默认已勾选：取消勾选即不导入、也不进快照；</div>
+          <div class="text-item-line">· 导入会先自动创建快照，导入后可一键回滚；</div>
+          <div class="text-item-line">· 请核对来源与内容后再确认导入。</div>
+        </div>
+
+        <div class="checkbox-row">
+          <div class="custom-checkbox"></div>
+          <div class="checkbox-label">不再提示（该操作以后不再显示免责声明）</div>
+        </div>
+      </div>
+
+      <div class="dialog-footer">
+        <button class="btn btn-primary" type="button">我已了解，继续</button>
+        <button class="btn btn-ghost" type="button">取消</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

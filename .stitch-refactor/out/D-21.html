@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-21 进入救援模式确认弹窗</title>
+<style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      background-color: #EBECEF;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    /* 564x720 插件容器规格 */
+    .plugin-window {
+      width: 564px;
+      height: 720px;
+      background: #FFFFFF;
+      border: 1px solid #E6E6E6;
+      border-radius: 8px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 顶部 32px 导航栏 */
+    .top-nav {
+      height: 32px;
+      min-height: 32px;
+      border-bottom: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      background: #FFFFFF;
+    }
+    .nav-tabs {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .nav-tab {
+      font-size: 12px;
+      color: #61666B;
+      cursor: default;
+    }
+    .nav-tab.active {
+      color: #0F1115;
+      font-weight: 500;
+      position: relative;
+    }
+    .nav-tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: -8px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: #0F1115;
+    }
+    .nav-icons {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #81858C;
+    }
+    .nav-icon-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+    }
+
+    /* 压暗骨架内容区（环境 · 维护与诊断） */
+    .content-skeleton {
+      flex: 1;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: #FFFFFF;
+    }
+    .skeleton-bar {
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .skeleton-segmented {
+      width: 140px;
+      height: 24px;
+      background: #F5F5F5;
+      border-radius: 6px;
+      border: 0.5px solid #0000001A;
+    }
+    .skeleton-card {
+      background: #F9FAFB;
+      border: 1px solid #0000001A;
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .skeleton-line {
+      height: 10px;
+      background: #E5E7EB;
+      border-radius: 4px;
+    }
+
+    /* 底部 28px 状态栏 */
+    .status-bar {
+      height: 28px;
+      min-height: 28px;
+      border-top: 0.5px solid #0000001A;
+      background: #FFFFFF;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      font-size: 11px;
+      color: #81858C;
+    }
+    .status-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: #22C55E;
+    }
+
+    /* 全局 24% / #0000003D 遮罩层 */
+    .modal-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.24); /* #0000003D 规范 */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+
+    /* D-21 确认进入救援模式弹窗本体 (宽 519px，自适应高 ~230px) */
+    .confirm-dialog {
+      width: 519px;
+      background: #FFFFFF;
+      border: 1px solid #0000001A;
+      border-radius: 16px;
+      box-shadow: none;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* 1) 标题区：padding 12px 16px 0，无 onClose / 无 ✕ */
+    .dialog-header {
+      padding: 12px 16px 0 16px;
+    }
+    .dialog-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: #0F1115;
+      line-height: 1.25;
+    }
+
+    /* 2) 正文区：padding 8px 16px 12px，12.5px #61666B，行高 1.5，四行自然换行 */
+    .dialog-body {
+      padding: 8px 16px 12px 16px;
+    }
+    .dialog-desc {
+      font-size: 12.5px;
+      color: #61666B;
+      line-height: 1.5;
+      letter-spacing: -0.01em;
+      word-break: break-word;
+    }
+
+    /* 3) 动作区：padding 10px 16px 14px，上方 0.5px 分隔线，右对齐，顺序确认在左、取消在最右 */
+    .dialog-footer {
+      padding: 10px 16px 14px 16px;
+      border-top: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    /* 按钮规范：高 28px、圆角 8px、字号 12.5px */
+    .btn-danger {
+      height: 28px;
+      padding: 0 12px;
+      background: #EC1313;
+      color: #FFFFFF;
+      border: none;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.1s ease;
+    }
+    .btn-danger:hover {
+      background: #d60e0e;
+    }
+
+    .btn-ghost {
+      height: 28px;
+      padding: 0 12px;
+      background: #FFFFFF;
+      color: #0F1115;
+      border: 0.5px solid #0000001A;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 400;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.1s ease;
+    }
+    .btn-ghost:hover {
+      background: #F5F5F5;
+    }
+  </style>
+</head>
+<body>
+<!-- 564x720 插件容器 -->
+<div class="plugin-window">
+<!-- 顶部 32px 导航栏 -->
+<header class="top-nav">
+<nav class="nav-tabs"><span class="nav-tab" style="padding: 2px 8px; border-radius: 4px;">首页</span><span class="nav-tab" style="padding: 2px 8px; border-radius: 4px;">产物库</span><span class="nav-tab" style="padding: 2px 8px; border-radius: 4px;">同步</span><span class="nav-tab active" style="padding: 2px 8px; border-radius: 4px; background: #EBEEF2; border: 0.5px solid #979DA6; color: #0F1115; font-weight: 500;">环境</span></nav>
+<div class="nav-icons">
+<!-- ⌘K 命令面板 -->
+<span class="nav-icon-btn" title="命令面板">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24" width="14">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+</span>
+<!-- 活动折线 -->
+<span class="nav-icon-btn" title="活动记录">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24" width="14">
+<path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+</svg>
+</span>
+<!-- 历史时钟 -->
+<span class="nav-icon-btn" title="历史">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+</span>
+<!-- 关于信息 -->
+<span class="nav-icon-btn" title="关于">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</span>
+</div>
+</header>
+<!-- 环境·维护与诊断 压暗底层骨架轮廓 -->
+<main class="content-skeleton" style="overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; background: #F8F9FA;">
+<!-- 环境标题与分段选择器 -->
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+<h1 style="font-size: 13px; font-weight: 600; color: #0F1115; margin: 0;">环境</h1>
+<div style="display: inline-flex; background: #E9ECEF; padding: 2px; border-radius: 6px; border: 0.5px solid rgba(0,0,0,0.08); font-size: 11px;">
+<span style="padding: 2px 10px; border-radius: 4px; color: #61666B; cursor: default;">档案</span>
+<span style="padding: 2px 10px; border-radius: 4px; background: #FFFFFF; color: #0F1115; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.06); cursor: default;">维护与诊断</span>
+</div>
+</div>
+<!-- 恢复 小节标题与刷新按钮 -->
+<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+<span style="font-size: 13px; font-weight: 600; color: #0F1115;">恢复</span>
+<button style="display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; background: #FFFFFF; border: 0.5px solid rgba(0,0,0,0.15); border-radius: 6px; font-size: 11px; color: #61666B; cursor: pointer;" type="button">
+<svg fill="none" height="11" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="11"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+      刷新
+    </button>
+</div>
+<!-- 恢复事项就绪卡片 -->
+<div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.08); border-radius: 8px; padding: 8px 12px; display: flex; align-items: center; gap: 6px;">
+<span style="color: #22C55E; font-size: 10px;">●</span>
+<span style="font-size: 12.5px; color: #0F1115;">当前没有待处理的恢复事项</span>
+</div>
+<!-- 救援模式卡片 -->
+<div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.08); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px;">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<div style="display: flex; align-items: center; gap: 6px;">
+<span style="font-size: 12.5px; font-weight: 600; color: #0F1115;">救援模式</span>
+<svg fill="none" height="12" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="12"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+<span style="font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: #F1F3F5; color: #61666B;">未开启</span>
+</div>
+<button style="height: 24px; padding: 0 10px; background: #FFF5F5; border: 0.5px solid #EC1313; border-radius: 6px; font-size: 11.5px; font-weight: 500; color: #EC1313; cursor: pointer;" type="button">进入救援模式</button>
+</div>
+<span style="font-size: 11px; color: #81858C;">停用依赖校验，仅在插件自身无法启动时使用</span>
+</div>
+<!-- 磁盘占用卡片 -->
+<div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.08); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<div style="display: flex; align-items: center; gap: 6px;">
+<span style="font-size: 12.5px; font-weight: 600; color: #0F1115;">磁盘占用</span>
+<svg fill="none" height="12" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="12"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</div>
+<svg fill="none" height="12" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" style="cursor: pointer;" viewbox="0 0 24 24" width="12"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+</div>
+<div style="font-size: 11.5px; color: #61666B; margin-bottom: 2px;">合计 1652.9 MB · 49150 个文件</div>
+<!-- 4行明细 -->
+<div style="display: flex; flex-direction: column; gap: 5px; font-size: 11.5px;">
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 3px 0; border-bottom: 0.5px solid #F1F3F5;">
+<span style="color: #1A1C20;">备份文件</span>
+<div style="display: flex; align-items: center; gap: 8px;">
+<span style="color: #61666B;">20.1 MB</span>
+<span style="font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #EBF3FE; color: #1758C7;">保留 30 天</span>
+</div>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 3px 0; border-bottom: 0.5px solid #F1F3F5;">
+<span style="color: #1A1C20;">导入前快照</span>
+<div style="display: flex; align-items: center; gap: 8px;">
+<span style="color: #61666B;">302 KB</span>
+<span style="font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #F1F3F5; color: #61666B;">可重建</span>
+</div>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 3px 0; border-bottom: 0.5px solid #F1F3F5;">
+<span style="color: #1A1C20;">同步覆盖与工作副本</span>
+<div style="display: flex; align-items: center; gap: 8px;">
+<span style="color: #61666B;">108.9 MB</span>
+<span style="font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #F1F3F5; color: #61666B;">可重建</span>
+</div>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 3px 0;">
+<span style="color: #1A1C20;">遗留 checkpoints（不自动删除）</span>
+<div style="display: flex; align-items: center; gap: 8px;">
+<span style="color: #61666B;">56.9 MB</span>
+<span style="font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #FEF3E6; color: #B45309;">受保护</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 折叠卡片 1：会话体检 -->
+<div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.08); border-radius: 8px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+<span style="font-size: 12.5px; font-weight: 500; color: #0F1115;">会话体检</span>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: #81858C;">
+<span>上次检查：从未</span>
+<svg fill="none" height="12" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="12"><polyline points="9 18 15 12 9 6"></polyline></svg>
+</div>
+</div>
+<!-- 折叠卡片 2：工作区与会话回滚 -->
+<div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.08); border-radius: 8px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer;">
+<span style="font-size: 12.5px; font-weight: 500; color: #0F1115;">工作区与会话回滚</span>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: #81858C;">
+<span>9 个回滚点</span>
+<svg fill="none" height="12" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="12"><polyline points="9 18 15 12 9 6"></polyline></svg>
+</div>
+</div>
+</main>
+<!-- 底部 28px 状态栏 -->
+<footer class="status-bar" style="margin: 8px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1); background: #FFFFFF; height: 26px; min-height: 26px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #81858C;"><div class="status-left"><span class="status-dot"></span><span>就绪</span></div><div class="status-right"><span>v0.8.0 · DSH 2.4</span></div></footer>
+<!-- 全局压暗遮罩 #0000003D -->
+<div class="modal-overlay">
+<!-- D-21 确认进入救援模式弹窗 -->
+<div class="confirm-dialog" style="box-shadow: 0 16px 36px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.08);">
+<!-- 1) 标题区：padding 12px 16px 0，无 onClose / 无 ✕ -->
+<div class="dialog-header">
+<h2 class="dialog-title">进入救援模式</h2>
+</div>
+<!-- 2) 正文区：padding 8px 16px 12px，12.5px #61666B，行高 1.5，四行自然换行 -->
+<div class="dialog-body">
+<p class="dialog-desc">进入救援模式会改写 profile 的 cordis.patch.yml、置空 home 的 cordis.patch.yml，并把 dsh.profile.bundles 收窄为 DSH 核心与本插件（其它用户插件本次启动不挂载；包本身不删除）。退出时会从备份逐字节还原。请重启 DSH 使其生效。是否继续？</p>
+</div>
+<!-- 3) 动作区：padding 10px 16px 14px，上方 0.5px 分隔线，确认在左、取消在最右 -->
+<div class="dialog-footer">
+<button class="btn-danger" type="button">进入救援模式</button>
+<button class="btn-ghost" type="button">取消</button>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

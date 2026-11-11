@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-22 会话体检报告弹窗</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/lucide/0.263.1/lucide.min.css" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lucide/0.263.1/umd/lucide.min.js"></script>
+<style>
+    * {
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBEEF2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #0F1115;
+    }
+    .font-mono-code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    /* 严格禁止外部滚动，确保整体在画板居中 */
+    .viewport-container {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .plugin-window {
+      width: 564px;
+      height: 720px;
+      position: relative;
+      background: #FFFFFF;
+      border: 1px solid #EBEEF2;
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+  </style>
+</head>
+<body class="viewport-container select-none">
+<!-- 564x720 插件容器 -->
+<div class="plugin-window">
+<!-- 1. 压暗的底层维护与诊断骨架（导航条 + 骨架内容 + 底部状态栏） -->
+<!-- 顶部 32px 导航条 -->
+<header class="h-[32px] px-[14px] flex items-center justify-between border-b border-[#0000001A] bg-[#FFFFFF] shrink-0">
+<div class="flex items-center space-x-[16px] text-[12.5px]">
+<span class="text-[#61666B]">首页</span>
+<span class="text-[#61666B]">产物库</span>
+<span class="text-[#61666B]">同步</span>
+<div class="px-[8px] py-[1.5px] rounded-[8px] bg-[#EBEEF2] border border-[#979DA6] font-medium text-[#0F1115] text-[12px]">环境</div>
+</div>
+<div class="flex items-center space-x-[12px] text-[#81858C]">
+<i class="w-[14px] h-[14px]" data-lucide="command"></i>
+<i class="w-[14px] h-[14px]" data-lucide="activity"></i>
+<i class="w-[14px] h-[14px]" data-lucide="clock"></i>
+<i class="w-[14px] h-[14px]" data-lucide="info"></i>
+</div>
+</header>
+<!-- 中间压暗骨架内容区 -->
+<main class="flex-1 p-[14px] flex flex-col space-y-[10px] bg-[#FFFFFF]">
+<div class="h-[34px] w-full rounded-[8px] bg-[#EBEEF2] border border-[#EBEEF2]"></div>
+<div class="h-[74px] w-full rounded-[12px] bg-[#EBEEF2] border border-[#EBEEF2]"></div>
+<div class="h-[140px] w-full rounded-[12px] bg-[#EBEEF2] border border-[#EBEEF2]"></div>
+<div class="h-[120px] w-full rounded-[12px] bg-[#EBEEF2] border border-[#EBEEF2]"></div>
+<div class="flex-1 w-full rounded-[12px] bg-[#EBEEF2] border border-[#EBEEF2]"></div>
+</main>
+<!-- 底部 28px 状态栏（压暗底板） -->
+<footer class="h-[28px] px-[14px] flex items-center justify-between border-t border-[#0000001A] bg-[#FFFFFF] shrink-0 text-[11px] text-[#81858C]">
+<div class="flex items-center space-x-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span>就绪</span>
+</div>
+<span class="font-mono-code">v0.8.0 · DSH 2.4</span>
+</footer>
+<!-- 2. 全局 24% 深度遮罩 #0000003D (rgba(0,0,0,0.24)) -->
+<div class="absolute inset-0 bg-[#0000003D] z-10"></div>
+<!-- 3. D-22 宽弹窗本体：宽 541px，水平居中，顶底各约 50px（高度 594px 精确裁切半行），白底，1px 描边 #0000001A，圆角 16px，无阴影 -->
+<div class="absolute left-1/2 -translate-x-1/2 top-[50px] w-[541px] h-[594px] bg-[#FFFFFF] border border-[#0000001A] rounded-[16px] z-20 flex flex-col overflow-hidden shadow-none">
+<!-- 3.1 标题栏 padding 12px 14px 0 -->
+<div class="pt-[12px] px-[14px] pb-[8px] flex items-center justify-between shrink-0">
+<div class="text-[13px] font-[500] leading-[1.25] text-[#0F1115]">会话体检</div>
+<!-- 修复项 1：横向水平排列 3 个元素（间距 8px 或 10px，垂直居中） -->
+<div class="flex items-center space-x-[8px]"><svg class="w-[14px] h-[14px] text-[#81858C] cursor-pointer hover:text-[#0F1115] transition-colors shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg><button class="h-[24px] px-[8px] rounded-[8px] bg-transparent border border-[#CCCCCC] text-[#0F1115] hover:bg-[#EBEEF2] text-[11px] font-[500] flex items-center justify-center transition-colors">重新体检</button><svg class="w-[14px] h-[14px] text-[#61666B] cursor-pointer hover:text-[#0F1115] transition-colors shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></div>
+</div>
+<!-- 3.2 正文内容区 padding 0 16px 0，超出部分底部严格截断 -->
+<div class="px-[16px] flex flex-col space-y-[10px] overflow-hidden">
+<!-- 总览卡：1px 描边 + 圆角 12 + padding 12px 14px -->
+<div class="border border-[#0000001A] rounded-[12px] p-[12px_14px] bg-[#FFFFFF] flex flex-col space-y-[10px]">
+<!-- 三个指标横排：值 13px/600、标签 11px 次色，间距 24px -->
+<div class="flex items-center space-x-[24px]">
+<div class="flex items-baseline space-x-[6px]">
+<span class="text-[13px] font-[600] text-[#0F1115] tabular-nums">128</span>
+<span class="text-[11px] text-[#61666B]">会话总数</span>
+</div>
+<div class="h-[12px] w-[0.5px] bg-[#0000001A]"></div>
+<div class="flex items-baseline space-x-[6px]">
+<span class="text-[13px] font-[600] text-[#EC1313] tabular-nums">7</span>
+<span class="text-[11px] text-[#61666B]">需要处理</span>
+</div>
+<div class="h-[12px] w-[0.5px] bg-[#0000001A]"></div>
+<div class="flex items-baseline space-x-[6px]">
+<span class="text-[13px] font-[600] text-[#0F1115] font-mono-code">v3</span>
+<span class="text-[11px] text-[#61666B]">会话格式</span>
+</div>
+</div>
+<!-- 四个严重度胶囊（同一行，gap 6，padding 2px 8px、11px、圆角 999、浅色底）：四项之和 = 7 -->
+<div class="flex items-center space-x-[6px] overflow-hidden text-[11px]">
+<!-- 红点 + 阻断启动 2 -->
+<div class="flex items-center space-x-[4px] px-[8px] py-[2px] rounded-[999px] bg-[#EC13130F] text-[#EC1313]">
+<span class="w-[5px] h-[5px] rounded-full bg-[#EC1313]"></span>
+<span>阻断启动</span>
+<span class="font-[600] tabular-nums">2</span>
+</div>
+<!-- 红点 + 不可加载 3 -->
+<div class="flex items-center space-x-[4px] px-[8px] py-[2px] rounded-[999px] bg-[#EC13130F] text-[#EC1313]">
+<span class="w-[5px] h-[5px] rounded-full bg-[#EC1313]"></span>
+<span>不可加载</span>
+<span class="font-[600] tabular-nums">3</span>
+</div>
+<!-- 橙点 + 下次请求失败 1 -->
+<div class="flex items-center space-x-[4px] px-[8px] py-[2px] rounded-[999px] bg-[#F59E0B14] text-[#F59E0B]">
+<span class="w-[5px] h-[5px] rounded-full bg-[#F59E0B]"></span>
+<span>下次请求失败</span>
+<span class="font-[600] tabular-nums">1</span>
+</div>
+<!-- 灰点 + 看不见 1 -->
+<div class="flex items-center space-x-[4px] px-[8px] py-[2px] rounded-[999px] bg-[#EBEEF2] text-[#61666B]">
+<span class="w-[5px] h-[5px] rounded-full bg-[#81858C]"></span>
+<span>看不见</span>
+<span class="font-[600] tabular-nums">1</span>
+</div>
+</div>
+<!-- 细分隔线 -->
+<div class="h-[0.5px] w-full bg-[#0000001A]"></div>
+<!-- 备注徽章行（11px 弱色，gap 8）：未深校验 118 · 已深校验 10｜正常已隐藏 41｜读不出 0 -->
+<div class="flex items-center space-x-[8px] text-[11px] text-[#81858C]">
+<span>未深校验 118 · 已深校验 10</span>
+<span class="text-[#0000001A]">|</span>
+<span>正常已隐藏 41</span>
+<span class="text-[#0000001A]">|</span>
+<span>读不出 0</span>
+</div>
+</div>
+<!-- 修复项 2：「需要处理的会话」右侧的计数徽章「7」后面紧跟一个 14px 线性 ⓘ 图标 -->
+<div class="flex items-center justify-between pt-[2px]">
+<div class="flex items-center space-x-[5px]">
+<span class="text-[12.5px] font-[500] text-[#0F1115]">需要处理的会话</span>
+<span class="px-[5px] py-[0.5px] rounded-[4px] bg-[#EC13130F] text-[#EC1313] text-[11px] font-[500] tabular-nums">7</span>
+<svg class="w-[14px] h-[14px] text-[#81858C] cursor-pointer hover:text-[#0F1115] transition-colors shrink-0 ml-[1px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
+</div>
+<button class="h-[24px] px-[10px] rounded-[8px] bg-[#0F1115] hover:bg-[#43454A] text-[#FFFFFF] text-[11px] font-[500] flex items-center justify-center transition-colors">
+            一键修复全部（7）
+          </button>
+</div>
+<!-- 三张会话行卡（1px 描边 + 左侧 2px 语义色条 + 圆角 12 + padding 8px 10px） -->
+<div class="flex flex-col space-y-[6px]">
+<!-- 卡 1（红条） -->
+<div class="border border-[#0000001A] rounded-[12px] p-[8px_10px] bg-[#FFFFFF] relative overflow-hidden flex flex-col space-y-[5px]">
+<div class="absolute left-0 top-0 bottom-0 w-[2px] bg-[#EC1313]"></div>
+<!-- 第一行：修复项 3 在「修复」ghost 按钮右边补下载图标按钮 -->
+<div class="flex items-center justify-between pl-[4px]">
+<div class="flex items-center space-x-[6px]">
+<span class="px-[5px] py-[1px] rounded-[4px] bg-[#EC13130F] text-[#EC1313] text-[11px] font-[500]">阻断启动</span>
+<span class="text-[12px] font-[500] text-[#0F1115]">重构回滚点台账与恢复预览</span>
+</div>
+<div class="flex items-center space-x-[6px]">
+<button class="h-[22px] px-[8px] rounded-[6px] bg-transparent border border-[#0000001A] text-[#0F1115] hover:bg-[#EBEEF2] text-[11px] font-[500] flex items-center">
+                  修复
+                </button>
+<button class="w-[22px] h-[22px] flex items-center justify-center rounded-[4px] text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2] transition-colors">
+<i class="w-[14px] h-[14px] stroke-[#61666B]" data-lucide="download"></i>
+</button>
+</div>
+</div>
+<!-- 第二行：修复项 4 单行 flex 布局紧凑排版 -->
+<div class="flex items-center justify-between pl-[4px] text-[11px] whitespace-nowrap overflow-hidden">
+<div class="flex items-center space-x-[6px] min-w-0 pr-[8px]">
+<span class="font-mono-code text-[11px] text-[#61666B] shrink-0">20261110-2231-a1b2c3</span>
+<span class="px-[5px] py-[0.5px] rounded-[999px] bg-[#EBEEF2] border border-[#0000001A] text-[#61666B] text-[11px] truncate shrink">重复写入的行（可零损失清理）</span>
+<span class="px-[5px] py-[0.5px] rounded-[999px] bg-[#EBEEF2] border border-[#0000001A] text-[#61666B] text-[11px] truncate shrink">首帧缺 message id</span>
+<span class="px-[4px] py-[0.5px] rounded-[999px] bg-[#EBEEF2] text-[#81858C] text-[10.5px] shrink-0">还有 1 条</span>
+</div>
+<div class="flex items-center space-x-[4px] shrink-0 text-[11px] text-[#81858C]">
+<span class="font-mono-code">v3</span>
+<span class="text-[#0000001A]">·</span>
+<span class="tabular-nums">1.2 MB</span>
+<span class="text-[#0000001A]">·</span>
+<span>今天 22:41</span>
+</div>
+</div>
+</div>
+<!-- 卡 2（红条） -->
+<div class="border border-[#0000001A] rounded-[12px] p-[8px_10px] bg-[#FFFFFF] relative overflow-hidden flex flex-col space-y-[5px]">
+<div class="absolute left-0 top-0 bottom-0 w-[2px] bg-[#EC1313]"></div>
+<!-- 第一行：修复项 3 补下载图标 -->
+<div class="flex items-center justify-between pl-[4px]">
+<div class="flex items-center space-x-[6px]">
+<span class="px-[5px] py-[1px] rounded-[4px] bg-[#EC13130F] text-[#EC1313] text-[11px] font-[500]">不可加载</span>
+<span class="text-[12px] font-[500] text-[#0F1115]">增量同步冲突处理</span>
+</div>
+<div class="flex items-center space-x-[6px]">
+<button class="h-[22px] px-[8px] rounded-[6px] bg-transparent border border-[#0000001A] text-[#0F1115] hover:bg-[#EBEEF2] text-[11px] font-[500] flex items-center">
+                  修复
+                </button>
+<button class="w-[22px] h-[22px] flex items-center justify-center rounded-[4px] text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2] transition-colors">
+<i class="w-[14px] h-[14px] stroke-[#61666B]" data-lucide="download"></i>
+</button>
+</div>
+</div>
+<!-- 第二行 11px -->
+<div class="flex items-center justify-between pl-[4px] text-[11px] whitespace-nowrap overflow-hidden">
+<div class="flex items-center space-x-[6px] min-w-0 pr-[8px]">
+<span class="font-mono-code text-[11px] text-[#61666B] shrink-0">20261109-1830-9f2c11</span>
+<span class="px-[5px] py-[0.5px] rounded-[999px] bg-[#EBEEF2] border border-[#0000001A] text-[#61666B] text-[11px] truncate shrink">事件形状不合法</span>
+</div>
+<div class="flex items-center space-x-[4px] shrink-0 text-[11px] text-[#81858C]">
+<span class="font-mono-code">v3</span>
+<span class="text-[#0000001A]">·</span>
+<span class="tabular-nums">848 KB</span>
+<span class="text-[#0000001A]">·</span>
+<span>昨天 18:32</span>
+</div>
+</div>
+</div>
+<!-- 卡 3（橙条） -->
+<div class="border border-[#0000001A] rounded-[12px] p-[8px_10px] bg-[#FFFFFF] relative overflow-hidden flex flex-col space-y-[5px]">
+<div class="absolute left-0 top-0 bottom-0 w-[2px] bg-[#F59E0B]"></div>
+<!-- 第一行：修复项 3 补下载图标 -->
+<div class="flex items-center justify-between pl-[4px]">
+<div class="flex items-center space-x-[6px]">
+<span class="px-[5px] py-[1px] rounded-[4px] bg-[#F59E0B14] text-[#F59E0B] text-[11px] font-[500]">下次请求失败</span>
+<span class="text-[12px] font-[500] text-[#0F1115]">TOKEN 预算与压缩策略</span>
+</div>
+<div class="flex items-center space-x-[6px]">
+<button class="h-[22px] px-[8px] rounded-[6px] bg-transparent border border-[#0000001A] text-[#0F1115] hover:bg-[#EBEEF2] text-[11px] font-[500] flex items-center">
+                  修复
+                </button>
+<button class="w-[22px] h-[22px] flex items-center justify-center rounded-[4px] text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2] transition-colors">
+<i class="w-[14px] h-[14px] stroke-[#61666B]" data-lucide="download"></i>
+</button>
+</div>
+</div>
+<!-- 第二行 11px -->
+<div class="flex items-center justify-between pl-[4px] text-[11px] whitespace-nowrap overflow-hidden">
+<div class="flex items-center space-x-[6px] min-w-0 pr-[8px]">
+<span class="font-mono-code text-[11px] text-[#61666B] shrink-0">20261108-0912-4d77e0</span>
+<span class="px-[5px] py-[0.5px] rounded-[999px] bg-[#EBEEF2] border border-[#0000001A] text-[#61666B] text-[11px] truncate shrink">tool call id 为空</span>
+</div>
+<div class="flex items-center space-x-[4px] shrink-0 text-[11px] text-[#81858C]">
+<span class="font-mono-code">v3</span>
+<span class="text-[#0000001A]">·</span>
+<span class="tabular-nums">512 KB</span>
+<span class="text-[#0000001A]">·</span>
+<span>11-08 09:12</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 小字提示：「还有 4 条未显示」（11px 弱色） -->
+<div class="text-[11px] text-[#81858C] pl-[2px] leading-none">还有 4 条未显示</div>
+<!-- 修复项 2：「怎么修」标题文字后面紧跟一个 14px 线性 ⓘ 图标（#81858C，间距 6px） -->
+<div class="flex flex-col space-y-[6px] pt-[1px]">
+<div class="flex items-center space-x-[6px]">
+<span class="text-[12px] font-[500] text-[#0F1115]">怎么修</span>
+<svg class="w-[14px] h-[14px] text-[#81858C] cursor-pointer hover:text-[#0F1115] transition-colors shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
+</div>
+<div class="border border-[#0000001A] rounded-[8px] bg-[#F9FAFB] p-[4px_8px] flex flex-col space-y-[3px]">
+<div class="flex items-center justify-between text-[11px] text-[#61666B] py-[1px]">
+<span class="font-mono-code">dcm sessions doctor --json</span>
+<i class="w-[11px] h-[11px] text-[#81858C] hover:text-[#0F1115] cursor-pointer" data-lucide="copy"></i>
+</div>
+<div class="h-[0.5px] w-full bg-[#0000000D]"></div>
+<div class="flex items-center justify-between text-[11px] text-[#61666B] py-[1px]">
+<span class="font-mono-code">dcm sessions repair --dry-run</span>
+<i class="w-[11px] h-[11px] text-[#81858C] hover:text-[#0F1115] cursor-pointer" data-lucide="copy"></i>
+</div>
+<div class="h-[0.5px] w-full bg-[#0000000D]"></div>
+<div class="flex items-center justify-between text-[11px] text-[#61666B] py-[1px]">
+<span class="font-mono-code">dcm sessions repair --apply</span>
+<i class="w-[11px] h-[11px] text-[#81858C] hover:text-[#0F1115] cursor-pointer" data-lucide="copy"></i>
+</div>
+</div>
+</div>
+<!-- 修复项 5：底部「修复记录（可回滚）」半截裁切行（区块头 + 记录行被白色卡片下沿截半以形成滚动暗示） -->
+<div class="flex flex-col space-y-[6px] pt-[1px] shrink-0">
+<div class="flex items-center space-x-[6px]">
+<span class="text-[12px] font-[500] text-[#0F1115]">修复记录（可回滚）</span>
+<span class="px-[5px] py-[0.5px] rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px] font-[500] tabular-nums">2</span>
+</div>
+<!-- 修复记录行：被弹窗底部裁切一半 -->
+<div class="border border-[#0000001A] rounded-[10px] p-[8px_10px] bg-[#FFFFFF] flex flex-col space-y-[4px]">
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-[6px]">
+<span class="px-[5px] py-[1px] rounded-[4px] bg-[#22C55E14] text-[#22C55E] text-[11px] font-[500]">已修复</span>
+<span class="text-[12px] font-[500] text-[#0F1115]">归档会话的重复事件</span>
+</div>
+<button class="h-[24px] px-[8px] rounded-[6px] bg-transparent border border-[#0000001A] text-[#0F1115] hover:bg-[#EBEEF2] text-[11px] font-[500] flex items-center">
+                回滚
+              </button>
+</div>
+<div class="text-[11px] text-[#81858C] pl-[2px] leading-[1.2]">
+              丢弃 12 行 · 今天 20:14
+            </div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<script>
+    lucide.createIcons();
+  </script>
+</body></html>

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+
+<html class="h-full" lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 插件内弹窗 D-11「确认推送」</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "inverse-surface": "#2b3138",
+            "surface-tint": "#5d5e63",
+            "on-tertiary-container": "#61666B",
+            "surface-container-low": "#eef4fe",
+            "on-tertiary-fixed-variant": "#4e453f",
+            "on-surface": "#161c23",
+            "surface-container-lowest": "#ffffff",
+            "inverse-on-surface": "#ebf1fb",
+            "outline": "#76777b",
+            "primary": "#000000",
+            "on-surface-variant": "#45474b",
+            "secondary": "#1758c7",
+            "inverse-primary": "#c6c6cc",
+            "surface-container-highest": "#dde3ed",
+            "primary-container": "#1a1c20",
+            "on-tertiary-fixed": "#0F1115",
+            "tertiary-fixed": "#EBEEF2",
+            "surface-variant": "#dde3ed",
+            "surface": "#f7f9ff",
+            "on-error": "#ffffff",
+            "surface-bright": "#f7f9ff",
+            "on-primary-container": "#828489",
+            "error-container": "#ffdad6",
+            "on-secondary-container": "#002663",
+            "on-primary-fixed-variant": "#45474b",
+            "secondary-fixed-dim": "#b1c5ff",
+            "on-tertiary": "#ffffff",
+            "background": "#f7f9ff",
+            "on-secondary-fixed-variant": "#4176E6",
+            "primary-fixed": "#e2e2e8",
+            "outline-variant": "#c6c6cb",
+            "on-error-container": "#93000a",
+            "on-background": "#161c23",
+            "on-secondary": "#ffffff",
+            "on-primary-fixed": "#1a1c20",
+            "tertiary-fixed-dim": "#d1c4bb",
+            "secondary-fixed": "#dae2ff",
+            "on-secondary-fixed": "#0F1115",
+            "error": "#EC1313",
+            "primary-fixed-dim": "#c6c6cc",
+            "surface-container": "#e9eef8",
+            "secondary-container": "#4176E6",
+            "tertiary-container": "#0F1115",
+            "tertiary": "#000000",
+            "surface-container-high": "#e3e8f2",
+            "surface-dim": "#d5dae4",
+            "on-primary": "#ffffff"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.125rem",
+            "lg": "0.25rem",
+            "xl": "0.5rem",
+            "full": "0.75rem"
+          },
+          "spacing": {
+            "space-xs": "0.125rem",
+            "margin": "1rem",
+            "gutter": "0.75rem",
+            "space-xl": "1rem",
+            "space-sm": "0.25rem",
+            "space-md": "0.5rem",
+            "space-lg": "0.75rem"
+          },
+          "fontFamily": {
+            "label-sm": ["JetBrains Mono"],
+            "body-md": ["Geist"],
+            "label-md": ["JetBrains Mono"],
+            "label-lg": ["JetBrains Mono"],
+            "headline-md": ["Geist"],
+            "headline-lg": ["Geist"],
+            "headline-sm": ["Geist"],
+            "body-lg": ["Geist"],
+            "body-sm": ["Geist"]
+          },
+          "fontSize": {
+            "label-sm": ["10px", { "lineHeight": "12px", "letterSpacing": "0.02em", "fontWeight": "500" }],
+            "body-md": ["12.5px", { "lineHeight": "17px", "fontWeight": "400" }],
+            "label-md": ["11px", { "lineHeight": "14px", "fontWeight": "500" }],
+            "label-lg": ["12px", { "lineHeight": "16px", "fontWeight": "500" }],
+            "headline-md": ["14px", { "lineHeight": "18px", "letterSpacing": "-0.005em", "fontWeight": "600" }],
+            "headline-lg": ["16px", { "lineHeight": "20px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+            "headline-sm": ["13px", { "lineHeight": "16px", "fontWeight": "600" }],
+            "body-lg": ["13px", { "lineHeight": "18px", "fontWeight": "400" }],
+            "body-sm": ["12px", { "lineHeight": "16px", "fontWeight": "400" }]
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-family: 'Material Symbols Outlined';
+      font-weight: normal;
+      font-style: normal;
+      font-size: 14px;
+      line-height: 1;
+      letter-spacing: normal;
+      text-transform: none;
+      display: inline-block;
+      white-space: nowrap;
+      word-wrap: normal;
+      direction: ltr;
+      -webkit-font-feature-settings: 'liga';
+      -webkit-font-smoothing: antialiased;
+    }
+    .custom-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: rgba(0, 0, 0, 0.12);
+      border-radius: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb:hover {
+      background: rgba(0, 0, 0, 0.2);
+    }
+  </style>
+</head>
+<body class="w-[1440px] h-[900px] min-w-[1440px] min-h-[900px] overflow-hidden flex items-center justify-center select-none bg-[#EBEEF2] m-0 p-0 font-body-md text-on-surface antialiased">
+<!-- 564x720 插件完整窗口 -->
+<div class="relative w-[564px] h-[720px] rounded-[12px] bg-[#FFFFFF] border border-[#0000001A] overflow-hidden flex flex-col box-border">
+<!-- 底层：压暗灰阶同步页 UI -->
+<div class="w-full h-full flex flex-col justify-between bg-surface-container-lowest">
+<!-- 插件顶部导航条 -->
+<div class="w-full h-[44px] px-[16px] border-b border-[#0000001A] flex items-center justify-between shrink-0">
+<!-- 导航项群组 -->
+<div class="flex items-center space-x-[4px]">
+<span class="px-[8px] py-[4px] text-body-sm font-body-sm text-[#81858C]">首页</span>
+<span class="px-[8px] py-[4px] text-body-sm font-body-sm text-[#81858C]">产物库</span>
+<span class="px-[8px] py-[4px] text-body-sm font-body-sm font-medium text-[#0F1115] bg-[#EBEEF2] rounded-[6px]">同步</span>
+<span class="px-[8px] py-[4px] text-body-sm font-body-sm text-[#81858C]">环境</span>
+</div>
+<!-- 右侧线性图标群 -->
+<div class="flex items-center space-x-[8px] text-[#81858C]">
+<span class="w-[20px] h-[20px] flex items-center justify-center font-label-sm text-label-sm border border-[#0000001A] rounded-[4px]">⌘K</span>
+<span class="material-symbols-outlined text-[14px]">bolt</span>
+<span class="material-symbols-outlined text-[14px]">history</span>
+<span class="material-symbols-outlined text-[14px]">info</span>
+</div>
+</div>
+<!-- 中间内容区被压暗底图 -->
+<div class="flex-1 p-[16px] flex flex-col space-y-[12px]"><div class="w-full p-[14px] rounded-[8px] border border-[#0000000D] bg-surface-container/30 h-[100px]"><div class="w-[120px] h-[12px] bg-[#0000000D] rounded mb-[10px]"></div><div class="w-[220px] h-[10px] bg-[#0000000D] rounded mb-[6px]"></div><div class="w-[180px] h-[10px] bg-[#0000000D] rounded"></div></div><div class="w-full p-[14px] rounded-[8px] border border-[#0000000D] bg-surface-container/30 h-[240px]"><div class="w-[140px] h-[12px] bg-[#0000000D] rounded mb-[10px]"></div><div class="w-full h-[1px] bg-[#0000000D] my-[8px]"></div><div class="w-[220px] h-[10px] bg-[#0000000D] rounded mb-[6px]"></div><div class="w-[180px] h-[10px] bg-[#0000000D] rounded"></div></div></div>
+<!-- 底部 28px 状态栏 -->
+<div class="w-full h-[28px] px-[16px] border-t border-[#0000001A] flex items-center justify-between text-label-sm font-label-sm text-[#81858C] shrink-0 bg-surface-container-lowest">
+<div class="flex items-center space-x-[6px]">
+<span class="text-[#22C55E]">●</span>
+<span>就绪 · 远程可选</span>
+</div>
+<div>v0.8.0 · DSH 2.4</div>
+</div>
+</div>
+<!-- 黑色遮罩蒙层 (rgba(0,0,0,0.24) 即 #0000003D) -->
+<div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-[12px]">
+<!-- 弹窗本体 D-11「确认推送」（宽 540px，fit-content 高度） -->
+<div class="w-[540px] bg-[#FFFFFF] rounded-[12px] border border-[#0000001A] flex flex-col box-border shadow-none overflow-hidden">
+<!-- 1. 标题区（高度 48px，左右内边距 16px，底边 0.5px #0000001A 分隔线） -->
+<div class="h-[48px] px-[16px] flex items-center justify-between border-b border-[#0000001A] shrink-0">
+<span class="text-[13px] font-semibold text-[#0F1115] tracking-tight">确认推送</span>
+<button aria-label="关闭" class="w-[20px] h-[20px] flex items-center justify-center text-[#81858C] hover:text-[#0F1115] transition-colors duration-100 ease-linear" type="button">
+<span class="material-symbols-outlined text-[14px]">close</span>
+</button>
+</div>
+<!-- 2. 内容区（内边距 12px 16px，纵向排列，间距 10px） -->
+<div class="p-[12px_16px] flex flex-col space-y-[10px]">
+<!-- 信息 Banner (info) -->
+<div class="min-h-[34px] rounded-[6px] bg-[rgba(65,118,230,0.12)] border border-[rgba(65,118,230,0.35)] px-[12px] py-[8px] flex items-center space-x-[8px] shrink-0"><span class="material-symbols-outlined text-[13px] text-[#4176E6] shrink-0">info</span><span class="text-[12px] font-semibold text-[#0F1115] leading-none">将推送 18 个分区（12 个有变化）</span></div>
+<!-- 次级提示行 1 -->
+<div class="text-[12px] leading-[1.5] text-[#61666B]">
+            加密快照：载荷将整体加密，各分区相对基线的变化不可比对。
+          </div>
+<!-- 次级提示行 2 -->
+<div class="text-[12px] leading-[1.5] text-[#61666B]">
+            本次推送包含真实凭据值（已随载荷整体加密；远端只见密文）。
+          </div>
+<!-- 卡片：将推送的分区清单 -->
+<div class="rounded-[8px] border border-[#0000001A] p-[10px] bg-[#FFFFFF] flex flex-col">
+<!-- 分组标签 -->
+<div class="text-[11px] font-medium text-[#81858C] mb-[8px] leading-none">
+              将推送的分区
+            </div>
+<!-- 滚动清单容器 planScroll（8行） -->
+<div class="custom-scroll max-h-[208px] overflow-y-auto flex flex-col pr-[2px]" id="planScroll"><div class="h-[26px] flex items-center border-b border-[#0000000D] py-[2px]"><div class="flex items-center space-x-[8px]"><span class="h-[18px] px-[8px] rounded-[999px] text-[11px] font-medium inline-flex items-center justify-center text-[#22C55E] bg-[rgba(34,197,94,0.12)] border border-[rgba(34,197,94,0.35)] leading-none">有改动</span><span class="text-[12.5px] font-label-md text-[#0F1115]">settings</span><span class="text-[12px] text-[#61666B]">· 42 项</span></div></div><div class="h-[26px] flex items-center border-b border-[#0000000D] py-[2px]"><div class="flex items-center space-x-[8px]"><span class="h-[18px] px-[8px] rounded-[999px] text-[11px] font-medium inline-flex items-center justify-center text-[#22C55E] bg-[rgba(34,197,94,0.12)] border border-[rgba(34,197,94,0.35)] leading-none">有改动</span><span class="text-[12.5px] font-label-md text-[#0F1115]">plugins</span><span class="text-[12px] text-[#61666B]">· 18 项</span></div></div><div class="h-[26px] flex items-center border-b border-[#0000000D] py-[2px]"><div class="flex items-center space-x-[8px]"><span class="h-[18px] px-[8px] rounded-[999px] text-[11px] font-medium inline-flex items-center justify-center text-[#22C55E] bg-[rgba(34,197,94,0.12)] border border-[rgba(34,197,94,0.35)] leading-none">有改动</span><span class="text-[12.5px] font-label-md text-[#0F1115]">mcp</span><span class="text-[12px] text-[#61666B]">· 7 项</span></div></div><div class="h-[26px] flex items-center border-b border-[#0000000D] py-[2px]"><div class="flex items-center space-x-[8px]"><span class="h-[18px] px-[8px] rounded-[999px] text-[11px] font-medium inline-flex items-center justify-center text-[#22C55E] bg-[rgba(34,197,94,0.12)] border border-[rgba(34,197,94,0.35)] leading-none">有改动</span><span class="text-[12.5px] font-label-md text-[#0F1115]">prompts</span><span class="text-[12px] text-[#61666B]">· 31 项</span></div></div><div class="h-[26px] flex items-center border-b border-[#0000000D] py-[2px]"><div class="flex items-center space-x-[8px]"><span class="h-[18px] px-[8px] rounded-[999px] text-[11px] font-medium inline-flex items-center justify-center text-[#22C55E] bg-[rgba(34,197,94,0.12)] border border-[rgba(34,197,94,0.35)] leading-none">有改动</span><span class="text-[12.5px] font-label-md text-[#0F1115]">skills</span><span class="text-[12px] text-[#61666B]">· 12 项</span></div></div><div class="h-[26px] flex items-center border-b border-[#0000000D] py-[2px]"><div class="flex items-center space-x-[8px]"><span class="h-[18px] px-[8px] rounded-[999px] text-[11px] font-medium inline-flex items-center justify-center text-[#22C55E] bg-[rgba(34,197,94,0.12)] border border-[rgba(34,197,94,0.35)] leading-none">有改动</span><span class="text-[12.5px] font-label-md text-[#0F1115]">workspaces</span><span class="text-[12px] text-[#61666B]">· 4 项</span></div></div><div class="h-[26px] flex items-center border-b border-[#0000000D] py-[2px]"><div class="flex items-center space-x-[8px]"><span class="h-[18px] px-[8px] rounded-[999px] text-[11px] font-medium inline-flex items-center justify-center text-[#81858C] bg-[rgba(129,133,140,0.12)] border border-[rgba(129,133,140,0.35)] leading-none">无改动</span><span class="text-[12.5px] font-label-md text-[#0F1115]">sessions</span><span class="text-[12px] text-[#61666B]">· 0 项</span></div></div><div class="h-[26px] flex items-center py-[2px]"><div class="flex items-center space-x-[8px]"><span class="h-[18px] px-[8px] rounded-[999px] text-[11px] font-medium inline-flex items-center justify-center text-[#81858C] bg-[rgba(129,133,140,0.12)] border border-[rgba(129,133,140,0.35)] leading-none">无改动</span><span class="text-[12.5px] font-label-md text-[#0F1115]">pluginData</span><span class="text-[12px] text-[#61666B]">· 0 项</span></div></div></div>
+</div>
+</div>
+<!-- 3. 动作区（高度 56px，左右内边距 16px，顶部 1px #0000001A 边框，水平靠右） -->
+<div class="h-[56px] px-[16px] border-t border-[#0000001A] flex items-center justify-end space-x-[8px] shrink-0 bg-[#FFFFFF]">
+<!-- ghost 取消 -->
+<button class="h-[30px] px-[16px] rounded-[8px] bg-[#FFFFFF] border border-[#0000001A] text-[12px] font-medium text-[#0F1115] hover:bg-[#EBEEF2] transition-colors duration-100 ease-linear active:scale-[0.99] leading-none inline-flex items-center justify-center" type="button">取消</button>
+<!-- primary 确认推送 -->
+<button class="h-[30px] px-[16px] rounded-[8px] bg-[#0F1115] text-[12px] font-medium text-[#FFFFFF] hover:bg-[#0F1115] transition-colors duration-100 ease-linear active:scale-[0.99] leading-none inline-flex items-center justify-center" onmouseout="this.style.backgroundColor='#0F1115'" onmouseover="this.style.backgroundColor='#43454A'" style="transition: background-color 100ms linear;" type="button">确认推送</button>
+</div>
+</div>
+</div>
+</div>
+</body></html>

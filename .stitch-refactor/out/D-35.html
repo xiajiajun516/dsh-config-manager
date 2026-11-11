@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 D-35 回滚到导入前快照确认弹窗</title>
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    background-color: #EBEEF2;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+    color: #0F1115;
+  }
+
+  /* 564x720 插件主画布容器 */
+  .plugin-canvas {
+    width: 564px;
+    height: 720px;
+    background-color: #FFFFFF;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
+  }
+
+  /* 顶部导航条 32px */
+  .top-nav {
+    height: 32px;
+    border-bottom: 0.5px solid #0000001A;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    background-color: #FFFFFF;
+    flex-shrink: 0;
+  }
+
+  .nav-tabs {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .nav-tab {
+    font-size: 12px;
+    line-height: 1.5;
+    color: #61666B;
+    text-decoration: none;
+    cursor: default;
+  }
+
+  .nav-tab.active {
+    color: #0F1115;
+    font-weight: 500;
+  }
+
+  .nav-icons {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    color: #81858C;
+  }
+
+  .nav-icon-btn {
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+  }
+
+  /* 中间被压暗的底层页面内容（导入复核/结果页轮廓） */
+  .content-area {
+    flex: 1;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background-color: #FFFFFF;
+  }
+
+  /* 顶部 Stepper 灰块 */
+  .stepper-skeleton {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+
+  .stepper-pill {
+    height: 20px;
+    flex: 1;
+    background-color: #EBEEF2;
+    border-radius: 4px;
+  }
+
+  /* 导入结果概览卡骨架 */
+  .result-card-skeleton {
+    border: 1px solid #0000001A;
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .skeleton-line {
+    height: 12px;
+    background-color: #EBEEF2;
+    border-radius: 4px;
+  }
+
+  .skeleton-badge {
+    width: 80px;
+    height: 18px;
+    background-color: #EBEEF2;
+    border-radius: 4px;
+  }
+
+  .skeleton-box {
+    height: 120px;
+    background-color: #EBEEF2;
+    border-radius: 6px;
+    margin-top: 4px;
+  }
+
+  .skeleton-btn-row {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 8px;
+  }
+
+  .skeleton-btn {
+    width: 110px;
+    height: 28px;
+    background-color: #EBEEF2;
+    border-radius: 6px;
+  }
+
+  /* 底部状态栏 28px */
+  .bottom-status-bar {
+    height: 28px;
+    border-top: 0.5px solid #0000001A;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    background-color: #FFFFFF;
+    flex-shrink: 0;
+  }
+
+  .status-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #61666B;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background-color: #22C55E;
+  }
+
+  .status-right {
+    font-size: 11px;
+    color: #81858C;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 564x720 整屏遮罩 #0000003D */
+  .modal-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #0000003D;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    /* 规范要求上边距 240px，弹窗水平居中 */
+    padding-top: 240px;
+  }
+
+  /* 弹窗本体 D-35 */
+  .danger-dialog {
+    width: 519px; /* 564px 的约 92% */
+    background-color: #FFFFFF;
+    border: 1px solid #0000001A;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* 弹窗 Header 44px */
+  .dialog-header {
+    height: 44px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    border-bottom: 0.5px solid #0000001A;
+  }
+
+  .dialog-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.25;
+    color: #0F1115;
+  }
+
+  /* 弹窗 Body 内边距 16px，自然折行 */
+  .dialog-body {
+    padding: 16px;
+  }
+
+  .dialog-text {
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: #0F1115;
+  }
+
+  /* 弹窗 Footer 48px，两颗按钮右对齐、间距 8px */
+  .dialog-footer {
+    height: 48px;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    border-top: 0.5px solid #0000001A;
+  }
+
+  /* 危险确认按钮（左侧） */
+  .btn-danger {
+    height: 28px;
+    padding: 0 14px;
+    background-color: #EC1313;
+    color: #FFFFFF;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.5;
+    border-radius: 8px;
+    border: none;
+    cursor: default;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+  }
+
+  /* 取消按钮（右侧 ghost 白底 0.5px 描边） */
+  .btn-ghost {
+    height: 28px;
+    padding: 0 14px;
+    background-color: #FFFFFF;
+    color: #0F1115;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.5;
+    border-radius: 8px;
+    border: 0.5px solid #0000001A;
+    cursor: default;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+  }
+</style>
+</head>
+<body>
+<!-- 564x720 完整插件画布 -->
+<div class="plugin-canvas">
+<!-- 顶部导航条 32px -->
+<header class="top-nav">
+<nav class="nav-tabs">
+<span class="nav-tab">首页</span>
+<span class="nav-tab active">产物库</span>
+<span class="nav-tab">同步</span>
+<span class="nav-tab">环境</span>
+</nav>
+<div class="nav-icons">
+<!-- ⌘K、活动、历史、关于 纯文本/SVG 占位或极简符号，符合规范且不引入外层多余装饰 -->
+<span class="nav-icon-btn" style="font-size: 11px; font-weight: 500;">⌘K</span>
+<svg class="nav-icon-btn" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="14">
+<path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+</svg>
+<svg class="nav-icon-btn" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<svg class="nav-icon-btn" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</header>
+<!-- 中间被压暗的底层页面骨架（导入结果页） -->
+<main class="content-area">
+<div class="stepper-skeleton">
+<div class="stepper-pill"></div>
+<div class="stepper-pill"></div>
+<div class="stepper-pill"></div>
+<div class="stepper-pill"></div>
+<div class="stepper-pill"></div>
+</div>
+<div class="result-card-skeleton">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<div class="skeleton-badge"></div>
+<div style="width: 60px; height: 12px; background-color: #EBEEF2; border-radius: 4px;"></div>
+</div>
+<div class="skeleton-line" style="width: 70%;"></div>
+<div class="skeleton-line" style="width: 45%;"></div>
+</div>
+<div class="skeleton-box"></div>
+<div class="skeleton-btn-row">
+<div class="skeleton-btn"></div>
+<div class="skeleton-btn" style="width: 80px;"></div>
+</div>
+</main>
+<!-- 底部状态栏 28px -->
+<footer class="bottom-status-bar">
+<div class="status-left">
+<span class="status-dot"></span>
+<span>就绪 · 待确认回滚</span>
+</div>
+<div class="status-right">v0.8.0 · DSH 2.4</div>
+</footer>
+<!-- 盖满整块 564x720 画布的 #0000003D 遮罩 -->
+<div class="modal-overlay">
+<!-- 弹窗本体 D-35「回滚到导入前快照？」 -->
+<div class="danger-dialog">
+<!-- 1 Header 高 44px、左右内边距 16px、标题带问号、不画 ✕ -->
+<div class="dialog-header">
+<h2 class="dialog-title">回滚到导入前快照？</h2>
+</div>
+<!-- 2 Body 内边距 16px，逐字无损正文 -->
+<div class="dialog-body">
+<p class="dialog-text">将把本机配置恢复为<span style="white-space: nowrap;">「ds-config-sample」</span>导入前的状态<span style="white-space: nowrap;">（快照 20261110-2358-4f2c）</span>。本次导入写入的内容会被覆盖。</p>
+</div>
+<!-- 3 Footer 高 48px、两颗按钮右对齐、间距 8px、「确认回滚」在左、「取消」在右 -->
+<div class="dialog-footer">
+<button class="btn-danger" type="button">确认回滚</button>
+<button class="btn-ghost" type="button">取消</button>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

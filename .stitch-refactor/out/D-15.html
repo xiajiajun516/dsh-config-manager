@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DSH 设置 — 备份与迁移 D-15 重新克隆工作副本确认弹窗</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            // BASE DSH 亮色规范 tokens
+            'text-primary': '#0F1115',
+            'text-secondary': '#61666B',
+            'text-tertiary': '#81858C',
+            'stroke': 'rgba(0, 0, 0, 0.1)',
+            'accent': '#4176E6',
+            'success': '#22C55E',
+            'warning': '#F59E0B',
+            'danger': '#EC1313',
+            'ghost-bg': '#EBEEF2',
+            'ghost-border': '#979DA6',
+          },
+          fontFamily: {
+            sans: ['Geist', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          fontSize: {
+            '11': ['11px', { lineHeight: '1.5' }],
+            '12': ['12px', { lineHeight: '1.5' }],
+            '12.5': ['12.5px', { lineHeight: '1.5' }],
+            '13': ['13px', { lineHeight: '1.25' }],
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    body {
+      font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body class="bg-[#EBEEF2] min-h-screen flex items-center justify-center p-0 m-0 select-none overflow-hidden font-sans antialiased">
+
+  <!-- Core App Window Canvas (564px × 720px) 严格规范 -->
+  <div class="relative w-[564px] h-[720px] bg-[#EBEEF2] rounded-xl overflow-hidden shadow-2xl flex flex-col border border-black/10">
+    
+    <!-- UNDERLYING BACKGROUND INTERFACE (被压暗的同步页背景，浅灰处理 #EBEEF2 氛围，文字图标弱化为 #61666B) -->
+    <div class="flex-1 flex flex-col pointer-events-none select-none">
+      
+      <!-- 1. 顶部导航条 44px -->
+      <header class="h-[44px] px-4 bg-[#EBEEF2] border-b border-black/[0.08] flex items-center justify-between shrink-0">
+        <nav class="flex items-center gap-4">
+          <span class="text-12 text-text-secondary">首页</span>
+          <span class="text-12 text-text-secondary">产物库</span>
+          <span class="text-12 font-medium text-text-secondary border-b-2 border-text-secondary pb-3 pt-3">同步</span>
+          <span class="text-12 text-text-secondary">环境</span>
+        </nav>
+        
+        <!-- 右端 4 个图标按钮：⌘K、活动、历史、关于 -->
+        <div class="flex items-center gap-2 text-text-secondary">
+          <!-- ⌘K 命令面板 -->
+          <div class="w-6 h-6 flex items-center justify-center">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
+            </svg>
+          </div>
+          <!-- 活动 (折线) -->
+          <div class="w-6 h-6 flex items-center justify-center">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+          </div>
+          <!-- 历史 (时钟) -->
+          <div class="w-6 h-6 flex items-center justify-center">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </div>
+          <!-- 关于 (info) -->
+          <div class="w-6 h-6 flex items-center justify-center">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="16" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+          </div>
+        </div>
+      </header>
+
+      <!-- 2. 中间内容区 (同步页被压暗的卡片残影) -->
+      <main class="flex-1 p-3.5 flex flex-col gap-2.5 overflow-hidden">
+        
+        <!-- 卡片 1: 通道卡片 (Git · 已连接) -->
+        <div class="border border-black/[0.08] bg-[#EBEEF2] rounded-[12px] p-3 flex flex-col gap-2">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="text-12 font-medium text-text-secondary">Git 私有仓库</span>
+              <span class="text-11 px-1.5 py-0.5 rounded bg-black/5 text-text-secondary">已连接</span>
+            </div>
+            <span class="text-11 text-text-secondary">上次同步 19:52</span>
+          </div>
+          <div class="text-11 font-mono text-text-secondary truncate">
+            https://github.com/xiajiajun516/dsh-config.git
+          </div>
+        </div>
+
+        <!-- 卡片 2: 工作副本卡片 (WorkDirCard 事实残影) -->
+        <div class="border border-black/[0.08] bg-[#EBEEF2] rounded-[12px] p-3 flex flex-col gap-2">
+          <div class="flex items-center justify-between">
+            <span class="text-12 font-medium text-text-secondary">本地工作副本</span>
+            <span class="text-11 text-text-secondary font-mono">main 分支 · 就绪</span>
+          </div>
+          <div class="flex flex-col gap-1 text-11 font-mono text-text-secondary">
+            <div>路径: ~/.dsh/worktree/default</div>
+            <div>origin: https://github.com/xiajiajun516/dsh-config.git</div>
+          </div>
+          <div class="flex items-center justify-between pt-1">
+            <div class="h-[24px] px-2 rounded bg-black/5 text-11 text-text-secondary flex items-center">
+              重指向仓库地址
+            </div>
+            <div class="h-[24px] px-2 rounded bg-black/5 text-11 text-text-secondary flex items-center">
+              重新克隆工作副本
+            </div>
+          </div>
+        </div>
+
+        <!-- 卡片 3: 同步记录概要 -->
+        <div class="border border-black/[0.08] bg-[#EBEEF2] rounded-[12px] p-3 flex-1 flex flex-col gap-2">
+          <div class="flex justify-between items-center text-11 text-text-secondary">
+            <span>同步记录</span>
+            <span>8 条</span>
+          </div>
+          <div class="flex flex-col gap-1.5 opacity-60">
+            <div class="h-3.5 bg-black/5 rounded w-3/4"></div>
+            <div class="h-3.5 bg-black/5 rounded w-1/2"></div>
+            <div class="h-3.5 bg-black/5 rounded w-2/3"></div>
+          </div>
+        </div>
+
+      </main>
+
+      <!-- 3. 底部状态栏 28px -->
+      <footer class="h-[28px] px-3 bg-[#EBEEF2] border-t border-black/[0.08] flex items-center justify-between text-11 text-text-secondary shrink-0">
+        <div class="flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-text-secondary"></span>
+          <span>就绪</span>
+        </div>
+        <div>v0.8.0 · DSH 2.4</div>
+      </footer>
+    </div>
+
+    <!-- 遮罩层 (与画布压暗效果协同，保证聚焦于弹窗) -->
+    <div class="absolute inset-0 bg-black/[0.08] pointer-events-none z-10"></div>
+
+    <!-- D-15 弹窗本体 (ConfirmDialog danger) -->
+    <!-- 宽 519px (min(600px, 92%))，水平垂直居中，白底 #FFFFFF，圆角 16px，1px #0000001A 描边，无投影，高度贴合内容 (~250px) -->
+    <div class="absolute inset-0 z-20 flex items-center justify-center p-4">
+      <div class="w-[519px] bg-white rounded-[16px] border border-black/10 flex flex-col overflow-hidden select-text">
+        
+        <!-- 1. 标题行 (padding: 16px 16px 0) -->
+        <div class="pt-4 px-4 pb-0 flex items-center shrink-0">
+          <h2 class="text-13 font-medium text-text-primary tracking-tight">
+            重新克隆工作副本？
+          </h2>
+        </div>
+
+        <!-- 2. 正文区 (padding: 8px 16px 12px，12.5px/1.5 #61666B，标题与正文间距 8px，正文与底栏间距 12px) -->
+        <div class="pt-2 px-4 pb-3 flex flex-col">
+          <p class="text-12.5 text-text-secondary leading-[1.5]">
+            将删除本机工作副本目录并从远端重新克隆。本机配置与远端快照都不受影响，但工作副本里尚未推送的本地提交会被丢弃 —— 需要时请先在同步页执行一次推送。
+          </p>
+        </div>
+
+        <!-- 3. 底栏 (顶部 0.5px #0000001A，padding: 10px 16px 14px，按钮右对齐：左深色危险确认、右描边取消) -->
+        <div class="border-t border-black/10 px-4 pt-2.5 pb-3.5 flex items-center justify-end gap-2 bg-white shrink-0">
+          
+          <!-- 左边深色危险按钮「重新克隆」: #EC1313 填充、白字，圆角 8px、高 30px、padding 0 12px -->
+          <button type="button" class="h-[30px] px-3 bg-danger text-white rounded-[8px] text-12 font-medium flex items-center justify-center transition-colors hover:bg-[#EC1313] active:bg-[#EC1313] focus:outline-none">
+            重新克隆
+          </button>
+
+          <!-- 右边 ghost 按钮「取消」: 白底 + 1px #0000001A 描边、深色文字，带默认焦点环 (1px #979DA6 描边外扩 2px) -->
+          <button type="button" class="h-[30px] px-3 bg-white border border-black/10 text-text-primary rounded-[8px] text-12 font-medium flex items-center justify-center transition-colors hover:bg-black/[0.03] active:bg-black/[0.06] outline-none ring-1 ring-ghost-border ring-offset-2">
+            取消
+          </button>
+
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>

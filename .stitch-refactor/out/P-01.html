@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=564, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 首页 (564x720 精准规范版)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<style>
+    * {
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBEEF2;
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      color: #0F1115;
+    }
+    .font-mono-code {
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+    .tabular {
+      font-variant-numeric: tabular-nums;
+    }
+    /* 自定义紧凑滚动条 */
+    .custom-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #0000001A;
+      border-radius: 999px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb:hover {
+      background: #00000033;
+    }
+  </style>
+</head>
+<body>
+<!-- 插件独立画布：严格 564px × 720px，无宿主左侧栏，无品牌头，纯插件界面 -->
+<div class="relative w-[564px] h-[720px] bg-[#FFFFFF] border border-[#0000001A] shadow-sm flex flex-col overflow-hidden text-[#0F1115] select-none">
+<!-- 1. 顶部导航条 (高 32px，底边 0.5px 分隔线) -->
+<header class="h-[32px] min-h-[32px] px-[12px] flex items-center justify-between border-b border-[#0000001A] bg-[#FFFFFF] z-10">
+<!-- 左侧 4 个页签 -->
+<nav class="flex items-center h-full gap-[16px]">
+<!-- 首页 (激活态：底部 2px 深色下划线 + 主色文字) -->
+<button class="flex items-center text-[12px] font-medium text-[#0F1115] px-[10px] py-[4px] rounded-[8px] bg-[#EBEEF2] border border-[#979DA6]">
+          首页
+</button>
+<!-- 产物库 -->
+<button class="h-full flex items-center text-[12px] text-[#61666B] hover:text-[#0F1115] transition-colors px-[2px]">
+          产物库
+        </button>
+<!-- 同步 -->
+<button class="h-full flex items-center text-[12px] text-[#61666B] hover:text-[#0F1115] transition-colors px-[2px]">
+          同步
+        </button>
+<!-- 环境 -->
+<button class="h-full flex items-center text-[12px] text-[#61666B] hover:text-[#0F1115] transition-colors px-[2px]">
+          环境
+        </button>
+</nav>
+<!-- 右端 4 个 28×28 ghost 图标按钮 (⌘K、活动、历史、关于) -->
+<div class="flex items-center gap-[2px]">
+<!-- ⌘K 命令面板 -->
+<button class="w-[28px] h-[28px] flex items-center justify-center rounded-[4px] text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2] transition-colors text-[11px] font-mono-code" title="命令面板 (⌘K)">
+          ⌘K
+        </button>
+<!-- 活动 / 脉冲 (lucide activity) -->
+<button class="w-[28px] h-[28px] flex items-center justify-center rounded-[4px] text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2] transition-colors" title="活动详情">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+</button>
+<!-- 历史 (lucide clock / history) -->
+<button class="w-[28px] h-[28px] flex items-center justify-center rounded-[4px] text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2] transition-colors" title="历史快照">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+</button>
+<!-- 关于 (lucide info) -->
+<button class="w-[28px] h-[28px] flex items-center justify-center rounded-[4px] text-[#61666B] hover:text-[#0F1115] hover:bg-[#EBEEF2] transition-colors" title="关于插件">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</button>
+</div>
+</header>
+<!-- 2. 中间内容区 (自上而下：状态行 -> 动作工具栏 -> 最近活动表，填满吃透 720px 剩余高度) -->
+<main class="flex-1 flex flex-col p-[12px] pb-[10px] gap-[10px] overflow-hidden bg-[#FFFFFF]">
+<!-- 2.1 状态行 (高 56px，1px 描边卡片，圆角 12px，横向 4 段指标，段间 0.5px 竖线分隔) -->
+<section class="h-[32px] min-h-[32px] w-full rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] flex items-center divide-x divide-[#0000001A] overflow-hidden select-none"><div class="flex-1 min-w-0 h-full px-[4px] flex items-center justify-center gap-[4px] whitespace-nowrap text-[11px]"><span class="w-[6px] h-[6px] rounded-full bg-[#22C55E] shrink-0"></span><span class="font-medium text-[#0F1115]">健康</span><span class="text-[#81858C]">最近 21:04</span></div><div class="flex-1 min-w-0 h-full px-[4px] flex items-center justify-center gap-[4px] whitespace-nowrap text-[11px]"><span class="text-[#81858C]">备份文件</span><span class="font-medium text-[#0F1115] tabular">12</span></div><div class="flex-1 min-w-0 h-full px-[4px] flex items-center justify-center gap-[4px] whitespace-nowrap text-[11px]"><span class="text-[#81858C]">安全快照</span><span class="font-medium text-[#0F1115] tabular">37</span></div><div class="flex-1 min-w-0 h-full px-[4px] flex items-center justify-center gap-[4px] whitespace-nowrap text-[11px]"><span class="text-[#81858C]">定时备份</span><span class="font-medium text-[#0F1115]">开启</span></div><div class="flex-1 min-w-0 h-full px-[4px] flex items-center justify-center gap-[4px] whitespace-nowrap text-[11px]"><span class="text-[#81858C]">远程同步</span><span class="font-medium text-[#0F1115]">已配置</span></div></section>
+<!-- 2.2 动作工具栏 (高 32px，左起 5 个按钮 + 最右端纯文字按钮「活动 ↗」) -->
+<section class="h-[32px] min-h-[32px] flex items-center justify-between">
+<!-- 5 个操作按钮：高 28px，圆角 8px，内边距 12px，不换行，间距 8px -->
+<div class="flex items-center gap-[8px] whitespace-nowrap">
+<!-- 1. 立即备份 (主按钮：深色填充 #0F1115，白字) -->
+<button class="h-[28px] px-[12px] rounded-[8px] bg-[#0F1115] hover:bg-[#43454A] text-[#FFFFFF] text-[12px] font-medium transition-colors flex items-center justify-center">
+            立即备份
+          </button>
+<!-- 2. 手动导出 (ghost：0.5px 描边) -->
+<button class="h-[28px] px-[12px] rounded-[8px] bg-transparent border border-[#0000001A] hover:bg-[#EBEEF2] hover:border-[#979DA6] text-[#0F1115] text-[12px] font-medium transition-colors flex items-center justify-center">
+            手动导出
+          </button>
+<!-- 3. 导入 (ghost) -->
+<button class="h-[28px] px-[12px] rounded-[8px] bg-transparent border border-[#0000001A] hover:bg-[#EBEEF2] hover:border-[#979DA6] text-[#0F1115] text-[12px] font-medium transition-colors flex items-center justify-center">
+            导入
+          </button>
+<!-- 4. 从其它 agent 导入 (ghost，右侧带 12px 下拉箭头) -->
+<button class="h-[28px] px-[12px] rounded-[8px] bg-transparent border border-[#0000001A] hover:bg-[#EBEEF2] hover:border-[#979DA6] text-[#0F1115] text-[12px] font-medium transition-colors flex items-center gap-[4px]">从其它 agent 导入</button>
+<!-- 5. 一键同步 (ghost，左侧 lucide refresh-cw 图标) -->
+<button class="h-[28px] px-[12px] rounded-[8px] bg-transparent border border-[#0000001A] hover:bg-[#EBEEF2] hover:border-[#979DA6] text-[#0F1115] text-[12px] font-medium transition-colors flex items-center gap-[4px]">
+<svg class="w-[12px] h-[12px] text-[#0F1115]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<path d="M21 2v6h-6"></path>
+<path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
+<path d="M3 22v-6h6"></path>
+<path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+</svg>
+<span>一键同步</span>
+</button>
+</div>
+<!-- 最右端贴边纯文字按钮「活动 ↗」(11px 弱色) -->
+<button class="text-[11px] text-[#81858C] hover:text-[#0F1115] transition-colors flex items-center gap-[2px] pr-[2px]">
+<span>活动</span>
+<span class="text-[11px] leading-none">↗</span>
+</button>
+</section>
+<!-- 2.3 最近活动卡片 (吃掉剩余全部高度，1px 描边，圆角 12px，自身内部滚动，底部裁切示意可滚动) -->
+<section class="flex-1 min-h-0 w-full rounded-[12px] border border-[#0000001A] bg-[#FFFFFF] flex flex-col overflow-hidden">
+<!-- 卡片标题行：最近活动 + 徽章「14 记录」 + 右端「查看全部 ›」 -->
+<div class="h-[36px] min-h-[36px] px-[12px] flex items-center justify-between border-b border-[#0000001A] bg-[#FFFFFF]">
+<div class="flex items-center gap-[6px]">
+<span class="text-[13px] font-semibold text-[#0F1115]">最近活动</span>
+<span class="text-[11px] px-[6px] py-[1px] rounded-[4px] bg-[#EBEEF2] text-[#61666B] tabular">14 记录</span>
+</div>
+<button class="text-[11px] text-[#81858C] hover:text-[#0F1115] transition-colors flex items-center gap-[2px]"><span>活动中心</span>
+<span class="text-[11px]">›</span></button>
+</div>
+<!-- 表头 (11px 弱色，0.5px 分隔线) -->
+<div class="h-[28px] min-h-[28px] px-[12px] flex items-center text-[11px] text-[#81858C] bg-[#EBEEF2] border-b border-[#0000001A]"><div class="w-[72px] shrink-0">时间</div>
+<div class="w-[96px] shrink-0">类型</div>
+<div class="flex-1 min-w-0 pr-[8px]">详情</div>
+<div class="w-[48px] shrink-0 text-right">结果</div></div>
+<!-- 表格数据容器 (自内滚动，共 14 行，每行高 32px，最后一行被卡片底边微裁切展现滚动感) -->
+<div class="flex-1 overflow-y-auto custom-scroll divide-y divide-[#0000001A]"><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">12 分钟前</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">备份</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]"><span class="font-mono-code text-[#0F1115]">backup-2026-11-10T2104.zip</span> · 24.8 MB</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]" title="成功"></span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">35 分钟前</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">快照</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]">before-import · <span class="tabular">1,204</span> 文件</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]" title="成功"></span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">1 小时前</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">同步</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]">Git · 推送远程仓库超时 (网络异常)</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="text-[11px] px-[6px] py-[2px] rounded-[4px] bg-[#EC13130D] text-[#EC1313] font-medium leading-tight">失败</span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">2 小时前</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">导出</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]"><span class="font-mono-code text-[#0F1115]">full-export.zip</span> · 24.8 MB</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]" title="成功"></span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">3 小时前</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">导入</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]">导入配置 · <span class="font-mono-code text-[#0F1115]">profile.json</span> (版本一致无更新)</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="text-[11px] px-[6px] py-[2px] rounded-[4px] bg-[#EBEEF2] text-[#61666B] font-medium leading-tight">跳过</span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">昨天 17:40</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">同步</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]">同步到 gist · 主题与指令集</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]" title="成功"></span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">昨天 16:22</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">恢复</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]">恢复快照 before-import · <span class="tabular">1,204</span> 文件</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]" title="成功"></span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">昨天 15:48</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">快照</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]">auto · 定时备份</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]" title="成功"></span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">11-08 14:03</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">同步</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]">WebDAV · 冲突 2 项待处理</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="text-[11px] px-[4px] py-[0.5px] rounded-[4px] bg-[#F59E0B1F] text-[#F59E0B] font-medium leading-tight">待处理</span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">11-06 12:00</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">体检</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]">运行会话体检 · 会话 128 个</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="text-[11px] px-[4px] py-[0.5px] rounded-[4px] bg-[#F59E0B1F] text-[#F59E0B] font-medium leading-tight">待处理</span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">11-05 11:26</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">清理</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]">删除过期导出 3 个 · 释放 74 MB</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]" title="成功"></span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">11-04 18:20</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">备份</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]"><span class="font-mono-code text-[#0F1115]">manual-daily.zip</span> · 22.4 MB</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]" title="成功"></span></div></div><div class="h-[38px] px-[12px] flex items-center hover:bg-[#EBEEF2] transition-colors"><div class="w-[72px] shrink-0 text-[11px] text-[#81858C] whitespace-nowrap">11-04 09:15</div><div class="w-[96px] shrink-0 text-[11px] text-[#61666B]">快照</div><div class="flex-1 min-w-0 pr-[8px] truncate text-[12px] text-[#61666B]">before-sync · <span class="tabular">1,190</span> 文件</div><div class="w-[48px] shrink-0 flex items-center justify-end"><span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]" title="成功"></span></div></div></div>
+</section>
+</main>
+<!-- 3. 底部状态栏 (固定高 28px，底边对齐，0.5px 顶边线) -->
+<footer class="h-[28px] min-h-[28px] mx-[8px] mb-[8px] px-[12px] flex items-center justify-between border border-[#0000001A] rounded-[8px] bg-[#FFFFFF] text-[11px] text-[#81858C] z-10 shrink-0">
+<!-- 左侧：状态指示点 + 文案 -->
+<div class="flex items-center gap-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span class="text-[#0F1115] font-medium">就绪</span>
+<span class="text-[#81858C]">· 校验无冲突项</span>
+</div>
+<!-- 右侧：版本号 -->
+<div class="font-mono-code text-[#81858C] tabular">
+        v0.8.0 · DSH 2.4
+      </div>
+</footer>
+</div>
+</body>
+</html>

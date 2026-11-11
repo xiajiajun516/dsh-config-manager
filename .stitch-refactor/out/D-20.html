@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-20 确认恢复弹窗 (ConfirmDialog)</title>
+<style>
+    /* Reset & Base Fonts */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: #EBECEF;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #0F1115;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* 564x720 Canvas Container */
+    .plugin-canvas {
+      width: 564px;
+      height: 720px;
+      background-color: #FFFFFF;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+    }
+
+    /* --- Underlying Real Frame (环境 · 维护与诊断) --- */
+    .underlying-shell {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background-color: #FFFFFF;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    /* Top Nav Bar (32px) */
+    .top-nav {
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      border-bottom: 0.5px solid #0000001A;
+      background-color: #FFFFFF;
+      flex-shrink: 0;
+    }
+
+    .nav-tabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .nav-tab {
+      padding: 3px 8px;
+      font-size: 12px;
+      color: #61666B;
+      cursor: default;
+    }
+
+    .nav-tab.active {
+      background-color: #EBEEF2;
+      border: 0.5px solid #979DA6;
+      border-radius: 6px;
+      color: #0F1115;
+      font-weight: 500;
+    }
+
+    .nav-icons {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #81858C;
+    }
+
+    .nav-icon-svg {
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      stroke-width: 1.5;
+      fill: none;
+    }
+
+    /* Underlying Real Content */
+    .underlying-content {
+      flex: 1;
+      padding: 10px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: hidden;
+    }
+
+    /* Bottom Status Bar (28px) */
+    .status-bar {
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      border-top: 0.5px solid #0000001A;
+      background-color: #FFFFFF;
+      font-size: 11px;
+      color: #81858C;
+      flex-shrink: 0;
+    }
+
+    .status-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: #22C55E;
+    }
+
+    /* --- Modal Overlay (#0000003D = rgba(0,0,0,0.24)) --- */
+    .modal-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 564px;
+      height: 720px;
+      background-color: rgba(0, 0, 0, 0.24);
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* --- ConfirmDialog Modal Card (D-20) --- */
+    .dialog-card {
+      width: 512px;
+      background-color: #FFFFFF;
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: dialogPop 0.15s ease-out;
+    }
+
+    @keyframes dialogPop {
+      0% {
+        opacity: 0.85;
+        transform: scale(0.985);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    /* 1) 标题区: padding 12px 16px 0, 13px/600 #0F1115 左对齐，无 ✕ */
+    .dialog-header {
+      padding: 12px 16px 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+    }
+
+    .dialog-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #0F1115;
+      line-height: 1.25;
+      letter-spacing: -0.01em;
+    }
+
+    /* 2) 正文区: padding 8px 16px 12px, 12.5px #0F1115、行高 1.5 */
+    .dialog-body {
+      padding: 8px 16px 12px 16px;
+    }
+
+    .dialog-desc {
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #0F1115;
+      letter-spacing: normal;
+      word-break: break-word;
+    }
+
+    /* 3) 动作区: padding 10px 16px 14px, 上方 0.5px #0000001A 分隔线, gap 8, 右对齐 */
+    .dialog-footer {
+      padding: 10px 16px 14px 16px;
+      border-top: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    /* 按钮通用尺寸：高 28px、圆角 8、padding 0 12px、字号 12.5px */
+    .btn {
+      height: 28px;
+      padding: 0 12px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+      line-height: 1;
+      text-decoration: none;
+      white-space: nowrap;
+      transition: background-color 0.1s ease, border-color 0.1s ease;
+    }
+
+    /* 「执行恢复」：填充 #EC1313、白字、同色边框 */
+    .btn-danger {
+      background-color: #EC1313;
+      color: #FFFFFF;
+      border: 1px solid #EC1313;
+    }
+
+    .btn-danger:hover {
+      background-color: #D31010;
+      border-color: #D31010;
+    }
+
+    /* 「取消」：ghost 白底 + 0.5px 描边 #0000001A、字 #61666B */
+    .btn-ghost {
+      background-color: #FFFFFF;
+      color: #61666B;
+      border: 0.5px solid #0000001A;
+    }
+
+    .btn-ghost:hover {
+      background-color: #F5F6F8;
+    }
+  </style>
+</head>
+<body>
+<!-- 564x720 Canvas Box -->
+<div class="plugin-canvas">
+<!-- 1. Underlying Real Content Frame (环境 · 维护与诊断) -->
+<div aria-hidden="true" class="underlying-shell">
+<!-- 顶部 32px 导航条 -->
+<header class="top-nav">
+<nav class="nav-tabs">
+<span class="nav-tab">首页</span>
+<span class="nav-tab">产物库</span>
+<span class="nav-tab">同步</span>
+<span class="nav-tab active">环境</span>
+</nav>
+<div class="nav-icons">
+<!-- ⌘K 命令面板 -->
+<svg class="nav-icon-svg" viewbox="0 0 24 24">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+<!-- 活动折线 -->
+<svg class="nav-icon-svg" viewbox="0 0 24 24">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史时钟 -->
+<svg class="nav-icon-svg" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于问号/信息 -->
+<svg class="nav-icon-svg" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</header>
+<!-- 真实「环境 · 维护与诊断」内容区 -->
+<main class="underlying-content">
+<!-- 标题行 + Segmented 分段控件 -->
+<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;">
+<h1 style="font-size: 13px; font-weight: 600; color: #0F1115;">环境</h1>
+<div style="display: inline-flex; background: #F0F2F5; padding: 2px; border-radius: 8px; border: 0.5px solid #0000001A;">
+<button style="font-size: 11px; padding: 2px 10px; border-radius: 6px; border: none; background: transparent; color: #61666B; cursor: default;" type="button">档案</button>
+<button style="font-size: 11px; padding: 2px 10px; border-radius: 6px; border: 0.5px solid #0000001A; background: #FFFFFF; color: #0F1115; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.04); cursor: default;" type="button">维护与诊断</button>
+</div>
+</div>
+<!-- 小节标题：「恢复」+ 刷新按钮 -->
+<div style="display: flex; align-items: center; justify-content: space-between; margin-top: 2px;">
+<span style="font-size: 13px; font-weight: 600; color: #0F1115;">恢复</span>
+<button class="btn btn-ghost" style="height: 22px; padding: 0 8px; font-size: 11px; gap: 4px; border-radius: 6px;" type="button">
+<svg style="width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 2;" viewbox="0 0 24 24">
+<path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+</svg>
+            刷新
+          </button>
+</div>
+<!-- 事实状态行 -->
+<div style="background: #FFFFFF; border: 1px solid #0000001A; border-radius: 8px; padding: 7px 12px; display: flex; align-items: center; gap: 8px;">
+<span style="width: 6px; height: 6px; border-radius: 50%; background-color: #22C55E; display: inline-block;"></span>
+<span style="font-size: 12px; color: #0F1115;">当前没有待处理的恢复事项</span>
+</div>
+<!-- 救援模式卡 -->
+<div style="background: #FFFFFF; border: 1px solid #0000001A; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px;">
+<div style="display: flex; align-items: center; justify-content: space-between;">
+<div style="display: flex; align-items: center; gap: 6px;">
+<span style="font-size: 12px; font-weight: 600; color: #0F1115;">救援模式</span>
+<svg style="width: 12px; height: 12px; stroke: #81858C; fill: none; stroke-width: 1.5;" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+<span style="font-size: 10px; background: #EEF2F6; color: #4B5563; padding: 1px 6px; border-radius: 4px; border: 0.5px solid #D1D5DB;">未开启</span>
+</div>
+<button class="btn" style="height: 24px; padding: 0 10px; font-size: 11px; background: #FFFFFF; border: 1px solid #EC1313; color: #EC1313; border-radius: 6px;" type="button">进入救援模式</button>
+</div>
+<span style="font-size: 11px; color: #81858C;">停用依赖校验，仅在插件自身无法启动时使用</span>
+</div>
+<!-- 磁盘占用卡 -->
+<div style="background: #FFFFFF; border: 1px solid #0000001A; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;">
+<div style="display: flex; align-items: center; justify-content: space-between;">
+<div style="display: flex; align-items: center; gap: 6px;">
+<span style="font-size: 12px; font-weight: 600; color: #0F1115;">磁盘占用</span>
+<svg style="width: 12px; height: 12px; stroke: #81858C; fill: none; stroke-width: 1.5;" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</div>
+<svg style="width: 12px; height: 12px; stroke: #81858C; fill: none; stroke-width: 2; cursor: default;" viewbox="0 0 24 24"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+</div>
+<div style="font-size: 12px; color: #45474B; font-weight: 400;">合计 1652.9 MB · 49150 个文件</div>
+<div style="display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; border-top: 0.5px solid #0000000D; padding-top: 6px;">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<span style="color: #0F1115;">备份文件</span>
+<div style="display: flex; align-items: center; gap: 6px;">
+<span style="color: #0F1115; font-family: monospace;">20.1 MB</span>
+<span style="font-size: 10px; background: #F3F4F6; color: #6B7280; padding: 1px 5px; border-radius: 3px;">保留 30 天</span>
+</div>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<span style="color: #0F1115;">导入前快照</span>
+<div style="display: flex; align-items: center; gap: 6px;">
+<span style="color: #0F1115; font-family: monospace;">302 KB</span>
+<span style="font-size: 10px; background: #EBF5FF; color: #1E40AF; padding: 1px 5px; border-radius: 3px;">可重建</span>
+</div>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<span style="color: #0F1115;">同步覆盖与工作副本</span>
+<div style="display: flex; align-items: center; gap: 6px;">
+<span style="color: #0F1115; font-family: monospace;">108.9 MB</span>
+<span style="font-size: 10px; background: #EBF5FF; color: #1E40AF; padding: 1px 5px; border-radius: 3px;">可重建</span>
+</div>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<span style="color: #0F1115;">遗留 checkpoints（不自动删除）</span>
+<div style="display: flex; align-items: center; gap: 6px;">
+<span style="color: #0F1115; font-family: monospace;">56.9 MB</span>
+<span style="font-size: 10px; background: #E5E7EB; color: #374151; padding: 1px 5px; border-radius: 3px;">受保护</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 折叠卡 1: 会话体检 -->
+<div style="background: #FFFFFF; border: 1px solid #0000001A; border-radius: 10px; padding: 9px 12px; display: flex; align-items: center; justify-content: space-between;">
+<span style="font-size: 12px; font-weight: 500; color: #0F1115;">会话体检</span>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: #81858C;">
+<span>上次检查：从未</span>
+<svg style="width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2;" viewbox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
+</div>
+</div>
+<!-- 折叠卡 2: 工作区与会话回滚 -->
+<div style="background: #FFFFFF; border: 1px solid #0000001A; border-radius: 10px; padding: 9px 12px; display: flex; align-items: center; justify-content: space-between;">
+<span style="font-size: 12px; font-weight: 500; color: #0F1115;">工作区与会话回滚</span>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: #81858C;">
+<span>9 个回滚点</span>
+<svg style="width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2;" viewbox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
+</div>
+</div>
+</main>
+<!-- 底部 28px 状态栏 -->
+<footer class="status-bar">
+<div class="status-left">
+<div class="status-dot"></div>
+<span>就绪</span>
+</div>
+<div class="status-right">v0.8.0 · DSH 2.4</div>
+</footer>
+</div>
+<!-- 2. Modal Overlay & Dialog Card (#0000003D / rgba(0,0,0,0.24)) -->
+<div class="modal-overlay">
+<div aria-labelledby="dialog-title" aria-modal="true" class="dialog-card" role="dialog">
+<!-- 1) 标题区: padding 12px 16px 0, 标题「确认恢复」13px/600 #0F1115 左对齐, 无 ✕ -->
+<div class="dialog-header">
+<h2 class="dialog-title" id="dialog-title">确认恢复</h2>
+</div>
+<!-- 2) 正文区: padding 8px 16px 12px, 12.5px #0F1115, 行高 1.5, 逐字内容 -->
+<div class="dialog-body">
+<p class="dialog-desc">恢复/回滚是危险操作。确认执行？系统会先把当前文件备份到一个安全位置。</p>
+</div>
+<!-- 3) 动作区: padding 10px 16px 14px, 0.5px 分隔线, gap 8, 右对齐, 「执行恢复」在左、「取消」在右 -->
+<div class="dialog-footer">
+<button class="btn btn-danger" type="button">执行恢复</button>
+<button class="btn btn-ghost" type="button">取消</button>
+</div>
+</div>
+</div>
+</div>
+</body></html>

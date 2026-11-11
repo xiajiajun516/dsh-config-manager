@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DSH 设置 — 备份与迁移 D-09 断开同步通道配置确认弹窗</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Geist', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            dsh: {
+              main: '#0F1115',
+              secondary: '#61666B',
+              tertiary: '#81858C',
+              surface: '#FFFFFF',
+              container: '#EBEEF2',
+              border: '#EBEEF2',
+              divider: '#CCCCCC',
+              accent: '#4176E6',
+              success: '#22C55E',
+              warning: '#F59E0B',
+              error: '#EC1313',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBEEF2;
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    * {
+      box-sizing: border-box;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 插件容器: 564 x 720 固定规范 -->
+  <div class="relative w-[564px] h-[720px] bg-white rounded-none border border-[#0000001A] overflow-hidden flex flex-col shadow-none">
+
+    <!-- 1. 顶部导航条 (32px, 下层同步页被压暗状态) -->
+    <div class="h-[32px] px-3 bg-white border-b border-[#0000001A] flex items-center justify-between shrink-0">
+      <div class="flex items-center space-x-4 h-full">
+        <span class="text-[12px] text-[#61666B] flex items-center h-full">首页</span>
+        <span class="text-[12px] text-[#61666B] flex items-center h-full">产物库</span>
+        <!-- 同步页签激活态 -->
+        <span class="text-[12px] font-medium text-[#0F1115] border-b-2 border-[#0F1115] flex items-center h-full px-0.5">同步</span>
+        <span class="text-[12px] text-[#61666B] flex items-center h-full">环境</span>
+      </div>
+      <!-- 右端 4 个 14px 图标按钮 -->
+      <div class="flex items-center space-x-2.5 text-[#81858C]">
+        <!-- ⌘K 图标 -->
+        <span class="text-[11px] font-mono leading-none border border-[#81858C] rounded px-1 py-0.5 scale-90">⌘K</span>
+        <!-- 活动 (Activity 折线) -->
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+        </svg>
+        <!-- 历史 (Clock) -->
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+        <!-- 关于 (Info) -->
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+      </div>
+    </div>
+
+    <!-- 2. 中间内容区 (下层同步页布局展示: 通道列表) -->
+    <div class="flex-1 bg-[#EBEEF2] p-2.5 space-y-2.5 overflow-hidden">
+      <!-- Git 私有仓库卡片 (已连接) -->
+      <div class="bg-white border border-[#EBEEF2] rounded-[10px] p-2.5">
+        <div class="flex items-center justify-between mb-1.5">
+          <div class="flex items-center space-x-1.5">
+            <span class="text-[12.5px] font-semibold text-[#0F1115]">Git 私有仓库</span>
+            <span class="px-1.5 py-0.2 bg-[#22C55E]/10 text-[#22C55E] text-[11px] rounded">已连接</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span class="text-[11px] text-[#61666B]">配置</span>
+            <span class="text-[11px] text-[#EC1313]">断开配置</span>
+          </div>
+        </div>
+        <div class="text-[11px] font-mono text-[#81858C] truncate">https://github.com/xiajiajun516/dsh-config.git</div>
+      </div>
+
+      <!-- WebDAV 卡片 -->
+      <div class="bg-white border border-[#EBEEF2] rounded-[10px] p-2.5">
+        <div class="flex items-center justify-between">
+          <span class="text-[12.5px] font-semibold text-[#0F1115]">WebDAV</span>
+          <span class="text-[11px] text-[#61666B]">未配置</span>
+        </div>
+      </div>
+
+      <!-- S3 卡片 -->
+      <div class="bg-white border border-[#EBEEF2] rounded-[10px] p-2.5">
+        <div class="flex items-center justify-between">
+          <span class="text-[12.5px] font-semibold text-[#0F1115]">S3 对象存储</span>
+          <span class="text-[11px] text-[#61666B]">未配置</span>
+        </div>
+      </div>
+
+      <!-- Gist 卡片 -->
+      <div class="bg-white border border-[#EBEEF2] rounded-[10px] p-2.5">
+        <div class="flex items-center justify-between">
+          <span class="text-[12.5px] font-semibold text-[#0F1115]">GitHub Gist</span>
+          <span class="text-[11px] text-[#61666B]">未配置</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. 底部状态栏 (28px) -->
+    <div class="h-[28px] px-3 bg-white border-t border-[#0000001A] flex items-center justify-between shrink-0">
+      <div class="flex items-center space-x-1.5 text-[11px] text-[#61666B]">
+        <span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+        <span>就绪 · 远程可达</span>
+      </div>
+      <div class="text-[11px] font-mono text-[#81858C]">
+        v0.8.0 · DSH 2.4
+      </div>
+    </div>
+
+    <!-- 4. 全屏遮罩层 (遮罩 #0000003D 盖满 564x720，纯灰阶压暗) -->
+    <div class="absolute inset-0 bg-black/[0.24] flex items-center justify-center p-5 z-20">
+
+      <!-- D-09 确认弹窗本体 (520px宽, 圆角12, 白底, 1px描边, fit-content 高约 250px) -->
+      <div class="w-[520px] bg-white rounded-[12px] border border-[#0000001A] overflow-hidden flex flex-col shadow-none">
+        
+        <!-- 标题区: 48px, 13px/600, 无 ✕ 图标 -->
+        <div class="h-[48px] px-4 flex items-center justify-between border-b border-[#0000001A] shrink-0">
+          <h2 class="text-[13px] font-semibold text-[#0F1115] tracking-tight m-0">断开同步通道配置？</h2>
+          <!-- 明确无 ✕ 按钮 -->
+        </div>
+
+        <!-- 内容区: 内边距 12px 16px, 段间距 10px, 紧凑无多余空白 -->
+        <div class="p-4 pt-3 pb-3.5 space-y-[10px]">
+          <!-- 正文说明 -->
+          <p class="text-[12.5px] leading-[1.5] text-[#61666B] m-0">
+            将删除「Git 私有仓库」的本机配置、已保存的凭据与自动同步开关。远端快照与本机备份不受影响；断开后可重新配置。
+          </p>
+
+          <!-- 警示 Banner (warn: 橙 12% 混色底 + 三角警告图标 + 橙色说明) -->
+          <div class="flex items-start space-x-2.5 p-2.5 bg-[#F59E0B]/[0.12] rounded-[8px] border border-[#F59E0B]/20">
+            <svg class="w-3.5 h-3.5 text-[#F59E0B] shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <div class="text-[12px] leading-[1.5] text-[#0F1115]">
+              Git 通道的访问令牌会被一并删除：GitHub 登录状态随之失效，需要重新登录（不会自动恢复）。
+            </div>
+          </div>
+        </div>
+
+        <!-- 动作区: 56px, 上边框 1px #0000001A, 按钮右对齐, 危险按钮在左、取消在右 -->
+        <div class="h-[56px] px-4 flex items-center justify-end space-x-2 border-t border-[#0000001A] bg-white shrink-0">
+          <!-- 危险确认按钮 (左): #EC1313底, 白字, 高30, 圆角8 -->
+          <button class="h-[30px] px-3.5 bg-[#EC1313] hover:bg-[#D41111] text-white text-[12.5px] font-medium rounded-[8px] border border-transparent transition-colors flex items-center justify-center">
+            断开配置
+          </button>
+          <!-- 取消按钮 (右): ghost 白底, 1px描边, 深色字 -->
+          <button class="h-[30px] px-3.5 bg-white hover:bg-[#EBEEF2] text-[#0F1115] text-[12.5px] font-medium rounded-[8px] border border-[#CCCCCC] transition-colors flex items-center justify-center">
+            取消
+          </button>
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+</body>
+</html>

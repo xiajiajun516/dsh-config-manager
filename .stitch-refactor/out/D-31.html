@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DSH 设置 — 备份与迁移 D-31 终止运行确认弹窗</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+    * {
+      box-sizing: border-box;
+      font-feature-settings: "tnum" 1;
+    }
+    body {
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #EBECEF;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    .font-mono-val {
+      font-family: 'JetBrains Mono', monospace;
+    }
+  </style>
+</head>
+<body class="p-0 select-none">
+
+  <!-- 564x720 插件主画布容器 -->
+  <div class="relative w-[564px] h-[720px] bg-[#FFFFFF] overflow-hidden flex flex-col shadow-none border border-[#0000001A]">
+    
+    <!-- 1. 顶部导航条（被压暗底层） -->
+    <div class="h-[32px] px-3 border-b border-[#0000001A] flex items-center justify-between shrink-0 bg-[#FFFFFF]">
+      <div class="flex items-center space-x-2 text-[12px]">
+        <span class="px-2 py-0.5 rounded-[8px] bg-[#EBEEF2] border border-[#979DA6] text-[#0F1115] font-medium leading-[1.25]">首页</span>
+        <span class="text-[#61666B] px-1.5 py-0.5 leading-[1.25]">产物库</span>
+        <span class="text-[#61666B] px-1.5 py-0.5 leading-[1.25]">同步</span>
+        <span class="text-[#61666B] px-1.5 py-0.5 leading-[1.25]">环境</span>
+      </div>
+      <div class="flex items-center space-x-2 text-[#81858C]">
+        <!-- ⌘K 图标 -->
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3z"/>
+        </svg>
+        <!-- 活动折线图标 -->
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+        </svg>
+        <!-- 历史时钟图标 -->
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <!-- 关于图标 -->
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M12 16v-4"/>
+          <path d="M12 8h.01"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- 2. 中间内容区（淡灰卡片轮廓，模拟正在运行的导入任务） -->
+    <div class="flex-1 p-3 flex flex-col space-y-3 bg-[#FFFFFF]">
+      <!-- 模拟运行中的导入任务卡片 -->
+      <div class="rounded-[12px] border border-[#0000001A] p-3 flex flex-col space-y-2.5">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center space-x-2">
+            <span class="text-[12.5px] font-medium text-[#0F1115]">导入备份包</span>
+            <span class="text-[11px] px-1.5 py-0.5 rounded-[4px] bg-[#4176E6]/10 text-[#4176E6]">进行中</span>
+          </div>
+          <span class="text-[11px] text-[#81858C]">已耗时 18s</span>
+        </div>
+        <div class="w-full h-1.5 bg-[#EBEEF2] rounded-full overflow-hidden">
+          <div class="w-1/4 h-full bg-[#4176E6]"></div>
+        </div>
+        <div class="flex items-center justify-between pt-1">
+          <span class="text-[11px] text-[#61666B]">正在写入 settings.json (6/30)...</span>
+          <button class="text-[11px] text-[#EC1313] hover:underline px-2 py-0.5 rounded-[4px] border border-[#EC1313]/30">终止</button>
+        </div>
+      </div>
+
+      <!-- 模拟下方占位卡片 -->
+      <div class="rounded-[12px] border border-[#0000001A] p-3 flex-1 flex flex-col space-y-2 opacity-50">
+        <div class="h-3 w-24 bg-[#EBEEF2] rounded-[4px]"></div>
+        <div class="h-8 w-full bg-[#EBEEF2]/60 rounded-[8px]"></div>
+        <div class="h-8 w-full bg-[#EBEEF2]/60 rounded-[8px]"></div>
+        <div class="h-8 w-full bg-[#EBEEF2]/60 rounded-[8px]"></div>
+      </div>
+    </div>
+
+    <!-- 3. 底部状态栏（被压暗底层） -->
+    <div class="px-2 pb-2 shrink-0 bg-[#FFFFFF]">
+      <div class="h-[28px] px-2.5 rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] flex items-center justify-between text-[11px]">
+        <div class="flex items-center space-x-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+          <span class="text-[#0F1115] font-medium">就绪</span>
+          <span class="text-[#81858C]">· 远程可选</span>
+        </div>
+        <div class="text-[#81858C] font-mono-val">v0.8.0 · DSH 2.4</div>
+      </div>
+    </div>
+
+    <!-- 4. 全屏遮罩层 (#0000003D) 盖满整块 564x720 画布 -->
+    <div class="absolute inset-0 bg-[#0000003D] flex items-center justify-center p-4 z-40">
+      
+      <!-- 5. 危险确认弹窗 D-31「终止运行」 (520px 宽，fit-content 高，约 420px，圆角 12px，纯白底) -->
+      <div class="w-[520px] bg-[#FFFFFF] rounded-[12px] border border-[#0000001A] flex flex-col overflow-hidden select-text shadow-none z-50">
+        
+        <!-- ① 标题区 48px：标题 + 右端 ✕ -->
+        <div class="h-[48px] px-4 border-b border-[#0000001A] flex items-center justify-between shrink-0">
+          <h2 class="text-[13px] font-semibold text-[#0F1115] m-0 leading-[1.25]">终止运行</h2>
+          <button class="text-[#81858C] hover:text-[#0F1115] p-1 rounded-[4px] transition-colors" aria-label="关闭">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
+        <!-- ② 提示段：内边距 12px 16px 0，计数行 -->
+        <div class="pt-3 px-4 pb-0 shrink-0">
+          <div class="text-[12px] text-[#61666B] leading-[1.5]">
+            已应用 6 项、未执行 24 项
+          </div>
+        </div>
+
+        <!-- ③ 选项区：内边距 8px 16px，两张可点卡片，各高约 64px，上下间距 8px -->
+        <div class="px-4 py-2 flex flex-col space-y-2 shrink-0">
+          
+          <!-- 选项卡 1（当前选中：1px #4176E6 描边 + 极浅底） -->
+          <div class="h-[64px] px-3.5 py-2.5 rounded-[8px] border border-[#4176E6] bg-[#4176E6]/[0.04] flex flex-col justify-center cursor-pointer">
+            <div class="flex items-center space-x-2">
+              <span class="text-[12.5px] font-medium text-[#0F1115] leading-[1.25]">保留已应用项</span>
+              <span class="text-[11px] px-1.5 py-0.5 rounded-[999px] bg-[#EBEEF2] text-[#61666B] border border-[#0000001A] leading-none">推荐</span>
+            </div>
+            <div class="text-[11px] text-[#61666B] leading-[1.5] mt-1 line-clamp-1">
+              只停掉未执行的部分，已经写进配置的内容留在本机；随后会自动做一次启动安全审计
+            </div>
+          </div>
+
+          <!-- 选项卡 2（未选中：1px #0000001A 描边、白底） -->
+          <div class="h-[64px] px-3.5 py-2.5 rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] hover:bg-[#000000]/[0.02] flex flex-col justify-center cursor-pointer transition-colors">
+            <div class="flex items-center space-x-2">
+              <span class="text-[12.5px] font-medium text-[#0F1115] leading-[1.25]">回滚到导入前</span>
+            </div>
+            <div class="text-[11px] text-[#61666B] leading-[1.5] mt-1 line-clamp-1">
+              撤销本次导入已应用的全部改动，回到导入前的快照状态
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ④ 警示条：左右 16px、下 12px，warn 浅底 + 2px 琥珀竖条 + 12px 文案 -->
+        <div class="px-4 pb-3 shrink-0">
+          <div class="p-2.5 rounded-[4px] bg-[#F59E0B]/10 border-l-2 border-[#F59E0B] flex items-start">
+            <div class="text-[12px] text-[#0F1115] leading-[1.5]">
+              「保留」会留下一笔未完成的导入：审计只能压低 DSH 启动失败的概率，不能保证。若 DSH 起不来，用「事故恢复 / SAFE MODE」或离线 CLI 处理。
+            </div>
+          </div>
+        </div>
+
+        <!-- ⑤ 动作区 56px：上边框 1px #0000001A，左「继续运行」ghost、右「确认终止」danger #EC1313 实心白字 -->
+        <div class="h-[56px] px-4 border-t border-[#0000001A] flex items-center justify-between shrink-0 bg-[#FFFFFF]">
+          <button class="h-[30px] px-3.5 rounded-[8px] bg-transparent border border-[#0000001A] text-[12.5px] text-[#61666B] hover:text-[#0F1115] hover:bg-[#000000]/[0.03] transition-colors leading-none flex items-center justify-center">
+            继续运行
+          </button>
+          <button class="h-[30px] px-3.5 rounded-[8px] bg-[#EC1313] hover:bg-[#d01111] text-[12.5px] font-medium text-[#FFFFFF] shadow-none border-0 transition-colors leading-none flex items-center justify-center">
+            确认终止
+          </button>
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+</body>
+</html>

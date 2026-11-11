@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=564, height=720, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 D-37 装回本地确认步弹窗</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    body {
+      width: 564px;
+      height: 720px;
+      overflow: hidden;
+      background-color: #FFFFFF;
+      position: relative;
+      color: #0F1115;
+    }
+  </style>
+</head>
+<body class="w-full min-h-screen bg-[#EBEEF2] flex items-center justify-center p-0 m-0 overflow-hidden font-sans">
+<!-- 564x720 插件外壳窗口 -->
+<div class="relative w-[564px] h-[720px] bg-[#FFFFFF] border border-[#0000001A] overflow-hidden flex flex-col justify-between shrink-0 shadow-sm">
+<!-- ================= 底层页面三段式外壳 ================= -->
+<!-- 顶部 32px 导航条（产物库高亮激活） -->
+<header class="h-[32px] w-full px-[16px] flex items-center justify-between border-b border-[#0000001A] bg-[#FFFFFF] shrink-0">
+<div class="flex items-center gap-[16px]">
+<span class="text-[12px] text-[#61666B]">首页</span>
+<span class="text-[12px] font-[600] text-[#0F1115]">产物库</span>
+<span class="text-[12px] text-[#61666B]">同步</span>
+<span class="text-[12px] text-[#61666B]">环境</span>
+</div>
+<div class="flex items-center gap-[10px] text-[#81858C]">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="14">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="14">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</header>
+<!-- 中间内容区（灰阶配置列表上下文） -->
+<main class="flex-1 w-full p-[16px] flex flex-col gap-[14px]">
+<div class="flex items-center justify-between">
+<div class="w-[72px] h-[16px] rounded-[4px] bg-[#0000001A]"></div>
+<div class="w-[84px] h-[24px] rounded-[8px] bg-[#0000001A]"></div>
+</div>
+<div class="w-full h-[64px] rounded-[8px] border border-[#0000001A] p-[10px] flex flex-col justify-between">
+<div class="w-[140px] h-[12px] rounded-[4px] bg-[#0000001A]"></div>
+<div class="w-[220px] h-[10px] rounded-[4px] bg-[#0000001A]"></div>
+</div>
+<div class="w-full rounded-[8px] border border-[#0000001A] divide-y divide-[#0000001A]">
+<div class="h-[52px] px-[12px] flex items-center justify-between">
+<div class="flex flex-col gap-[6px]">
+<div class="w-[120px] h-[12px] rounded-[4px] bg-[#0000001A]"></div>
+<div class="w-[180px] h-[10px] rounded-[4px] bg-[#0000001A]"></div>
+</div>
+<div class="w-[56px] h-[24px] rounded-[6px] bg-[#0000001A]"></div>
+</div>
+<div class="h-[52px] px-[12px] flex items-center justify-between">
+<div class="flex flex-col gap-[6px]">
+<div class="w-[100px] h-[12px] rounded-[4px] bg-[#0000001A]"></div>
+<div class="w-[160px] h-[10px] rounded-[4px] bg-[#0000001A]"></div>
+</div>
+<div class="w-[56px] h-[24px] rounded-[6px] bg-[#0000001A]"></div>
+</div>
+<div class="h-[52px] px-[12px] flex items-center justify-between">
+<div class="flex flex-col gap-[6px]">
+<div class="w-[110px] h-[12px] rounded-[4px] bg-[#0000001A]"></div>
+<div class="w-[140px] h-[10px] rounded-[4px] bg-[#0000001A]"></div>
+</div>
+<div class="w-[56px] h-[24px] rounded-[6px] bg-[#0000001A]"></div>
+</div>
+</div>
+</main>
+<!-- 底部 28px 内缩状态栏 -->
+<footer class="mx-[8px] mb-[8px] h-[28px] px-[10px] rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] flex items-center justify-between shrink-0">
+<div class="flex items-center gap-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span class="text-[11px] text-[#61666B]">就绪 · 市场已连接</span>
+</div>
+<span class="text-[11px] text-[#81858C] font-mono">v0.8.0 · DSH 2.4</span>
+</footer>
+<!-- ================= 遮罩层（覆盖整块 564×720，rgba(0,0,0,0.24)） ================= -->
+<div class="absolute inset-0 bg-[#0000003D] z-10 pointer-events-none"></div>
+<!-- ================= 弹窗本体 D-37（宽 541px、高 600px、居中、距顶 40px） ================= -->
+<div class="absolute left-[11.5px] top-[40px] w-[541px] bg-[#FFFFFF] rounded-[12px] border border-[#0000001A] flex flex-col z-20 overflow-hidden shadow-none">
+<!-- Top Section: Header + Stepper + Badges + Cards + Snapshot Info -->
+<div class="flex flex-col">
+<!-- 标题行: 高约 44px, padding 12px 16px, 下方 0.5px 分隔线 -->
+<div class="h-[44px] px-[16px] flex items-center justify-between border-b border-[#0000001A] shrink-0">
+<div class="flex items-baseline gap-[8px]">
+<h2 class="text-[13px] font-[600] text-[#0F1115] leading-none">条目详情</h2>
+<span class="text-[12px] text-[#81858C] font-mono leading-none">dsh-config-sample</span>
+</div>
+<button class="text-[#81858C] hover:text-[#0F1115] transition-colors p-[2px]" type="button">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="14">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</button>
+</div>
+<!-- 五步 Stepper: 预览 — 选择内容 — 冲突 — 确认 — 结果 (确认激活) -->
+<div class="h-[36px] px-[16px] py-[8px] flex items-center justify-between shrink-0">
+<span class="text-[12px] text-[#81858C]">预览</span>
+<div class="w-[16px] h-[0.5px] bg-[#0000001A]"></div>
+<span class="text-[12px] text-[#81858C]">选择内容</span>
+<div class="w-[16px] h-[0.5px] bg-[#0000001A]"></div>
+<span class="text-[12px] text-[#81858C]">冲突</span>
+<div class="w-[16px] h-[0.5px] bg-[#0000001A]"></div>
+<div class="flex flex-col items-center justify-center">
+<span class="text-[12px] font-[600] text-[#0F1115]">确认</span>
+<div class="w-[18px] h-[2px] bg-[#0F1115] rounded-full mt-[2px]"></div>
+</div>
+<div class="w-[16px] h-[0.5px] bg-[#0000001A]"></div>
+<span class="text-[12px] text-[#81858C]">结果</span>
+</div>
+<!-- 计数徽章行: 间距 12px, padding 0 16px, 单行无折行, gap 6px -->
+<div class="mt-[12px] px-[16px] flex items-center gap-[6px] shrink-0">
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px]">已选 18/24 项</span>
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px]">将改动 12 项</span>
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px]">已一致 6 项</span>
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px]">已取消 6 项</span>
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[#F59E0B1F] text-[#F59E0B] text-[11px] font-medium">需重启 DSH 后生效</span>
+</div>
+<!-- 四张分区卡: 间距 12px, 每张高 44px, 间距 8px, padding 0 16px -->
+<div class="mt-[12px] px-[16px] flex flex-col gap-[8px] shrink-0">
+<!-- 卡 1: 设置 -->
+<div class="h-[44px] px-[14px] py-[10px] rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] flex items-center justify-between">
+<div class="flex items-center gap-[8px]">
+<span class="text-[12.5px] font-[600] text-[#0F1115]">设置</span>
+<span class="text-[11px] text-[#81858C]">已选 4/4 个条目</span>
+</div>
+<div class="flex items-center">
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px]">将改动</span>
+</div>
+</div>
+<!-- 卡 2: 提示词 -->
+<div class="h-[44px] px-[14px] py-[10px] rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] flex items-center justify-between">
+<div class="flex items-center gap-[8px]">
+<span class="text-[12.5px] font-[600] text-[#0F1115]">提示词</span>
+<span class="text-[11px] text-[#81858C]">已选 3/5 个条目</span>
+</div>
+<div class="flex items-center gap-[4px]">
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px]">将改动</span>
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[#F59E0B1F] text-[#F59E0B] text-[11px]">高风险</span>
+</div>
+</div>
+<!-- 卡 3: 技能 -->
+<div class="h-[44px] px-[14px] py-[10px] rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] flex items-center justify-between">
+<div class="flex items-center gap-[8px]">
+<span class="text-[12.5px] font-[600] text-[#0F1115]">技能</span>
+<span class="text-[11px] text-[#81858C]">已选 2/2 个条目</span>
+</div>
+<div class="flex items-center">
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[#22C55E1F] text-[#22C55E] text-[11px]">已一致</span>
+</div>
+</div>
+<!-- 卡 4: MCP 服务器 -->
+<div class="h-[44px] px-[14px] py-[10px] rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] flex items-center justify-between">
+<div class="flex items-center gap-[8px]">
+<span class="text-[12.5px] font-[600] text-[#0F1115]">MCP 服务器</span>
+<span class="text-[11px] text-[#81858C]">已选 1/1 个条目</span>
+</div>
+<div class="flex items-center">
+<span class="px-[6px] py-[2px] rounded-[4px] bg-[#EBEEF2] text-[#61666B] text-[11px]">将改动</span>
+</div>
+</div>
+</div>
+<!-- 快照提示行: 贴合文字的小胶囊，无图标，rounded-full -->
+<div class="mt-[12px] px-[16px] shrink-0 flex">
+<span class="inline-flex items-center px-[12px] py-[4px] rounded-full bg-[#EBEEF2] text-[#61666B] text-[12px]">导入前自动创建可回滚快照</span>
+</div>
+</div>
+<!-- 底部操作按钮行: 紧随快照行下方 16px (mt-[16px])，底部 padding 16px (pb-[16px]) -->
+<div class="mt-[16px] px-[16px] pb-[16px] flex items-center justify-end gap-[8px] shrink-0 bg-[#FFFFFF]">
+<button class="h-[28px] px-[12px] rounded-[8px] border border-[#0000001A] bg-[#FFFFFF] text-[12px] text-[#0F1115] hover:bg-[#EBEEF2] transition-colors" type="button">
+          上一步
+        </button>
+<button class="h-[28px] px-[14px] rounded-[8px] bg-[#0F1115] text-[12px] text-[#FFFFFF] hover:bg-[#43454A] transition-colors font-medium" type="button">
+          确认导入
+        </button>
+</div>
+</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 远程合并弹窗</title>
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- Lucide Icons -->
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+    /* 严格遵从 BASE 规范字体与颜色 */
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBECEF;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      color: #0F1115;
+    }
+
+    .font-mono-code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 细线 0.5px / 1px 描边 */
+    .border-subtle {
+      border: 0.5px solid #0000001A;
+    }
+    .border-card {
+      border: 1px solid #0000001A;
+    }
+    .border-t-subtle {
+      border-top: 0.5px solid #0000001A;
+    }
+    .border-b-subtle {
+      border-bottom: 0.5px solid #0000001A;
+    }
+    .border-t-card {
+      border-top: 1px solid #0000001A;
+    }
+    .border-b-card {
+      border-bottom: 1px solid #0000001A;
+    }
+
+    /* 按钮样式严格对齐 token */
+    .btn-primary {
+      background-color: #0F1115;
+      color: #FFFFFF;
+      font-size: 12px;
+      font-weight: 500;
+      height: 28px;
+      padding: 0 12px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.1s ease;
+      cursor: pointer;
+      border: none;
+      white-space: nowrap;
+    }
+    .btn-primary:hover {
+      background-color: #43454A;
+    }
+
+    .btn-ghost {
+      background-color: transparent;
+      color: #0F1115;
+      font-size: 11px;
+      font-weight: 500;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 6px;
+      border: 0.5px solid #0000001A;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background-color 0.1s ease;
+    }
+    .btn-ghost:hover {
+      background-color: rgba(38, 49, 72, 0.06);
+    }
+    .btn-ghost-active {
+      background-color: #EBEEF2;
+      border-color: #979DA6;
+      color: #0F1115;
+    }
+
+    .btn-ghost-sm {
+      background-color: transparent;
+      color: #61666B;
+      font-size: 11px;
+      height: 22px;
+      padding: 0 6px;
+      border-radius: 4px;
+      border: 0.5px solid #0000001A;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn-ghost-sm:hover {
+      background-color: rgba(38, 49, 72, 0.05);
+      color: #0F1115;
+    }
+    .btn-ghost-sm-active {
+      background-color: #EBEEF2;
+      border-color: #979DA6;
+      color: #0F1115;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+<!-- 主插件容器：严格 564×720px -->
+<div class="relative w-[564px] h-[720px] bg-white overflow-hidden shadow-2xl flex flex-col justify-between select-none">
+<!-- ==================== 遮罩下层：脱敏且压暗的「同步」页底板 ==================== -->
+<div class="absolute inset-0 w-full h-full flex flex-col justify-between pointer-events-none z-0" style="filter: blur(1.5px) contrast(0.95); opacity: 0.85;">
+<!-- 顶部 32px 导航条 (被压暗) -->
+<div class="h-[32px] px-3 bg-[#FFFFFF] border-b-subtle flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="text-[12px] text-[#81858C]">首页</span>
+<span class="text-[12px] text-[#81858C]">产物库</span>
+<span class="text-[12px] text-[#0F1115] font-medium px-2 py-0.5 rounded bg-[#EBEEF2] border-[0.5px] border-[#979DA6]">同步</span>
+<span class="text-[12px] text-[#81858C]">环境</span>
+</div>
+<div class="flex items-center gap-2 text-[#81858C]">
+<i class="w-3.5 h-3.5" data-lucide="command"></i>
+<i class="w-3.5 h-3.5" data-lucide="activity"></i>
+<i class="w-3.5 h-3.5" data-lucide="clock"></i>
+<i class="w-3.5 h-3.5" data-lucide="info"></i>
+</div>
+</div>
+<!-- 中间内容区轮廓：仅保留卡片骨架轮廓，无具体文字 -->
+<div class="flex-1 p-3 flex flex-col gap-2 bg-[#F5F5F5]">
+<div class="h-28 bg-white rounded-lg border-card p-3 flex flex-col justify-between">
+<div class="h-4 w-32 bg-[#EBECEF] rounded"></div>
+<div class="h-3 w-48 bg-[#F0F2F5] rounded"></div>
+<div class="h-6 w-full bg-[#FAFAFA] rounded border-subtle"></div>
+</div>
+<div class="h-16 bg-white rounded-lg border-card p-3 flex items-center justify-between">
+<div class="h-4 w-24 bg-[#EBECEF] rounded"></div>
+<div class="h-5 w-14 bg-[#F0F2F5] rounded"></div>
+</div>
+<div class="h-16 bg-white rounded-lg border-card p-3 flex items-center justify-between">
+<div class="h-4 w-20 bg-[#EBECEF] rounded"></div>
+<div class="h-5 w-14 bg-[#F0F2F5] rounded"></div>
+</div>
+<div class="flex-1 bg-white rounded-lg border-card p-3 flex flex-col gap-2">
+<div class="h-4 w-28 bg-[#EBECEF] rounded"></div>
+<div class="h-4 w-full bg-[#FAFAFA] rounded border-subtle"></div>
+<div class="h-4 w-full bg-[#FAFAFA] rounded border-subtle"></div>
+</div>
+</div>
+<!-- 底部 28px 状态栏 (被压暗) -->
+<div class="h-[28px] mx-2 mb-2 px-2.5 bg-white rounded-lg border-subtle flex items-center justify-between text-[11px] text-[#81858C]">
+<div class="flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span>就绪 · 远程可选</span>
+</div>
+<span class="tabular-nums font-mono-code">v0.8.0 · DSH 2.4</span>
+</div>
+</div>
+<!-- 全屏 #0000003D 遮罩 (覆盖整块 564×720 面板) -->
+<div class="absolute inset-0 bg-[#000000] bg-opacity-[0.24] z-10 pointer-events-none" style="background-color: rgba(0, 0, 0, 0.25);"></div>
+<!-- ==================== 弹窗主体 (Modal Container) ==================== -->
+<div class="relative z-20 w-full h-full flex items-center justify-center pointer-events-auto">
+<!-- 弹窗卡片：宽 532px (左右留 16px 遮罩边)，高约 560px 贴合内容，圆角 12，1px #0000001A 描边，白底 -->
+<div class="w-[532px] bg-white rounded-[12px] border-card flex flex-col overflow-hidden">
+<!-- 1. Header (高 40px，1px 底分隔线) -->
+<div class="h-[40px] px-4 flex items-center justify-between border-b-card bg-white">
+<span class="text-[13px] font-semibold text-[#0F1115]">远程合并</span>
+<button class="text-[#81858C] hover:text-[#0F1115] transition-colors p-1" title="关闭">
+<i class="w-3.5 h-3.5" data-lucide="x"></i>
+</button>
+</div>
+<!-- 中间内容区：内边距 16px，各小节纵向间距严格遵从布局说明 -->
+<div class="p-4 flex flex-col gap-2.5 bg-white">
+<!-- 2. 四指标块（四等分、圆角 8、0.5px 描边、内边距 8、居中） -->
+<div class="grid grid-cols-4 gap-2">
+<!-- 2 可自动应用 -->
+<div class="border-subtle rounded-[8px] p-2 flex flex-col items-center justify-center bg-white">
+<span class="text-[13px] font-semibold text-[#0F1115] tabular-nums leading-tight">2</span>
+<span class="text-[11px] text-[#61666B] mt-0.5 leading-tight">可自动应用</span>
+</div>
+<!-- 1 待裁决 -->
+<div class="border-subtle rounded-[8px] p-2 flex flex-col items-center justify-center bg-white">
+<span class="text-[13px] font-semibold text-[#0F1115] tabular-nums leading-tight">1</span>
+<span class="text-[11px] text-[#61666B] mt-0.5 leading-tight">待裁决</span>
+</div>
+<!-- 2 冲突 -->
+<div class="border-subtle rounded-[8px] p-2 flex flex-col items-center justify-center bg-white">
+<span class="text-[13px] font-semibold text-[#0F1115] tabular-nums leading-tight">2</span>
+<span class="text-[11px] text-[#61666B] mt-0.5 leading-tight">冲突</span>
+</div>
+<!-- 4 无变化 -->
+<div class="border-subtle rounded-[8px] p-2 flex flex-col items-center justify-center bg-white">
+<span class="text-[13px] font-semibold text-[#0F1115] tabular-nums leading-tight">4</span>
+<span class="text-[11px] text-[#61666B] mt-0.5 leading-tight">无变化</span>
+</div>
+</div>
+<!-- 3. 警告横幅：底 #F59E0B 12%，圆角 8，内边距 10，12px/1.5 #61666B -->
+<div class="rounded-[8px] p-2.5 flex items-start gap-2 bg-[#F59E0B]/[0.12] border-[0.5px] border-[#F59E0B]/20">
+<i class="w-3.5 h-3.5 text-[#F59E0B] shrink-0 mt-0.5" data-lucide="alert-triangle"></i>
+<span class="text-[12px] leading-[1.5] text-[#61666B]">
+              没有共同基准快照：合并退化为两方比较，两侧不一致的分区一律按冲突处理，需要你逐个裁决。
+            </span>
+</div>
+<!-- 4. 批量工具栏：标签「批量」+ 三个 ghost 小按钮；右端 info + 重新预览 -->
+<div class="flex items-center justify-between py-0.5">
+<div class="flex items-center gap-1.5">
+<span class="text-[12px] text-[#61666B]">批量</span>
+<button class="btn-ghost">全部采用本地</button>
+<button class="btn-ghost">全部采用远端</button>
+<button class="btn-ghost">全部采用自动合并</button>
+</div>
+<div class="flex items-center gap-2">
+<i class="w-3.5 h-3.5 text-[#81858C] cursor-pointer hover:text-[#0F1115]" data-lucide="info"></i>
+<button class="btn-ghost">
+<i class="w-3 h-3" data-lucide="rotate-cw"></i>
+<span>重新预览</span>
+</button>
+</div>
+</div>
+<!-- 5. 分组标题「分区裁决」12px #61666B -->
+<div class="text-[12px] text-[#61666B] font-medium -mb-1">分区裁决</div>
+<!-- 6. 三张分区卡（圆角 8、1px 描边、内边距 10、间距 8） -->
+<div class="flex flex-col gap-2">
+<!-- 卡片 a:「插件清单」需裁决 -->
+<div class="border-card rounded-[8px] p-2.5 bg-white flex flex-col gap-2">
+<!-- 卡头 -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="text-[12px] font-semibold text-[#0F1115]">插件清单</span>
+<span class="text-[11px] px-1.5 py-0.5 rounded-[4px] bg-[#F59E0B]/[0.12] text-[#F59E0B] font-medium">需裁决</span>
+</div>
+<span class="text-[11px] text-[#81858C] tabular-nums">2 处冲突</span>
+</div>
+<!-- 冲突行：文件 plugins.yml + 两侧都改动了同一位置 -->
+<div class="bg-[#FAFAFA] rounded-[6px] border-subtle p-2 flex flex-col gap-1.5">
+<div class="flex items-center justify-between text-[11px]">
+<span class="text-[#0F1115] font-medium flex items-center gap-1">
+<span class="text-[#81858C]">文件</span>
+<span class="font-mono-code">plugins.yml</span>
+</span>
+<span class="text-[#81858C]">两侧都改动了同一位置</span>
+</div>
+<!-- 三列对照：本地 / 远端 / 基准 -->
+<div class="grid grid-cols-3 gap-2 pt-1 border-t-subtle">
+<div class="flex flex-col gap-1">
+<span class="text-[11px] text-[#81858C]">本地</span>
+<div class="px-2 py-1 rounded-[4px] bg-white border-subtle text-[11px] font-mono-code text-[#0F1115]">
+                      { version: 1.1 }
+                    </div>
+</div>
+<div class="flex flex-col gap-1">
+<span class="text-[11px] text-[#81858C]">远端</span>
+<div class="px-2 py-1 rounded-[4px] bg-white border-subtle text-[11px] font-mono-code text-[#0F1115]">
+                      { version: 1.6 }
+                    </div>
+</div>
+<div class="flex flex-col gap-1">
+<span class="text-[11px] text-[#81858C]">基准</span>
+<div class="px-2 py-1 rounded-[4px] bg-white border-subtle text-[11px] font-mono-code text-[#61666B]">
+                      { version: 1.0 }
+                    </div>
+</div>
+</div>
+<!-- 动作行：「采用本地」（当前、带 12px 勾）「采用远端」 -->
+<div class="flex justify-end gap-1.5 pt-1">
+<button class="btn-ghost-sm btn-ghost-sm-active">
+<i class="w-3 h-3 text-[#0F1115]" data-lucide="check"></i>
+<span>采用本地</span>
+</button>
+<button class="btn-ghost-sm">
+<span>采用远端</span>
+</button>
+</div>
+</div>
+</div>
+<!-- 卡片 b:「设置」自动合并 -->
+<div class="border-card rounded-[8px] p-2.5 bg-white flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="text-[12px] font-semibold text-[#0F1115]">设置</span>
+<span class="text-[11px] px-1.5 py-0.5 rounded-[4px] bg-[#4176E6]/[0.12] text-[#4176E6] font-medium">自动合并</span>
+</div>
+<span class="text-[11px] text-[#81858C] tabular-nums">已自动并入 1 处改动</span>
+</div>
+<!-- 动作行：「采用本地」「采用远端」「采用自动合并」（当前、带勾） -->
+<div class="flex justify-end gap-1.5">
+<button class="btn-ghost-sm">
+<span>采用本地</span>
+</button>
+<button class="btn-ghost-sm">
+<span>采用远端</span>
+</button>
+<button class="btn-ghost-sm btn-ghost-sm-active">
+<i class="w-3 h-3 text-[#0F1115]" data-lucide="check"></i>
+<span>采用自动合并</span>
+</button>
+</div>
+</div>
+<!-- 卡片 c:「MCP 服务器」保留本地 -->
+<div class="border-card rounded-[8px] p-2.5 bg-white flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="text-[12px] font-semibold text-[#0F1115]">MCP 服务器</span>
+<span class="text-[11px] px-1.5 py-0.5 rounded-[4px] bg-[#EBEEF2] text-[#61666B] font-medium">保留本地</span>
+</div>
+<span class="text-[11px] text-[#81858C] tabular-nums">0 处冲突</span>
+</div>
+<!-- 动作行：「采用本地」（当前、带勾）「采用远端」 -->
+<div class="flex justify-end gap-1.5">
+<button class="btn-ghost-sm btn-ghost-sm-active">
+<i class="w-3 h-3 text-[#0F1115]" data-lucide="check"></i>
+<span>采用本地</span>
+</button>
+<button class="btn-ghost-sm">
+<span>采用远端</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- 7. Footer（1px 顶分隔线，高 48px，左右内边距 16px） -->
+<div class="h-[48px] px-4 bg-white border-t-card flex items-center justify-between">
+<span class="text-[12px] text-[#61666B] tabular-nums">
+            已裁决 3 / 待裁决 1 个分区 · 本次会应用 3 个分区
+          </span>
+<div class="flex items-center gap-2">
+<button class="btn-ghost !h-[28px] !px-3 !text-[12px]">关闭</button>
+<button class="btn-primary">执行合并</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+<script>
+    // 初始化图标
+    lucide.createIcons();
+  </script>
+</body>
+</html>

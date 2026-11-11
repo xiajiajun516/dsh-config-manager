@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DSH 设置 — 备份与迁移 配置市场 (564x720)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #EBEEF2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    /* 精确控制文字与尺寸规范 */
+    .font-tabular {
+      font-variant-numeric: tabular-nums;
+    }
+    /* 徽章基础样式 */
+    .badge {
+      height: 18px;
+      padding: 0 6px;
+      border-radius: 999px;
+      font-size: 11px;
+      line-height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .badge-info {
+      background-color: rgba(65, 118, 230, 0.12);
+      color: #4176E6;
+    }
+    .badge-ok {
+      background-color: rgba(34, 197, 94, 0.12);
+      color: #22C55E;
+    }
+    .badge-warn {
+      background-color: rgba(245, 158, 11, 0.12);
+      color: #F59E0B;
+    }
+    .badge-error {
+      background-color: rgba(236, 19, 19, 0.12);
+      color: #EC1313;
+    }
+
+    /* 细边框与分割线规范 */
+    .border-subtle {
+      border-color: rgba(0, 0, 0, 0.10);
+    }
+    .divide-subtle > * + * {
+      border-color: rgba(0, 0, 0, 0.10);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 564×720 插件独立画框，高密度开发者工具规范 -->
+  <div class="w-[564px] h-[720px] bg-[#FFFFFF] flex flex-col overflow-hidden select-none border border-black/10 shadow-sm relative">
+
+    <!-- 1. 顶部导航条：高 44px，左右内边距 14px，被任务面板覆盖所以页签与图标均不激活 -->
+    <header class="h-[44px] px-[14px] flex items-center justify-between border-b border-subtle shrink-0 bg-[#FFFFFF]">
+      <!-- 4 个页签文字（12.5px，未激活一律 #61666B，无下划线无底色） -->
+      <nav class="flex items-center space-x-[18px]">
+        <span class="text-[12.5px] text-[#61666B] cursor-default font-normal">首页</span>
+        <span class="text-[12.5px] text-[#61666B] cursor-default font-normal">产物库</span>
+        <span class="text-[12.5px] text-[#61666B] cursor-default font-normal">同步</span>
+        <span class="text-[12.5px] text-[#61666B] cursor-default font-normal">环境</span>
+      </nav>
+      <!-- 右侧 4 个 lucide 线性图标按钮（命令面板 / 活动 / 历史 / 关于）各 14px、间距 12px、颜色 #61666B、无激活底 -->
+      <div class="flex items-center space-x-[12px] text-[#61666B]">
+        <button class="w-[14px] h-[14px] flex items-center justify-center p-0 hover:text-[#0F1115] transition-colors" title="命令面板">
+          <i data-lucide="command" class="w-[14px] h-[14px]"></i>
+        </button>
+        <button class="w-[14px] h-[14px] flex items-center justify-center p-0 hover:text-[#0F1115] transition-colors" title="活动">
+          <i data-lucide="activity" class="w-[14px] h-[14px]"></i>
+        </button>
+        <button class="w-[14px] h-[14px] flex items-center justify-center p-0 hover:text-[#0F1115] transition-colors" title="历史">
+          <i data-lucide="history" class="w-[14px] h-[14px]"></i>
+        </button>
+        <button class="w-[14px] h-[14px] flex items-center justify-center p-0 hover:text-[#0F1115] transition-colors" title="关于">
+          <i data-lucide="help-circle" class="w-[14px] h-[14px]"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- 2. 面板头：高 44px，左右内边距 16px，底部 1px 分隔线 -->
+    <div class="h-[44px] px-[16px] flex items-center border-b border-subtle shrink-0 bg-[#FFFFFF]">
+      <!-- 左端 ghost 小按钮「← 返回产物库」 -->
+      <button class="h-[26px] px-[8px] flex items-center space-x-[4px] border border-subtle rounded-[8px] bg-[#FFFFFF] text-[12px] text-[#0F1115] hover:bg-[#EBEEF2] transition-colors">
+        <i data-lucide="arrow-left" class="w-[12px] h-[12px]"></i>
+        <span>返回产物库</span>
+      </button>
+      <div class="w-[10px]"></div>
+      <!-- 标题「逛市场」 -->
+      <h1 class="text-[12.5px] font-[600] text-[#0F1115] m-0 p-0">逛市场</h1>
+    </div>
+
+    <!-- 3. 中间内容区：flex-1，内边距 12px 16px 0，自身排布，底部直接衔接状态栏 -->
+    <main class="flex-1 px-[16px] pt-[12px] pb-0 flex flex-col overflow-hidden bg-[#FFFFFF]">
+
+      <!-- 4. 页签行（高 30px，gap 4px） -->
+      <div class="h-[30px] flex items-center space-x-[4px] shrink-0">
+        <!-- 「浏览市场」（激活：底 #EBEEF2、1px #979DA6 描边、圆角 8px、12.5px/600 #0F1115） -->
+        <button class="h-[28px] px-[10px] flex items-center justify-center bg-[#EBEEF2] border border-[#979DA6] rounded-[8px] text-[12.5px] font-[600] text-[#0F1115]">
+          浏览市场
+        </button>
+        <!-- 「我的配置」（未激活：无底无描边、12.5px #61666B） -->
+        <button class="h-[28px] px-[10px] flex items-center justify-center bg-transparent border-0 rounded-[8px] text-[12.5px] text-[#61666B] hover:text-[#0F1115] transition-colors">
+          我的配置
+        </button>
+      </div>
+
+      <div class="h-[8px] shrink-0"></div>
+
+      <!-- 5. 区块标题行（高 22px）：「配置市场」13px/600 #0F1115 + 紧跟一枚 14px lucide info 图标（#81858C） -->
+      <div class="h-[22px] flex items-center space-x-[6px] shrink-0">
+        <span class="text-[13px] font-[600] text-[#0F1115] leading-[22px]">配置市场</span>
+        <i data-lucide="info" class="w-[14px] h-[14px] text-[#81858C]"></i>
+      </div>
+
+      <div class="h-[8px] shrink-0"></div>
+
+      <!-- 6. 市场仓库行（高 30px）：「市场仓库」12px #61666B 在左，弹簧撑开后右端两枚按钮 -->
+      <div class="h-[30px] flex items-center justify-between shrink-0">
+        <span class="text-[12px] text-[#61666B]">市场仓库</span>
+        <div class="flex items-center space-x-[8px]">
+          <!-- 主按钮「拉取最新」（底 #0F1115、白字、高 28px、左右 12px、圆角 8px） -->
+          <button class="h-[28px] px-[12px] bg-[#0F1115] hover:bg-[#43454A] text-[#FFFFFF] rounded-[8px] text-[12px] font-medium transition-colors flex items-center justify-center">
+            拉取最新
+          </button>
+          <!-- ghost 按钮「浏览」（白底、1px #0000001A 描边、12px #0F1115） -->
+          <button class="h-[28px] px-[12px] bg-[#FFFFFF] hover:bg-[#EBEEF2] border border-subtle text-[#0F1115] rounded-[8px] text-[12px] font-medium transition-colors flex items-center justify-center">
+            浏览
+          </button>
+        </div>
+      </div>
+
+      <div class="h-[10px] shrink-0"></div>
+
+      <!-- 7. 筛选卡（1px #0000001A 描边、圆角 12px、白底、内边距 12px，占满剩余高度并被下沿裁切内部滚动） -->
+      <div class="flex-1 border border-subtle rounded-t-[12px] rounded-b-none bg-[#FFFFFF] p-[12px] pb-0 flex flex-col overflow-hidden border-b-0">
+        
+        <!-- 搜索框跨满两列，高 28px、圆角 8px、1px #0000001A 描边、12px 弱色占位文字 -->
+        <div class="h-[28px] border border-subtle rounded-[8px] px-[8px] flex items-center space-x-[6px] shrink-0 bg-[#FFFFFF]">
+          <i data-lucide="search" class="w-[12px] h-[12px] text-[#81858C] shrink-0"></i>
+          <input 
+            type="text" 
+            readonly 
+            placeholder="搜索名称 / 作者 / 描述…" 
+            class="w-full bg-transparent border-0 outline-none text-[12px] text-[#0F1115] placeholder-[#81858C] p-0 font-normal cursor-default"
+          />
+        </div>
+
+        <div class="h-[8px] shrink-0"></div>
+
+        <!-- 2×2 四个下拉（每个占一半宽、高 28px、1px 描边、圆角 8px、12px 字 #61666B、右端 12px chevron-down） -->
+        <div class="grid grid-cols-2 gap-[8px] shrink-0">
+          <div class="h-[28px] border border-subtle rounded-[8px] px-[8px] flex items-center justify-between bg-[#FFFFFF] cursor-pointer hover:border-black/20">
+            <span class="text-[12px] text-[#61666B]">全部类别</span>
+            <i data-lucide="chevron-down" class="w-[12px] h-[12px] text-[#81858C]"></i>
+          </div>
+          <div class="h-[28px] border border-subtle rounded-[8px] px-[8px] flex items-center justify-between bg-[#FFFFFF] cursor-pointer hover:border-black/20">
+            <span class="text-[12px] text-[#61666B]">全部分区</span>
+            <i data-lucide="chevron-down" class="w-[12px] h-[12px] text-[#81858C]"></i>
+          </div>
+          <div class="h-[28px] border border-subtle rounded-[8px] px-[8px] flex items-center justify-between bg-[#FFFFFF] cursor-pointer hover:border-black/20">
+            <span class="text-[12px] text-[#61666B]">全部来源</span>
+            <i data-lucide="chevron-down" class="w-[12px] h-[12px] text-[#81858C]"></i>
+          </div>
+          <div class="h-[28px] border border-subtle rounded-[8px] px-[8px] flex items-center justify-between bg-[#FFFFFF] cursor-pointer hover:border-black/20">
+            <span class="text-[12px] text-[#61666B]">默认排序</span>
+            <i data-lucide="chevron-down" class="w-[12px] h-[12px] text-[#81858C]"></i>
+          </div>
+        </div>
+
+        <!-- 计数行（高 22px，上下各 6px 间距）：一枚 info 徽章「共 42 个条目（筛选后 8 个）」 -->
+        <div class="py-[6px] flex items-center shrink-0">
+          <span class="badge badge-info">共 42 个条目（筛选后 8 个）</span>
+        </div>
+
+        <!-- 条目列表：紧接计数行，行与行之间 1px #0000001A 分隔线，最后一行被卡片下沿裁切（露出半行内容），明确表示内部滚动 -->
+        <div class="flex-1 flex flex-col divide-y divide-subtle overflow-hidden">
+          
+          <!-- 1) 前端工程规范 -->
+          <div class="pt-[8px] pb-[8px] flex items-start justify-between shrink-0">
+            <div class="flex-1 min-w-0 pr-[8px]">
+              <!-- 第一行：名称 + 版本徽章 -->
+              <div class="flex items-center space-x-[6px] leading-[18px]">
+                <span class="text-[12.5px] font-[600] text-[#0F1115]">前端工程规范</span>
+                <span class="badge badge-info">1.4.0</span>
+              </div>
+              <!-- 第二行：作者 · 描述 -->
+              <div class="text-[12px] text-[#61666B] mt-[2px] truncate leading-[16px]">
+                xiajiajun516 · 统一 ESLint + Prettier + TS 严格档
+              </div>
+              <!-- 第三行：徽章行 (gap 4px) -->
+              <div class="flex items-center space-x-[4px] mt-[4px]">
+                <span class="badge badge-ok">官方配置</span>
+                <span class="badge badge-info">前端</span>
+                <span class="badge badge-ok">已缓存</span>
+                <span class="badge badge-info font-tabular">⭐ 128</span>
+              </div>
+            </div>
+            <!-- 右端：查看详情 -->
+            <button class="h-[26px] px-[8px] border border-subtle rounded-[8px] bg-[#FFFFFF] hover:bg-[#EBEEF2] text-[12px] text-[#0F1115] shrink-0 mt-[2px] transition-colors">
+              查看详情
+            </button>
+          </div>
+
+          <!-- 2) 终端工作流 -->
+          <div class="pt-[8px] pb-[8px] flex items-start justify-between shrink-0">
+            <div class="flex-1 min-w-0 pr-[8px]">
+              <!-- 第一行：名称 + 版本徽章 -->
+              <div class="flex items-center space-x-[6px] leading-[18px]">
+                <span class="text-[12.5px] font-[600] text-[#0F1115]">终端工作流</span>
+                <span class="badge badge-info">0.9.2</span>
+              </div>
+              <!-- 第二行：作者 · 描述 -->
+              <div class="text-[12px] text-[#61666B] mt-[2px] truncate leading-[16px]">
+                devtools-lab · zsh 别名、fzf 与 starship 预设
+              </div>
+              <!-- 第三行：徽章行 (gap 4px) -->
+              <div class="flex items-center space-x-[4px] mt-[4px]">
+                <span class="badge badge-warn">个人配置</span>
+                <span class="badge badge-info">终端</span>
+                <span class="badge badge-info">刚刚拉取</span>
+                <span class="badge badge-info font-tabular">⭐ 46</span>
+              </div>
+            </div>
+            <!-- 右端：查看详情 -->
+            <button class="h-[26px] px-[8px] border border-subtle rounded-[8px] bg-[#FFFFFF] hover:bg-[#EBEEF2] text-[12px] text-[#0F1115] shrink-0 mt-[2px] transition-colors">
+              查看详情
+            </button>
+          </div>
+
+          <!-- 3) 代码评审技能包 -->
+          <div class="pt-[8px] pb-[8px] flex items-start justify-between shrink-0">
+            <div class="flex-1 min-w-0 pr-[8px]">
+              <!-- 第一行：名称 + 版本徽章 -->
+              <div class="flex items-center space-x-[6px] leading-[18px]">
+                <span class="text-[12.5px] font-[600] text-[#0F1115]">代码评审技能包</span>
+                <span class="badge badge-info">2.1.0</span>
+              </div>
+              <!-- 第二行：作者 · 描述 -->
+              <div class="text-[12px] text-[#61666B] mt-[2px] truncate leading-[16px]">
+                xiajiajun516 · code-review 技能的 personas 与检查清单
+              </div>
+              <!-- 第三行：徽章行 (gap 4px) -->
+              <div class="flex items-center space-x-[4px] mt-[4px]">
+                <span class="badge badge-ok">官方配置</span>
+                <span class="badge badge-info">技能</span>
+                <span class="badge badge-ok">已缓存</span>
+                <span class="badge badge-info font-tabular">⭐ 96</span>
+              </div>
+            </div>
+            <!-- 右端：查看详情 -->
+            <button class="h-[26px] px-[8px] border border-subtle rounded-[8px] bg-[#FFFFFF] hover:bg-[#EBEEF2] text-[12px] text-[#0F1115] shrink-0 mt-[2px] transition-colors">
+              查看详情
+            </button>
+          </div>
+
+          <!-- 4) MCP 服务器合集 -->
+          <div class="pt-[8px] pb-[8px] flex items-start justify-between shrink-0">
+            <div class="flex-1 min-w-0 pr-[8px]">
+              <!-- 第一行：名称 + 版本徽章 -->
+              <div class="flex items-center space-x-[6px] leading-[18px]">
+                <span class="text-[12.5px] font-[600] text-[#0F1115]">MCP 服务器合集</span>
+                <span class="badge badge-info">0.3.1</span>
+              </div>
+              <!-- 第二行：作者 · 描述 -->
+              <div class="text-[12px] text-[#61666B] mt-[2px] truncate leading-[16px]">
+                mcp-collective · 常用 MCP server 一键导入
+              </div>
+              <!-- 第三行：徽章行 (gap 4px) -->
+              <div class="flex items-center space-x-[4px] mt-[4px]">
+                <span class="badge badge-warn">个人配置</span>
+                <span class="badge badge-info">MCP</span>
+                <span class="badge badge-warn">未缓存</span>
+                <span class="badge badge-info font-tabular">⭐ 21</span>
+              </div>
+            </div>
+            <!-- 右端：查看详情 -->
+            <button class="h-[26px] px-[8px] border border-subtle rounded-[8px] bg-[#FFFFFF] hover:bg-[#EBEEF2] text-[12px] text-[#0F1115] shrink-0 mt-[2px] transition-colors">
+              查看详情
+            </button>
+          </div>
+
+          <!-- 5) 中文写作指令集（这一行被卡片下沿裁切，只露出名称与半行徽章，明确表示内部滚动） -->
+          <div class="pt-[8px] pb-[8px] flex items-start justify-between shrink-0 opacity-90">
+            <div class="flex-1 min-w-0 pr-[8px]">
+              <!-- 第一行：名称 + 版本徽章 -->
+              <div class="flex items-center space-x-[6px] leading-[18px]">
+                <span class="text-[12.5px] font-[600] text-[#0F1115]">中文写作指令集</span>
+                <span class="badge badge-info">1.0.0</span>
+              </div>
+              <!-- 第三行：徽章行 -->
+              <div class="flex items-center space-x-[4px] mt-[4px]">
+                <span class="badge badge-ok">官方配置</span>
+                <span class="badge badge-ok">已缓存</span>
+              </div>
+            </div>
+            <!-- 右端：查看详情 -->
+            <button class="h-[26px] px-[8px] border border-subtle rounded-[8px] bg-[#FFFFFF] text-[12px] text-[#0F1115] shrink-0 mt-[2px]">
+              查看详情
+            </button>
+          </div>
+
+        </div>
+
+      </div>
+
+    </main>
+
+    <!-- 8. 底部状态栏：高 28px，左右内边距 14px，左侧状态点 + 文案，右侧「v0.8.0 · DSH 2.4」 -->
+    <footer class="h-[28px] px-[14px] flex items-center justify-between border-t border-subtle shrink-0 bg-[#FFFFFF]">
+      <div class="flex items-center space-x-[6px]">
+        <div class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></div>
+        <span class="text-[11px] text-[#61666B] font-tabular">就绪</span>
+      </div>
+      <div class="text-[11px] text-[#81858C] font-mono font-tabular">
+        v0.8.0 · DSH 2.4
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+    lucide.createIcons();
+  </script>
+</body>
+</html>

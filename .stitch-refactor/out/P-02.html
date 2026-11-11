@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=564, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 产物库</title>
+<!-- Lucide Icons -->
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+    /* Reset & Base */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      width: 564px;
+      height: 720px;
+      min-width: 564px;
+      max-width: 564px;
+      min-height: 720px;
+      max-height: 720px;
+      overflow: hidden;
+      background-color: #FFFFFF;
+      color: #0F1115;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 12.5px;
+      line-height: 1.5;
+      user-select: none;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .font-mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 顶部导航条: 高 32px */
+    .top-nav {
+      height: 32px;
+      min-height: 32px;
+      background: #FFFFFF;
+      border-bottom: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+    }
+
+    .tab-group {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .tab-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      height: 24px;
+      padding: 0 8px;
+      font-size: 12px;
+      color: #61666B;
+      border-radius: 999px;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+
+    .tab-item:hover {
+      background: rgba(38, 49, 72, 0.06);
+      color: #0F1115;
+    }
+
+    .tab-item.active {
+      background: #EBEEF2;
+      border: 0.5px solid #979DA6;
+      color: #0F1115;
+      font-weight: 500;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .icon-btn {
+      width: 24px;
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      background: transparent;
+      border: none;
+      color: #61666B;
+      cursor: pointer;
+    }
+
+    .icon-btn:hover {
+      background: rgba(38, 49, 72, 0.06);
+      color: #0F1115;
+    }
+
+    /* 过滤与搜索区 */
+    .filter-section {
+      padding: 10px 12px 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: #FFFFFF;
+      border-bottom: 0.5px solid #0000001A;
+    }
+
+    .chips-bar {
+      height: 24px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .filter-chip {
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: #61666B;
+      cursor: pointer;
+      background: transparent;
+      border: 0.5px solid transparent;
+      transition: all 0.1s;
+    }
+
+    .filter-chip:hover {
+      background: rgba(38, 49, 72, 0.05);
+      color: #0F1115;
+    }
+
+    .filter-chip.active {
+      background: #EBEEF2;
+      border: 0.5px solid #979DA6;
+      color: #0F1115;
+      font-weight: 500;
+    }
+
+    .chip-count {
+      font-size: 11px;
+      color: #81858C;
+      font-family: ui-monospace, monospace;
+    }
+
+    .filter-chip.active .chip-count {
+      color: #61666B;
+    }
+
+    /* 搜索框 */
+    .search-box {
+      height: 28px;
+      width: 100%;
+      border: 0.5px solid #0000001A;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      gap: 6px;
+      background: #FFFFFF;
+    }
+
+    .search-box:focus-within {
+      border-color: #4176E6;
+    }
+
+    .search-box input {
+      border: none;
+      outline: none;
+      background: transparent;
+      font-size: 12px;
+      color: #0F1115;
+      width: 100%;
+    }
+
+    .search-box input::placeholder {
+      color: #81858C;
+      font-size: 12px;
+    }
+
+    /* 产物列表区：吃满剩余高度，内部滚动 */
+    .product-list-container {
+      flex: 1;
+      overflow-y: scroll;
+      overflow-x: hidden;
+      background: #FFFFFF;
+      position: relative;
+    }
+
+    /* 自定义紧凑滚动条 */
+    .product-list-container::-webkit-scrollbar {
+      width: 6px;
+    }
+    .product-list-container::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .product-list-container::-webkit-scrollbar-thumb {
+      background: #EBEEF2;
+      border-radius: 3px;
+    }
+    .product-list-container::-webkit-scrollbar-thumb:hover {
+      background: #CCCCCC;
+    }
+
+    .product-item {
+      display: flex;
+      flex-direction: column;
+      border-bottom: 0.5px solid #0000001A;
+    }
+
+    .product-header-row {
+      height: 44px;
+      min-height: 44px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .product-header-row:hover {
+      background: rgba(38, 49, 72, 0.03);
+    }
+
+    .product-header-row.is-open {
+      background: #EBEEF2;
+    }
+
+    .row-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .type-icon {
+      color: #61666B;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .meta-content {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 1px;
+      min-width: 0;
+    }
+
+    .title-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .item-title {
+      font-size: 12.5px;
+      font-weight: 500;
+      color: #0F1115;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* 来源芯片 */
+    .source-badge {
+      font-size: 11px;
+      line-height: 1;
+      padding: 2px 5px;
+      border-radius: 4px;
+      white-space: nowrap;
+      font-weight: 400;
+    }
+
+    .badge-backup {
+      background: #EBEEF2;
+      color: #61666B;
+      border: 0.5px solid #D5D8DC;
+    }
+
+    .badge-local {
+      background: #EFF6FF;
+      color: #4176E6;
+      border: 0.5px solid #BFDBFE;
+    }
+
+    .badge-remote {
+      background: #FAF5FF;
+      color: #4176E6;
+      border: 0.5px solid #E9D5FF;
+    }
+
+    .badge-market {
+      background: #F0FDF4;
+      color: #22C55E;
+      border: 0.5px solid #BBF7D0;
+    }
+
+    .sub-meta {
+      font-size: 11px;
+      color: #81858C;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row-right {
+      display: flex;
+      align-items: center;
+      padding-left: 8px;
+      color: #81858C;
+      flex-shrink: 0;
+    }
+
+    /* 展开详情区：高 132px，背景 #EBEEF2 */
+    .expanded-drawer {
+      height: 132px;
+      background: #EBEEF2;
+      border-top: 0.5px dashed #00000014;
+      padding: 10px 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .drawer-info {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 2px 0;
+    }
+
+    .kv-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .kv-key {
+      color: #81858C;
+      width: 48px;
+      flex-shrink: 0;
+    }
+
+    .kv-val {
+      color: #0F1115;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      word-break: break-all;
+    }
+
+    .drawer-actions {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 8px;
+      width: 68px;
+      flex-shrink: 0;
+    }
+
+    /* 贴底底栏：高 40px，白底不透明，0.5px 顶边 */
+    .bottom-bar {
+      height: 40px;
+      min-height: 40px;
+      background: #FFFFFF;
+      border-top: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      z-index: 10;
+    }
+
+    .bottom-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .count-label {
+      font-size: 12px;
+      color: #61666B;
+    }
+
+    .warn-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: #FEF3C7;
+      color: #F59E0B;
+      border: 0.5px solid #FCD34D;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.2;
+    }
+
+    .info-icon {
+      color: #81858C;
+      display: flex;
+      align-items: center;
+    }
+
+    .bottom-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* 按钮规范 */
+    .btn {
+      height: 24px;
+      padding: 0 8px;
+      font-size: 11.5px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+      text-decoration: none;
+      transition: all 0.1s ease;
+    }
+
+    .btn-primary {
+      background: #0F1115;
+      color: #FFFFFF;
+      border: 0.5px solid #0F1115;
+      font-weight: 500;
+    }
+
+    .btn-primary:hover {
+      background: #43454A;
+      border-color: #43454A;
+    }
+
+    .btn-ghost {
+      background: #FFFFFF;
+      color: #0F1115;
+      border: 0.5px solid #0000001A;
+    }
+
+    .btn-ghost:hover {
+      background: rgba(38, 49, 72, 0.05);
+      border-color: #979DA6;
+    }
+
+    .btn-danger {
+      background: transparent;
+      color: #EC1313;
+      border: 0.5px solid #0000001A;
+    }
+
+    .btn-danger:hover {
+      background: #FEF2F2;
+      border-color: #F87171;
+    }
+
+    /* 底部状态栏：高 24px */
+    .status-bar {
+      height: 24px;
+      min-height: 24px;
+      background: #FFFFFF;
+      border-top: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      font-size: 11px;
+      color: #81858C;
+    }
+
+    .status-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #61666B;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #22C55E;
+    }
+
+    .status-right {
+      color: #81858C;
+      font-family: ui-monospace, monospace;
+      font-size: 10.5px;
+    }
+  </style>
+</head>
+<body style="width: 100vw; min-width: 100vw; max-width: 100vw; height: 100vh; min-height: 100vh; max-height: 100vh; overflow: hidden; background-color: #EBEEF2; display: flex; align-items: center; justify-content: center; margin: 0; padding: 0;"><div style="width: 564px; height: 720px; min-width: 564px; max-width: 564px; min-height: 720px; max-height: 720px; overflow: hidden; background-color: #FFFFFF; color: #0F1115; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 12.5px; line-height: 1.5; user-select: none; display: flex; flex-direction: column; border-radius: 8px; border: 1px solid rgba(0, 0, 0, 0.12); box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04); position: relative;">
+<!-- 1. 顶部导航条（高 32px） -->
+<header class="top-nav">
+<div class="tab-group">
+<a class="tab-item">
+<i data-lucide="home" style="width: 13px; height: 13px;"></i>
+<span>首页</span>
+</a>
+<a class="tab-item active">
+<i data-lucide="box" style="width: 13px; height: 13px;"></i>
+<span>产物库</span>
+</a>
+<a class="tab-item">
+<i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i>
+<span>同步</span>
+</a>
+<a class="tab-item">
+<i data-lucide="cpu" style="width: 13px; height: 13px;"></i>
+<span>环境</span>
+</a>
+</div>
+<div class="top-actions">
+<button class="icon-btn" title="⌘K 快速命令">
+<span class="font-mono" style="font-size: 11px; font-weight: 600;">⌘K</span>
+</button>
+<button class="icon-btn" title="最近活动">
+<i data-lucide="activity" style="width: 14px; height: 14px;"></i>
+</button>
+<button class="icon-btn" title="历史日志">
+<i data-lucide="history" style="width: 14px; height: 14px;"></i>
+</button>
+<button class="icon-btn" title="关于与帮助">
+<i data-lucide="help-circle" style="width: 14px; height: 14px;"></i>
+</button>
+</div>
+</header>
+<!-- 2. 筛选条与搜索框 -->
+<div class="filter-section">
+<!-- 横向 Chips 筛选条 -->
+<div class="chips-bar">
+<button class="filter-chip active">
+<span>全部</span>
+<span class="chip-count">16</span>
+</button>
+<button class="filter-chip">
+<span>备份文件</span>
+<span class="chip-count">12</span>
+</button>
+<button class="filter-chip">
+<span>本机快照</span>
+<span class="chip-count">37</span>
+</button>
+<button class="filter-chip">
+<span>远端快照</span>
+<span class="chip-count">3</span>
+</button>
+<button class="filter-chip">
+<span>市场</span>
+<span class="chip-count">2</span>
+</button>
+</div>
+<!-- 搜索框 -->
+<div class="search-box">
+<i data-lucide="search" style="width: 14px; height: 14px; color: #81858C; flex-shrink: 0;"></i>
+<input placeholder="搜索文件名、备注或分区" type="text"/>
+</div>
+</div>
+<!-- 3. 产物列表区 -->
+<main class="product-list-container">
+<!-- 第 1 行：备份文件 (已加密) -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="archive" style="width: 14px; height: 14px;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">backup-2026-11-10T2104.zip</span>
+<span class="source-badge badge-backup">本机备份</span>
+<i data-lucide="lock" style="width: 11px; height: 11px; color: #F59E0B;" title="AES-256 加密"></i>
+</div>
+<div class="sub-meta font-mono">2026-11-10 21:04 · 24.8 MB · 12 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+<!-- 第 2 行：本机快照（展开态） -->
+<div class="product-item">
+<div class="product-header-row is-open">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="camera" style="width: 14px; height: 14px; color: #4176E6;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">before-import</span>
+<span class="source-badge badge-local">本机快照</span>
+</div>
+<div class="sub-meta font-mono">2026-11-10 20:41 · 1,204 文件 · 8 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-down" style="width: 12px; height: 12px; color: #0F1115;"></i>
+</div>
+</div>
+<!-- 展开内容区：高 132px，三行键值 + 右侧 3 动作 -->
+<div class="expanded-drawer">
+<div class="drawer-info font-mono">
+<div class="kv-row">
+<span class="kv-key">路径</span>
+<span class="kv-val" title="~/.dsh/snapshots/before-import-20261110.snap">~/.dsh/snapshots/before-import-20261110.snap</span>
+</div>
+<div class="kv-row" style="align-items: flex-start;">
+<span class="kv-key">分区</span>
+<div class="kv-val" style="white-space: normal; line-height: 1.45;">
+<div>settings · providers · plugins · mcp · skills · sessions</div>
+<div>workspace · market</div>
+</div>
+</div>
+<div class="kv-row">
+<span class="kv-key">SHA-256</span>
+<span class="kv-val" title="4f9c1a2b8e70d4c5a6b8f1e2c3d4e5f67890abcdef1234567890abcdef123456">4f9c1a2b8e70d4c5a6b8f1e2c3d4e5f67890abcdef1234567890abcdef123456</span>
+</div>
+</div>
+<div class="drawer-actions">
+<button class="btn btn-ghost" style="width: 100%;">恢复</button>
+<button class="btn btn-ghost" style="width: 100%;">导入</button>
+<button class="btn btn-danger" style="width: 100%;">删除</button>
+</div>
+</div>
+</div>
+<!-- 第 3 行：备份文件 -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="archive" style="width: 14px; height: 14px;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">full-export.zip</span>
+<span class="source-badge badge-backup">本机备份</span>
+</div>
+<div class="sub-meta font-mono">2026-11-10 18:30 · 24.8 MB · 12 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+<!-- 第 4 行：远端快照 -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="cloud" style="width: 14px; height: 14px; color: #4176E6;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">gist:main-2026-11-09</span>
+<span class="source-badge badge-remote">远端快照</span>
+</div>
+<div class="sub-meta font-mono">昨天 18:20 · GitHub Gist · 3 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+<!-- 第 5 行：市场预设 -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="shopping-bag" style="width: 14px; height: 14px; color: #22C55E;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">前端全栈工具箱配置包</span>
+<span class="source-badge badge-market">市场</span>
+</div>
+<div class="sub-meta font-mono">11-08 14:10 · v1.2.0 · 5 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+<!-- 第 6 行：本机快照 -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="camera" style="width: 14px; height: 14px; color: #4176E6;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">before-sync</span>
+<span class="source-badge badge-local">本机快照</span>
+</div>
+<div class="sub-meta font-mono">11-07 19:30 · 1,190 文件 · 8 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+<!-- 第 7 行：备份文件 -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="archive" style="width: 14px; height: 14px;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">backup-2026-11-06.zip</span>
+<span class="source-badge badge-backup">本机备份</span>
+</div>
+<div class="sub-meta font-mono">11-06 12:00 · 22.1 MB · 10 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+<!-- 第 8 行：远端快照 -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="cloud" style="width: 14px; height: 14px; color: #4176E6;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">s3:backup-2026-11-05</span>
+<span class="source-badge badge-remote">远端快照</span>
+</div>
+<div class="sub-meta font-mono">11-05 03:00 · AWS S3 · 12 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+<!-- 第 9 行：本机快照 -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="camera" style="width: 14px; height: 14px; color: #4176E6;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">manual · 迁移前</span>
+<span class="source-badge badge-local">本机快照</span>
+</div>
+<div class="sub-meta font-mono">11-04 16:45 · 1,180 文件 · 8 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+<!-- 第 10 行：备份文件 -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="archive" style="width: 14px; height: 14px;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">pre-upgrade-0.6.9.zip</span>
+<span class="source-badge badge-backup">本机备份</span>
+</div>
+<div class="sub-meta font-mono">11-02 10:15 · 21.4 MB · 10 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+<!-- 第 11 行：市场预设 -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="shopping-bag" style="width: 14px; height: 14px; color: #22C55E;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">团队核心研发同步预设</span>
+<span class="source-badge badge-market">市场</span>
+</div>
+<div class="sub-meta font-mono">10-30 09:20 · v0.9.1 · 4 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+<!-- 第 12 行：备份文件 -->
+<div class="product-item">
+<div class="product-header-row">
+<div class="row-left">
+<div class="type-icon"><i data-lucide="archive" style="width: 14px; height: 14px;"></i></div>
+<div class="meta-content">
+<div class="title-line">
+<span class="item-title">archive-2026-10-25.zip</span>
+<span class="source-badge badge-backup">本机备份</span>
+</div>
+<div class="sub-meta font-mono">10-25 22:00 · 19.8 MB · 9 个分区</div>
+</div>
+</div>
+<div class="row-right">
+<i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i>
+</div>
+</div>
+</div>
+</main>
+<!-- 4. 贴底底栏（高 40px） -->
+<footer class="bottom-bar">
+<div class="bottom-left">
+<span class="count-label">共 16 个</span>
+<span class="warn-badge">
+<i data-lucide="shield-alert" style="width: 11px; height: 11px;"></i>
+<span>1 个加密</span>
+</span>
+<span class="info-icon" title="来源包含本机备份、快照、远端同步与市场预设">
+<i data-lucide="info" style="width: 13px; height: 13px;"></i>
+</span>
+</div>
+<div class="bottom-actions">
+<button class="btn btn-primary">导出</button>
+<button class="btn btn-ghost">导入</button>
+<button class="btn btn-ghost">逛市场</button>
+<button class="btn btn-ghost">发布到市场</button>
+</div>
+</footer>
+<!-- 5. 底部状态栏（高 24px） -->
+<div class="status-bar">
+<div class="status-left">
+<span class="status-dot"></span>
+<span>就绪 · 4 个来源已同步</span>
+</div>
+<div class="status-right font-mono">
+      v0.8.0 · DSH 2.4
+    </div>
+</div>
+</div>
+<script>if (window.lucide) { lucide.createIcons(); }</script></body>
+</html>

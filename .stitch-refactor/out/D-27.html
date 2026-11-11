@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-27 版本更新弹窗</title>
+<style>
+    /* 严格遵循 BASE 统一设计规范 */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #EBECEF;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      overflow: hidden;
+      color: #0F1115;
+    }
+
+    /* 564x720 纯竖版插件画布容器 */
+    .plugin-canvas {
+      width: 564px;
+      height: 720px;
+      background-color: #FFFFFF;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    }
+
+    /* 底层关于页：三段外壳结构 */
+    .underlying-page {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background-color: #FFFFFF;
+    }
+
+    /* 顶部 32px 导航条 */
+    .top-nav {
+      height: 32px;
+      border-bottom: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      background-color: #FFFFFF;
+      flex-shrink: 0;
+    }
+
+    .nav-tabs {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .nav-tab {
+      font-size: 12px;
+      color: #61666B;
+      text-decoration: none;
+      cursor: default;
+    }
+
+    .nav-icons {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #81858C;
+    }
+
+    .icon-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+    }
+
+    /* 中间关于页内容骨架结构（压暗不可读但结构真实） */
+    .about-content {
+      flex: 1;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow: hidden;
+    }
+
+    .about-card {
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .about-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .about-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #0F1115;
+    }
+
+    .about-badge {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #EBEEF2;
+      color: #61666B;
+    }
+
+    .about-btn-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .about-ghost-btn {
+      height: 28px;
+      padding: 0 10px;
+      border: 0.5px solid #0000001A;
+      border-radius: 8px;
+      background: #FFFFFF;
+      font-size: 12px;
+      color: #0F1115;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .about-text-p {
+      font-size: 12px;
+      line-height: 1.5;
+      color: #61666B;
+    }
+
+    /* 底部 28px 状态栏 */
+    .status-bar {
+      height: 28px;
+      border-top: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      background-color: #FFFFFF;
+      flex-shrink: 0;
+      font-size: 11px;
+      color: #81858C;
+    }
+
+    .status-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background-color: #22C55E;
+    }
+
+    /* 遮罩全铺 #0000003D */
+    .modal-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 564px;
+      height: 720px;
+      background-color: #0000003D;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+    }
+
+    /* 弹窗宽 540px，居中，圆角 12px，白底，1px 描边 */
+    .update-dialog {
+      width: 540px;
+      max-height: 612px;
+      background-color: #FFFFFF;
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+      overflow: hidden;
+    }
+
+    /* Header：上 12 左右 14 */
+    .dialog-header {
+      padding: 12px 14px 4px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .header-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #0F1115;
+      line-height: 1.25;
+    }
+
+    .close-btn {
+      width: 14px;
+      height: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: #81858C;
+      transition: color 0.1s ease;
+    }
+
+    .close-btn:hover {
+      color: #0F1115;
+    }
+
+    /* Body：上 8 左右 16 下 12，超出时内滚 */
+    .dialog-body {
+      padding: 6px 16px 12px 16px;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    /* 版本行（在 Header 之下，上间距 6、下间距 10，行内 gap 8） */
+    .version-flow-row {
+      margin-top: 2px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .version-prev {
+      font-size: 12px;
+      color: #81858C;
+    }
+
+    .version-arrow {
+      color: #81858C;
+      display: flex;
+      align-items: center;
+    }
+
+    .version-next {
+      font-size: 13px;
+      font-weight: 600;
+      color: #4176E6;
+    }
+
+    /* 提示条：警告 tint（#F59E0B 12% 底 + 同色 1px 描边），圆角 8px，内距 8px 10px */
+    .warning-notice-bar {
+      background-color: rgba(245, 158, 11, 0.12);
+      border: 1px solid #F59E0B;
+      border-radius: 8px;
+      padding: 8px 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .warning-icon {
+      color: #F59E0B;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+    }
+
+    .warning-text {
+      font-size: 12.5px;
+      line-height: 1.4;
+      color: #0F1115;
+    }
+
+    /* 发布说明正文区块 */
+    .release-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: #FFFFFF;
+    }
+
+    .release-version-title {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: #61666B;
+      line-height: 1.3;
+    }
+
+    .release-lead {
+      font-size: 13px;
+      font-weight: 600;
+      color: #0F1115;
+      line-height: 1.5;
+    }
+
+    .release-paragraph {
+      font-size: 13px;
+      line-height: 1.5;
+      color: #0F1115;
+    }
+
+    /* 无序列表两项（弱色 • 前导、文字左缩进 14px） */
+    .release-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 2px;
+    }
+
+    .release-list-item {
+      display: flex;
+      align-items: flex-start;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #0F1115;
+      padding-left: 2px;
+    }
+
+    .list-bullet {
+      color: #81858C;
+      margin-right: 6px;
+      font-size: 14px;
+      line-height: 1.4;
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    .list-text {
+      flex: 1;
+    }
+
+    .list-bold {
+      font-weight: 600;
+      color: #0F1115;
+    }
+
+    /* 正文底部的两个链接按钮（上间距 10px，横向 gap 8px） */
+    .github-links-row {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ghost-link-btn {
+      height: 28px;
+      padding: 0 10px;
+      border: 0.5px solid #0000001A;
+      border-radius: 8px;
+      background: #FFFFFF;
+      font-size: 13px;
+      color: #0F1115;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background-color 0.1s ease;
+    }
+
+    .ghost-link-btn:hover {
+      background-color: #EBEEF2;
+    }
+
+    .ghost-link-btn svg {
+      color: #61666B;
+    }
+
+    /* Footer：上 10 左右 16 下 14，带 0.5px #0000001A 上边框，右对齐 gap 8px */
+    .dialog-footer {
+      padding: 10px 16px 14px 16px;
+      border-top: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      background: #FFFFFF;
+      flex-shrink: 0;
+    }
+
+    .btn-ghost {
+      height: 28px;
+      padding: 0 12px;
+      border: 0.5px solid #0000001A;
+      border-radius: 8px;
+      background: #FFFFFF;
+      font-size: 12.5px;
+      color: #0F1115;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.1s ease;
+    }
+
+    .btn-ghost:hover {
+      background-color: #EBEEF2;
+    }
+
+    .btn-primary {
+      height: 28px;
+      padding: 0 14px;
+      border: none;
+      border-radius: 8px;
+      background: #0F1115;
+      color: #FFFFFF;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.1s ease;
+    }
+
+    .btn-primary:hover {
+      background-color: #43454A;
+    }
+  </style>
+</head>
+<body>
+<!-- 564×720 画布 -->
+<div class="plugin-canvas">
+<!-- 底层关于页（结构真实但整体在遮罩下压暗） -->
+<div class="underlying-page">
+<!-- 顶导航 -->
+<div class="top-nav">
+<div class="nav-tabs">
+<span class="nav-tab">首页</span>
+<span class="nav-tab">产物库</span>
+<span class="nav-tab">同步</span>
+<span class="nav-tab" style="color: #0F1115; font-weight: 500;">环境</span>
+</div>
+<div class="nav-icons">
+<!-- ⌘K 命令面板 -->
+<div class="icon-btn">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+</div>
+<!-- 活动 -->
+<div class="icon-btn">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+</div>
+<!-- 历史 -->
+<div class="icon-btn">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+</div>
+<!-- 关于 -->
+<div class="icon-btn" style="color: #0F1115;">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</div>
+</div>
+<!-- 关于页内容区 -->
+<div class="about-content"><div class="about-card" style="gap: 14px;"><div class="about-title-row" style="justify-content: flex-start; gap: 8px; align-items: center;"><span class="about-title" style="font-size: 15px;">Config Manager</span><span class="about-badge" style="background: rgba(34, 197, 94, 0.12); color: #16a34a; font-weight: 500;">官方</span><span class="about-badge" style="background: rgba(65, 118, 230, 0.12); color: #4176e6; font-weight: 500;">版本 0.8.0</span><span class="about-badge" style="background: rgba(65, 118, 230, 0.12); color: #4176e6; font-weight: 500;">DSH 2.4</span></div><div style="display: flex; flex-direction: column; gap: 6px;"><div style="font-size: 11px; font-weight: 500; color: #81858c;">更新</div><div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #f8fafc; border: 1px solid rgba(0,0,0,0.06); border-radius: 8px;"><div style="display: flex; align-items: center; gap: 8px;"><span style="font-size: 12.5px; color: #0f1115; font-weight: 500;">当前版本 0.8.0</span><span class="about-badge" style="background: rgba(245, 158, 11, 0.12); color: #d97706; font-weight: 500;">有新版本 v0.9.0</span></div><div style="display: flex; align-items: center; gap: 6px;"><button class="about-ghost-btn" style="cursor: default;" type="button">重新检查</button><button class="btn-primary" style="height: 28px; font-size: 12px; padding: 0 10px; cursor: default;" type="button">立即更新</button></div></div></div><div style="display: flex; flex-direction: column; gap: 6px;"><div style="font-size: 11px; font-weight: 500; color: #81858c;">链接</div><div class="about-btn-row" style="flex-wrap: wrap; gap: 6px;"><div class="about-ghost-btn">Star</div><div class="about-ghost-btn">GitHub 仓库</div><div class="about-ghost-btn">文档</div><div class="about-ghost-btn">反馈</div><div class="about-ghost-btn">更新内容</div></div></div></div></div>
+<!-- 底部状态栏 -->
+<div class="status-bar">
+<div class="status-left">
+<div class="status-dot"></div>
+<span>就绪</span>
+</div>
+<div>v0.8.0 · DSH 2.4</div>
+</div>
+</div>
+<!-- 遮罩层 #0000003D 全铺 -->
+<div class="modal-overlay" style="position: absolute; inset: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.24); display: flex; align-items: center; justify-content: center; z-index: 50;">
+<!-- 居中版本更新弹窗（宽 540px，最大高 612px，圆角 12px） -->
+<div class="update-dialog">
+<!-- Header：左标题「更新到 v0.9.0」，13px / 600 / #0F1115；右端 14px 线性关闭 ✕ -->
+<div class="dialog-header">
+<div class="header-title">更新到 v0.9.0</div>
+<div aria-label="关闭" class="close-btn">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</div>
+</div>
+<!-- Body：超出时自身内滚 -->
+<div class="dialog-body">
+<!-- 版本行：弱色小字「当前版本 0.8.0」+ 14px 箭头「→」+ 强调色 13px / 600 的「0.9.0」 -->
+<div class="version-flow-row">
+<span class="version-prev">当前版本 0.8.0</span>
+<div class="version-arrow">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<line x1="5" x2="19" y1="12" y2="12"></line>
+<polyline points="12 5 19 12 12 19"></polyline>
+</svg>
+</div>
+<span class="version-next">0.9.0</span>
+</div>
+<!-- 提示条：警告 tint（#F59E0B 12% 底 + 同色 1px 描边），圆角 8px，内距 8px 10px，左侧 14px 三角警示图标 -->
+<div class="warning-notice-bar">
+<div class="warning-icon">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="14">
+<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+<line x1="12" x2="12" y1="9" y2="13"></line>
+<line x1="12" x2="12.01" y1="17" y2="17"></line>
+</svg>
+</div>
+<div class="warning-text">未找到 v0.9.0 的发布说明，以下为最新一条发布内容。</div>
+</div>
+<!-- 发布说明正文（13px / 行高 1.5 / 块间 6px） -->
+<div class="release-section">
+<!-- 1) 小标题「v0.8.0 · 2026-11-10」，12.5px / 600 / #61666B -->
+<div class="release-version-title">v0.8.0 · 2026-11-10</div>
+<!-- 2) 加粗导语「远端删掉的插件，同步时也跟着删」 -->
+<div class="release-lead">远端删掉的插件，同步时也跟着删</div>
+<!-- 3) 段落「插件同步多了个默认关闭的开关...」 -->
+<div class="release-paragraph">
+              插件同步多了个默认关闭的开关，打开后远端删了什么、你这儿没改过的一并卸载，删掉的都能从当轮快照装回。
+            </div>
+<!-- 4) 无序列表两项（弱色 • 前导、文字左缩进 14px） -->
+<div class="release-list">
+<div class="release-list-item">
+<span class="list-bullet">•</span>
+<span class="list-text">
+<span class="list-bold">同步可以跟随远端删除插件（默认关）</span>：勾上开关后，远端删掉、你这边没改过的插件会在合并/自动同步时一起卸载，并在报告里逐项列明「已删除：包@版本」。
+                </span>
+</div>
+<div class="release-list-item">
+<span class="list-bullet">•</span>
+<span class="list-text">
+                  被删的包会记进当轮快照，恢复快照时自动装回同一版本。
+                </span>
+</div>
+</div>
+</div>
+<!-- 正文底部的两个链接按钮（上间距 10px，横向 gap 8px） -->
+<div class="github-links-row">
+<a class="ghost-link-btn" href="#">
+<span>在 GitHub 查看此版本</span>
+<svg fill="none" height="12" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="12">
+<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+<polyline points="15 3 21 3 21 9"></polyline>
+<line x1="10" x2="21" y1="14" y2="3"></line>
+</svg>
+</a>
+<a class="ghost-link-btn" href="#">
+<span>在 GitHub 查看全部版本</span>
+<svg fill="none" height="12" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="12">
+<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+<polyline points="15 3 21 3 21 9"></polyline>
+<line x1="10" x2="21" y1="14" y2="3"></line>
+</svg>
+</a>
+</div>
+</div>
+<!-- Footer：右对齐 gap 8px，左边「取消」ghost，右边主按钮「立即更新」（#0F1115 实底、白字、高 28px、圆角 8px） -->
+<div class="dialog-footer">
+<button class="btn-ghost" type="button">取消</button>
+<button class="btn-primary" type="button">立即更新</button>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

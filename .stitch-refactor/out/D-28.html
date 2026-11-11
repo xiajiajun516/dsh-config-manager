@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-28 版本更新内容弹窗</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    /* 自定义滚动条 */
+    ::-webkit-scrollbar {
+      width: 4px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #0000001A;
+      border-radius: 999px;
+    }
+  </style>
+</head>
+<body class="bg-[#F0F2F5] min-h-screen flex items-center justify-center p-0 select-none">
+<!-- 插件内容区画布 564×720 -->
+<div class="relative w-[564px] h-[720px] bg-[#FFFFFF] overflow-hidden flex flex-col justify-between border border-[#0000001A] shadow-none">
+<!-- 1. 顶部导航条（32px） -->
+<header class="h-8 min-h-[32px] px-3.5 bg-[#FFFFFF] border-b border-[#0000001A] flex items-center justify-between z-0">
+<nav class="flex items-center gap-1.5 text-[12px] leading-none">
+<span class="px-2 py-1 text-[#61666B] rounded-[8px]">首页</span>
+<span class="px-2 py-1 text-[#61666B] rounded-[8px]">产物库</span>
+<span class="px-2 py-1 text-[#61666B] rounded-[8px]">同步</span>
+<span class="px-2 py-1 bg-[#EBEEF2] border border-[#979DA6] text-[#0F1115] font-medium rounded-[8px]">环境</span>
+</nav>
+<!-- 右侧 4 个图标按钮 -->
+<div class="flex items-center gap-2 text-[#81858C]">
+<!-- ⌘K 命令面板 -->
+<span class="text-[11px] mono border border-[#0000001A] px-1 py-0.5 rounded-[4px] leading-none">⌘K</span>
+<!-- 活动 -->
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-width="1.8" viewbox="0 0 24 24">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史 -->
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于 -->
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</header>
+<!-- 2. 中间内容区底板（灰阶示意卡片轮廓，绝不出现敏感文本） -->
+<main class="flex-1 p-3 flex flex-col gap-2.5 z-0 bg-[#FFFFFF]">
+<div class="h-6 w-32 bg-[#F0F2F5] rounded-[4px]"></div>
+<div class="flex-1 border border-[#0000001A] rounded-[8px] p-3 flex flex-col gap-2.5 bg-[#FFFFFF]">
+<div class="h-4 w-48 bg-[#F0F2F5] rounded-[4px]"></div>
+<div class="h-3 w-full bg-[#F0F2F5] rounded-[4px]"></div>
+<div class="h-3 w-5/6 bg-[#F0F2F5] rounded-[4px]"></div>
+<div class="h-10 border border-[#0000001A] rounded-[6px] bg-[#F7F9FB]"></div>
+<div class="h-10 border border-[#0000001A] rounded-[6px] bg-[#F7F9FB]"></div>
+<div class="h-10 border border-[#0000001A] rounded-[6px] bg-[#F7F9FB]"></div>
+</div>
+</main>
+<!-- 3. 底部状态栏（28px，内缩悬浮样式） -->
+<footer class="h-7 min-h-[28px] mx-2 mb-2 px-2.5 bg-[#FFFFFF] border border-[#0000001A] rounded-[8px] flex items-center justify-between text-[11px] text-[#81858C] z-0">
+<div class="flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span>就绪 · 远程可选</span>
+</div>
+<div class="tabular-nums mono text-[11px] text-[#81858C]">
+        v0.8.0 · DSH 2.4
+      </div>
+</footer>
+<!-- 全局遮罩层 #0000003D 盖满 564×720 画布 -->
+<div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-3">
+<!-- D-28 弹窗本体：540px 宽，最大高 85vh（约 600px），白底，1px 描边，圆角 12 -->
+<div class="w-[540px] bg-[#FFFFFF] border border-[#0000001A] rounded-[12px] flex flex-col overflow-hidden select-text">
+<!-- 标题区 48px -->
+<div class="h-12 min-h-[48px] px-4 border-b border-[#0000001A] flex items-center justify-between bg-[#FFFFFF]">
+<h2 class="text-[13px] font-semibold text-[#0F1115] leading-none">版本更新内容</h2>
+<button class="w-6 h-6 flex items-center justify-center text-[#81858C] hover:text-[#0F1115] rounded-[4px] hover:bg-[#00000008] transition-colors" title="关闭">
+<svg class="w-3.5 h-3.5 stroke-current" fill="none" stroke-width="2" viewbox="0 0 24 24">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</button>
+</div>
+<!-- 内容区（内边距 12px 16px，纵向 10px 间距，卡片流内滚） -->
+<div class="overflow-y-auto px-4 py-3 flex flex-col gap-2.5">
+<!-- 版本卡 1：v0.8.0 -->
+<article class="border border-[#0000001A] rounded-[8px] p-2.5 bg-[#FFFFFF] flex flex-col gap-2">
+<!-- 卡头 -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="text-[13px] font-semibold text-[#0F1115] mono tabular-nums">v0.8.0</span>
+<!-- 最新徽章 (ok色 #22C55E，color-mix 12% 底，35% 描边) -->
+<span class="text-[11px] leading-none px-1.5 py-0.5 rounded-[4px] font-medium bg-[color-mix(in_srgb,#22C55E_12%,transparent)] text-[#22C55E] border border-[color-mix(in_srgb,#22C55E_35%,transparent)]">
+                  最新
+                </span>
+<time class="text-[11px] text-[#81858C] mono tabular-nums">2026-11-09</time>
+</div>
+<!-- ghost 外链按钮 -->
+<a class="inline-flex items-center gap-1 text-[11px] text-[#61666B] hover:text-[#0F1115] px-2 py-1 rounded-[6px] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors leading-none" href="#">
+<span>在 GitHub 上查看此版本</span>
+<span class="text-[10px]">↗</span>
+</a>
+</div>
+<!-- 卡身 Markdown 要点行 -->
+<ul class="flex flex-col gap-1.5 pt-0.5">
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>新增：命令面板 ⌘K，21 条命令直达</span>
+</li>
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>优化：同步差异确认逐项勾选</span>
+</li>
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>修复：恢复计划在 Windows 短路径下的误判</span>
+</li>
+</ul>
+</article>
+<!-- 版本卡 2：v0.7.2 -->
+<article class="border border-[#0000001A] rounded-[8px] p-2.5 bg-[#FFFFFF] flex flex-col gap-2">
+<!-- 卡头 -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="text-[13px] font-semibold text-[#0F1115] mono tabular-nums">v0.7.2</span>
+<time class="text-[11px] text-[#81858C] mono tabular-nums">2026-10-21</time>
+</div>
+<!-- ghost 外链按钮 -->
+<a class="inline-flex items-center gap-1 text-[11px] text-[#61666B] hover:text-[#0F1115] px-2 py-1 rounded-[6px] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors leading-none" href="#">
+<span>在 GitHub 上查看此版本</span>
+<span class="text-[10px]">↗</span>
+</a>
+</div>
+<!-- 卡身 Markdown 要点行 -->
+<ul class="flex flex-col gap-1.5 pt-0.5">
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>新增：备份排期与磁盘清理建议</span>
+</li>
+<li class="flex items-start gap-2 text-[12.5px] leading-snug text-[#0F1115]">
+<span class="w-1.5 h-1.5 rounded-full bg-[#4176E6] mt-1.5 shrink-0"></span>
+<span>修复：加密容器未解锁时的错误码</span>
+</li>
+</ul>
+</article>
+<!-- 末尾居中 11px 次要色文字 -->
+<div class="pt-1 pb-1 flex items-center justify-center"><span class="text-[11px] text-[#61666B] leading-none">已加载全部版本记录</span></div>
+</div>
+<!-- 底部 actionRow：高 48px，上边框 1px #0000001A -->
+<div class="h-12 min-h-[48px] px-4 border-t border-[#0000001A] flex items-center justify-between bg-[#FFFFFF]">
+<!-- 左侧：查看全部 Releases 外链按钮 -->
+<a class="inline-flex items-center gap-1 h-7 px-2.5 text-[12px] text-[#61666B] hover:text-[#0F1115] rounded-[6px] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors leading-none" href="#">
+<span>在 GitHub 上查看全部 Releases</span>
+<span class="text-[11px]">↗</span>
+</a>
+<!-- 右侧组：永不提示 (ghost) + 确认 (primary) -->
+<div class="flex items-center gap-2">
+<button class="h-7 px-3 text-[12px] text-[#61666B] hover:text-[#0F1115] rounded-[8px] border border-[#0000001A] hover:bg-[#EBEEF2] transition-colors leading-none">
+              永不提示
+            </button>
+<button class="h-7 px-4 text-[12px] font-medium text-[#FFFFFF] bg-[#0F1115] hover:bg-[#43454A] rounded-[8px] transition-colors leading-none">
+              确认
+            </button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

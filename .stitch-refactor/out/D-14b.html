@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 D-14b 选择要同步的历史对话</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body class="bg-[#EBEEF2] min-h-screen flex items-center justify-center p-0 m-0">
+<!-- 564x720 完整插件画布 (外壳与内容压暗，浅灰 #EBEEF2) -->
+<div class="w-[564px] h-[720px] bg-[#EBEEF2] relative overflow-hidden flex flex-col justify-between border border-[#0000001A] shadow-none select-none">
+<!-- 1. 顶部导航条 (44px, 压暗态背景 #EBEEF2，文字与图标为 #61666B) -->
+<header class="w-full h-[44px] bg-[#EBEEF2] border-b border-[#0000001A] px-[16px] flex items-center justify-between z-0">
+<!-- 左侧页签 (纯文字) -->
+<nav class="flex items-center gap-[20px]">
+<span class="text-[12.5px] text-[#61666B] font-normal cursor-default">首页</span>
+<span class="text-[12.5px] text-[#61666B] font-normal cursor-default">产物库</span>
+<div class="relative py-[11px]">
+<span class="text-[12.5px] text-[#0F1115] font-medium cursor-default">同步</span>
+<!-- 激活下划线 -->
+<div class="absolute bottom-0 left-0 right-0 h-[2px] bg-[#0F1115] rounded-full"></div>
+</div>
+<span class="text-[12.5px] text-[#61666B] font-normal cursor-default">环境</span>
+</nav>
+<!-- 右端 4 个图标按钮 (14px, #61666B) -->
+<div class="flex items-center gap-[12px] text-[#61666B]">
+<!-- ⌘K 命令面板 -->
+<span class="text-[11px] font-mono tracking-tight cursor-default">⌘K</span>
+<!-- 活动 (Activity 折线) -->
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史 (时钟) -->
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于 (Info 圆圈) -->
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</header>
+<!-- 2. 中间底层内容区 (示意背景：通道卡片等被压暗淡出在底层) -->
+<main class="flex-1 w-full p-[16px] flex flex-col gap-[10px] bg-[#EBEEF2] opacity-40 pointer-events-none">
+<div class="w-full h-[36px] bg-[#FFFFFF] border border-[#0000001A] rounded-[8px] flex items-center px-[12px] justify-between">
+<div class="flex items-center gap-[8px]">
+<span class="text-[12px] text-[#61666B]">Git 仓库</span>
+<span class="text-[11px] bg-[color-mix(in srgb, #22C55E 12%, transparent)] text-[#22C55E] px-[6px] py-[1px] rounded-[4px]">已连接</span>
+</div>
+<span class="text-[11px] text-[#81858C]">上次同步 19:52</span>
+</div>
+<div class="w-full h-[120px] bg-[#FFFFFF] border border-[#0000001A] rounded-[12px]"></div>
+<div class="w-full h-[120px] bg-[#FFFFFF] border border-[#0000001A] rounded-[12px]"></div>
+<div class="w-full h-[120px] bg-[#FFFFFF] border border-[#0000001A] rounded-[12px]"></div>
+</main>
+<!-- 3. 底部状态栏 (28px, 压暗态背景 #EBEEF2) -->
+<footer class="w-full h-[28px] bg-[#EBEEF2] border-t border-[#0000001A] px-[16px] flex items-center justify-between text-[#61666B] z-0">
+<div class="flex items-center gap-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span class="text-[11px]">就绪</span>
+</div>
+<span class="text-[11px] font-mono tracking-tight">v0.8.0 · DSH 2.4</span>
+</footer>
+<!-- 4. D-14b 弹窗本体 (纯白高亮，水平垂直居中，宽 541px，高约 540px，圆角 16px，1px #0000001A 描边，无投影) -->
+<div class="absolute inset-0 flex items-center justify-center pointer-events-auto z-10 p-[12px]">
+<section class="w-[541px] bg-[#FFFFFF] rounded-[16px] border border-[#0000001A] flex flex-col overflow-hidden relative">
+<!-- 弹窗标题行 (40px, padding 12px 14px 0) -->
+<div class="w-full h-[40px] pt-[12px] px-[14px] pb-0 flex items-center justify-between shrink-0">
+<div class="flex items-center gap-[6px]">
+<h2 class="text-[13px] font-[500] text-[#0F1115] leading-[1.25]">选择要同步的历史对话</h2>
+<!-- 14px ⓘ 图标 (距标题 6px) -->
+<button aria-label="说明" class="text-[#81858C] hover:text-[#0F1115] transition-colors" type="button">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</button>
+</div>
+<!-- 最右端 14px ✕ (距弹窗右边缘 16px，即外容器 14px + 内边距微调) -->
+<button aria-label="关闭" class="text-[#81858C] hover:text-[#0F1115] pr-[2px] transition-colors" type="button">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</button>
+</div>
+<!-- 弹窗正文区 (430px, pt 8px px 16px pb 0, 独立内滚且超高下沿干净切断) -->
+<div class="w-full pt-[8px] px-[16px] flex flex-col overflow-y-auto shrink-0 relative p-[12px]">
+<!-- 工具条 (高 32px，水平排布：搜索框 + 全选 + 清空 + 合计) -->
+<div class="w-full h-[32px] flex items-center justify-between shrink-0 mb-[8px]">
+<!-- 搜索框 (宽 240px、高 30px、圆角 8px、1px #0000001A 描边、白底) -->
+<div class="w-[240px] h-[30px] bg-[#FFFFFF] border border-[#0000001A] rounded-[8px] flex items-center px-[8px] gap-[6px]">
+<!-- 14px 放大镜 -->
+<svg class="w-[14px] h-[14px] text-[#81858C] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<circle cx="11" cy="11" r="8"></circle>
+<line x1="21" x2="16.65" y1="21" y2="16.65"></line>
+</svg>
+<input class="w-full text-[12px] text-[#0F1115] placeholder-[#81858C] bg-transparent outline-none border-none p-0" placeholder="搜索会话…" type="text"/>
+</div>
+<!-- 右侧快捷操作与计数行 -->
+<div class="flex items-center gap-[12px]">
+<div class="flex items-center gap-[8px]">
+<button class="text-[12px] text-[#0F1115] hover:text-[#4176E6] transition-colors" type="button">全选</button>
+<span class="text-[11px] text-[#0000001A]">|</span>
+<button class="text-[12px] text-[#61666B] hover:text-[#EC1313] transition-colors" type="button">清空</button>
+</div>
+<!-- 灰色合计文字 -->
+<span class="text-[11px] text-[#81858C] tabular-nums font-mono">已选 3 / 128</span>
+</div>
+</div>
+<!-- 会话树列表 (平铺列表，不套卡片) -->
+<div class="w-full flex flex-col">
+<!-- 分组 1: dsh-config-manager -->
+<div class="w-full flex items-center gap-[6px] h-[26px] mt-[4px]">
+<!-- 14px 展开箭头 (向下展开) -->
+<svg class="w-[14px] h-[14px] text-[#81858C] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<polyline points="6 9 12 15 18 9"></polyline>
+</svg>
+<span class="text-[12px] font-medium text-[#81858C] font-mono">dsh-config-manager</span>
+</div>
+<!-- 分组 1 包含 4 行会话 (2 勾选，2 未勾选) -->
+<!-- 行 1: 已勾选 -->
+<div class="w-full h-[30px] flex items-center justify-between border-b border-[#0000001A] pl-[20px] pr-[4px]">
+<div class="flex items-center gap-[8px] overflow-hidden">
+<!-- 16px 黑色实心勾选框 (圆角 4px) -->
+<div class="w-[16px] h-[16px] rounded-[4px] bg-[#0F1115] flex items-center justify-center shrink-0">
+<svg class="w-[11px] h-[11px] text-[#FFFFFF]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" viewbox="0 0 24 24">
+<polyline points="20 6 9 17 4 12"></polyline>
+</svg>
+</div>
+<span class="text-[12.5px] text-[#0F1115] truncate">重构回滚点台账与恢复预览功能实现</span>
+</div>
+<span class="text-[11px] text-[#81858C] font-mono tabular-nums shrink-0 ml-[8px]">今天 22:41</span>
+</div>
+<!-- 行 2: 已勾选 -->
+<div class="w-full h-[30px] flex items-center justify-between border-b border-[#0000001A] pl-[20px] pr-[4px]">
+<div class="flex items-center gap-[8px] overflow-hidden">
+<!-- 16px 黑色实心勾选框 (圆角 4px) -->
+<div class="w-[16px] h-[16px] rounded-[4px] bg-[#0F1115] flex items-center justify-center shrink-0">
+<svg class="w-[11px] h-[11px] text-[#FFFFFF]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" viewbox="0 0 24 24">
+<polyline points="20 6 9 17 4 12"></polyline>
+</svg>
+</div>
+<span class="text-[12.5px] text-[#0F1115] truncate">Git 分区同步哈希校验与增量拉取流程排查</span>
+</div>
+<span class="text-[11px] text-[#81858C] font-mono tabular-nums shrink-0 ml-[8px]">昨天 18:32</span>
+</div>
+<!-- 行 3: 未勾选 -->
+<div class="w-full h-[30px] flex items-center justify-between border-b border-[#0000001A] pl-[20px] pr-[4px]">
+<div class="flex items-center gap-[8px] overflow-hidden">
+<!-- 16px 空心描边方框 (圆角 4px, 1px #979DA6) -->
+<div class="w-[16px] h-[16px] rounded-[4px] bg-[#FFFFFF] border border-[#979DA6] shrink-0"></div>
+<span class="text-[12.5px] text-[#61666B] truncate">定损模型提示词微调及 JSON 响应兼容性适配</span>
+</div>
+<span class="text-[11px] text-[#81858C] font-mono tabular-nums shrink-0 ml-[8px]">11-08 14:10</span>
+</div>
+<!-- 行 4: 未勾选 -->
+<div class="w-full h-[30px] flex items-center justify-between border-b border-[#0000001A] pl-[20px] pr-[4px]">
+<div class="flex items-center gap-[8px] overflow-hidden">
+<!-- 16px 空心描边方框 (圆角 4px, 1px #979DA6) -->
+<div class="w-[16px] h-[16px] rounded-[4px] bg-[#FFFFFF] border border-[#979DA6] shrink-0"></div>
+<span class="text-[12.5px] text-[#61666B] truncate">插件配置项解构与本地安全密钥解密调试</span>
+</div>
+<span class="text-[11px] text-[#81858C] font-mono tabular-nums shrink-0 ml-[8px]">11-07 09:20</span>
+</div>
+<!-- 分组 2: DSH 本体 -->
+<div class="w-full flex items-center gap-[6px] h-[26px] mt-[10px]">
+<!-- 14px 展开箭头 (向下展开) -->
+<svg class="w-[14px] h-[14px] text-[#81858C] shrink-0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24">
+<polyline points="6 9 12 15 18 9"></polyline>
+</svg>
+<span class="text-[12px] font-medium text-[#81858C]">DSH 本体</span>
+</div>
+<!-- 分组 2 包含 3 行会话 (1 勾选，2 未勾选) -->
+<!-- 行 5: 已勾选 -->
+<div class="w-full h-[30px] flex items-center justify-between border-b border-[#0000001A] pl-[20px] pr-[4px]">
+<div class="flex items-center gap-[8px] overflow-hidden">
+<!-- 16px 黑色实心勾选框 (圆角 4px) -->
+<div class="w-[16px] h-[16px] rounded-[4px] bg-[#0F1115] flex items-center justify-center shrink-0">
+<svg class="w-[11px] h-[11px] text-[#FFFFFF]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" viewbox="0 0 24 24">
+<polyline points="20 6 9 17 4 12"></polyline>
+</svg>
+</div>
+<span class="text-[12.5px] text-[#0F1115] truncate">全局主题变量注入及外观设置持久化更新</span>
+</div>
+<span class="text-[11px] text-[#81858C] font-mono tabular-nums shrink-0 ml-[8px]">11-06 20:15</span>
+</div>
+<!-- 行 6: 未勾选 -->
+<div class="w-full h-[30px] flex items-center justify-between border-b border-[#0000001A] pl-[20px] pr-[4px]">
+<div class="flex items-center gap-[8px] overflow-hidden">
+<!-- 16px 空心描边方框 (圆角 4px, 1px #979DA6) -->
+<div class="w-[16px] h-[16px] rounded-[4px] bg-[#FFFFFF] border border-[#979DA6] shrink-0"></div>
+<span class="text-[12.5px] text-[#61666B] truncate">快捷键映射冲突裁决与跨平台按键兼容修复</span>
+</div>
+<span class="text-[11px] text-[#81858C] font-mono tabular-nums shrink-0 ml-[8px]">11-05 16:40</span>
+</div>
+<!-- 行 7: 未勾选 (最后一行被正文下沿切断，暗示可滚动) -->
+<div class="w-full h-[30px] flex items-center justify-between pl-[20px] pr-[4px]">
+<div class="flex items-center gap-[8px] overflow-hidden">
+<!-- 16px 空心描边方框 (圆角 4px, 1px #979DA6) -->
+<div class="w-[16px] h-[16px] rounded-[4px] bg-[#FFFFFF] border border-[#979DA6] shrink-0"></div>
+<span class="text-[12.5px] text-[#61666B] truncate">底层守护进程健康探活与会话重连机制规范</span>
+</div>
+<span class="text-[11px] text-[#81858C] font-mono tabular-nums shrink-0 ml-[8px]">11-04 11:05</span>
+</div>
+</div>
+</div>
+<!-- 弹窗底栏 (52px, 顶部 0.5px #0000001A 分隔线，两端按钮垂直居中) -->
+<div class="w-full h-[52px] bg-[#FFFFFF] border-t border-[#0000001A] px-[16px] flex items-center justify-between shrink-0">
+<!-- 左侧「返回分区列表」ghost 按钮 (白底 1px 描边、圆角 8px、高 28px) -->
+<button class="h-[28px] px-[12px] bg-[#FFFFFF] border border-[#0000001A] hover:bg-[#EBEEF2] text-[12px] text-[#0F1115] rounded-[8px] flex items-center gap-[4px] transition-colors" type="button">
+<svg class="w-[12px] h-[12px] text-[#81858C]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<polyline points="15 18 9 12 15 6"></polyline>
+</svg>
+<span>返回分区列表</span>
+</button>
+<!-- 右侧深色主按钮「完成」 (高 28px、圆角 8px、深色底 #0F1115、白字) -->
+<button class="h-[28px] px-[16px] bg-[#0F1115] hover:bg-[#43454A] text-[12px] text-[#FFFFFF] font-medium rounded-[8px] flex items-center justify-center transition-colors" type="button">
+            完成
+          </button>
+</div>
+</section>
+</div>
+</div>
+</body>
+</html>

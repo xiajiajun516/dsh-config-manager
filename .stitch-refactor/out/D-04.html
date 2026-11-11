@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-04 拉取远端快照弹窗</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      background-color: #EBEEF2;
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #0F1115;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      width: 100vw;
+    }
+
+    .tabular {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* 旋转加载动画 */
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .spinner {
+      animation: spin 0.9s linear infinite;
+    }
+  </style>
+</head>
+<body>
+<!-- 插件内容区画布 564x720 独立居中显示，四周极浅灰底 -->
+<div class="relative w-[564px] h-[720px] bg-[#FFFFFF] overflow-hidden flex flex-col select-none border border-[#0000001A]">
+<!-- ========================================== -->
+<!-- 下层：被压暗的「产物库」页面（灰阶 / 沉浸背景结构） -->
+<!-- ========================================== -->
+<!-- 顶部导航条 (32px 高度) -->
+<header class="h-[32px] min-h-[32px] px-3 border-b border-[#0000001A] flex items-center justify-between bg-white">
+<!-- 左侧页签项 (纯文字) -->
+<nav class="flex items-center space-x-1 h-full text-[12px]">
+<span class="px-2 py-0.5 text-[#61666B]">首页</span>
+<!-- 「产物库」激活态：底 #EBEEF2、内描边 #979DA6、圆角 8px、文字主色 -->
+<span class="px-2 py-0.5 bg-[#EBEEF2] border border-[#979DA6] rounded-[8px] text-[#0F1115] font-medium">产物库</span>
+<span class="px-2 py-0.5 text-[#61666B]">同步</span>
+<span class="px-2 py-0.5 text-[#61666B]">环境</span>
+</nav>
+<!-- 右侧 4 个线性图标按钮 (14px) -->
+<div class="flex items-center space-x-2 text-[#81858C]">
+<!-- ⌘K 命令面板图标 -->
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0 3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+<!-- 活动图标 -->
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史图标 -->
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于图标 -->
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" viewbox="0 0 24 24">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</header>
+<!-- 产物库内容区主背景（过滤、搜索、列表） -->
+<main class="flex-1 p-3 flex flex-col space-y-2.5 overflow-hidden bg-white opacity-40">
+<!-- 搜索与筛选行 -->
+<div class="flex items-center space-x-2">
+<div class="flex-1 h-[28px] border border-[#0000001A] rounded-[8px] px-2 flex items-center text-[12px] text-[#81858C] bg-[#FFFFFF]">
+<svg class="w-[12px] h-[12px] mr-1.5 text-[#81858C]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<circle cx="11" cy="11" r="8"></circle>
+<line x1="21" x2="16.65" y1="21" y2="16.65"></line>
+</svg>
+<span>搜索快照、备注或分区...</span>
+</div>
+<div class="h-[28px] px-2.5 bg-[#EBEEF2] border border-[#0000001A] rounded-[8px] flex items-center text-[11px] text-[#61666B]">
+          全部 (16)
+        </div>
+</div>
+<!-- 产物列表条目 (灰阶示意背景) -->
+<div class="flex-1 border border-[#0000001A] rounded-[12px] divide-y divide-[#0000001A] overflow-hidden text-[12px]">
+<!-- 条目 1 (远端快照触发来源行) -->
+<div class="px-3 py-2 flex items-center justify-between bg-[#EBEEF2]/40">
+<div class="flex items-center space-x-2">
+<span class="px-1.5 py-0.2 bg-[#4176E6]/10 text-[#4176E6] text-[11px] rounded-[4px] border border-[#4176E6]/20">远端快照</span>
+<span class="font-medium text-[#0F1115]">snapshot-2026-11-09T18-32.zip</span>
+<span class="text-[11px] text-[#81858C]">4.2 MB · 8 分区</span>
+</div>
+<div class="flex items-center space-x-1.5 text-[11px]">
+<span class="text-[#81858C]">刚刚</span>
+</div>
+</div>
+<!-- 条目 2 -->
+<div class="px-3 py-2 flex items-center justify-between">
+<div class="flex items-center space-x-2">
+<span class="px-1.5 py-0.2 bg-[#0000000A] text-[#61666B] text-[11px] rounded-[4px]">本地备份</span>
+<span class="font-medium text-[#0F1115]">dsh-config-2026-11-10T2104.zip</span>
+<span class="text-[11px] text-[#81858C]">24.8 MB</span>
+</div>
+<span class="text-[11px] text-[#81858C]">21:04</span>
+</div>
+<!-- 条目 3 -->
+<div class="px-3 py-2 flex items-center justify-between">
+<div class="flex items-center space-x-2">
+<span class="px-1.5 py-0.2 bg-[#0000000A] text-[#61666B] text-[11px] rounded-[4px]">安全快照</span>
+<span class="font-medium text-[#0F1115]">before-import-20261110.snap</span>
+<span class="text-[11px] text-[#81858C]">1,204 文件</span>
+</div>
+<span class="text-[11px] text-[#81858C]">20:41</span>
+</div>
+<!-- 条目 4 -->
+<div class="px-3 py-2 flex items-center justify-between">
+<div class="flex items-center space-x-2">
+<span class="px-1.5 py-0.2 bg-[#0000000A] text-[#61666B] text-[11px] rounded-[4px]">本地备份</span>
+<span class="font-medium text-[#0F1115]">full-export.zip</span>
+<span class="text-[11px] text-[#81858C]">24.8 MB</span>
+</div>
+<span class="text-[11px] text-[#81858C]">18:30</span>
+</div>
+<!-- 条目 5 -->
+<div class="px-3 py-2 flex items-center justify-between">
+<div class="flex items-center space-x-2">
+<span class="px-1.5 py-0.2 bg-[#4176E6]/10 text-[#4176E6] text-[11px] rounded-[4px]">远端快照</span>
+<span class="font-medium text-[#0F1115]">gist:main-2026-11-09</span>
+<span class="text-[11px] text-[#81858C]">3 个分区</span>
+</div>
+<span class="text-[11px] text-[#81858C]">昨天</span>
+</div>
+<!-- 条目 6 -->
+<div class="px-3 py-2 flex items-center justify-between">
+<div class="flex items-center space-x-2">
+<span class="px-1.5 py-0.2 bg-[#22C55E]/10 text-[#22C55E] text-[11px] rounded-[4px]">配置市场</span>
+<span class="font-medium text-[#0F1115]">前端全栈工具箱配置包</span>
+<span class="text-[11px] text-[#81858C]">v1.2.0</span>
+</div>
+<span class="text-[11px] text-[#81858C]">11-08</span>
+</div>
+<!-- 条目 7 -->
+<div class="px-3 py-2 flex items-center justify-between">
+<div class="flex items-center space-x-2">
+<span class="px-1.5 py-0.2 bg-[#0000000A] text-[#61666B] text-[11px] rounded-[4px]">安全快照</span>
+<span class="font-medium text-[#0F1115]">before-sync.snap</span>
+<span class="text-[11px] text-[#81858C]">1,190 文件</span>
+</div>
+<span class="text-[11px] text-[#81858C]">11-07</span>
+</div>
+<!-- 条目 8 -->
+<div class="px-3 py-2 flex items-center justify-between">
+<div class="flex items-center space-x-2">
+<span class="px-1.5 py-0.2 bg-[#0000000A] text-[#61666B] text-[11px] rounded-[4px]">本地备份</span>
+<span class="font-medium text-[#0F1115]">backup-2026-11-06.zip</span>
+<span class="text-[11px] text-[#81858C]">22.1 MB</span>
+</div>
+<span class="text-[11px] text-[#81858C]">11-06</span>
+</div>
+</div>
+</main>
+<!-- 底部状态栏 (28px 高度) -->
+<footer class="h-[28px] min-h-[28px] px-3 bg-white border-t border-[#0000001A] flex items-center justify-between text-[11px] text-[#81858C]">
+<div class="flex items-center space-x-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span class="text-[#0F1115]">就绪</span>
+<span>·</span>
+<span>校验无冲突</span>
+</div>
+<div class="tabular font-mono tracking-tight text-[#81858C]">
+        v0.8.0 · DSH 2.4
+      </div>
+</footer>
+<!-- ========================================== -->
+<!-- 弹窗遮罩层：#0000003D 盖满 564x720            -->
+<!-- ========================================== -->
+<div class="absolute inset-0 bg-[#0000003D] flex items-center justify-center p-0 z-50">
+<!-- ========================================== -->
+<!-- 弹窗主体 D-04: 520px x 280px，圆角 12px，白底 #FFFFFF -->
+<!-- ========================================== -->
+<div class="w-[520px] bg-white rounded-xl border border-[#EBEEF2] shadow-[0_8px_30px_rgb(0,0,0,0.12)] flex flex-col overflow-hidden h-[240px]">
+<!-- 1. 标题区 (48px 高度，px-4 = 16px) -->
+<div class="h-[48px] min-h-[48px] px-4 flex items-center justify-between border-b border-[#EBEEF2]">
+<!-- 标题 13px / 600 左对齐 -->
+<h2 class="text-[13px] font-semibold text-[#0F1115] tracking-tight">拉取远端快照</h2>
+<!-- 右端关闭 ✕ 14px 线性图标，运行中禁用态 #81858C -->
+<div aria-label="关闭" class="w-[14px] h-[14px] flex items-center justify-center cursor-not-allowed text-[#81858C]" title="运行中不可关闭">
+<svg class="w-[14px] h-[14px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</div>
+</div>
+<!-- 2. 中间内容区 (flex-1，上下左右均衡，两行内容整体绝对居中对齐) -->
+<div class="h-[144px] px-4 flex flex-col items-center justify-center gap-3">
+<!-- 上一行：文件名提示 12px 主色 #0F1115 居中显示 -->
+<div class="text-[12px] text-[#0F1115] font-mono select-text text-center leading-none">
+            snapshot-2026-11-09T18-32.zip
+          </div>
+<!-- 下一行：水平居中排列的加载动画圆环 (16px) + 文案「正在拉取并导入…」(12.5px, #0F1115) -->
+<div class="flex items-center justify-center space-x-2">
+<!-- 加载圆环 (直径 16px，细描边 2px，浅灰底环 #0000001A + 一段 #4176E6 弧) -->
+<div class="relative w-[16px] h-[16px] shrink-0">
+<svg class="w-[16px] h-[16px] spinner" fill="none" viewbox="0 0 16 16">
+<!-- 底环 -->
+<circle cx="8" cy="8" r="7" stroke="#0000001A" stroke-width="2"></circle>
+<!-- 强调色弧线 -->
+<path d="M8 1a7 7 0 0 1 7 7" stroke="#4176E6" stroke-linecap="round" stroke-width="2"></path>
+</svg>
+</div>
+<!-- 状态文案 12.5px，主色 #0F1115 -->
+<span class="text-[12.5px] leading-tight text-[#0F1115] font-normal tracking-tight">
+              正在拉取并导入…
+            </span>
+</div>
+</div>
+<!-- 3. 底部操作栏 (48px 高度，上边框 1px #EBEEF2，左右内边距 16px，单按钮右对齐) -->
+<div class="h-[48px] min-h-[48px] px-4 border-t border-[#EBEEF2] flex items-center justify-end bg-white">
+<!-- 单按钮「关闭」，禁用态（底 #EBEEF2、文字 #81858C、圆角 8px、高 30px、内边距 px-4、无投影） -->
+<button class="h-[30px] px-4 text-[#81858C] text-[12px] font-medium rounded-[8px] cursor-not-allowed select-none flex items-center justify-center bg-[#EBEEF2]" disabled="" type="button">
+            关闭
+          </button>
+</div>
+</div>
+</div>
+</div>
+</body></html>

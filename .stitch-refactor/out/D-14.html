@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-14 选择同步分区弹窗</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://cdn.jsdelivr.net/npm/lucide-static@0.469.0/font/lucide.min.css" rel="stylesheet"/>
+<style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      background-color: #EBEEF2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    /* 564x720 插件画布容器 */
+    .plugin-viewport {
+      width: 564px;
+      height: 720px;
+      position: relative;
+      background-color: #EBEEF2;
+      border: 1px solid #EBEEF2;
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+    }
+
+    /* 字体规范：严格 11 / 12 / 12.5 / 13px */
+    .text-11 { font-size: 11px; line-height: 1.5; }
+    .text-12 { font-size: 12px; line-height: 1.5; }
+    .text-12-5 { font-size: 12.5px; line-height: 1.5; }
+    .text-13 { font-size: 13px; line-height: 1.25; }
+
+    /* 勾选框样式 */
+    .custom-checkbox-checked {
+      width: 16px;
+      height: 16px;
+      background-color: #0F1115;
+      border: 1px solid #0F1115;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #FFFFFF;
+      flex-shrink: 0;
+    }
+    .custom-checkbox-unchecked {
+      width: 16px;
+      height: 16px;
+      background-color: #FFFFFF;
+      border: 1px solid rgba(0, 0, 0, 0.2);
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    /* 徽章样式 */
+    .badge-pill {
+      font-size: 11px;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 999px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+    }
+    .badge-blue {
+      background-color: rgba(65, 118, 230, 0.1);
+      color: #4176E6;
+    }
+    .badge-orange {
+      background-color: rgba(245, 158, 11, 0.12);
+      color: #F59E0B;
+    }
+
+    /* 小按钮样式 */
+    .btn-ghost-sm {
+      height: 24px;
+      padding: 0 8px;
+      font-size: 11px;
+      color: #0F1115;
+      background: #FFFFFF;
+      border: 0.5px solid rgba(0, 0, 0, 0.15);
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+<!-- 564x720 插件外壳被压暗成 #EBEEF2 -->
+<div class="plugin-viewport">
+<!-- 顶部导航条 44px (压暗背景 #EBEEF2，文字次色 #61666B) -->
+<header class="h-[44px] px-[16px] flex items-center justify-between border-b border-[rgba(0,0,0,0.08)] bg-[#EBEEF2] shrink-0">
+<nav class="flex items-center space-x-[20px] h-full">
+<span class="text-12-5 text-[#61666B] font-normal cursor-default flex items-center h-full">首页</span>
+<span class="text-12-5 text-[#61666B] font-normal cursor-default flex items-center h-full">产物库</span>
+<div class="relative flex items-center h-full">
+<span class="text-12-5 text-[#0F1115] font-medium">同步</span>
+<div class="absolute bottom-0 left-0 right-0 h-[2px] bg-[#0F1115]"></div>
+</div>
+<span class="text-12-5 text-[#61666B] font-normal cursor-default flex items-center h-full">环境</span>
+</nav>
+<!-- 右侧 4 个图标按钮：⌘K、活动、历史、关于 -->
+<div class="flex items-center space-x-[14px] text-[#61666B]">
+<i class="icon-lucide icon-lucide--command text-[14px]"></i>
+<i class="icon-lucide icon-lucide--activity text-[14px]"></i>
+<i class="icon-lucide icon-lucide--clock text-[14px]"></i>
+<i class="icon-lucide icon-lucide--info text-[14px]"></i>
+</div>
+</header>
+<!-- 中间内容区 (作为被压暗的底层同步页通道卡视图) -->
+<div class="flex-1 px-[16px] py-[12px] overflow-hidden flex flex-col space-y-[10px] bg-[#EBEEF2]">
+<!-- 压暗的同步卡片占位 -->
+<div class="border border-[rgba(0,0,0,0.08)] rounded-[12px] p-[12px] bg-[#EBEEF2]">
+<div class="flex items-center justify-between pb-[8px] border-b border-[rgba(0,0,0,0.06)]">
+<div class="flex items-center space-x-[8px]">
+<i class="icon-lucide icon-lucide--git-branch text-[14px] text-[#61666B]"></i>
+<span class="text-12-5 font-medium text-[#61666B]">Git</span>
+<span class="badge-pill bg-[#22C55E]/10 text-[#22C55E] text-[11px]">已连接</span>
+</div>
+<span class="text-11 text-[#81858C]">上次同步 19:52</span>
+</div>
+<div class="pt-[8px] space-y-[4px]">
+<div class="text-11 text-[#81858C]">仓库：github.com/dsh-core/sync-config</div>
+<div class="text-11 text-[#81858C]">分支：main · 自动同步：每 30 分钟</div>
+</div>
+</div>
+<div class="border border-[rgba(0,0,0,0.08)] rounded-[12px] p-[12px] bg-[#EBEEF2]">
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-[8px]">
+<i class="icon-lucide icon-lucide--folder-sync text-[14px] text-[#61666B]"></i>
+<span class="text-12-5 font-medium text-[#61666B]">WebDAV</span>
+<span class="text-11 text-[#81858C]">未配置</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 底部状态栏 28px (被压暗) -->
+<footer class="h-[28px] px-[16px] flex items-center justify-between border-t border-[rgba(0,0,0,0.08)] bg-[#EBEEF2] shrink-0">
+<div class="flex items-center space-x-[6px]">
+<span class="w-[6px] height-[6px] rounded-full bg-[#22C55E]"></span>
+<span class="text-11 text-[#61666B]">就绪</span>
+</div>
+<span class="text-11 text-[#81858C]">v0.8.0 · DSH 2.4</span>
+</footer>
+<!-- 模态弹窗：宽 541px，纯白 #FFFFFF，圆角 16px，1px #0000001A 描边，无投影，高约 540px，绝对居中 -->
+<div class="absolute inset-0 flex items-center justify-center pointer-events-auto">
+<div class="w-[541px] h-[540px] bg-[#FFFFFF] rounded-[16px] border border-[rgba(0,0,0,0.1)] flex flex-col overflow-hidden">
+<!-- 弹窗标题行：40px (padding: 12px 14px 0) -->
+<div class="h-[40px] pt-[12px] flex items-center justify-between shrink-0 px-[16px]"><div class="flex items-center"><h2 class="text-13 font-[500] text-[#0F1115]">选择同步分区</h2><svg class="w-3.5 h-3.5 text-[#81858C] shrink-0 ml-[6px]" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg></div><svg class="w-3.5 h-3.5 text-[#81858C] shrink-0 hover:text-black cursor-pointer transition-colors" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24"><line x1="18" x2="6" y1="6" y2="18"></line><line x1="6" x2="18" y1="6" y2="18"></line></svg></div>
+<!-- 正文区：470px (padding: 8px 16px 0，超出部分在此切断，卡片底部被切边) -->
+<div class="px-[16px] pt-[8px] flex flex-col space-y-[10px] overflow-hidden shrink-0" style="height: 430px;">
+<!-- 卡 1「通用」 -->
+<div class="border border-[rgba(0,0,0,0.1)] rounded-[12px] p-[10px_12px] bg-[#FFFFFF] flex flex-col space-y-[8px] shrink-0">
+<span class="text-11 font-[500] text-[#61666B]">通用</span>
+<!-- 项 1：设置 -->
+<div class="flex items-start justify-between">
+<div class="flex items-start space-x-[8px]">
+<div class="custom-checkbox-checked mt-[2px]">
+<i class="icon-lucide icon-lucide--check text-[11px] stroke-[3]"></i>
+</div>
+<div class="flex flex-col">
+<div class="flex items-center space-x-[6px]">
+<span class="text-12 font-[500] text-[#0F1115]">设置</span>
+<span class="badge-pill badge-blue">推荐</span>
+</div>
+<span class="text-11 text-[#81858C]">应用基础外观、快捷键与模型参数</span>
+</div>
+</div>
+</div>
+<!-- 项 2：凭据状态 -->
+<div class="flex items-start justify-between pt-[4px] border-t border-[rgba(0,0,0,0.06)]">
+<div class="flex items-start space-x-[8px]">
+<div class="custom-checkbox-unchecked mt-[2px]"></div>
+<div class="flex flex-col">
+<div class="flex items-center space-x-[6px]">
+<span class="text-12 font-[500] text-[#0F1115]">凭据状态</span>
+<span class="badge-pill badge-orange">设备相关</span>
+</div>
+<span class="text-11 text-[#81858C]">凭据引用与登录态标记</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 卡 2「插件与扩展」 -->
+<div class="border border-[rgba(0,0,0,0.1)] rounded-[12px] p-[10px_12px] bg-[#FFFFFF] flex flex-col space-y-[8px] shrink-0">
+<span class="text-11 font-[500] text-[#61666B]">插件与扩展</span>
+<!-- 项 1：插件清单 -->
+<div class="flex items-start justify-between">
+<div class="flex items-start space-x-[8px]">
+<div class="custom-checkbox-checked mt-[2px]">
+<i class="icon-lucide icon-lucide--check text-[11px] stroke-[3]"></i>
+</div>
+<div class="flex flex-col">
+<div class="flex items-center space-x-[6px]">
+<span class="text-12 font-[500] text-[#0F1115]">插件清单</span>
+<span class="badge-pill badge-blue">可移植</span>
+<span class="badge-pill badge-blue">推荐</span>
+</div>
+<span class="text-11 text-[#81858C]">已启用的插件与版本</span>
+</div>
+</div>
+</div>
+<!-- 项 2：插件散落配置 -->
+<div class="flex items-start justify-between pt-[4px] border-t border-[rgba(0,0,0,0.06)]">
+<div class="flex items-start space-x-[8px]">
+<div class="custom-checkbox-unchecked mt-[2px]"></div>
+<div class="flex flex-col">
+<div class="flex items-center space-x-[6px]">
+<span class="text-12 font-[500] text-[#0F1115]">插件散落配置</span>
+<span class="badge-pill badge-orange">设备相关</span>
+</div>
+<span class="text-11 text-[#81858C]">插件各自生成的配置片段</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 卡 4「可选数据」（在卡 3 之前、正文可见范围内完整可见） -->
+<div class="border border-[rgba(0,0,0,0.1)] rounded-[12px] p-[10px_12px] bg-[#FFFFFF] flex flex-col space-y-[8px] shrink-0">
+<span class="text-11 font-[500] text-[#61666B]">可选数据</span>
+<div class="flex items-start justify-between">
+<div class="flex items-start space-x-[8px]">
+<div class="custom-checkbox-checked mt-[2px]">
+<i class="icon-lucide icon-lucide--check text-[11px] stroke-[3]"></i>
+</div>
+<div class="flex flex-col">
+<div class="flex items-center space-x-[6px]">
+<span class="text-12 font-[500] text-[#0F1115]">历史会话</span>
+<span class="badge-pill badge-orange">设备相关</span>
+</div>
+<span class="text-11 text-[#81858C]">本机会话记录与上下文快照</span>
+</div>
+</div>
+</div>
+<!-- 紧随其下缩进参数区两行（完整可见于正文区内） -->
+<div class="ml-[24px] pt-[6px] border-t border-[rgba(0,0,0,0.06)] space-y-[6px]">
+<!-- 第一行：「同步最近多少个会话」+ⓘ + 右侧数字输入框显示 5 -->
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-[4px]">
+<span class="text-11 text-[#61666B]">同步最近多少个会话</span>
+<i class="icon-lucide icon-lucide--info text-[12px] text-[#81858C]"></i>
+</div>
+<div class="h-[24px] w-[44px] px-[6px] border border-[rgba(0,0,0,0.15)] rounded-[4px] flex items-center justify-center bg-[#FFFFFF]">
+<span class="text-11 text-[#0F1115] font-mono">5</span>
+</div>
+</div>
+<!-- 第二行：按钮「选择具体对话」+ 蓝色徽章「已点名 3 个对话」+ 按钮「改为「最近 N 个」」 -->
+<div class="flex items-center space-x-[8px] pt-[2px]">
+<button class="btn-ghost-sm">选择具体对话</button>
+<span class="badge-pill badge-blue">已点名 3 个对话</span>
+<button class="btn-ghost-sm">改为「最近 N 个」</button>
+</div>
+</div>
+</div>
+<!-- 卡 3「MCP / 工具」：被正文区切断，只露 headline 与描述半行（露出作为滚动暗示） -->
+<div class="border border-[rgba(0,0,0,0.1)] rounded-[12px] p-[10px_12px] bg-[#FFFFFF] flex flex-col space-y-[8px] shrink-0">
+<span class="text-11 font-[500] text-[#61666B]">MCP / 工具</span>
+<div class="flex items-start justify-between">
+<div class="flex items-start space-x-[8px]">
+<div class="custom-checkbox-unchecked mt-[2px]"></div>
+<div class="flex flex-col">
+<div class="flex items-center space-x-[6px]">
+<span class="text-12 font-[500] text-[#0F1115]">MCP 服务器</span>
+<span class="badge-pill badge-orange">平台相关</span>
+<i class="icon-lucide icon-lucide--info text-[14px] text-[#81858C]"></i>
+</div>
+<span class="text-11 text-[#81858C]">MCP Server 端点与启动参数</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- 独立底栏：52px (白底，顶部 0.5px #0000001A 分隔线，按钮垂直居中靠右，完全不覆盖任何内容) -->
+<div class="h-[52px] px-[16px] bg-[#FFFFFF] border-t border-[rgba(0,0,0,0.1)] flex items-center justify-end shrink-0" style="height: 56px; padding-bottom: 14px; padding-top: 14px;">
+<button class="h-[28px] px-[16px] bg-[#0F1115] hover:bg-[#43454A] text-[#FFFFFF] text-12-5 font-[500] rounded-[8px] flex items-center justify-center transition-colors">
+            完成
+          </button>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

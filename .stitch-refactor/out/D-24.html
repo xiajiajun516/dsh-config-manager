@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 D-24 回滚确认 (回退预览弹窗)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #EBEEF2;
+      color: #0F1115;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    .font-mono-code {
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+    /* 自定义紧凑滚动条 */
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: rgba(15, 17, 21, 0.15);
+      border-radius: 999px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: rgba(15, 17, 21, 0.28);
+    }
+  </style>
+</head>
+<body>
+<!-- 主画布 564x720 竖版 -->
+<div class="relative w-[564px] h-[720px] bg-[#FFFFFF] rounded-[16px] border border-[#0000001A] overflow-hidden flex flex-col select-none">
+<!-- 1. 顶部导航条（32px） -->
+<header class="h-[32px] px-[14px] flex items-center justify-between border-b border-[#0000001A] bg-[#FFFFFF] shrink-0">
+<nav class="flex items-center gap-[6px]">
+<span class="text-[12px] text-[#61666B] px-[6px] py-[2px]">首页</span>
+<span class="text-[12px] text-[#61666B] px-[6px] py-[2px]">产物库</span>
+<span class="text-[12px] text-[#61666B] px-[6px] py-[2px]">同步</span>
+<span class="text-[12px] font-medium text-[#0F1115] bg-[#EBEEF2] border border-[#979DA6] rounded-[8px] px-[8px] py-[1.5px]">环境</span>
+</nav>
+<div class="flex items-center gap-[8px] text-[#81858C]">
+<button class="w-[18px] h-[18px] flex items-center justify-center hover:text-[#0F1115]" title="命令面板">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+</button>
+<button class="w-[18px] h-[18px] flex items-center justify-center hover:text-[#0F1115]" title="活动">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+</button>
+<button class="w-[18px] h-[18px] flex items-center justify-center hover:text-[#0F1115]" title="历史">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+</button>
+<button class="w-[18px] h-[18px] flex items-center justify-center hover:text-[#0F1115]" title="关于">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</button>
+</div>
+</header>
+<!-- 2. 中间内容区底板骨架（环境 → 维护与诊断 灰阶轮廓） -->
+<main class="flex-1 p-[12px] flex flex-col gap-[10px] overflow-hidden bg-[#FFFFFF]">
+<!-- 骨架状态条 -->
+<div class="h-[32px] w-full rounded-[8px] border border-[#0000001A] bg-[#EBEEF2] flex items-center px-[10px] justify-between">
+<div class="flex items-center gap-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<div class="w-[48px] h-[10px] bg-[#EBEEF2] rounded-[4px]"></div>
+</div>
+<div class="w-[120px] h-[10px] bg-[#EBEEF2] rounded-[4px]"></div>
+</div>
+<!-- 骨架卡片 1 -->
+<div class="h-[140px] w-full rounded-[12px] border border-[#0000001A] bg-[#EBEEF2] p-[12px] flex flex-col gap-[8px]">
+<div class="w-[96px] h-[12px] bg-[#EBEEF2] rounded-[4px]"></div>
+<div class="w-full h-[8px] bg-[#EBEEF2] rounded-[4px]"></div>
+<div class="w-full h-[8px] bg-[#EBEEF2] rounded-[4px]"></div>
+<div class="w-3/4 h-[8px] bg-[#EBEEF2] rounded-[4px]"></div>
+</div>
+<!-- 骨架卡片 2 -->
+<div class="flex-1 w-full rounded-[12px] border border-[#0000001A] bg-[#EBEEF2] p-[12px] flex flex-col gap-[10px]">
+<div class="w-[110px] h-[12px] bg-[#EBEEF2] rounded-[4px]"></div>
+<div class="w-full h-[32px] bg-[#EBEEF2] rounded-[6px]"></div>
+<div class="w-full h-[32px] bg-[#EBEEF2] rounded-[6px]"></div>
+<div class="w-full h-[32px] bg-[#EBEEF2] rounded-[6px]"></div>
+</div>
+</main>
+<!-- 3. 底部状态栏（28px） -->
+<footer class="h-[28px] px-[14px] flex items-center justify-between border-t border-[#0000001A] bg-[#FFFFFF] shrink-0 text-[11px] text-[#81858C] font-mono-code">
+<div class="flex items-center gap-[6px]">
+<span class="w-[6px] h-[6px] rounded-full bg-[#22C55E]"></span>
+<span>就绪 · 待确认回退</span>
+</div>
+<div>v0.8.0 · DSH 2.4</div>
+</footer>
+<!-- 4. 全局压暗遮罩（#0000003D，盖满整块 564x720） -->
+<div class="absolute inset-0 bg-[#0000003D] z-10 flex items-center justify-center p-[10px]">
+<!-- 5. D-24 回滚确认（回退预览）本体宽弹窗（541px） -->
+<div class="w-[541px] max-w-[96%] bg-[#FFFFFF] rounded-[16px] border border-[#0000001A] overflow-hidden flex flex-col z-20" style="box-shadow: none;">
+<!-- 标题栏（padding 12px 14px 0） -->
+<div class="pt-[12px] px-[14px] pb-0 flex items-center justify-between">
+<h2 class="text-[13px] font-[500] leading-[1.25] text-[#0F1115]">回退预览</h2>
+<div class="flex items-center gap-[8px] text-[#81858C]">
+<button class="w-[16px] h-[16px] flex items-center justify-center hover:text-[#0F1115] transition-colors" title="以下为只读预览（零写入）。确认后才会执行回退。">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</button>
+<button class="w-[16px] h-[16px] flex items-center justify-center hover:text-[#0F1115] transition-colors" title="关闭">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<line x1="18" x2="6" y1="6" y2="18"></line><line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</button>
+</div>
+</div>
+<!-- 正文容器（padding 8px 16px 12px） -->
+<div class="pt-[8px] px-[16px] pb-[12px] flex flex-col gap-[10px]">
+<!-- 提示块：浅灰底（#0F1115 4% 混色）+ 圆角 8 + padding 8px 10px -->
+<div class="bg-[rgba(15,17,21,0.04)] rounded-[8px] p-[8px_10px] flex flex-col gap-[2px] text-[11px] text-[#61666B] leading-[1.5]">
+<p>有一态没留到：该态本次不能回退。</p>
+<p>回退只覆盖该点记录在案的路径；能证明是留点后新建的路径会被删除，证明名单不完整时一条都不删。</p>
+</div>
+<!-- 汇总行：左「将被回退的文件：」12.5px/600；右端一行三段 -->
+<div class="flex items-center justify-between pt-[2px]">
+<span class="text-[12.5px] font-[600] text-[#0F1115]">将被回退的文件：</span>
+<div class="flex items-center gap-[6px] text-[11px] font-mono-code">
+<span class="text-[#61666B]">文件 12 个</span>
+<span class="text-[#81858C]">·</span>
+<span class="text-[#22C55E] font-[500]">+184</span>
+<span class="text-[#81858C]">·</span>
+<span class="text-[#EC1313] font-[500]">−63</span>
+<span class="text-[#81858C]">·</span>
+<span class="text-[#EC1313] font-[600]">删除 2</span>
+</div>
+</div>
+<!-- 文件清单（高约 200px、内部可滚、行高 28px、行间 0.5px 分隔线） -->
+<div class="overflow-y-auto custom-scrollbar border border-[#0000001A] rounded-[8px] bg-[#FFFFFF] divide-y divide-[#0000000D]">
+<!-- 1. src/client/recovery/RollbackCard.tsx -->
+<div class="h-[32px] px-[8px] flex items-center justify-between hover:bg-[#00000005] transition-colors">
+<div class="flex items-center gap-[6px] min-w-0 pr-[8px]">
+<div class="w-[14px] h-[14px] rounded-[3px] bg-[#0F1115] flex items-center justify-center shrink-0 cursor-pointer">
+<svg fill="none" height="10" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" viewbox="0 0 24 24" width="10"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</div>
+<svg class="shrink-0" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline>
+</svg>
+<div class="text-[12px] font-mono-code truncate">
+<span style="color:#81858C">src/client/recovery/</span><span style="color:#0F1115">RollbackCard.tsx</span>
+</div>
+</div>
+<div class="flex items-center gap-[4px] text-[11px] font-mono-code shrink-0">
+<span class="text-[#22C55E]">+42</span>
+<span class="text-[#EC1313]">−18</span>
+</div>
+</div>
+<!-- 2. src/client/config-manager.module.css -->
+<div class="h-[32px] px-[8px] flex items-center justify-between hover:bg-[#00000005] transition-colors">
+<div class="flex items-center gap-[6px] min-w-0 pr-[8px]">
+<div class="w-[14px] h-[14px] rounded-[3px] bg-[#0F1115] flex items-center justify-center shrink-0 cursor-pointer">
+<svg fill="none" height="10" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" viewbox="0 0 24 24" width="10"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</div>
+<svg class="shrink-0" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline>
+</svg>
+<div class="text-[12px] font-mono-code truncate">
+<span style="color:#81858C">src/client/</span><span style="color:#0F1115">config-manager.module.css</span>
+</div>
+</div>
+<div class="flex items-center gap-[4px] text-[11px] font-mono-code shrink-0">
+<span class="text-[#22C55E]">+96</span>
+<span class="text-[#EC1313]">−31</span>
+</div>
+</div>
+<!-- 3. src/ui/rollback-view.ts -->
+<div class="h-[32px] px-[8px] flex items-center justify-between hover:bg-[#00000005] transition-colors">
+<div class="flex items-center gap-[6px] min-w-0 pr-[8px]">
+<div class="w-[14px] h-[14px] rounded-[3px] bg-[#0F1115] flex items-center justify-center shrink-0 cursor-pointer">
+<svg fill="none" height="10" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" viewbox="0 0 24 24" width="10"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</div>
+<svg class="shrink-0" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline>
+</svg>
+<div class="text-[12px] font-mono-code truncate">
+<span style="color:#81858C">src/ui/</span><span style="color:#0F1115">rollback-view.ts</span>
+</div>
+</div>
+<div class="flex items-center gap-[4px] text-[11px] font-mono-code shrink-0">
+<span class="text-[#22C55E]">+28</span>
+<span class="text-[#EC1313]">−6</span>
+</div>
+</div>
+<!-- 4. src/core/rollback-point.ts -->
+<div class="h-[32px] px-[8px] flex items-center justify-between hover:bg-[#00000005] transition-colors">
+<div class="flex items-center gap-[6px] min-w-0 pr-[8px]">
+<div class="w-[14px] h-[14px] rounded-[3px] bg-[#0F1115] flex items-center justify-center shrink-0 cursor-pointer">
+<svg fill="none" height="10" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" viewbox="0 0 24 24" width="10"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</div>
+<svg class="shrink-0" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline>
+</svg>
+<div class="text-[12px] font-mono-code truncate">
+<span style="color:#81858C">src/core/</span><span style="color:#0F1115">rollback-point.ts</span>
+</div>
+</div>
+<div class="flex items-center gap-[6px] text-[11px] font-mono-code shrink-0">
+<span class="text-[#22C55E]">+12</span>
+<span class="text-[#EC1313]">−4</span>
+<span class="text-[11px] text-[#61666B] bg-[#EBEEF2] border border-[#0000001A] rounded-[4px] px-[4px] py-[0.5px]">其它对话改过</span>
+</div>
+</div>
+<!-- 5. docs/evidence/recovery-console.md -->
+<div class="h-[32px] px-[8px] flex items-center justify-between hover:bg-[#00000005] transition-colors">
+<div class="flex items-center gap-[6px] min-w-0 pr-[8px]">
+<div class="w-[14px] h-[14px] rounded-[3px] bg-[#0F1115] flex items-center justify-center shrink-0 cursor-pointer">
+<svg fill="none" height="10" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" viewbox="0 0 24 24" width="10"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</div>
+<svg class="shrink-0" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline>
+</svg>
+<div class="text-[12px] font-mono-code truncate">
+<span style="color:#81858C">docs/evidence/</span><span style="color:#0F1115">recovery-console.md</span>
+</div>
+</div>
+<div class="flex items-center gap-[4px] text-[11px] font-mono-code shrink-0">
+<span class="text-[#22C55E]">+6</span>
+<span class="text-[#EC1313]">−4</span>
+</div>
+</div>
+<!-- 6. tests/core/rollback.test.ts -->
+<div class="h-[32px] px-[8px] flex items-center justify-between hover:bg-[#00000005] transition-colors">
+<div class="flex items-center gap-[6px] min-w-0 pr-[8px]">
+<div class="w-[14px] h-[14px] rounded-[3px] bg-[#0F1115] flex items-center justify-center shrink-0 cursor-pointer">
+<svg fill="none" height="10" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" viewbox="0 0 24 24" width="10"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</div>
+<svg class="shrink-0" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline>
+</svg>
+<div class="text-[12px] font-mono-code truncate">
+<span style="color:#81858C">tests/core/</span><span style="color:#0F1115">rollback.test.ts</span>
+</div>
+</div>
+<div class="text-[11px] font-mono-code text-[#81858C] shrink-0">
+      行数未统计
+    </div>
+</div>
+<!-- 7. .dsh/scratch/old-plan.md -->
+<div class="h-[32px] px-[8px] flex items-center justify-between hover:bg-[#00000005] transition-colors">
+<div class="flex items-center gap-[6px] min-w-0 pr-[8px]">
+<div class="w-[14px] h-[14px] rounded-[3px] bg-[#0F1115] flex items-center justify-center shrink-0 cursor-pointer">
+<svg fill="none" height="10" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" viewbox="0 0 24 24" width="10"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</div>
+<svg class="shrink-0" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline>
+</svg>
+<div class="text-[12px] font-mono-code truncate">
+<span style="color:#81858C">.dsh/scratch/</span><span style="color:#0F1115">old-plan.md</span>
+</div>
+</div>
+<div class="text-[11px] font-mono-code text-[#EC1313] font-[600] shrink-0">
+      删除
+    </div>
+</div>
+<!-- 8. .dsh/scratch/temp-note.md -->
+<div class="h-[32px] px-[8px] flex items-center justify-between hover:bg-[#00000005] transition-colors">
+<div class="flex items-center gap-[6px] min-w-0 pr-[8px]">
+<div class="w-[14px] h-[14px] rounded-[3px] bg-[#0F1115] flex items-center justify-center shrink-0 cursor-pointer">
+<svg fill="none" height="10" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="3" viewbox="0 0 24 24" width="10"><polyline points="20 6 9 17 4 12"></polyline></svg>
+</div>
+<svg class="shrink-0" fill="none" height="14" stroke="#81858C" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" viewbox="0 0 24 24" width="14">
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline>
+</svg>
+<div class="text-[12px] font-mono-code truncate">
+<span style="color:#81858C">.dsh/scratch/</span><span style="color:#0F1115">temp-note.md</span>
+</div>
+</div>
+<div class="text-[11px] font-mono-code text-[#EC1313] font-[600] shrink-0">
+      删除
+    </div>
+</div>
+</div>
+<!-- 回退范围下拉选择行 -->
+<div class="flex items-center justify-between pt-[2px]">
+<label class="text-[11px] text-[#61666B]">回退范围</label>
+<div class="relative w-[180px]">
+<select class="w-full h-[28px] px-[10px] pr-[26px] bg-[#FFFFFF] border border-[#0000001A] rounded-[8px] text-[12px] text-[#0F1115] appearance-none cursor-pointer focus:outline-none focus:border-[#4176E6]">
+<option value="all">工作区文件 + 会话</option>
+<option value="workspace">仅工作区文件</option>
+<option value="sessions">仅会话记录</option>
+</select>
+<svg class="absolute right-[8px] top-[8px] pointer-events-none" fill="none" height="12" stroke="#61666B" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="12">
+<polyline points="6 9 12 15 18 9"></polyline>
+</svg>
+</div>
+</div>
+<!-- 动作行（与正文同容器，无上分隔线；左 ghost 取消，右 danger 回退到此处） -->
+<div class="flex items-center justify-between pt-[4px]">
+<button class="h-[28px] px-[12px] bg-transparent hover:bg-[#EBEEF2] border border-[#0000001A] rounded-[8px] text-[12px] text-[#0F1115] transition-colors">
+              取消
+            </button>
+<button class="h-[28px] px-[14px] bg-[#EC1313] hover:bg-[#EC1313] text-[#FFFFFF] rounded-[8px] text-[12px] font-[500] transition-colors flex items-center justify-center">
+              回退到此处
+            </button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

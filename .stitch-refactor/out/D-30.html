@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DSH 设置 — 备份与迁移 D-30 命令面板</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #EBECEF;
+      color: #0F1115;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    /* 闪烁光标模拟 */
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+    .cursor-blink {
+      display: inline-block;
+      width: 1.5px;
+      height: 14px;
+      background-color: #4176E6;
+      vertical-align: middle;
+      margin-right: 2px;
+      animation: blink 1s step-end infinite;
+    }
+    /* 隐藏原生滚动条但允许列表被剪切 */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  </style>
+</head>
+<body>
+<!-- 564×720 插件外壳面板 -->
+<div class="relative w-[564px] h-[720px] bg-[#FFFFFF] rounded-2xl overflow-hidden border border-[#0000001A] flex flex-col justify-between shadow-none select-none">
+<!-- ================= 底层被压暗页面（真实插件底板） ================= -->
+<div class="absolute inset-0 flex flex-col justify-between z-0 pointer-events-none">
+<!-- 1. 顶部 32px 导航条 -->
+<div class="w-full h-[32px] px-3 border-b border-[#0000001A] flex items-center justify-between bg-[#FFFFFF]">
+<div class="flex items-center gap-4 text-[12px] font-medium">
+<span class="text-[#0F1115] relative py-1">首页</span>
+<span class="text-[#81858C] hover:text-[#0F1115]">产物库</span>
+<span class="text-[#81858C] hover:text-[#0F1115]">同步</span>
+<span class="text-[#81858C] hover:text-[#0F1115]">环境</span>
+</div>
+<!-- 右端 4 个图标按钮 -->
+<div class="flex items-center gap-2.5 text-[#81858C]">
+<!-- ⌘K 命令面板 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" viewbox="0 0 24 24" width="14">
+<path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path>
+</svg>
+<!-- 活动折线 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" viewbox="0 0 24 24" width="14">
+<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+</svg>
+<!-- 历史时钟 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<polyline points="12 6 12 12 16 14"></polyline>
+</svg>
+<!-- 关于问号/信息 -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+</div>
+<!-- 2. 中间内容区底板轮廓 -->
+<div class="flex-1 p-3 flex flex-col gap-2.5">
+<!-- 状态事实条 -->
+<div class="w-full h-8 border border-[#0000001A] rounded-lg bg-[#FFFFFF] flex items-center px-2 divide-x divide-[#0000001A]">
+<div class="flex items-center gap-1.5 pr-2.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span class="text-[11px] text-[#0F1115]">健康</span>
+</div>
+<div class="px-2.5 text-[11px] text-[#81858C]">备份文件 <span class="text-[#0F1115] font-mono">12</span></div>
+<div class="px-2.5 text-[11px] text-[#81858C]">安全快照 <span class="text-[#0F1115] font-mono">37</span></div>
+<div class="px-2.5 text-[11px] text-[#81858C]">定时备份 <span class="text-[#0F1115]">开启</span></div>
+<div class="pl-2.5 text-[11px] text-[#81858C]">远程同步 <span class="text-[#0F1115]">已配置</span></div>
+</div>
+<!-- 卡片轮廓（淡灰圆角） -->
+<div class="w-full flex-1 rounded-xl border border-[#0000001A] bg-[#FFFFFF] p-3 flex flex-col gap-2">
+<div class="w-24 h-3 bg-[#EBEEF2] rounded"></div>
+<div class="w-full h-7 border border-[#0000001A] rounded-lg bg-[#F5F5F5]/40"></div>
+<div class="w-full h-7 border border-[#0000001A] rounded-lg bg-[#F5F5F5]/40"></div>
+<div class="w-full h-7 border border-[#0000001A] rounded-lg bg-[#F5F5F5]/40"></div>
+<div class="w-full h-7 border border-[#0000001A] rounded-lg bg-[#F5F5F5]/40"></div>
+<div class="w-full h-7 border border-[#0000001A] rounded-lg bg-[#F5F5F5]/40"></div>
+</div>
+</div>
+<!-- 3. 底部 28px 内缩状态栏 -->
+<div class="p-2 pt-0">
+<div class="w-full h-[28px] px-2.5 bg-[#FFFFFF] border border-[#0000001A] rounded-lg flex items-center justify-between text-[11px]">
+<div class="flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>
+<span class="text-[#61666B]">就绪 · 远程可选</span>
+</div>
+<span class="text-[#81858C] font-mono">v0.8.0 · DSH 2.4</span>
+</div>
+</div>
+</div>
+<!-- ================= 全域遮罩 #0000003D (24% 黑色压暗) ================= -->
+<div class="absolute inset-0 bg-[#0000003D] z-10"></div>
+<!-- ================= 浮层 D-30「命令面板」 ================= -->
+<!-- 宽 420px、水平居中、距画布顶 80px、圆角 12px、白底 #FFFFFF、1px 描边 #0000001A、高约 400px -->
+<div class="absolute top-[80px] left-1/2 -translate-x-1/2 w-[420px] bg-[#FFFFFF] rounded-xl border border-[#0000001A] flex flex-col z-20 overflow-hidden" style="height: 456px;">
+<!-- 1. 输入区 44px（内边距 12px 14px，无边框无底色，只有底部分隔线 1px #0000001A） -->
+<div class="w-full h-[44px] px-[14px] py-[12px] border-b border-[#0000001A] flex items-center bg-[#FFFFFF]">
+<div class="flex items-center w-full">
+<!-- 光标在最前 -->
+<span class="cursor-blink"></span>
+<!-- placeholder 22px 高、无边框、13px -->
+<span class="text-[13px] text-[#81858C] leading-[22px] tracking-tight">输入命令或搜索…</span>
+</div>
+</div>
+<!-- 2. 列表区（内边距 4px 6px，限高 280px，超出裁剪并留出被裁切的下一行） -->
+<div class="w-full h-[280px] px-[6px] py-[4px] overflow-hidden no-scrollbar flex flex-col bg-[#FFFFFF]" style="height: 336px;">
+<!-- 分组 1：前往 -->
+<div class="w-full flex flex-col">
+<!-- 分组标签「前往」（11px #81858C，左侧 6px 内缩，上下 6px） -->
+<div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none">前往</div>
+<!-- 4 行，每行 12.5px，行高 26px，首行「首页」为选中态（底色 #EBEEF2、左侧 2px #4176E6 竖条、文字 #0F1115） -->
+<div class="w-full h-[26px] bg-[#EBEEF2] rounded-md relative flex items-center px-2 cursor-pointer">
+<span class="absolute left-0 top-1 bottom-1 w-[2px] bg-[#4176E6] rounded-r-sm"></span>
+<span class="text-[12.5px] text-[#0F1115] font-medium leading-none pl-1">首页</span>
+</div>
+<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
+<span class="text-[12.5px] text-[#0F1115] leading-none">产物库</span>
+</div>
+<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
+<span class="text-[12.5px] text-[#0F1115] leading-none">同步</span>
+</div>
+<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
+<span class="text-[12.5px] text-[#0F1115] leading-none">环境</span>
+</div>
+</div>
+<!-- 分组 2：产物库 -->
+<div class="w-full flex flex-col mt-1">
+<!-- 分组标签「产物库」 -->
+<div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none">产物库</div>
+<!-- 5 行 —— 全部 / 本机快照 / 备份文件 / 远端快照 / 市场配置（纯标签 + 名称，无附注） -->
+<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
+<span class="text-[12.5px] text-[#0F1115] leading-none">全部</span>
+</div>
+<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
+<span class="text-[12.5px] text-[#0F1115] leading-none">本机快照</span>
+</div>
+<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
+<span class="text-[12.5px] text-[#0F1115] leading-none">备份文件</span>
+</div>
+<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
+<span class="text-[12.5px] text-[#0F1115] leading-none">远端快照</span>
+</div>
+<div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md">
+<span class="text-[12.5px] text-[#0F1115] leading-none">市场配置</span>
+</div>
+</div>
+<!-- 分组 3：动作 -->
+<!-- 只露出第一行「发布到市场」与下一行的一部分（被 280px 裁切，暗示还能往下滚） -->
+<div class="w-full flex flex-col mt-1"><div class="px-[6px] py-[6px] text-[11px] text-[#81858C] font-medium leading-none">动作</div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">发布到市场</span></div><div class="w-full h-[26px] flex items-center px-3 cursor-pointer hover:bg-[#EBEEF2]/50 rounded-md"><span class="text-[12.5px] text-[#0F1115] leading-none">导出</span></div></div>
+</div>
+<!-- 3. 提示区 32px（上边框 1px #0000001A，11px 次要色居中） -->
+<!-- 提示区固定在浮层底部：44 + 280 + 32 加上微调填满 400px 外壳 -->
+<div class="w-full h-[32px] mt-auto border-t border-[#0000001A] flex items-center justify-center bg-[#FFFFFF] px-4">
+<span class="text-[11px] text-[#61666B] tracking-tight">↑↓ 选择 · ↵ 执行 · Esc 关闭</span>
+</div>
+</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DSH 设置 — 备份与迁移 D-12 推送结果弹窗</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    
+    body {
+      background-color: #EBECEF;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+
+    /* 564x720 纯净竖版插件面板 */
+    .plugin-canvas {
+      width: 564px;
+      height: 720px;
+      background-color: #FFFFFF;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #0000001A;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+    }
+
+    /* 底层被压暗的三段外壳 */
+    .shell-header {
+      height: 36px;
+      border-bottom: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      background: #FFFFFF;
+      flex-shrink: 0;
+    }
+
+    .shell-tabs {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .shell-tab {
+      font-size: 12px;
+      color: #61666B;
+      padding: 6px 0;
+      position: relative;
+    }
+
+    .shell-tab.active {
+      color: #0F1115;
+      font-weight: 500;
+    }
+
+    .shell-tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: -4px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: #0F1115;
+    }
+
+    .shell-tools {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      color: #81858C;
+    }
+
+    .shell-content {
+      flex: 1;
+      padding: 16px;
+      background: #FFFFFF;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* 灰阶轮廓背景卡片（绝无仓库、SSH、令牌文本） */
+    .bg-skeleton-card {
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      padding: 16px;
+      background: #FFFFFF;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .bg-skeleton-line {
+      height: 12px;
+      background: #0000000D;
+      border-radius: 4px;
+    }
+
+    .shell-footer {
+      height: 28px;
+      border-top: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      background: #FFFFFF;
+      flex-shrink: 0;
+      font-size: 11px;
+      color: #81858C;
+    }
+
+    .status-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background-color: #22C55E;
+    }
+
+    /* 遮罩 #0000003D 盖满 564x720 面板 */
+    .modal-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #0000003D;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px;
+      z-index: 50;
+    }
+
+    /* 模态框本体：宽 540，圆角 12，白底，1px 描边 */
+    .modal-dialog {
+      width: 540px;
+      background-color: #FFFFFF;
+      border-radius: 12px;
+      border: 1px solid #0000001A;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* 标题区 48px */
+    .modal-header {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      flex-shrink: 0;
+    }
+
+    .modal-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #0F1115;
+      line-height: 1.25;
+    }
+
+    .close-btn {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #81858C;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      border-radius: 4px;
+    }
+
+    /* 内容区：内边距 12px 16px，纵向 10px 间距 */
+    .modal-body {
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: calc(720px - 48px - 56px - 40px);
+      overflow-y: auto;
+    }
+
+    /* 结果 Banner (success: #22C55E 12% 混色底) */
+    .result-banner {
+      background-color: color-mix(in srgb, #22C55E 12%, transparent);
+      border-radius: 8px;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .result-banner-icon {
+      width: 14px;
+      height: 14px;
+      color: #22C55E;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .result-banner-text {
+      font-size: 12.5px;
+      font-weight: 500;
+      color: #0F1115;
+      line-height: 1.5;
+    }
+
+    /* 分组标题与徽章行 */
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 2px;
+    }
+
+    .section-label {
+      font-size: 12px;
+      color: #61666B;
+      line-height: 1.5;
+    }
+
+    /* info 徽章 */
+    .badge-info {
+      font-size: 11px;
+      color: #4176E6;
+      background-color: color-mix(in srgb, #4176E6 12%, transparent);
+      padding: 1px 6px;
+      border-radius: 4px;
+      line-height: 1.25;
+      font-weight: 500;
+    }
+
+    /* 分区清单 7 行 (12.5px, 行高 22px, 无边框) */
+    .partition-list {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .partition-item {
+      height: 22px;
+      display: flex;
+      align-items: center;
+      font-size: 12.5px;
+      color: #0F1115;
+      line-height: 22px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    .partition-item .item-count {
+      color: #61666B;
+      margin-left: 4px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    /* 告警清单 2 行 */
+    .warning-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .warning-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 12px;
+      color: #61666B;
+      line-height: 1.5;
+    }
+
+    .warning-indicator {
+      width: 3px;
+      height: 12px;
+      background-color: #F59E0B;
+      border-radius: 2px;
+      margin-top: 3px;
+      flex-shrink: 0;
+    }
+
+    /* 动作区 56px (上边框 1px #0000001A，按钮右对齐) */
+    .modal-footer {
+      height: 56px;
+      border-top: 1px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 0 16px;
+      flex-shrink: 0;
+      background: #FFFFFF;
+    }
+
+    /* Primary 关闭按钮 */
+    .btn-primary {
+      height: 30px;
+      background-color: #0F1115;
+      color: #FFFFFF;
+      border: none;
+      border-radius: 8px;
+      padding: 0 16px;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .btn-primary:hover {
+      background-color: #43454A;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="plugin-canvas">
+    <!-- 下层压暗的同步页三段外壳 -->
+    <header class="shell-header">
+      <nav class="shell-tabs">
+        <span class="shell-tab">首页</span>
+        <span class="shell-tab">产物库</span>
+        <span class="shell-tab active">同步</span>
+        <span class="shell-tab">环境</span>
+      </nav>
+      <div class="shell-tools">
+        <!-- ⌘K 图标 -->
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
+        </svg>
+        <!-- 活动图标 (折线) -->
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        <!-- 历史图标 (时钟) -->
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <!-- 关于图标 (info) -->
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="16" x2="12" y2="12"/>
+          <line x1="12" y1="8" x2="12.01" y2="8"/>
+        </svg>
+      </div>
+    </header>
+
+    <main class="shell-content">
+      <!-- 极简灰阶轮廓卡片，无任何真实敏感文本 -->
+      <div class="bg-skeleton-card">
+        <div class="bg-skeleton-line" style="width: 32%;"></div>
+        <div class="bg-skeleton-line" style="width: 75%;"></div>
+        <div class="bg-skeleton-line" style="width: 50%;"></div>
+      </div>
+      <div class="bg-skeleton-card" style="opacity: 0.6;">
+        <div class="bg-skeleton-line" style="width: 24%;"></div>
+        <div class="bg-skeleton-line" style="width: 60%;"></div>
+      </div>
+    </main>
+
+    <footer class="shell-footer">
+      <div class="status-left">
+        <span class="status-dot"></span>
+        <span>就绪 · 远程可选</span>
+      </div>
+      <span>v0.8.0 · DSH 2.4</span>
+    </footer>
+
+    <!-- 全局遮罩层 #0000003D -->
+    <div class="modal-overlay">
+      <!-- D-12 推送结果 弹窗本体 (540 宽) -->
+      <div class="modal-dialog">
+        <!-- 标题区 48px -->
+        <div class="modal-header">
+          <h2 class="modal-title">推送结果</h2>
+          <button class="close-btn" aria-label="关闭">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- 内容区 -->
+        <div class="modal-body">
+          <!-- 结果 Banner (success: #22C55E 12% 混色底 + 圆圈对勾图标) -->
+          <div class="result-banner">
+            <span class="result-banner-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="9 12 11.5 14.5 15.5 9.5"/>
+              </svg>
+            </span>
+            <span class="result-banner-text">推送成功（快照 2026-11-09T18-32-07Z）</span>
+          </div>
+
+          <!-- 分组：同步分区 + info 徽章 -->
+          <div class="section-header">
+            <span class="section-label">同步分区</span>
+            <span class="badge-info">18 个分区</span>
+          </div>
+
+          <!-- 清单 7 行 (12.5px，行高 22px，无边框) -->
+          <div class="partition-list">
+            <div class="partition-item">settings<span class="item-count"> · 42 项</span></div>
+            <div class="partition-item">plugins<span class="item-count"> · 18 项</span></div>
+            <div class="partition-item">mcp<span class="item-count"> · 7 项</span></div>
+            <div class="partition-item">prompts<span class="item-count"> · 31 项</span></div>
+            <div class="partition-item">skills<span class="item-count"> · 12 项</span></div>
+            <div class="partition-item">workspaces<span class="item-count"> · 4 项</span></div>
+            <div class="partition-item">pluginData<span class="item-count"> · 6 项</span></div>
+          </div>
+
+          <!-- 分组：分区告警 -->
+          <div class="section-header" style="margin-top: 4px;">
+            <span class="section-label">分区告警</span>
+          </div>
+
+          <!-- 告警清单 2 行 (12px #61666B，左侧 3px 橙 #F59E0B 竖条) -->
+          <div class="warning-list">
+            <div class="warning-item">
+              <span class="warning-indicator"></span>
+              <span>pluginData：cache 目录已跳过（不入同步载荷）</span>
+            </div>
+            <div class="warning-item">
+              <span class="warning-indicator"></span>
+              <span>workspaces：2 个工作区目录不存在，已跳过</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 动作区 56px (上边框 1px #0000001A，按钮右对齐，仅一个「关闭」) -->
+        <div class="modal-footer">
+          <button class="btn-primary">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

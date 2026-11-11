@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-36 一键上传表单弹窗</title>
+<style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      background-color: #EBEEF2;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    /* 564x720 插件主画布容器 */
+    .plugin-canvas {
+      width: 564px;
+      height: 720px;
+      background-color: #FFFFFF;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid #0000001A;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* 下层底层外壳：我的配置页骨架 (全量置灰脱敏轮廓) */
+    .underlay-header {
+      height: 32px;
+      background-color: #FFFFFF;
+      border-bottom: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      flex-shrink: 0;
+    }
+    .underlay-nav-tabs {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: #81858C;
+    }
+    .underlay-nav-tabs .active {
+      color: #0F1115;
+      font-weight: 500;
+    }
+    .underlay-header-icons {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #81858C;
+    }
+
+    .underlay-body {
+      flex: 1;
+      padding: 12px 16px;
+      background-color: #FFFFFF;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .skeleton-bar {
+      border-radius: 4px;
+      background-color: #0000001A;
+    }
+    .skeleton-card {
+      border: 1px solid #0000001A;
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .underlay-footer {
+      height: 28px;
+      background-color: #FFFFFF;
+      border-top: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      font-size: 11px;
+      color: #81858C;
+      flex-shrink: 0;
+    }
+    .status-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background-color: #22C55E;
+    }
+
+    /* 遮罩覆盖整块 564x720 画布 */
+    .modal-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #0000003D;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding-top: 40px;
+      z-index: 10;
+    }
+
+    /* 宽版弹窗本体：宽 541px、高 600px、圆角 12、白底 1px #0000001A 描边 */
+    .dialog-wide {
+      width: 541px;
+      height: 600px;
+      background-color: #FFFFFF;
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: none; /* 严格禁止阴影 */
+    }
+
+    /* 弹窗 Header：高 44px、左右 16px */
+    .dialog-header {
+      height: 44px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 0.5px solid #0000001A;
+      flex-shrink: 0;
+    }
+    .dialog-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #0F1115;
+      line-height: 1.25;
+    }
+    .dialog-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #81858C;
+    }
+    .icon-btn {
+      width: 14px;
+      height: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: #81858C;
+      transition: color 0.1s ease;
+    }
+    .icon-btn:hover {
+      color: #0F1115;
+    }
+
+    /* 弹窗 Body：内边距 16px，内部区块顺序固定，间距 12px */
+    .dialog-body {
+      flex: 1;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    /* ② 徽章行：浅底徽章「校验通过：内容合法、不含密钥」 */
+    .badge-validation {
+      align-self: flex-start;
+      font-size: 11px;
+      line-height: 1.5;
+      padding: 3px 8px;
+      border-radius: 4px;
+      color: #22C55E;
+      background-color: color-mix(in srgb, #22C55E 12%, transparent);
+      border: 0.5px solid color-mix(in srgb, #22C55E 35%, transparent);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 500;
+    }
+
+    /* 表单字段样式：标签在上、控件在下，间隔 4px */
+    .form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .field-label {
+      font-size: 11px;
+      font-weight: 500;
+      color: #61666B;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      line-height: 1.5;
+    }
+    .field-label .inline-info-icon {
+      color: #81858C;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .form-input {
+      height: 28px;
+      border-radius: 8px;
+      border: 0.5px solid #00000029;
+      background-color: #FFFFFF;
+      padding: 6px 8px;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #0F1115;
+      outline: none;
+      font-family: inherit;
+    }
+    .form-input:focus {
+      border-color: #4176E6;
+    }
+
+    .form-textarea {
+      height: 66px;
+      border-radius: 8px;
+      border: 0.5px solid #00000029;
+      background-color: #FFFFFF;
+      padding: 6px 8px;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #0F1115;
+      outline: none;
+      resize: none;
+      font-family: inherit;
+    }
+    .form-textarea:focus {
+      border-color: #4176E6;
+    }
+
+    /* ⑥ 发布模式：两个单选行（上下排列，行距 6px） */
+    .radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-top: 2px;
+    }
+    .radio-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .custom-radio {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      border: 1px solid #00000029;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      background-color: #FFFFFF;
+    }
+    .custom-radio.checked {
+      border-color: #0F1115;
+    }
+    .custom-radio.checked::after {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background-color: #0F1115;
+    }
+    .radio-text {
+      font-size: 12px;
+      line-height: 1.5;
+      color: #0F1115;
+    }
+
+    /* ⑦ 分组标签「自动生成」+ 四枚浅底徽章 */
+    .auto-gen-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-top: 2px;
+    }
+    .auto-gen-label {
+      font-size: 11px;
+      color: #81858C;
+      line-height: 1.5;
+    }
+    .badges-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .badge-auto {
+      font-size: 11px;
+      line-height: 1.5;
+      color: #61666B;
+      background-color: #EBEEF2;
+      border: 0.5px solid #0000001A;
+      border-radius: 999px;
+      padding: 2px 8px;
+    }
+
+    /* ⑧ 正文最后一行按钮右对齐：主按钮在左，ghost 在右 */
+    .dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      margin-top: auto;
+      padding-top: 8px;
+    }
+    .btn-primary {
+      height: 28px;
+      padding: 0 12px;
+      background-color: #0F1115;
+      color: #FFFFFF;
+      font-size: 12px;
+      font-weight: 500;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 28px;
+    }
+    .btn-ghost {
+      height: 28px;
+      padding: 0 12px;
+      background-color: #FFFFFF;
+      color: #0F1115;
+      font-size: 12px;
+      font-weight: 500;
+      border: 0.5px solid #00000029;
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 28px;
+    }
+  </style>
+</head>
+<body>
+<div class="plugin-canvas">
+<!-- 下层外壳：顶部导航条 -->
+<header class="underlay-header">
+<div class="underlay-nav-tabs">
+<span>首页</span>
+<span class="active">产物库</span>
+<span>同步</span>
+<span>环境</span>
+</div>
+<div class="underlay-header-icons">
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><rect height="18" rx="2" ry="2" width="18" x="3" y="3"></rect><path d="M7 15h4M15 9h-4M9 9v6M15 9v6"></path></svg>
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</div>
+</header>
+<!-- 下层内容区骨架（我的配置页轮廓） -->
+<div class="underlay-body"><div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+<div class="skeleton-bar" style="width: 96px; height: 18px;"></div>
+<div class="skeleton-bar" style="width: 68px; height: 24px; border-radius: 6px;"></div>
+</div>
+<div class="skeleton-card" style="padding: 10px; gap: 8px;">
+<div style="display: flex; align-items: center; gap: 10px;">
+<div class="skeleton-bar" style="width: 28px; height: 28px; border-radius: 999px;"></div>
+<div style="display: flex; flex-direction: column; gap: 4px; flex: 1;">
+<div class="skeleton-bar" style="width: 110px; height: 11px;"></div>
+<div class="skeleton-bar" style="width: 180px; height: 9px;"></div>
+</div>
+<div class="skeleton-bar" style="width: 52px; height: 20px; border-radius: 4px;"></div>
+</div>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+<div class="skeleton-bar" style="width: 72px; height: 13px;"></div>
+<div class="skeleton-bar" style="width: 80px; height: 24px; border-radius: 6px;"></div>
+</div>
+<div class="skeleton-card" style="padding: 10px; gap: 8px;">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<div class="skeleton-bar" style="width: 140px; height: 12px;"></div>
+<div class="skeleton-bar" style="width: 48px; height: 12px; border-radius: 999px;"></div>
+</div>
+<div class="skeleton-bar" style="width: 240px; height: 10px;"></div>
+<div style="display: flex; gap: 6px; margin-top: 2px;">
+<div class="skeleton-bar" style="width: 46px; height: 14px; border-radius: 4px;"></div>
+<div class="skeleton-bar" style="width: 54px; height: 14px; border-radius: 4px;"></div>
+</div>
+</div>
+<div class="skeleton-card" style="padding: 10px; gap: 8px;">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<div class="skeleton-bar" style="width: 125px; height: 12px;"></div>
+<div class="skeleton-bar" style="width: 48px; height: 12px; border-radius: 999px;"></div>
+</div>
+<div class="skeleton-bar" style="width: 210px; height: 10px;"></div>
+<div style="display: flex; gap: 6px; margin-top: 2px;">
+<div class="skeleton-bar" style="width: 50px; height: 14px; border-radius: 4px;"></div>
+</div>
+</div></div>
+<!-- 下层状态栏 -->
+<footer class="underlay-footer">
+<div class="status-left">
+<span class="status-dot"></span>
+<span>就绪</span>
+</div>
+<div>v0.8.0 · DSH 2.4</div>
+</footer>
+<!-- 遮罩覆盖整块 564x720 画布 -->
+<div class="modal-overlay" style="align-items: center; padding-top: 0;">
+<!-- 宽版弹窗本体 (dialogWide) 541x600px -->
+<div class="dialog-wide" style="height: auto; max-height: 600px;">
+<!-- ① Header: 高 44px, 标题「一键上传」13px 600, 右端 ⓘ 与 ✕ -->
+<div class="dialog-header">
+<div class="dialog-title">一键上传</div>
+<div class="dialog-header-actions">
+<!-- ⓘ 14px 线框图标 -->
+<div class="icon-btn" title="说明">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="14">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</div>
+<!-- ✕ 14px 关闭图标 -->
+<div class="icon-btn" title="关闭">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="14">
+<line x1="18" x2="6" y1="6" y2="18"></line>
+<line x1="6" x2="18" y1="6" y2="18"></line>
+</svg>
+</div>
+</div>
+</div>
+<!-- 弹窗 Body: 内部区块顺序固定 -->
+<div class="dialog-body">
+<!-- ② 徽章行：浅底徽章「校验通过：内容合法、不含密钥」 -->
+<div>
+<div class="badge-validation">
+<svg fill="none" height="12" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="12">
+<polyline points="20 6 9 17 4 12"></polyline>
+</svg>
+<span>校验通过：内容合法、不含密钥</span>
+</div>
+</div>
+<!-- ③ 字段「名称」+ 标签右侧 ⓘ；输入框有值「dsh-config-sample」 -->
+<div class="form-field">
+<label class="field-label">
+<span>名称</span>
+<span class="inline-info-icon">
+<svg fill="none" height="12" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="12">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</span>
+</label>
+<input class="form-input" readonly="" type="text" value="dsh-config-sample"/>
+</div>
+<!-- ④ 字段「描述（可选）」+ 三行高 textarea -->
+<div class="form-field">
+<label class="field-label">描述（可选）</label>
+<textarea class="form-textarea" placeholder=""></textarea>
+</div>
+<!-- ⑤ 字段「类别（可选，逗号分隔）」+ 空输入框 -->
+<div class="form-field">
+<label class="field-label">类别（可选，逗号分隔）</label>
+<input class="form-input" placeholder="" type="text"/>
+</div>
+<!-- ⑥ 字段「发布模式」+ 标签右侧 ⓘ；下方两个单选行 -->
+<div class="form-field">
+<label class="field-label">
+<span>发布模式</span>
+<span class="inline-info-icon">
+<svg fill="none" height="12" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" viewbox="0 0 24 24" width="12">
+<circle cx="12" cy="12" r="10"></circle>
+<line x1="12" x2="12" y1="16" y2="12"></line>
+<line x1="12" x2="12.01" y1="8" y2="8"></line>
+</svg>
+</span>
+</label>
+<div class="radio-group">
+<!-- 选中项：分享（自动排除敏感内容） -->
+<div class="radio-row">
+<div class="custom-radio checked"></div>
+<span class="radio-text">分享（自动排除敏感内容）</span>
+</div>
+<!-- 未选中项：迁移（保留全部内容） -->
+<div class="radio-row">
+<div class="custom-radio"></div>
+<span class="radio-text">迁移（保留全部内容）</span>
+</div>
+</div>
+</div>
+<!-- ⑦ 分组标签「自动生成」+ 四枚浅底徽章 -->
+<div class="auto-gen-section">
+<div class="auto-gen-label">自动生成</div>
+<div class="badges-row">
+<span class="badge-auto">条目 ID：系统自动</span>
+<span class="badge-auto">作者：系统自动</span>
+<span class="badge-auto">版本：系统自动</span>
+<span class="badge-auto">更新时间：系统自动</span>
+</div>
+</div>
+<!-- ⑧ 最后一行按钮右对齐：#0F1115 实底白字「上传配置包」在左，ghost 白底描边「重新选择」在右 -->
+<div class="dialog-actions" style="margin-top: 16px; padding-top: 0;">
+<button class="btn-primary" type="button">上传配置包</button>
+<button class="btn-ghost" type="button">重新选择</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

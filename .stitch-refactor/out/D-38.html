@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DSH 设置 — 备份与迁移 D-38 删除条目确认弹窗</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      background-color: #EBEEF2;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 0;
+    }
+
+    /* 插件固定视口 564x720 */
+    .plugin-viewport {
+      width: 564px;
+      height: 720px;
+      background-color: #FFFFFF;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      border: 1px solid #0000001A;
+    }
+
+    /* ========== 底层页面骨架（被压暗，只辨形状不可读） ========== */
+    .bg-layout {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      filter: grayscale(100%);
+      opacity: 0.35;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    /* 顶部导航条 32px */
+    .top-nav {
+      height: 32px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 0.5px solid #0000001A;
+      background: #FFFFFF;
+    }
+
+    .nav-tabs {
+      display: flex;
+      gap: 16px;
+    }
+
+    .nav-tab-placeholder {
+      height: 12px;
+      width: 32px;
+      background: #81858C;
+      border-radius: 4px;
+    }
+
+    .nav-tab-placeholder.active {
+      width: 40px;
+      background: #0F1115;
+    }
+
+    .nav-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .nav-icon-placeholder {
+      width: 14px;
+      height: 14px;
+      background: #81858C;
+      border-radius: 4px;
+    }
+
+    /* 中间内容区 */
+    .bg-content {
+      flex: 1;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .bg-title-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .bg-pill {
+      height: 24px;
+      width: 68px;
+      background: #EBEEF2;
+      border-radius: 999px;
+    }
+
+    .bg-title-text {
+      height: 14px;
+      width: 50px;
+      background: #0F1115;
+      border-radius: 4px;
+    }
+
+    .bg-meta-card {
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .bg-meta-row {
+      height: 18px;
+      width: 70%;
+      background: #EBEEF2;
+      border-radius: 4px;
+    }
+
+    .bg-upload-card {
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      padding: 12px;
+      height: 60px;
+      background: #FFFFFF;
+    }
+
+    .bg-list-card {
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      flex: 1;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .bg-list-item {
+      height: 38px;
+      border-bottom: 0.5px solid #0000001A;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .bg-item-left {
+      width: 40%;
+      height: 14px;
+      background: #81858C;
+      border-radius: 4px;
+    }
+
+    .bg-item-right {
+      width: 25%;
+      height: 14px;
+      background: #EBEEF2;
+      border-radius: 4px;
+    }
+
+    /* 底部内缩状态栏 28px */
+    .status-bar-wrapper {
+      padding: 0 8px 8px 8px;
+    }
+
+    .status-bar {
+      height: 28px;
+      background: #FFFFFF;
+      border: 1px solid #0000001A;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+    }
+
+    .status-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #22C55E;
+    }
+
+    .status-text {
+      font-size: 11px;
+      color: #61666B;
+    }
+
+    .status-version {
+      font-size: 11px;
+      color: #81858C;
+      font-family: monospace;
+    }
+
+    /* ========== 24% 遮罩层 (#0000003D) ========== */
+    .modal-backdrop {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #0000003D;
+      z-index: 10;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding-top: 210px; /* 垂直居中略偏上 */
+    }
+
+    /* ========== D-38 弹窗本体 (ConfirmDialog danger) ========== */
+    .dialog-card {
+      width: 519px; /* min(600px, 92%) => 564*0.92 = 518.88px -> 519px */
+      background: #FFFFFF;
+      border-radius: 12px;
+      border: 1px solid #0000001A;
+      display: flex;
+      flex-direction: column;
+      z-index: 20;
+    }
+
+    /* 1. Header (padding: 12px 16px 0, 仅标题, 无关闭按钮) */
+    .dialog-header {
+      padding: 14px 16px 0 16px;
+    }
+
+    .dialog-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: #0F1115;
+      line-height: 1.25;
+    }
+
+    /* 2. Body (padding: 8px 16px 14px, 一段说明文字, 不限高不内滚) */
+    .dialog-body {
+      padding: 8px 16px 14px 16px;
+    }
+
+    .dialog-desc {
+      font-size: 12.5px;
+      line-height: 1.7;
+      color: #61666B;
+      text-align: left;
+    }
+
+    /* 3. Footer (border-top 0.5px #0000001A, padding 10px 16px 14px, 按钮右对齐) */
+    .dialog-footer {
+      border-top: 0.5px solid #0000001A;
+      padding: 10px 16px 14px 16px;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Footer 按钮共通规格 */
+    .btn {
+      height: 28px;
+      font-size: 12.5px;
+      font-weight: 500;
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 10px;
+      background: transparent;
+      outline: none;
+      transition: background 0.1s ease;
+      white-space: nowrap;
+    }
+
+    /* danger 描边按钮（左起第一枚）：透明底，0.5px #EC1313 45% 描边，红字 #EC1313 */
+    .btn-danger {
+      border: 0.5px solid color-mix(in srgb, #EC1313 45%, transparent);
+      color: #EC1313;
+    }
+
+    .btn-danger:hover {
+      background-color: color-mix(in srgb, #EC1313 6%, transparent);
+    }
+
+    /* ghost 描边按钮（第二枚 取消）：透明底，0.5px #00000029 描边，文字 #0F1115 */
+    .btn-ghost {
+      border: 0.5px solid #00000029;
+      color: #0F1115;
+    }
+
+    .btn-ghost:hover {
+      background-color: #0000000A;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="plugin-viewport">
+    <!-- 底层骨架：已被压暗脱敏 -->
+    <div class="bg-layout">
+      <!-- 顶部导航条 -->
+      <div class="top-nav">
+        <div class="nav-tabs">
+          <div class="nav-tab-placeholder"></div>
+          <div class="nav-tab-placeholder active"></div>
+          <div class="nav-tab-placeholder"></div>
+          <div class="nav-tab-placeholder"></div>
+        </div>
+        <div class="nav-actions">
+          <div class="nav-icon-placeholder"></div>
+          <div class="nav-icon-placeholder"></div>
+          <div class="nav-icon-placeholder"></div>
+          <div class="nav-icon-placeholder"></div>
+        </div>
+      </div>
+
+      <!-- 内容区骨架 -->
+      <div class="bg-content">
+        <div class="bg-title-bar">
+          <div class="bg-pill"></div>
+          <div class="bg-title-text"></div>
+        </div>
+        <div class="bg-meta-card">
+          <div class="bg-meta-row" style="width: 85%;"></div>
+          <div class="bg-meta-row" style="width: 60%;"></div>
+        </div>
+        <div class="bg-upload-card"></div>
+        <div class="bg-list-card">
+          <div class="bg-list-item">
+            <div class="bg-item-left"></div>
+            <div class="bg-item-right"></div>
+          </div>
+          <div class="bg-list-item">
+            <div class="bg-item-left" style="width: 50%;"></div>
+            <div class="bg-item-right"></div>
+          </div>
+          <div class="bg-list-item">
+            <div class="bg-item-left" style="width: 35%;"></div>
+            <div class="bg-item-right"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部内缩状态栏 -->
+      <div class="status-bar-wrapper">
+        <div class="status-bar">
+          <div class="status-left">
+            <div class="status-dot"></div>
+            <span class="status-text">就绪 · 市场已连接</span>
+          </div>
+          <div class="status-version">v0.8.0 · DSH 2.4</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 24% 黑色遮罩层与 D-38 弹窗本体 -->
+    <div class="modal-backdrop">
+      <div class="dialog-card">
+        <!-- Header -->
+        <div class="dialog-header">
+          <div class="dialog-title">删除条目</div>
+        </div>
+
+        <!-- Body -->
+        <div class="dialog-body">
+          <p class="dialog-desc">
+            确认删除？该操作会从配置仓库永久删除该条目的索引与文件<br>（不可恢复）
+          </p>
+        </div>
+
+        <!-- Footer -->
+        <div class="dialog-footer">
+          <button class="btn btn-danger" type="button">确认删除</button>
+          <button class="btn btn-ghost" type="button">取消</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
