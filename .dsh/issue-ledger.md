@@ -6,3 +6,4 @@
 
 | issue | 症状 | 状态 | 修复提交 | 更新 |
 |---|---|---|---|---|
+| #133 | 「从远端合并」把 profile patch 的 `- insert:` 块摊平成顶层行，纯新增条目（MCP server 等）在 DSH 侧 not found 全灭；写回同时丢 `transport` 与 scoped 行名 | awaiting-release | 74539bd + 06daa26 | 2026-11-11 |
