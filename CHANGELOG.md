@@ -28,6 +28,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-12
+
+> **新版 Trae 的会话，现在也能导进来了**：这几个发行版把会话搬进了加密数据库，插件以前只认得旧文件、导出来是空的；现在两种形态都读，同一段对话不算两遍。导入失败时也不再只说一句「导入失败」，而是写清是哪一种原因，并带上问题码。
+>
+> **Theme**: sessions from newer Trae builds import again — conversations now come out of the encrypted database as well as the old session files, and a failed import states which kind of problem it hit instead of one generic message.
+
 ### 🆕 新增 · Added
 
 - **Trae（含 Trae CN / TRAE SOLO）新版的会话现在也能导入了**：这几个发行版把会话搬进了加密数据库，插件以前只认得旧的会话文件、导出来是空的；现在会连同该库里的会话一起读出来导入，旧的会话文件也照样认，同一段对话不会算两遍。（issue #134）
