@@ -6,7 +6,7 @@
  */
 import { draftFromTranscript, sessionSourceOf } from './session-source.ts';
 import type { SessionSourceWiring } from './session-source.ts';
-import { readTrae, traeProbePaths } from './read-trae.ts';
+import { readTrae, traeDetectSkips, traeProbePaths } from './read-trae.ts';
 import type { TraeSessionFile } from './read-trae.ts';
 import type { ForeignSource } from './registry.ts';
 
@@ -14,6 +14,8 @@ export const traeWiring: SessionSourceWiring<TraeSessionFile> = {
   id: 'trae',
   evidence: 'fixture',
   probePaths: (opts) => traeProbePaths(opts),
+  // detect 期就预告「为什么没有会话」（密钥错 / 超限 / 旧库无候选键），别等 build 的 400
+  probeSkips: (opts) => traeDetectSkips(opts),
   read: (opts) => readTrae(opts),
   draftOf: (file) => draftFromTranscript(file.id, file, 'trae'),
 };

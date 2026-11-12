@@ -432,8 +432,10 @@ export const FOREIGN_TRUTH_TABLES: readonly ForeignTruthTableEntry[] = [
     envKeys: [{ key: 'XDG_CONFIG_HOME', mode: 'replace', absoluteOnly: true, platforms: ['linux'] }],
     autoRoots: true,
     evidence: 'fixture',
-    refs: 'read-vault §10.1 trae 行 + chat-import discovery.mjs:80-93,140,2386（**4 个发行版** × 三分支；$APPDATA 缺失即跳过）',
-    dynamic: '<User>/{workspaceStorage,globalStorage}/**/state.vscdb（SQLite ItemTable；键 memento/icube-ai-agent-storage + 4 回退键）',
+    refs: 'read-vault §10.1 trae 行 + chat-import discovery.mjs:80-93,140,2386（**4 个发行版** × 三分支；$APPDATA 缺失即跳过）+ issue #134（2.3.x 加密库布局与 raw key 见 xitula/trae-session-export；**本机无真机样本，evidence 仍为 fixture**）',
+    dynamic:
+      '<User>/ModularData/ai-agent/database.db（2.3.x SQLCipher 4.x 整库加密，page 4096 / reserve 80 = IV16+HMAC512；表 chat_session / history_v2 / chat_message / chat_turn / project，消息在 history_v2.messages 的 raw_messages[]）'
+      + ' 与 <User>/{workspaceStorage,globalStorage}/**/state.vscdb（旧通道，SQLite ItemTable；键 memento/icube-ai-agent-storage + 4 回退键）；两条并存时按会话 id 只计一份',
   },
   {
     id: 'vibe',

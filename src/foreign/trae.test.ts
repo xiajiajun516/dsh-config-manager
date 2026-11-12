@@ -10,6 +10,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { createCipheriv, randomBytes } from 'node:crypto';
+
 import { FOREIGN_TRUTH_TABLES, TRUTH_PROBE_ENV, TRUTH_PROBES } from './truth-table.ts';
 import { normalizePlatform, roamingAppDataDir, vscodeUserDataDir, xdgDataHome } from './platform-paths.ts';
 import type { ForeignPlatform } from './platform-paths.ts';
@@ -75,6 +77,13 @@ import {
   traeVscdbPaths,
 } from './read-trae.ts';
 import { sqliteCapability } from './sqlite.ts';
+import {
+  TRAE_DB_DEFAULT_KEY,
+  TRAE_DB_KEY_ENV,
+  TRAE_DB_PAGE_SIZE,
+  TRAE_DB_RESERVE_BYTES,
+  traeDbPathFor,
+} from './trae-sqlcipher.ts';
 
 interface SqliteModule {
   DatabaseSync?: new (p: string) => {
@@ -314,3 +323,182 @@ test('trae t9 旧版回退键的库：整库可读（不再漏读）', async (t)
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+/* ------------------------------------------- 2.3.x 加密库夹具（SQLCipher 形态） */
+
+const DB_PAGE = TRAE_DB_PAGE_SIZE;
+const DB_RESERVE = TRAE_DB_RESERVE_BYTES;
+/** 会话 cwd 必须是**运行平台可判定为绝对**的路径（否则转码层按 session-missing-cwd 丢弃） */
+const DB_CWD = HOST === 'win32' ? 'C:\\work\\trae' : '/work/trae';
+
+/** 把 node:sqlite 建的普通库重排成 reserve 80 的明文库（真实 SQLCipher 明文的形状） */
+function reserve80(input: Buffer): Buffer {
+  const out = Buffer.from(input);
+  const pages = Math.floor(out.length / DB_PAGE);
+  const usable = DB_PAGE - DB_RESERVE;
+  for (let index = 0; index < pages; index += 1) {
+    const base = index * DB_PAGE;
+    const header = index === 0 ? 100 : 0;
+    const cellCount = out.readUInt16BE(base + header + 3);
+    const contentStart = out.readUInt16BE(base + header + 5);
+    if (contentStart === 0 || contentStart >= DB_PAGE) continue;
+    out.copy(out, base + contentStart - DB_RESERVE, base + contentStart, base + DB_PAGE);
+    out.fill(0, base + usable, base + DB_PAGE);
+    out.writeUInt16BE(contentStart - DB_RESERVE, base + header + 5);
+    for (let cell = 0; cell < cellCount; cell += 1) {
+      const pointer = base + header + 8 + cell * 2;
+      out.writeUInt16BE(out.readUInt16BE(pointer) - DB_RESERVE, pointer);
+    }
+  }
+  out[20] = DB_RESERVE;
+  return out;
+}
+
+/** 按 SQLCipher 4.x 页面布局正向加密（page0 = salt + AES，每页尾 IV16 + HMAC64 占位） */
+function sqlcipherPages(plain: Buffer, keyHex: string): Buffer {
+  const key = Buffer.from(keyHex, 'hex');
+  const pages = Math.ceil(plain.length / DB_PAGE);
+  const out: Buffer[] = [];
+  for (let index = 0; index < pages; index += 1) {
+    const start = index * DB_PAGE;
+    const page = Buffer.alloc(DB_PAGE);
+    plain.copy(page, 0, start, Math.min(start + DB_PAGE, plain.length));
+    const usable = DB_PAGE - DB_RESERVE;
+    const payload = index === 0 ? page.subarray(16, usable) : page.subarray(0, usable);
+    const iv = randomBytes(16);
+    const cipher = createCipheriv('aes-256-cbc', key, iv);
+    cipher.setAutoPadding(false);
+    const encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
+    out.push(index === 0 ? randomBytes(16) : Buffer.alloc(0), encrypted, iv, randomBytes(64));
+  }
+  return Buffer.concat(out);
+}
+
+/** 在 <User>/ModularData/ai-agent/database.db 造一个 SQLCipher 形态的库（表真造，不是假数据） */
+async function makeEncryptedDb(file: string, ids: readonly string[], keyHex = TRAE_DB_DEFAULT_KEY): Promise<boolean> {
+  const spec = 'node:sqlite';
+  let mod: SqliteModule;
+  try {
+    mod = await import(spec) as SqliteModule;
+  } catch {
+    return false;
+  }
+  const Ctor = mod.DatabaseSync;
+  if (Ctor === undefined) return false;
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const plainFile = file + '.plain';
+  const db = new Ctor(plainFile);
+  try {
+    db.exec('CREATE TABLE chat_session (id TEXT PRIMARY KEY, session_id TEXT, title TEXT, cwd TEXT, created_at INTEGER)');
+    db.exec('CREATE TABLE history_v2 (session_id TEXT, messages TEXT)');
+    const insertSession = db.prepare('INSERT INTO chat_session (id, session_id, title, cwd, created_at) VALUES (?, ?, ?, ?, ?)');
+    const insertHistory = db.prepare('INSERT INTO history_v2 (session_id, messages) VALUES (?, ?)');
+    for (const id of ids) {
+      insertSession.run(id, id, 'enc-' + id, DB_CWD, 1750000000000);
+      insertHistory.run(id, JSON.stringify({
+        raw_messages: [
+          { role: 'user', content: 'hi ' + id },
+          { role: 'assistant', content: 'yo ' + id },
+        ],
+      }));
+    }
+  } finally {
+    db.close();
+  }
+  const plain = reserve80(await fs.readFile(plainFile));
+  await fs.writeFile(file, sqlcipherPages(plain, keyHex));
+  await fs.rm(plainFile, { force: true });
+  return true;
+}
+
+test('trae t10 双通道并存：加密库优先且同 id 只计一份，旧 state.vscdb 的其余会话仍保留', async (t) => {
+  const capability = await sqliteCapability();
+  if (!capability.available) {
+    t.skip('本宿主无 node:sqlite');
+    return;
+  }
+  const root = await tmpRoot('trae-dual');
+  try {
+    const userDir = vscodeUserDataDir(HOST, root, {}, 'Trae CN');
+    assert.equal(await makeEncryptedDb(traeDbPathFor(userDir, HOST), ['d-1', 'd-2']), true, '加密库夹具必须造成功');
+    // 旧通道：d-1 与加密库同 id（迁移残留），old-9 只在旧库
+    assert.equal(await makeVscdb(path.join(userDir, 'globalStorage', 'state.vscdb'), [
+      { key: 'memento/icube-ai-agent-storage', value: JSON.stringify({
+        sessions: [
+          { id: 'd-1', workspace: DB_CWD, messages: [{ role: 'user', content: '旧残留' }] },
+          { id: 'old-9', workspace: DB_CWD, messages: [{ role: 'user', content: '只有旧库' }] },
+        ],
+      }) },
+    ]), true);
+
+    const read = await readTrae({ homeDir: root, env: {}, platform: HOST });
+    assert.deepEqual(read.files.map((f) => f.id), ['d-1', 'd-2', 'old-9'], '同 id 只出现一次，加密库先占位');
+    const dup = read.files.find((f) => f.id === 'd-1');
+    assert.equal(dup?.records[0]?.blocks[0]?.type, 'text', '同 id 用的是加密库那份正文');
+    assert.equal(read.extraCounts?.['trae.encryptedDb'], 1);
+    assert.equal(read.extraCounts?.['trae.encryptedSessions'], 2, '加密库贡献 2 条，旧库补 1 条');
+    assert.equal(read.extraSkips?.some((s) => s.code === 'sessions-not-migrated'), false, '加密库在场时不得再说「没迁移」');
+
+    const result = await traeSource.build(ctxOf(root, HOST));
+    assert.equal(result.counts['sessions.files'], 3);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('trae t11 detect 期就带出 sessions-not-migrated（不再等 build 的 400 才闪一下）', async (t) => {
+  const capability = await sqliteCapability();
+  if (!capability.available) {
+    t.skip('本宿主无 node:sqlite');
+    return;
+  }
+  const root = await tmpRoot('trae-detect');
+  try {
+    const userDir = vscodeUserDataDir(HOST, root, {}, 'Trae');
+    assert.equal(await makeVscdb(path.join(userDir, 'globalStorage', 'state.vscdb'), [
+      { key: 'memento/workbench.panel.output', value: '{}' },
+    ]), true);
+    const detect = await traeSource.detect(ctxOf(root, HOST));
+    assert.equal(detect.found, true);
+    assert.equal(
+      detect.skipped?.some((s) => s.code === 'sessions-not-migrated' && s.detail === 'chat-storage-key-not-found'),
+      true,
+      'detect 必须预告 build 会产生的同一 skip',
+    );
+    // 完全没有库时不预告（空目录 ≠ 没迁移）
+    const empty = await tmpRoot('trae-detect-empty');
+    try {
+      const skipped = await traeSource.detect(ctxOf(empty, HOST));
+      assert.deepEqual(skipped.skipped ?? [], []);
+    } finally {
+      await fs.rm(empty, { recursive: true, force: true });
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('trae t12 密钥不对：detect 与 build 都给 trae-db-key-invalid（绝不静默 0 会话）', async (t) => {
+  const capability = await sqliteCapability();
+  if (!capability.available) {
+    t.skip('本宿主无 node:sqlite');
+    return;
+  }
+  const root = await tmpRoot('trae-badkey');
+  try {
+    const userDir = vscodeUserDataDir(HOST, root, {}, 'TRAE SOLO CN');
+    assert.equal(await makeEncryptedDb(traeDbPathFor(userDir, HOST), ['k-1']), true);
+    const env = { [TRAE_DB_KEY_ENV]: '00'.repeat(32) };
+    const detect = await traeSource.detect(ctxOf(root, HOST, env));
+    assert.equal(detect.skipped?.some((s) => s.code === 'trae-db-key-invalid'), true, 'detect 必须先报密钥问题');
+
+    const read = await readTrae({ homeDir: root, env, platform: HOST });
+    assert.deepEqual(read.files, []);
+    assert.equal(read.extraSkips?.some((s) => s.code === 'trae-db-key-invalid'), true);
+    // 换回内置缺省密钥，同一台机器又能读到（密钥不是写死不可换）
+    const ok = await readTrae({ homeDir: root, env: {}, platform: HOST });
+    assert.deepEqual(ok.files.map((f) => f.id), ['k-1']);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+

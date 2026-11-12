@@ -182,7 +182,16 @@ export type ForeignSkipCode =
   /** 同名 MCP server 在多处出现（全局 / 项目级 / 插件）：先到先得，其余只报告 */
   | 'mcp-server-id-conflict'
   /** 项目级扫描触顶（maxProjects）：**不静默**，如实报码 */
-  | 'project-scan-truncated';
+  | 'project-scan-truncated'
+  /* ---- 2026-11-12（#134）：Trae 2.3.x 的 SQLCipher 加密会话库四条可判定失败 ---- */
+  /** 加密库密钥不符（换版 / 用户覆盖了错误密钥）：页头判据不成立，**绝不静默 0 会话** */
+  | 'trae-db-key-invalid'
+  /** 加密库超出**本来源**的体积上限（copy-too-large 语义；全局 1 GiB 兜底未改） */
+  | 'trae-db-too-large'
+  /** 加密库解密失败：截断 / 非 SQLCipher 形态 / 页尺寸不符 / IO 错误 */
+  | 'trae-db-decrypt-failed'
+  /** 解密成功但表结构不符（缺 chat_session / history_v2 或必需列）：可判定失败，不猜字段 */
+  | 'trae-db-schema-mismatch';
 
 /**
  * 冲突语义（**契约冻结**，§8.4）：同 id 会话恒「不覆盖、跳过并报码」。

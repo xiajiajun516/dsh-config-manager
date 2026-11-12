@@ -28,7 +28,14 @@ import { useEffect, useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi, ForeignImportResponse } from '../api.ts'
 import type { UiT } from '../../ui/i18n.ts'
-import { foreignLossyRows, foreignPathsText, foreignSourcesViewModel, type ForeignSourceRow } from '../../ui/foreign-view.ts'
+import {
+  foreignImportFailure,
+  foreignLossyRows,
+  foreignPathsText,
+  foreignSourcesViewModel,
+  type ForeignImportFailure,
+  type ForeignSourceRow,
+} from '../../ui/foreign-view.ts'
 import { Badge, Banner, Button, Card, SectionTitle } from '../common/ui.tsx'
 import { SkeletonList } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
@@ -106,7 +113,13 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
   const [loadError, setLoadError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
-  const [importError, setImportError] = useState<string | null>(null)
+  /**
+   * 上一次导入失败（#134）：**带机器码**而不是一句 message。
+   *
+   * 宿主的 400 会带 `code`，字典里早有对应文案（`sessions-not-migrated` 等）——
+   * 只显示 err.message 会让用户永远看不到「为什么这里没有会话」。
+   */
+  const [importFailure, setImportFailure] = useState<ForeignImportFailure | null>(null)
   /** 最近一次产包结果的跳过项与凭据引用（产包成功后仍显示，供用户在进向导前先看到） */
   const [produced, setProduced] = useState<ForeignImportResponse | null>(null)
   /** F-3：上一次的产包结果因输入变化被作废 —— 重置必须在 UI 上有反馈（绝不静默） */
@@ -148,7 +161,7 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
   const resetProduced = (): void => {
     if (produced !== null) setPreviewReset(true)
     setProduced(null)
-    setImportError(null)
+    setImportFailure(null)
   }
 
   /** 切换来源：同一个来源重复点击不算输入变化（不重置，免得谎报「已作废」）。 */
@@ -168,7 +181,7 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
   const runImport = async (): Promise<void> => {
     if (selected === null) return
     setImporting(true)
-    setImportError(null)
+    setImportFailure(null)
     setProduced(null)
     setPreviewReset(false)
     try {
@@ -177,7 +190,8 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
       // 交给上层 → 写进 runStore.library.pendingZip → 导入面板消费（复用既有通道）
       onReady(result)
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : String(err))
+      // 码 → 字典文案（同一本 UiT 字典）；翻不出才回落后端 message（绝不吞掉原因）
+      setImportFailure(foreignImportFailure(err, uiT))
     } finally {
       setImporting(false)
     }
@@ -301,8 +315,12 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
         </Card>
       )}
 
-      {importError !== null && (
-        <Banner kind="error">{t('foreign.importFailed', { reason: redact(importError) })}</Banner>
+      {importFailure !== null && (
+        <Banner kind="error">
+          {t('foreign.importFailed', { reason: redact(importFailure.text) })}
+          {/* 稳定码保留给排查/上报：文案是人话，码是可搜索的锚点（未知码时它就是唯一信息） */}
+          {importFailure.code !== null && <span className={css.skipCode}>{importFailure.code}</span>}
+        </Banner>
       )}
 
       <div className={css.actionRow}>

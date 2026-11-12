@@ -148,6 +148,8 @@ export const FOREIGN_FS_IMPORT_ALLOWLIST: readonly string[] = [
   'registry.ts',
   'session-read.ts',
   'sqlite.ts',
+  // #134：INode 加密库读取层要读写私有临时目录（明文库与逐页解密），故显式放行 node:fs/promises
+  'trae-sqlcipher.ts',
 ];
 
 const FS_IMPORT_RE = /(?:^|\n)\s*import\s+(?:type\s+)?[^;\n]*?from\s+'node:fs(?:\/promises)?'/;
@@ -251,7 +253,11 @@ test('C 来源形状：共享模块清单是封闭集合（新模块必须显式
     /* 2026-10-18 新增：Claude Code 插件/市场读盘层（名字不含来源 id，故不是来源形状模块；
        它是 claude-code 专属读盘子模块，由 read-claude-code.ts 动态 import）。清单按字母序比较。 */
     'read-claude-plugins.ts', 'registry.ts', 'session-ir.ts', 'session-read.ts', 'session-source.ts',
-    'source-modules.ts', 'sqlite.ts', 'truth-table.ts', 'types.ts',
+    'source-modules.ts', 'sqlite.ts',
+    /* #134 新增：Trae 2.3.x 的 SQLCipher 读盘/解密层（名字不含来源 id 之外的前缀，也不是来源装配；
+       由 read-trae.ts 静态 import；只交中性行，语义映射仍留 read-trae）。 */
+    'trae-sqlcipher.ts',
+    'truth-table.ts', 'types.ts',
   ];
   assert.deepEqual(
     shared.sort(),

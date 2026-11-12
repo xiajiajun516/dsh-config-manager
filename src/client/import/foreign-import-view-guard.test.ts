@@ -94,7 +94,7 @@ function renderBlocksOf(source: string): { at: number; text: string }[] {
 test('F-3：切换来源/重新检测都必须走 resetProduced（清产包结果 + 清失败横幅 + 有可见反馈）', () => {
   const reset = windowOf('const resetProduced = (): void => {', '\n  }')
   assert.match(reset, /setProduced\(null\)/, '必须清掉上一次的产包结果')
-  assert.match(reset, /setImportError\(null\)/, '上一次的失败横幅也属于上一次输入，必须一并清掉')
+  assert.match(reset, /setImportFailure\(null\)/, '上一次的失败横幅也属于上一次输入，必须一并清掉')
   assert.match(reset, /setPreviewReset\(true\)/, '重置必须留下可见反馈（绝不静默作废）')
 
   // 来源行的 onSelect 不得直连 setSelected（那正是 F-3 的原始缺陷形态）

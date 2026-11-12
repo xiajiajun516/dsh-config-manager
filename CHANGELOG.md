@@ -28,6 +28,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🆕 新增 · Added
+
+- **Trae（含 Trae CN / TRAE SOLO）新版的会话现在也能导入了**：这几个发行版把会话搬进了加密数据库，插件以前只认得旧的会话文件、导出来是空的；现在会连同该库里的会话一起读出来导入，旧的会话文件也照样认，同一段对话不会算两遍。（issue #134）
+  **Sessions from newer Trae builds (Trae CN / TRAE SOLO included) can now be imported**: those builds moved conversations into an encrypted database, which the plugin used to skip entirely and produce an empty result; conversations are now read from it as well, the old session files still work, and the same conversation is not counted twice.
+
+### 🐛 修复 · Fixed
+
+- **导入失败时告诉你是哪种原因，而不是只说一句「导入失败」**：加密库密钥对不上、库超过体积上限、库结构不是预期形态、该来源的对话存储本版还不迁移，现在都在点击导入前或失败当下写清是哪一种（中英都有），错误里还会带上稳定的问题码便于排查。（issue #134）
+  **A failed import now says which kind of problem it is instead of one generic "import failed"**: a key mismatch on the encrypted database, an oversized database, an unexpected database shape, or a source whose conversation storage this version does not migrate yet — each is stated before or at the moment the import fails (in both languages), with the stable problem code shown alongside.
+
 ## [0.8.1] - 2026-11-11
 
 > **导入或同步过的 MCP 服务器，重启后不会整条消失**：以前合并远端或导入备份时，插件会把「只能新增」的 patch 条目改写成另一种形态，主程序重启后认不出来、直接丢掉；现在两种形态各按原样写回，从零新建的 MCP 行还补上了连接类型与完整包名。

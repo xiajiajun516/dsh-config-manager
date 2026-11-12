@@ -562,8 +562,16 @@ export interface SessionSourceWiring<TFile extends { id: string }> {
   readonly probePaths: (opts: RootProbeOptions) => readonly string[];
   /** 命中即报 source-location-overridden 的环境变量（只报键名，绝不报值） */
   readonly probeEnvKeys?: readonly string[] | undefined;
-  /** 探测期的附加提示（如 chatgpt 的「无自动根」） */
-  readonly probeSkips?: ((opts: RootProbeOptions, probed: readonly string[]) => readonly ForeignSkip[]) | undefined;
+  /**
+   * 探测期的附加提示（如 chatgpt 的「无自动根」）。
+   *
+   * 允许返回 Promise：少数来源需要**有界**地读一点内容才能给出可判定的预告（trae 的加密库
+   * 只解密第 1 页、旧库只读 key 列）。这类探测必须自证「有界、只读、不枚举会话」，
+   * 否则 detect 会被 30 个来源拖慢。
+   */
+  readonly probeSkips?:
+    | ((opts: RootProbeOptions, probed: readonly string[]) => readonly ForeignSkip[] | Promise<readonly ForeignSkip[]>)
+    | undefined;
   readonly read: (opts: SessionSourceHostOptions) => Promise<SessionReadOutcome<TFile>>;
   readonly draftOf: (file: TFile) => SessionDraft | { readonly skip: { readonly code: ForeignSkipCode; readonly detail?: string } };
   readonly workspaceIdPrefix?: string | undefined;
@@ -572,8 +580,10 @@ export interface SessionSourceWiring<TFile extends { id: string }> {
 /**
  * 把一个会话来源装配成 `ForeignSource`。
  *
- * **detect 只 stat 真值表里的位置**（绝不读内容、绝不枚举会话）—— 界面对 30 个来源各调一次
- * detect，任何一处读全文都会把面板拖慢；真正的枚举发生在 build。
+ * **detect 默认只 stat 真值表里的位置**（绝不读内容、绝不枚举会话）—— 界面对 30 个来源各调一次
+ * detect，任何一处读全文都会把面板拖慢；真正的枚举发生在 build。唯一例外是来源在 `probeSkips`
+ * 里显式声明的**有界轻量探测**（trae：加密库只解密第 1 页、旧库只读 key 列），因为它们要回答的
+ * 正是「为什么这里没有会话」，而这件事只有看内容才知道。
  *
  * platform 的兜底只在**这一处**：`ctx.platform ?? process.platform`（装配层碰运行平台是允许的，
  * 真值表函数本身一律显式收参）。
@@ -598,7 +608,7 @@ export function sessionSourceOf<TFile extends { id: string }>(
       for (const key of wiring.probeEnvKeys ?? []) {
         if (envValue(ctx.env, key) !== undefined) skipped.push({ code: 'source-location-overridden', origin: key });
       }
-      skipped.push(...(wiring.probeSkips?.(opts, probed.paths) ?? []));
+      skipped.push(...((await wiring.probeSkips?.(opts, probed.paths)) ?? []));
       return { found: probed.paths.length > 0, paths: [...probed.paths], skipped };
     },
     async build(ctx) {

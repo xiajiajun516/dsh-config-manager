@@ -95,6 +95,11 @@ export const zh = {
   'foreign.skip.legacy-rules-file': '旧式规则文件：DSH 无对等结构，只报告',
   'foreign.skip.instructions-merged': '多份指令源被合并为一个全局指令文件',
   'foreign.skip.instructions-override-selected': '命中更高优先级的指令文件（override），按它导入',
+  // 2026-11-12（#134）：Trae 2.3.x 加密会话库（SQLCipher）的可判定失败
+  'foreign.skip.trae-db-key-invalid': 'Trae 加密会话库的密钥对不上（换版或密钥被覆盖）：页面头校验不通过，本次未读出任何会话',
+  'foreign.skip.trae-db-too-large': 'Trae 加密会话库超出本来源的体积上限：未解密，未读出任何会话（全局 1 GiB 上限未改动）',
+  'foreign.skip.trae-db-decrypt-failed': 'Trae 加密会话库无法解密：文件被截断、不是 SQLCipher 形态或读取失败，本次未读出任何会话',
+  'foreign.skip.trae-db-schema-mismatch': 'Trae 加密会话库解密成功但表结构不符（缺 chat_session / history_v2 或必需列）：不猜字段，本次未读出任何会话',
   // 冲突语义（用户决策：同 id 不覆盖、跳过并报码）
   'foreign.conflict.policy': '同 id 冲突不覆盖本机内容：跳过并逐条报告',
 } as const;
@@ -180,5 +185,9 @@ export const en: Record<keyof typeof zh, string> = {
   'foreign.skip.legacy-rules-file': 'Legacy rules file: DSH has no equivalent, reported only',
   'foreign.skip.instructions-merged': 'Several instruction sources were merged into one global instruction file',
   'foreign.skip.instructions-override-selected': 'A higher-priority instruction file (override) was found and is the one imported',
+  'foreign.skip.trae-db-key-invalid': 'The Trae encrypted session database key does not match (version change or an overridden key): the page-header checks failed, so no session was read',
+  'foreign.skip.trae-db-too-large': 'The Trae encrypted session database exceeds this source size limit: it was not decrypted, so no session was read (the global 1 GiB limit is unchanged)',
+  'foreign.skip.trae-db-decrypt-failed': 'The Trae encrypted session database cannot be decrypted: the file is truncated, not in SQLCipher form, or unreadable, so no session was read',
+  'foreign.skip.trae-db-schema-mismatch': 'The Trae encrypted session database decrypted but its schema does not match (chat_session / history_v2 or a required column is missing): fields are never guessed, so no session was read',
   'foreign.conflict.policy': 'Same-id conflicts never overwrite local content: skipped and listed in the report',
 };

@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import {
   FOREIGN_LOSSY_KINDS,
   FOREIGN_SKIP_KEY,
+  foreignImportFailure,
   foreignLossyRows,
   foreignPathsText,
   foreignSkipLine,
@@ -315,4 +316,39 @@ test('foreign-view：文件类分区的判定取注册表（skills/agentPresets/
 test('foreign-view：prompts 分区 / 六文件类分区同时命中 → 三条全「适用」', () => {
   const rows = foreignLossyRows(['skills', 'prompts'], zh);
   for (const row of rows) assert.equal(row.applicable, true, row.kind + ' 在本包里应当适用');
+});
+
+/**
+ * 导入失败文案（issue #134 第二半）：后端 400 的稳定码必须被翻成字典文案，
+ * 而不是把 message / 裸机器码直接糊到用户脸上。
+ */
+test('foreign-view：导入失败按稳定码翻字典（skip 码 / nothing-to-import / 未知码回落原文）', () => {
+  const withCode = (code: unknown, message = 'raw backend message') => foreignImportFailure(
+    Object.assign(new Error(message), { code }),
+    zh,
+  );
+
+  // skip 码：用 build 阶段真实会返回的码（含本轮新增的 4 个 trae-db-*）
+  for (const code of ['sessions-not-migrated', 'trae-db-key-invalid', 'trae-db-too-large', 'trae-db-decrypt-failed', 'trae-db-schema-mismatch'] as const) {
+    const failure = withCode(code);
+    assert.equal(failure.code, code);
+    assert.equal(failure.text, zh(('foreign.skip.' + code) as UiTextKey), code + ' 必须翻成既有字典文案');
+    assert.notEqual(failure.text, 'raw backend message', code + ' 不得回落原始 message');
+  }
+  // 路由自己的 400 码（不在 skip 词表里）也要有文案
+  const nothing = withCode('nothing-to-import');
+  assert.equal(nothing.code, 'nothing-to-import');
+  assert.equal(nothing.text, zh('foreign.importNothing'));
+  assert.ok(nothing.text.length > 0 && nothing.text !== 'foreign.importNothing', 'zh 文案必须是真文案（回退键名即视为缺失）');
+
+  // 未知码 / 无码：原样展示后端 message（不编造、不吞掉）
+  const unknown = withCode('some-future-code', '磁盘满了');
+  assert.equal(unknown.code, 'some-future-code');
+  assert.equal(unknown.text, '磁盘满了');
+  const bare = foreignImportFailure(new Error('网络断了'), zh);
+  assert.equal(bare.code, null);
+  assert.equal(bare.text, '网络断了');
+  const weird = foreignImportFailure('not an error', zh);
+  assert.equal(weird.code, null);
+  assert.equal(weird.text, 'not an error');
 });

@@ -21,6 +21,11 @@
  *  · 会话容器的字段级 schema **未取证**：本层用**结构自证**的窄口径（必须有「消息数组 + 至少一条
  *    带 role/type 的消息」）识别会话，容器必须自带字符串 id（否则铸稳定兜底 id）；cwd 只认明文
  *    绝对路径字段，找不到就交给下游落 session-missing-cwd（**绝不猜 cwd**）。
+ *
+ * 2.3.x 起多了一条通道（issue #134）：会话迁到 `<User>/ModularData/ai-agent/database.db`，
+ * **整库 SQLCipher 加密**。解密、临时明文、页头校验都在 trae-sqlcipher.ts（只交出中性行）；
+ * 本文件只负责「读表结果 → 统一会话形态」的语义映射（role/正文/cwd 口径与旧通道**同一份代码**）。
+ * 两条通道按会话 id 去重、**先加密库后旧库**（迁移后的库才是权威），并存时只计一份。
  */
 import { isAbsoluteFor, joinFor, normalizePlatform, vscodeUserDataDir } from './platform-paths.ts';
 import type { ForeignPlatform } from './platform-paths.ts';
@@ -34,6 +39,7 @@ import { msTime } from './read-opencode.ts';
 import { isRecord } from '../utils/guards.ts';
 import type { IrBlock, IrTimeMs } from './session-ir.ts';
 import type { ForeignSkip } from './types.ts';
+import { probeTraeEncryptedDatabase, readTraeEncryptedDatabase, traeDbPathFor, traeDbSkipOf } from './trae-sqlcipher.ts';
 
 /** 四个发行版名（顺序 = chat-import traeUserDataDirs 的判定顺序） */
 export const TRAE_PRODUCTS: readonly string[] = ['Trae', 'Trae CN', 'TRAE SOLO CN', 'TRAE SOLO'];
@@ -397,7 +403,7 @@ export async function traeVscdbPaths(userDir: string, platform: ForeignPlatform)
  * 而不是静默返回空 —— 那会与「未安装 Trae」混淆（t5 明文要求两者可区分）。
  */
 export async function readTrae(
-  opts: RootProbeOptions & { readonly maxFiles?: number },
+  opts: RootProbeOptions & { readonly maxFiles?: number; readonly maxEncryptedDbBytes?: number },
 ): Promise<SessionReadOutcome<TraeSessionFile>> {
   const platform = normalizePlatform(opts.platform);
   const findings: ForeignSkip[] = [];
@@ -414,12 +420,62 @@ export async function readTrae(
     };
   }
 
+  const extraSkips: ForeignSkip[] = [];
+  let truncated = false;
+
+  // ① 加密库通道（2.3.x）：先读 —— 迁移后的库才是权威，同 id 冲突以它为准
+  const encryptedDbs: string[] = [];
+  for (const userDir of traeUserDataDirs(opts)) {
+    const dbPath = traeDbPathFor(userDir, platform);
+    if (await isFile(dbPath)) encryptedDbs.push(dbPath);
+  }
+  let encryptedSessions = 0;
+  for (const dbPath of encryptedDbs) {
+    const outcome = await readTraeEncryptedDatabase(dbPath, {
+      env: opts.env,
+      platform,
+      ...(opts.maxEncryptedDbBytes !== undefined ? { maxBytes: opts.maxEncryptedDbBytes } : {}),
+      maxSessions: maxFiles,
+    });
+    // 密钥错/超限/截断/表结构不符 ⇒ 稳定码（绝不静默 0 会话）；旧库有货时继续走旧库
+    if (outcome.problem !== undefined) {
+      extraSkips.push(traeDbSkipOf(outcome.problem));
+      continue;
+    }
+    if (outcome.dropped !== undefined && outcome.dropped > 0) {
+      findings.push({ code: 'source-unreadable', origin: 'trae', detail: 'encrypted-row-json-error', count: outcome.dropped });
+    }
+    if (outcome.skipped !== undefined && outcome.skipped > 0) {
+      findings.push({ code: 'source-unreadable', origin: 'trae', detail: 'encrypted-session-without-id', count: outcome.skipped });
+    }
+    if (outcome.truncated === true) truncated = true;
+    for (const session of outcome.sessions) {
+      if (files.length >= maxFiles) { truncated = true; break; }
+      const id = isSafeIrId(session.id) ? session.id : safeFragment('trae-db-' + session.id);
+      if (seen.has(id)) continue;
+      const ignored: Record<string, number> = {};
+      const parsed = recordsOf(session.items, ignored);
+      seen.add(id);
+      files.push({
+        id,
+        cwd: session.cwd,
+        createdAt: session.createdAt,
+        title: session.title ?? '',
+        records: parsed.records,
+        raw: parsed.raw,
+        bad: 0,
+        ignored,
+      });
+      encryptedSessions += 1;
+    }
+  }
+
+  // ② 旧 state.vscdb 通道（保留）：同 id 已被加密库计入的不再重复
   const dbs: string[] = [];
   for (const userDir of traeUserDataDirs(opts)) {
     dbs.push(...await traeVscdbPaths(userDir, platform));
   }
   let candidateKeys = 0;
-  let truncated = false;
   for (const dbPath of dbs) {
     if (files.length >= maxFiles) { truncated = true; break; }
     const db = await openSqliteIfShape(dbPath, { ItemTable: ['key'] });
@@ -469,8 +525,8 @@ export async function readTrae(
     db.close();
     if (truncated) break;
   }
-  const extraSkips: ForeignSkip[] = [];
-  if (files.length === 0 && candidateKeys === 0 && dbs.length > 0) {
+  // 加密库存在时，「旧库没有候选键」不是用户需要的解释（真因已由 trae-db-* 说明）
+  if (files.length === 0 && candidateKeys === 0 && dbs.length > 0 && encryptedDbs.length === 0) {
     extraSkips.push({ code: 'sessions-not-migrated', origin: 'trae', detail: 'chat-storage-key-not-found' });
   } else if (files.length === 0 && candidateKeys > 0) {
     extraSkips.push({ code: 'sessions-not-migrated', origin: 'trae', detail: 'no-session-container', count: candidateKeys });
@@ -483,6 +539,62 @@ export async function readTrae(
     files,
     readFindings: findings,
     extraSkips,
-    extraCounts: { 'trae.vscdb': dbs.length, 'trae.chatStorageKeys': candidateKeys },
+    extraCounts: {
+      'trae.vscdb': dbs.length,
+      'trae.chatStorageKeys': candidateKeys,
+      'trae.encryptedDb': encryptedDbs.length,
+      'trae.encryptedSessions': encryptedSessions,
+    },
   };
+}
+
+/**
+ * detect 期的**轻量预告**（issue #134 的第二半）：让 `/foreign-sources` 在用户点导入前就把
+ * 「为什么这里没有会话」摆出来，而不是等 build 的 400 才闪一下。
+ *
+ * 代价（刻意接受）：只读**页头**与 **ItemTable 的 key 列**，绝不读正文、绝不枚举会话 ——
+ * 4 个发行版的加密库最多各解密 1 页，旧库只是 `SELECT key`。因此 detect 仍是有界的只读探测。
+ */
+export async function traeDetectSkips(
+  opts: RootProbeOptions & { readonly maxEncryptedDbBytes?: number },
+): Promise<ForeignSkip[]> {
+  const platform = normalizePlatform(opts.platform);
+  const skips: ForeignSkip[] = [];
+  let encryptedFound = 0;
+  for (const userDir of traeUserDataDirs(opts)) {
+    const dbPath = traeDbPathFor(userDir, platform);
+    if (!await isFile(dbPath)) continue;
+    encryptedFound += 1;
+    const problem = await probeTraeEncryptedDatabase(dbPath, {
+      env: opts.env,
+      ...(opts.maxEncryptedDbBytes !== undefined ? { maxBytes: opts.maxEncryptedDbBytes } : {}),
+    });
+    if (problem !== null) skips.push(traeDbSkipOf(problem));
+  }
+  // 加密库在场时不再猜旧库：迁移后旧库多半只是残留，混进「没有候选键」会误导用户
+  if (encryptedFound > 0) return skips;
+
+  const capability = await sqliteCapability();
+  if (!capability.available) return skips;
+  const dbs: string[] = [];
+  for (const userDir of traeUserDataDirs(opts)) {
+    dbs.push(...await traeVscdbPaths(userDir, platform));
+  }
+  if (dbs.length === 0) return skips;
+  let candidateKeys = 0;
+  for (const dbPath of dbs) {
+    const db = await openSqliteIfShape(dbPath, { ItemTable: ['key'] });
+    if (db === null) continue;
+    const rows = db.all('SELECT key FROM ItemTable');
+    db.close();
+    if (rows === null) continue;
+    for (const row of rows) {
+      const key = cellText(row, 'key');
+      if (key !== undefined && isTraeChatStorageKey(key)) candidateKeys += 1;
+    }
+  }
+  if (candidateKeys === 0) {
+    skips.push({ code: 'sessions-not-migrated', origin: 'trae', detail: 'chat-storage-key-not-found' });
+  }
+  return skips;
 }

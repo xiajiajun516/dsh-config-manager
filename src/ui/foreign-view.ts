@@ -147,6 +147,11 @@ export const FOREIGN_SKIP_KEY: Record<ForeignSkipCode, UiTextKey> = {
   'session-id-mismatch': 'foreign.skip.session-id-mismatch',
   'mcp-server-id-conflict': 'foreign.skip.mcp-server-id-conflict',
   'project-scan-truncated': 'foreign.skip.project-scan-truncated',
+  // 2026-11-12（#134）：Trae 2.3.x 加密会话库的四条可判定失败 —— 同样是全量 Record 保底
+  'trae-db-key-invalid': 'foreign.skip.trae-db-key-invalid',
+  'trae-db-too-large': 'foreign.skip.trae-db-too-large',
+  'trae-db-decrypt-failed': 'foreign.skip.trae-db-decrypt-failed',
+  'trae-db-schema-mismatch': 'foreign.skip.trae-db-schema-mismatch',
 }
 
 /**
@@ -397,3 +402,44 @@ export function foreignLossyRows(sections: readonly string[] | null, t: UiT): re
     applicable: applicable[kind],
   }))
 }
+
+/* -------------------------------------------------- 导入失败（#134） */
+
+/**
+ * 导入失败 → 可见载荷（码 + 后端原话 + 一句人话）。
+ *
+ * 为什么要有它：宿主把「为什么没东西可导」放在 **400 的 body**（`code` + `skipped`），
+ * 而客户端过去只显示 `err.message` —— 于是 `sessions-not-migrated`、
+ * `trae-db-key-invalid` 这些**字典里早就有中英文案**的码，用户根本看不到。
+ * 现在按同一本字典把码翻成文案（skip 码走冻结映射，`nothing-to-import` 走单独一条键），
+ * 翻不出才回落后端 message —— 绝不吞掉原因，也绝不编解释。
+ */
+export interface ForeignImportFailure {
+  /** 稳定机器码（后端 400 带的 code；没有则为 null） */
+  code: string | null
+  /** 后端原始 message（渲染处再过 redact） */
+  message: string
+  /** 展示文案（字典优先；没有就用 message） */
+  text: string
+}
+
+/**
+ * 非 skip 词表、但同样会作为 400 码出现的导入失败（与 `src/routes/foreign.ts` 同源）：
+ * `nothing-to-import` 是路由层的码，不在 `ForeignSkipCode` union 里，故单独映射。
+ */
+const IMPORT_FAILURE_KEYS: Readonly<Record<string, UiTextKey>> = {
+  'nothing-to-import': 'foreign.importNothing',
+}
+
+/** 失败载荷的构造（未知码 → 原样返回 message，绝不猜语义） */
+export function foreignImportFailure(err: unknown, t: UiT): ForeignImportFailure {
+  const source = typeof err === 'object' && err !== null ? (err as { code?: unknown; message?: unknown }) : null
+  const rawCode = source?.code
+  const code = typeof rawCode === 'string' && rawCode !== '' ? rawCode : null
+  const rawMessage = source?.message
+  const message = typeof rawMessage === 'string' && rawMessage !== '' ? rawMessage : String(err)
+  if (code === null) return { code, message, text: message }
+  const mapped = IMPORT_FAILURE_KEYS[code] ?? (isKnownSkipCode(code) ? FOREIGN_SKIP_KEY[code] : undefined)
+  return { code, message, text: mapped === undefined ? message : t(mapped) }
+}
+

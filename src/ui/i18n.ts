@@ -453,6 +453,13 @@ export const uiZh = {
   'foreign.skip.legacy-rules-file': '旧式规则文件：DSH 无对等结构，只报告',
   'foreign.skip.instructions-merged': '多份指令源被合并为一个全局指令文件',
   'foreign.skip.instructions-override-selected': '命中更高优先级的指令文件（override），按它导入',
+  // ---------- 2026-11-12（#134）：Trae 2.3.x 的加密会话库（SQLCipher）四条可判定失败 ----------
+  // 纪律同上：每条都要能被代码逐条证明 —— 只说「什么没搬 / 为什么 / 怎么办」，不承诺修好。
+  'foreign.importNothing': '没有可导入的内容：该来源在本机没有可转换的配置或会话',
+  'foreign.skip.trae-db-key-invalid': 'Trae 加密会话库的密钥对不上（换版或密钥被覆盖）：页面头校验不通过，本次未读出任何会话',
+  'foreign.skip.trae-db-too-large': 'Trae 加密会话库超出本来源的体积上限：未解密，未读出任何会话（全局 1 GiB 上限未改动）',
+  'foreign.skip.trae-db-decrypt-failed': 'Trae 加密会话库无法解密：文件被截断、不是 SQLCipher 形态或读取失败，本次未读出任何会话',
+  'foreign.skip.trae-db-schema-mismatch': 'Trae 加密会话库解密成功但表结构不符（缺 chat_session / history_v2 或必需列）：不猜字段，本次未读出任何会话',
   // ---------- 2026-10-18：Claude Code 项目级配置 / 插件 / 权限 / 设置键的如实诊断（8 个新码）----------
   // 纪律：每条都要能被代码逐条证明 —— 只说「什么没搬、为什么、本项是否可补」，
   // 绝不写「已支持 / 完全兼容」这类无法被代码证明的话。
@@ -934,6 +941,12 @@ export const uiEn: Record<UiTextKey, string> = {
   'foreign.skip.legacy-rules-file': 'Legacy rules file: DSH has no equivalent, reported only',
   'foreign.skip.instructions-merged': 'Several instruction sources were merged into one global instruction file',
   'foreign.skip.instructions-override-selected': 'A higher-priority instruction file (override) was found and is the one imported',
+  // 2026-11-12 (#134): four decidable failures of the Trae 2.3.x encrypted session database (SQLCipher)
+  'foreign.importNothing': 'Nothing to import: this source has no convertible configuration or sessions on this machine',
+  'foreign.skip.trae-db-key-invalid': 'The Trae encrypted session database key does not match (version change or an overridden key): the page-header checks failed, so no session was read',
+  'foreign.skip.trae-db-too-large': 'The Trae encrypted session database exceeds this source size limit: it was not decrypted, so no session was read (the global 1 GiB limit is unchanged)',
+  'foreign.skip.trae-db-decrypt-failed': 'The Trae encrypted session database cannot be decrypted: the file is truncated, not in SQLCipher form, or unreadable, so no session was read',
+  'foreign.skip.trae-db-schema-mismatch': 'The Trae encrypted session database decrypted but its schema does not match (chat_session / history_v2 or a required column is missing): fields are never guessed, so no session was read',
   // 2026-10-18: honest diagnostics for Claude Code project-level config / plugins / permissions / settings keys (8 new codes)
   'foreign.skip.unsupported-permissions': 'Permission rules (allow/ask/deny) were not migrated: DSH has no equivalent permission-rule file, so they are not in this bundle and will not take effect after import',
   'foreign.skip.unsupported-settings-keys': 'Other unmigrated top-level keys in settings.json: only key names and counts are recorded; values are never read and never enter this bundle',
