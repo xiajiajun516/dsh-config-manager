@@ -216,7 +216,10 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
       <Card>
         <span className={css.groupLabel}>{t('about.links')}</span>
         <div className={css.actionRow}>
-          <Button variant="primary" href={ABOUT_LINKS.starUrl}>{t('about.star')}</Button>
+          {/* 只有一颗 primary 的纪律：本页的 primary 属于「立即更新」（更新卡），
+              Star 是外链邀请、与更新抢同一层强调时，用户会先看见「去点赞」而错过更新。
+              2026-11-13 随设计稿落地改为 ghost（0.5px 描边），行为与落点不变。 */}
+          <Button href={ABOUT_LINKS.starUrl}>{t('about.star')}</Button>
         </div>
         <div className={css.aboutLinkRow}>
           <Button href={ABOUT_LINKS.repoUrl}>{t('about.repo')}</Button>

@@ -28,6 +28,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🐛 修复 · Fixed
+
+- **「关于」页不再有两个同等醒目的主按钮**：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
+  **The About panel no longer shows two equally loud primary buttons**: "Update now" and "Star on GitHub" used to be the same dark primary style side by side; the star link is now an outlined secondary button so the update action is the one that stands out.
+
 ## [0.8.2] - 2026-11-12
 
 > **新版 Trae 的会话，现在也能导进来了**：这几个发行版把会话搬进了加密数据库，插件以前只认得旧文件、导出来是空的；现在两种形态都读，同一段对话不算两遍。导入失败时也不再只说一句「导入失败」，而是写清是哪一种原因，并带上问题码。
