@@ -7456,4 +7456,311 @@ button.profileRowMain:hover {
   color: var(--cm-text-2);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   T-04「配置市场」/ T-05「市场·我的配置」—— 视觉稿（.stitch-refactor）落地
+   ---------------------------------------------------------------------------
+   全部是本波两屏的自有类；共享原语（.primaryButton / .card / .badge /
+   .selectTrigger / .conflictHead）不覆写全局值，需要收紧盒模型的都挂在自己的类上。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 两屏内容体：稿里页签→标题、标题→仓库行都是 8（.viewBody 缺省 10） */
+.marketView {
+  gap: var(--cm-sp-4);
+}
+
+/* 「我的配置」内容体：与外层页签保持 10px（稿：space-y-10），内部间距沿用 .viewBody 的 10 */
+.myconfigsView {
+  margin-top: var(--cm-sp-1);
+}
+
+/* 浏览列表模式整屏定高：筛选卡 flex-1 之后条目在卡内滚动，整页不随条目数变长。
+   height: 100% + 每环 min-height: 0 与 .diffPaneFill 同一条口径（否则 flex 项的自动最小
+   尺寸 = 内容，会把卡顶出画布）。 */
+.marketFill {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* —— 页签：稿里是两个独立描边胶囊，不是「灰底容器里的一条」 —— */
+.marketView .modeTabs {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-2);
+  height: 30px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+.marketView .modeTab {
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 var(--cm-sp-5);
+  border: 1px solid transparent;
+  border-radius: var(--cm-r-2);
+  background: none;
+  font-size: var(--cm-fs-base);
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+  box-shadow: none;
+}
+
+.marketView .modeTab:hover {
+  background: var(--cm-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.marketView .modeTab[data-active] {
+  border-color: var(--dsw-alias-border-l3);
+  background: var(--cm-hover);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+  box-shadow: none;
+}
+
+/* 仓库行左侧标签：稿里是 12px 常规字重的次级色，不是 .groupLabel 的 11px/700 小标题 */
+.marketRepoRow .groupLabel {
+  margin-bottom: 0;
+  font-size: var(--cm-fs-table);
+  font-weight: 400;
+  letter-spacing: normal;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* —— 筛选卡：吃满剩余高度（稿：flex-1、p12 但底边 0，列表被卡沿裁切） —— */
+.marketListCard {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--cm-sp-1);
+  padding: var(--cm-sp-6) var(--cm-sp-6) 0;
+  /* 不能 overflow:hidden：卡里的 Select 弹层是该节点的绝对定位子元素，裁掉就点不到；
+     条目仍由 .marketItemList 自己内滚。 */
+  overflow: visible;
+}
+
+/* 只在真的有条目时吃满剩余高度（空态/加载/错误态让卡贴合内容，不留一张空巨卡） */
+.marketListCardFill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 搜索框：描边在框上、input 无边框（稿：28px / r8 / 12px 放大镜） */
+.marketSearchBox {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-3);
+  height: var(--cm-h-md);
+  padding: 0 var(--cm-sp-4);
+  /* 盒模型与 .input/.selectTrigger 同一套（0.5px / border-l4 / input-major 底） */
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--cm-r-2);
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.marketSearchBox:hover {
+  border-color: color-mix(in srgb, var(--cm-accent) 40%, var(--dsw-alias-border-l2));
+}
+
+.marketSearchBox:focus-within {
+  border-color: var(--cm-accent);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.marketSearchInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  outline: none;
+  font-family: inherit;
+  font-size: var(--cm-fs-table);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 计数行：稿里是窄行；上间距由 .marketFilterGrid 的 margin-bottom 给，这里只留下方 6px
+   （原 mb8 让列表离计数太远） */
+.marketFilterMeta {
+  margin-bottom: 0;
+  padding: 0 0 var(--cm-sp-3);
+}
+
+/* —— 条目列表：卡内滚动 + 行间 1px 分隔（稿：divide-y、行 pt8 pb8） —— */
+.marketItemList {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+  overflow-y: auto;
+}
+
+.marketItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--cm-sp-4);
+  padding: var(--cm-sp-4) 0;
+}
+
+.marketItem + .marketItem {
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.marketItemMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: var(--cm-sp-4);
+}
+
+/* 名称行：12.5/600（.conflictHead 是 12；覆写在自有类上，不动共享规则） */
+.marketItemHead {
+  margin-bottom: var(--cm-sp-1);
+  font-size: var(--cm-fs-base);
+}
+
+/* 作者 · 描述：12px、单行省略（稿：mt2 / truncate） */
+.marketItemDesc {
+  display: block;
+  margin-top: var(--cm-sp-1);
+  font-size: var(--cm-fs-table);
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marketItemMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cm-sp-1);
+  margin-top: var(--cm-sp-2);
+}
+
+/* —— T-05 登录卡：三行徽章等距（稿：gap6 / px16 py12） —— */
+.marketLoginCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-3);
+  padding: var(--cm-sp-6) var(--cm-sp-8);
+}
+
+.marketLoginCard > * {
+  margin: 0;
+}
+
+.marketLoginRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cm-sp-2);
+  min-width: 0;
+}
+
+/* —— T-05 上传卡：单动作卡（稿：h50、px16 py10、按钮垂直居中） —— */
+.marketUploadCard {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  min-height: 50px;
+  padding: var(--cm-sp-5) var(--cm-sp-8);
+}
+
+/* —— T-05 已上传卡：列表头 + 贴在卡内的行（稿：p0 0 12、head h34 带下边框） —— */
+.marketMyListCard {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 var(--cm-sp-6);
+  overflow: hidden;
+}
+
+.marketMyListHead {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-4);
+  height: 34px;
+  margin: 0;
+  padding: 0 var(--cm-sp-6);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.marketMyListHead .groupLabel {
+  margin-bottom: 0;
+  font-size: var(--cm-fs-table);
+  font-weight: 600;
+  letter-spacing: normal;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.marketMyItemList {
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.marketMyItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-2);
+  padding: var(--cm-sp-3) var(--cm-sp-6);
+}
+
+.marketMyItem + .marketMyItem {
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.marketMyItemTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cm-sp-4);
+  min-width: 0;
+}
+
+.marketMyItemTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-3);
+  min-width: 0;
+  font-size: var(--cm-fs-base);
+}
+
+.marketMyItemActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--cm-sp-2);
+  min-width: 0;
+}
+
+.marketMyItemMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cm-sp-2);
+}
+
+/* —— W2 同步屏（P-03）：未配置通道卡收成单行矮态 ——
+   .cardTitleRow 是 baseline + 8px 下边距；矮态行是卡内唯一内容，按钮与徽章要居中对齐、
+   且不能把卡再撑高 8px。覆写落在自有类上，不动共享规则（四张已配置卡仍走 .cardTitleRow）。 */
+.channelCompactRow {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-4);
+  margin-bottom: 0;
+}
+
+
 

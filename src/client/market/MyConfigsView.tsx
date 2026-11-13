@@ -763,7 +763,8 @@ export function MyConfigsView({
   }
 
   return (
-    <div className={css.viewBody}>
+    /* .myconfigsView：与页签之间 10px（视觉稿 T-05 的 space-y-10；外层 .marketView 是 8px） */
+    <div className={`${css.viewBody} ${css.myconfigsView}`}>
       {/* 标题只留标题：登录说明紧挨着就在下面的登录卡标题 ⓘ 上，同一屏不再出现两遍 */}
       <SectionTitle title={t('myconfigs.tab.myconfigs')} />
       {renderLoginCard()}
@@ -771,13 +772,12 @@ export function MyConfigsView({
       {loginView.kind === 'logged-in' && (
         <>
           {/* 一键上传入口：点按钮 → 免责（首次）→ 弹窗向导 */}
-          <Card>
+          {/* 视觉稿 T-05：单动作卡 —— 卡内只有这枚主按钮（h50、px16 py10，按钮垂直居中） */}
+          <Card className={css.marketUploadCard}>
             {/* 卡片里只有一个动作：按钮本身已写明作用对象（上传配置包），不再重复标题。
                 此处不再放 ⓘ：它的「先在导出页生成 zip / 含密钥的备份会被拒绝」已在点开后的
                 向导头（MyConfigsWizard 的 Modal.Header trailing）逐字出现，入口再放一遍是同一条信息两次。 */}
-            <div className={css.actionRow}>
-              <Button variant="primary" onClick={openUpload}>{t('myconfigs.upload.run')}</Button>
-            </div>
+            <Button variant="primary" onClick={openUpload}>{t('myconfigs.upload.run')}</Button>
           </Card>
           {renderList()}
           {/* 弹窗：上传/更新向导（uploadOpen）—— 装回本地已改为页面级向导（见上方提前 return） */}
