@@ -3414,18 +3414,6 @@ body {
   flex-direction: column;
 }
 
-/* 遗留数据块（DiskUsageCard）：行数由磁盘上的旧目录决定，可能多条。
-   .diskUsageCard 是固定高度卡，块直接铺在 body 里会被裁掉 ⇒ 整块限高内滚，
-   卡片高度不变、每一行仍可达（2026-11-13）。上限 108px ≈ 3 行 + 组标题。 */
-.duLegacyScroll {
-  max-height: 108px;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-  /* 容器自带 1px 描边 + bg-base（.planScroll）：没有内边距时组标题与首行会顶到描边上
-     （2026-11-13 真机截图：文字与卡片紧贴）。8px 与 .duRow 的左右呼吸一致。 */
-  padding: 8px;
-}
-
 .duRow {
   display: flex;
   flex-direction: column;

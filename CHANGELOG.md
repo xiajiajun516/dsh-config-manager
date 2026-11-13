@@ -12,8 +12,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > **条目落位（按改动性质分组）**：新条目一律先写进 `## [Unreleased]`，并放进对应分组 ——
 > `### 🆕 新增 · Added` / `### 🔧 变更 · Changed` / `### 🐛 修复 · Fixed
 
-- **「磁盘占用」卡的「遗留数据」不再被卡片高度裁掉、也不再与边框紧贴**：遗留目录多的时候整块会超出固定高度卡的可见区，现在这块自己带滚动条；块内补了 8px 内边距，文字不再顶到描边上。
-  **The "Legacy data" section on the Disk usage card no longer gets clipped by the card's fixed height, and its text no longer touches the border**: the block scrolls on its own when there are several legacy directories, and 8px of inner padding keeps the text off the 1px outline.
+- **「磁盘占用」卡里那块「遗留数据」整块去掉了**：它只是几个不再被读取的旧目录（例如迁移前的 checkpoints），既不进合计也不能一键清，单独占一块反而让卡片显得零碎；这些目录仍会如实出现在无遗留数据时的常规扫描里，体积与文件数不受影响。
+  **The "Legacy data" block on the Disk usage card is gone**: it only listed a few directories the plugin no longer reads (pre-migration checkpoints, for instance), which counted toward no total and could not be cleaned from there, so the block made the card look fragmented for no decision value.
 
 ### 🐛 修复 · Fixed`（`🗑️ 移除 · Removed` / `🔐 安全 · Security` 同理）；
 > 没有内容的分组**不写标题**。已发布的历史版本段保留当时写法，不回改。
