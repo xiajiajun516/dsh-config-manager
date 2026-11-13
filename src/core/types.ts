@@ -1231,6 +1231,18 @@ export interface ConfigAdapter<TSection = unknown> {
   export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<TSection>>;
 
   /**
+   * 可选：脱敏**归属标注**（issue #136 C）—— 把 SecretScanner 的命中路径归属回具体载荷单元。
+   *
+   * 调用点只有一个：`sanitizeSectionData()`（`src/core/section-sanitize.ts`），纯函数语义
+   * （不改入参、不读盘）；只做「标注」，绝不把值写回去（脱敏仍是扫描器的职责）。
+   *
+   * plugins 分区用它把 `patch[i].raw.x` 的命中写进第 i 行的 `redactedPaths`：目标机据此区分
+   * 「被剥空」与「用户写空」，写回层才能精确保护本机明文（`src/core/patch-secret-guard.ts`）。
+   * 未实现 = 载荷不含归属信息，写回侧走保守分支。
+   */
+  annotateRedactions?(sanitized: unknown, hits: SensitiveHit[]): unknown;
+
+  /**
    * 可选：**只读预览**（`/export-preview` 用）。
    *
    * 与 `export()` 的唯一区别：文件类分区**不读文件内容、不算 SHA-256**，体积取自

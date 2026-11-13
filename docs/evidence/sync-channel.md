@@ -603,4 +603,34 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 
 **守卫（一条一个测试，已全部落地）**：A 卸载 → B 删除 / B 新装不删 / B 改版不删且报冲突 / 开关关不删且逐项 warning / 开关开 → 手动与自动都删且落 undo + 报告列明 / `bundlesOnly` 与本插件自身不删 / 祖先缺失不删 / 删除失败逐项 warning 不阻断 / `desktop` 档案被拒记 warning 不阻断 / 回滚能重装被删插件 —— 覆盖在 `src/sync/plugin-removals.test.ts`（判据 16 例）、`src/sync/sync-engine.test.ts`（引擎行为 6 例 + 单通道源码守卫）、`src/core/restore-plugin-install.test.ts`（undo 三例）、`src/sync/sync-selection.test.ts`（开关持久化）。
 
+## 脱敏剥空的 patch 行值会静默覆盖本机明文（issue #136，2026-11-13 修复）
+
+**事故机理（复现脚本在主检出 `.tmp/repro-136.ts`，未提交）**：
+
+1. 导出：`src/core/exporter.ts` 对结构化分区走 `scanAndRedact`，命中值被替换成 `REDACTED_PLACEHOLDER = ''`（`src/security/secret-scanner.ts:34`，**键与位置保留**）。patch 行的 `raw` 里 `promptApiKey: 'sk-…'` 因此变成 `promptApiKey: ''`——**与用户主动清空在字节上完全同形**。
+2. 分析：`analyzeImport` 对 patch 行做整行比对（`src/adapters/plugins.ts`），本机非空 vs 备份空 → `Conflict`。
+3. 落地：用户在差异确认里点「全部使用备份配置」= 逐项 `useImported`；`applyItem` 把整行 `raw` 写回目标层（`applyPatchChanges(...)`），`ok: true`、**零 warning** ⇒ 本机密钥被空串静默覆盖。
+4. 合并通道更糟：`applyMergePlan` 曾用 `createImportPlan(zipPath, { strategy: 'replace', resolutions: {} })`——全局 replace 把叶级 `Conflict` 直接翻成 `Update` 落盘，未裁决项既没被拦下、也没出现在报告里。
+
+**修复（A 写回守卫 / B 落地层 / C 载荷）**：
+
+- **C 载荷可区分剥空与真空**：`PatchLine` 新增可选 `redactedPaths`（`src/schema/types.ts`）；导出侧 `sanitizeSectionData()`（`src/core/section-sanitize.ts:28`）在 `scanAndRedact` 之后调用 adapter 的可选 `annotateRedactions(sanitized, hits)`（`src/core/types.ts` 的 `ConfigAdapter.annotateRedactions`），plugins 实现（`src/adapters/plugins.ts:402`）把 `patch[i].<relPath>` 形式的命中归到第 i 行，写成行内相对路径（如 `raw.config.apiKey`，排序去重，**只给路径不给值**）。exporter 与 sync-engine 的 5 处脱敏全部改走同一函数（`src/core/exporter.ts:354`、`src/sync/sync-engine.ts:892/1046/1396/1513/1750`），保证 `hasLocalChanges` 与载荷同字节。**旧载荷缺该字段 = 位置未知 → 保守分支**。
+- **A 写回层守卫**：`applyPatchSecretGuard()`（`src/core/patch-secret-guard.ts:133`）的判定——声明路径上「导入为空/缺失 + 本机同叶子非空」且**未经该行显式确认** ⇒ 换回本机值并计入 `kept`（报告文案含 patch 行 id 与字段路径、不含值，`src/adapters/plugins.ts:1159` 的 `adapter.patchSecretsKept`）；远端同叶子**真实非空** ⇒ 不保护，照常写入；`item.conflict?.resolution === 'useImported'`（显式逐行确认）⇒ 放行清空并出 `adapter.patchSecretsCleared`；`Create`（本机无该行）⇒ 不拦。未声明 `redactedPaths` 时保守扫描「导入 `''` + 本机非空串」的叶子，同样保护。
+- **B 落地层不再一律 replace**：`applyMergePlan`（`src/sync/sync-engine.ts:1934`）改为两趟计划——第一趟 `strategy: 'merge'` + 空 `resolutions` 探测计划项；只对「adapter ∈ 本轮 `autoApply` 分区（`MergeSectionResult.conflicts` 恒空，故分区裁决已覆盖叶级）」的 `Conflict` 补 `useImported` 再规划一次；仍无裁决的项原样留 `Conflict`（`planItemWritesTarget()`，`src/core/backup.ts:65` 据此不写、状态 `skipped`），并进 `ApplyReport.review`（`ReviewQueueItem`，只给 id/分区，不带值）与 `sync.mergeHeldConflicts` 告警。
+- **自动同步不报「成功且零告警」**：`src/sync/autosync-scheduler.ts:743-744` 把 `applyReport.warnings` 与 `review` 里的分区收进 `downlinkWarnings`/`heldLeafSections`；四条终态分支（推送被冲突挡下、推送成功、纯下行 skipped、纯下行 success）都合并 held 分区进 `conflictedSections`，`degraded` 时 status 降为 `partial`、skipReason 归 `conflict`，并把 `warnings`/`heldSections` 透传到 `AutosyncRunResult` 与历史条目。
+
+**回归确认（远端真实非空新值照常写入）**：`src/core/patch-secret-guard.test.ts` 的「声明路径 + 导入真实新值 → 不保护」与 `src/adapters/plugins.test.ts` 的守卫用例（`sk-REMOTE-REAL-136` 落盘且无 warning）同向钉住；`src/sync/sync-engine.test.ts` 既有「全部裁决 → 本机被写」「issue #127 会话连带工作区」两例在 B 改两趟计划后恢复通过（这正是「一刀 merge + 空 resolutions」会打坏的语义）。
+
+**实测命令与关键输出**：
+
+```text
+$ node --test src/core/patch-secret-guard.test.ts      -> # pass 9   # fail 0
+$ node --test src/adapters/plugins.test.ts             -> # pass 35  # fail 0
+$ node --test tests/core/exporter.test.ts              -> # pass 15  # fail 0
+$ node --test src/sync/sync-engine.test.ts             -> # pass 101 # fail 0
+$ node --test src/sync/autosync-scheduler.test.ts      -> # pass 54  # fail 0
+```
+
+**守卫（一条一个测试，已全部落地）**：导出把字段名命中与值形状命中的路径都记进该行 `redactedPaths` 且干净行不带字段（`tests/core/exporter.test.ts` E-10）/ 命中归行忽略行外路径、不就地改原对象（`src/adapters/plugins.test.ts`）/ 守卫三分支（剥空保留本机 + warning 含行 id 与字段路径且不含值 / 真实新值照写 / 显式确认才清空）/ 旧载荷保守回落 / `Create` 不拦 / `validate` 拒绝空数组与空串元素 / 叶级 Conflict 不被 replace 兜底且进 `review`+`warnings`（`src/sync/sync-engine.test.ts`）/ 自动同步叶级冲突 skip+warning+终态 `partial`（`src/sync/autosync-scheduler.test.ts`）。
+
 

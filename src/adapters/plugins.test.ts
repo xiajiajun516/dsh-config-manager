@@ -952,3 +952,166 @@ test('④ 可移植性：本机 pnpm-workspace.yaml 存在但读不出来 → �
     '读不到就不写：本机文件逐字不动',
   );
 });
+
+
+/* ---------------- issue #136：patch 行剥空守卫（A）与载荷归属路径（C） ---------------- */
+
+/** 造一份「脱敏后」的 plugins 载荷：行内被剥空的叶子 + 该行的剥空路径声明。 */
+function redactedSection(lineId: string, raw: Record<string, unknown>, redactedPaths?: string[]): PluginsSection {
+  const line: PluginsSection['patch'][number] = { file: 'cordis.patch.yml', lineId, raw };
+  if (redactedPaths !== undefined) line.redactedPaths = redactedPaths;
+  return { version: 1, plugins: [], patch: [line] };
+}
+
+function patchItem(lineId: string, extra: Partial<PlanItem> = {}): PlanItem {
+  return {
+    id: `patch:${lineId}`,
+    kind: 'Conflict',
+    adapter: 'plugins',
+    description: 'x',
+    severity: 'warning',
+    target: { adapter: 'plugins', ref: lineId },
+    ...extra,
+  };
+}
+
+test('#136/C annotateRedactions：命中路径按行归属，未命中行不带字段、不改行原文', () => {
+  const section: PluginsSection = {
+    version: 1,
+    plugins: [],
+    patch: [
+      { file: 'cordis.patch.yml', lineId: 'a', raw: { id: 'a', config: { apiKey: '' } } },
+      { file: 'cordis.patch.yml', lineId: 'b', raw: { id: 'b', config: { baseURL: 'https://x' } } },
+    ],
+  };
+  const annotated = new PluginsAdapter().annotateRedactions(section, [
+    { path: 'patch[0].raw.config.apiKey', field: 'apiKey' },
+    // 同一行的第二条命中：去重后仍是一条（Set）
+    { path: 'patch[0].raw.config.apiKey', field: 'apiKey' },
+    { path: 'patch[0].raw.config.headers', field: 'headers' },
+    // 分区级/行外命中（不是行内路径）必须被忽略，不能瞎归属
+    { path: 'plugins[0].spec', field: 'spec' },
+  ]) as PluginsSection;
+
+  assert.deepEqual(annotated.patch[0]?.redactedPaths, ['raw.config.apiKey', 'raw.config.headers']);
+  assert.deepEqual(annotated.patch[0]?.raw, { id: 'a', config: { apiKey: '' } }, '归属只加字段，不改行原文');
+  assert.equal('redactedPaths' in (annotated.patch[1] ?? {}), false, '未命中的行不得带 redactedPaths');
+  // 原对象不被就地改写（纯函数）
+  assert.equal('redactedPaths' in (section.patch[0] ?? {}), false);
+});
+
+test('#136/A 守卫：远端被剥空 + 本机非空 → 保留本机值、其余字段照常写入、warning 只报行 id 与路径', async () => {
+  const localSecret = 'sk-LOCAL-PLAINTEXT-136';
+  const dst = makeContext('linux', '/home/bob', 'web');
+  dst.patchFile.lines.set('line-a', {
+    lineId: 'line-a',
+    raw: { id: 'line-a', config: { apiKey: localSecret, baseURL: 'https://old.example' } },
+  });
+  const data = redactedSection('line-a', { id: 'line-a', config: { apiKey: '', baseURL: 'https://new.example' } }, ['raw.config.apiKey']);
+  const adapter = new PluginsAdapter();
+  const applied = await adapter.applyItem(patchItem('line-a'), makeImportContext(dst, new Map([['plugins', data]])));
+
+  assert.equal(applied.ok, true);
+  assert.equal(applied.warning, true, '静默保留不允许：必须有可见 warning');
+  assert.ok(applied.message?.includes('patch:line-a'), `告警应带 patch 行 id: ${applied.message}`);
+  assert.ok(applied.message?.includes('raw.config.apiKey'), `告警应带字段路径: ${applied.message}`);
+  assert.ok(!applied.message?.includes(localSecret), '告警绝不能带本机值（值本身是密钥）');
+
+  const written = dst.patchFile.lines.get('line-a')?.raw as { config: { apiKey: string; baseURL: string } };
+  assert.equal(written.config.apiKey, localSecret, '被剥空的叶子保留本机明文');
+  assert.equal(written.config.baseURL, 'https://new.example', '同一行的其余（非剥空）字段照常写入');
+});
+
+test('#136/A 守卫：远端真实非空新值照常写入（不回归）', async () => {
+  const remoteSecret = 'sk-REMOTE-REAL-136';
+  const dst = makeContext('linux', '/home/bob', 'web');
+  dst.patchFile.lines.set('line-a', {
+    lineId: 'line-a',
+    raw: { id: 'line-a', config: { apiKey: 'sk-LOCAL-OLD-136' } },
+  });
+  const data = redactedSection('line-a', { id: 'line-a', config: { apiKey: remoteSecret } }, ['raw.config.apiKey']);
+  const applied = await new PluginsAdapter().applyItem(patchItem('line-a'), makeImportContext(dst, new Map([['plugins', data]])));
+
+  assert.equal(applied.ok, true);
+  assert.notEqual(applied.warning, true, '真实新值不该触发守卫告警');
+  assert.equal(
+    (dst.patchFile.lines.get('line-a')?.raw as { config: { apiKey: string } }).config.apiKey,
+    remoteSecret,
+    '远端真实非空新值必须照常写入',
+  );
+});
+
+test('#136/A 守卫：显式逐行确认（useImported）才允许真的写空，且确认事实进报告', async () => {
+  const dst = makeContext('linux', '/home/bob', 'web');
+  dst.patchFile.lines.set('line-a', {
+    lineId: 'line-a',
+    raw: { id: 'line-a', config: { apiKey: 'sk-LOCAL-PLAINTEXT-136' } },
+  });
+  const data = redactedSection('line-a', { id: 'line-a', config: { apiKey: '' } }, ['raw.config.apiKey']);
+  const confirmed = patchItem('line-a', {
+    kind: 'Update',
+    conflict: { itemId: 'patch:line-a', resolution: 'useImported' },
+  });
+  const applied = await new PluginsAdapter().applyItem(confirmed, makeImportContext(dst, new Map([['plugins', data]])));
+
+  assert.equal(applied.ok, true);
+  assert.equal(applied.warning, true, '写空是显式行为，报告仍要可见');
+  assert.ok(applied.message?.includes('raw.config.apiKey'), `告警应带字段路径: ${applied.message}`);
+  assert.equal(
+    (dst.patchFile.lines.get('line-a')?.raw as { config: { apiKey: string } }).config.apiKey,
+    '',
+    '显式逐行确认后才允许清空',
+  );
+});
+
+test('#136/A 守卫：旧载荷（无 redactedPaths）走保守分支 —— 导入空串 + 本机非空即保留并告警', async () => {
+  const localSecret = 'sk-LOCAL-LEGACY-136';
+  const dst = makeContext('linux', '/home/bob', 'web');
+  dst.patchFile.lines.set('line-legacy', {
+    lineId: 'line-legacy',
+    raw: { id: 'line-legacy', config: { apiKey: localSecret }, disabled: false },
+  });
+  const data = redactedSection('line-legacy', { id: 'line-legacy', config: { apiKey: '' }, disabled: true });
+  assert.equal('redactedPaths' in (data.patch[0] ?? {}), false, '夹具必须是不带该字段的旧载荷');
+
+  const applied = await new PluginsAdapter().applyItem(patchItem('line-legacy'), makeImportContext(dst, new Map([['plugins', data]])));
+
+  assert.equal(applied.ok, true);
+  assert.equal(applied.warning, true, '旧载荷更要告警：它无法区分剥空与真空');
+  const written = dst.patchFile.lines.get('line-legacy')?.raw as { config: { apiKey: string }; disabled: boolean };
+  assert.equal(written.config.apiKey, localSecret, '旧载荷绝不假定空值等于用户主动清空');
+  assert.equal(written.disabled, true, '非空叶子仍按远端写入');
+});
+
+test('#136/A 守卫：Create（本机没有该行）不拦 —— 新行原样写入，不产生告警', async () => {
+  const dst = makeContext('linux', '/home/bob', 'web');
+  const data = redactedSection('line-new', { id: 'line-new', config: { apiKey: '' } }, ['raw.config.apiKey']);
+  const applied = await new PluginsAdapter().applyItem(
+    patchItem('line-new', { kind: 'Create' }),
+    makeImportContext(dst, new Map([['plugins', data]])),
+  );
+
+  assert.equal(applied.ok, true);
+  assert.notEqual(applied.warning, true);
+  assert.deepEqual(dst.patchFile.lines.get('line-new')?.raw, { id: 'line-new', config: { apiKey: '' } });
+});
+
+test('#136/C validate：redactedPaths 形状（空数组 / 空串元素）必须被拦下', async () => {
+  const adapter = new PluginsAdapter();
+  const empty = await adapter.validate(
+    { version: 1, plugins: [], patch: [{ file: 'x.yml', lineId: 'a', raw: {}, redactedPaths: [] }] } as PluginsSection,
+  );
+  assert.equal(empty.valid, false);
+  assert.ok(empty.issues.some((i) => i.path === 'patch[0].redactedPaths' && i.severity === 'error'));
+
+  const blank = await adapter.validate(
+    { version: 1, plugins: [], patch: [{ file: 'x.yml', lineId: 'a', raw: {}, redactedPaths: [''] }] } as PluginsSection,
+  );
+  assert.equal(blank.valid, false);
+  assert.ok(blank.issues.some((i) => i.path === 'patch[0].redactedPaths[0]' && i.severity === 'error'));
+
+  const okSection = await adapter.validate(
+    { version: 1, plugins: [], patch: [{ file: 'x.yml', lineId: 'a', raw: {}, redactedPaths: ['raw.config.apiKey'] }] } as PluginsSection,
+  );
+  assert.equal(okSection.valid, true, `合法形状应通过: ${JSON.stringify(okSection.issues)}`);
+});

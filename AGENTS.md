@@ -83,6 +83,7 @@
 - **索引条件写**：远端改过即中止、绝不覆盖别人；gist 例外 = 不做条件头（PATCH 回 400），改写后复核、冲突报 `index-conflict`。
 - **快照不进机器专属路径**（导出剥 store/cache、写回保留本机）；S3 授权头逐字序列化；祖先副本只落密文。
 - **「本地有改动」与导出载荷必须同一份字节**：`hasLocalChanges` 比 `hashSection(export())` ⇒ 比对里剔掉的易变字段必须同时从载荷剔除，否则每轮轮询都真推一次；身份字节只有 `src/adapters/file-collection.ts` 的 `comparableContent()` 一处。
+- **脱敏剥空的叶子不覆盖本机明文**：patch 行带 `redactedPaths`（缺省=未知→保守）；导入为空且本机非空、又未逐行确认时保留本机并告警（给行 id 与路径、不含值）；合并不得用全局 `replace` 兜底未裁决叶级 Conflict，留下的进 `review`，终态不得「成功且零告警」（判据 → `docs/evidence/sync-channel.md`）。
 - **会话管理五条**：远端保留接 GFS（刚 push 恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；墓碑不删本机数据。
 - **git 通道只碰同步内容**：clone 走 partial+sparse（sparse 面 = `SYNC_ROOT_DIRS`，与 `ADOPT_ROOT_ALLOW` 同源），老 git 回落全量；`--filter` 只给 promisor 副本。
 - **git 网络命令有界**：稳态靠 `ls-remote` 短路（远端 sha 与本地跟踪引用相同**且** HEAD 已合并才跳过）；网络子命令恒带低速上限；超时 kill 整棵进程树、宽限到点强制收尾（证据 → `docs/evidence/sync-channel.md`）。

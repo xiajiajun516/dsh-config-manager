@@ -698,6 +698,73 @@ test('runOnce: 远端有新快照但本地无改动 → 只 pull 合并，不 pu
   assert.equal(pushCalls.length, 0, '本地无改动不 push');
 });
 
+// ---------- issue #136：下行扣下叶级冲突 → 终态绝不 success，且事实进结果与历史 ----------
+
+test('runOnce(#136)：叶级冲突被扣下 + 推送成功 → partial(conflict)，其余分区照常应用', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const engine = {
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote'], ['plugins', 'useRemote']]),
+    applyMergePlan: async () => ({
+      ok: true,
+      applied: ['settings'] as never,
+      restoreId: 'r1',
+      rolledBack: false,
+      review: [{
+        id: 'patch:line-a', sectionId: 'plugins' as never, kind: 'key' as const,
+        description: 'patch 行 line-a 与本机不同（叶级冲突）',
+      }],
+      warnings: ['有 1 个叶级冲突未裁决（分区：plugins）：这些项保持本机原值、未写入，其余内容已应用'],
+    }),
+    push: async () => ({ ok: true, snapshotId: 'snap-136', sections: ['settings'] as never, warnings: [] }),
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+
+  assert.notEqual(result.status, 'success', '#136：下行扣下了叶级冲突，终态绝不能写成「成功且零告警」');
+  assert.equal(result.status, 'partial');
+  assert.equal(result.skipReason, 'conflict', '跳过码要说明是冲突待处理，而不是 normal');
+  assert.deepEqual(result.appliedSections, ['settings'], '其余分区照常应用');
+  assert.deepEqual(result.heldSections, ['plugins'], '被扣下的分区必须单独可见');
+  assert.ok(result.conflictedSections?.includes('plugins'), '待处理分区里也要列出它（面板据此提示）');
+  assert.equal(result.warnings?.length, 1, '告警必须透传到结果');
+  assert.ok(result.warnings?.[0]?.includes('叶级冲突'), `告警要说清扣下原因: ${result.warnings?.[0]}`);
+
+  const entry = getEntries().find((e) => e.status === 'partial');
+  assert.ok(entry, '历史必须留 partial（否则重启后查不到这轮为什么不算成功）');
+  assert.deepEqual(entry?.heldSections, ['plugins']);
+  assert.equal(entry?.warnings?.length, 1);
+  assert.equal(entry?.skipReason, 'conflict');
+});
+
+test('runOnce(#136)：纯下行（不上传）扣下叶级冲突 → partial(conflict)，不报 success', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const engine = {
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
+    applyMergePlan: async () => ({
+      ok: true,
+      applied: ['settings'] as never,
+      restoreId: 'r1',
+      rolledBack: false,
+      review: [{
+        id: 'patch:line-a', sectionId: 'plugins' as never, kind: 'key' as const,
+        description: 'patch 行 line-a 与本机不同（叶级冲突）',
+      }],
+      warnings: ['有 1 个叶级冲突未裁决（分区：plugins）：这些项保持本机原值、未写入，其余内容已应用'],
+    }),
+    push: async () => { throw new Error('本地无改动 + startup 变体不应上传'); },
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git', { startup: true });
+
+  assert.equal(result.status, 'partial', '纯下行同样不得写成 success');
+  assert.equal(result.direction, 'pull');
+  assert.equal(result.skipReason, 'conflict');
+  assert.deepEqual(result.heldSections, ['plugins']);
+  assert.deepEqual(result.appliedSections, ['settings']);
+  assert.ok(getEntries().some((e) => e.status === 'partial' && e.direction === 'pull'), '历史留 partial');
+});
+
 test('start(): 定时器触发后自动重排下一次（周期性后台同步）', async () => {
   // realtime:false 关掉「远端轮询定时器」，本用例只测 interval 兜底排期与重排（每个通道 1 个定时器）。
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };

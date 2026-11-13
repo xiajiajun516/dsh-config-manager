@@ -41,6 +41,13 @@ export interface AutosyncHistoryEntry {
   pulledSnapshotId?: string;
   /** failed 时的错误摘要（脱敏） */
   error?: string;
+  /**
+   * issue #136：本轮下行的用户可见告警（被保住的脱敏叶子 / 被扣下的叶级冲突）。
+   * 与 status 同看：有告警就不可能是一条「纯成功、什么都做了」的记录。
+   */
+  warnings?: string[];
+  /** issue #136：被保留待裁决的叶级冲突所在分区。 */
+  heldSections?: SectionId[];
   /** 连续失败 3 次通知时间（ISO-8601 UTC） */
   notifiedAt?: string;
   /** 本次触发时的连续失败计数 */

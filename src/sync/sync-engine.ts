@@ -22,6 +22,7 @@ import path from 'node:path';
 
 import { createAdapters } from '../adapters/index.ts';
 import { defaultSecretScanner } from '../core/exporter.ts';
+import { sanitizeSectionData } from '../core/section-sanitize.ts';
 import { Importer } from '../core/importer.ts';
 import { DEFAULT_ROLLBACK_ON_ERROR } from '../core/import-defaults.ts';
 // issue #91：只读预览与基线 hash 的口径判定（本地源插件在预览里不会被 npm pack）
@@ -77,6 +78,7 @@ export type { MergePreview, MergePreviewConflictView, MergePreviewSectionView } 
 import { gcSkipWarning, readGcSkipCode, reportGcSkipOnce } from './gc-skip.ts';
 import { classifyMergePlan } from './risk.ts';
 import type { SyncApplyPlan } from './risk.ts';
+import { createMergeApplySnapshot, planMergeApply } from './merge-apply-plan.ts';
 import { registerMessageCatalog } from '../core/engine-locale.ts';
 import { createSnapshot, selectPruneCandidates } from '../core/backup.ts';
 import { rollback } from '../core/rollback.ts';
@@ -98,6 +100,7 @@ const zh = {
   'sync.sessionTombstonesInherited': '已从远端快照继承 {count} 条会话删除墓碑：删除继续跨设备传播（本机数据不动）',
   'sync.applyMergeResolutionsNoImporter': 'applyMergeResolutions: SyncEngine 缺少 importer（需在 options 中注入）',
   'sync.mergePendingConflicts': '仍有 {count} 个分区未裁决（{sections}）：已裁决的部分已写入本机，但基线不推进，冲突下一轮会重新出现',
+  'sync.mergeHeldConflicts': '有 {count} 个叶级冲突未裁决（分区：{sections}）：这些项保持本机原值、未写入，其余内容已应用；确认后下一轮再合并',
   'sync.baselineRexportFailed': '写回成功但重新导出本机分区失败（{sections}）：无法证明基线与本机一致，本次**不记基线**（远端指针保持原值，下一轮重新合并收敛）',
   'sync.pushBaselineAdopted': '远端最新快照 {remote} 是本机上次推送的（本机基线停在 {base}，上次推送在记录基线前被打断）：已把它收养为基线并继续本次推送',
   'sync.pushBaselineAdoptedNoAncestor': '远端最新快照 {remote} 是本机上次推送的，但本机没有它的本地祖先副本：已收养基线（下次合并退化为两方合并，结果仍安全）',
@@ -109,6 +112,7 @@ const en: Record<keyof typeof zh, string> = {
   'sync.sessionTombstonesInherited': 'Inherited {count} session deletion tombstone(s) from the remote snapshot: deletions keep propagating across devices (local data untouched)',
   'sync.applyMergeResolutionsNoImporter': 'applyMergeResolutions: SyncEngine is missing the importer (must be injected via options)',
   'sync.mergePendingConflicts': '{count} section(s) still have no decision ({sections}): the decided parts were written locally, but the baseline is not advanced, so the conflicts will reappear next round',
+  'sync.mergeHeldConflicts': '{count} leaf-level conflict(s) remain undecided (sections: {sections}): those items keep the local value and were not written, while the rest was applied; they merge again next round once decided',
   'sync.baselineRexportFailed': 'The write succeeded but re-exporting the local section(s) failed ({sections}): the baseline cannot be proven to match this machine, so no baseline was recorded (the remote pointer keeps its old value and the next merge converges again)',
   'sync.pushBaselineAdopted': 'The newest remote snapshot {remote} was pushed by this device (its baseline stopped at {base}: that push was interrupted before recording the baseline): the baseline has been adopted and this push continues',
   'sync.pushBaselineAdoptedNoAncestor': 'The newest remote snapshot {remote} was pushed by this device, but no local ancestor copy exists for it: the baseline has been adopted (the next merge degrades to a two-way merge, which is still safe)',
@@ -881,9 +885,11 @@ export class SyncEngine {
       }
       warnings.push(...section.warnings);
       // includeSecrets=true：凭据值保留（随后整体加密）；否则过 SecretScanner 剥离（默认安全）
+      // issue #136 C：与 exporter 同走 `sanitizeSectionData`（脱敏 + 归属标注一次完成），
+      // 否则推送载荷里没有 `redactedPaths`，目标机无从判断哪一行被剥空。
       const data = isFileSection(adapter.id) || includeSecrets
         ? section.data
-        : this.scanner.scanAndRedact(section.data).sanitized;
+        : sanitizeSectionData(adapter, this.scanner, section.data).sanitized;
       plainSections[adapter.id] = data as SectionData;
     }
 
@@ -1037,7 +1043,7 @@ export class SyncEngine {
       }
       const data = isFileSection(adapter.id) || includeSecrets
         ? section.data
-        : this.scanner.scanAndRedact(section.data).sanitized;
+        : sanitizeSectionData(adapter, this.scanner, section.data).sanitized;
       plainSections[adapter.id] = data as SectionData;
       counts[adapter.id] = section.counts ? Object.values(section.counts).reduce((a, b) => a + b, 0) : 0;
     }
@@ -1387,7 +1393,7 @@ export class SyncEngine {
       } catch {
         continue; // 单项导出失败不影响判定（与 push 单项跳过语义一致）
       }
-      const data = isFileSection(adapter.id) ? section.data : this.scanner.scanAndRedact(section.data).sanitized;
+      const data = isFileSection(adapter.id) ? section.data : sanitizeSectionData(adapter, this.scanner, section.data).sanitized;
       const recorded = state.sections[adapter.id];
       if (recorded === undefined) return true; // 基线缺该分区 → 视为有变化
       if (recorded.hash !== hashSection(data as SectionData)) return true;
@@ -1504,7 +1510,7 @@ export class SyncEngine {
       } catch {
         continue;
       }
-      const data = isFileSection(adapter.id) ? section.data : this.scanner.scanAndRedact(section.data).sanitized;
+      const data = isFileSection(adapter.id) ? section.data : sanitizeSectionData(adapter, this.scanner, section.data).sanitized;
       localSections[adapter.id] = data as SectionData;
     }
     const portableIds = this.pullSectionIds();
@@ -1741,7 +1747,7 @@ export class SyncEngine {
         const section = await adapter.export(this.ctx, { includeSecrets: false });
         out[adapter.id] = (isFileSection(adapter.id)
           ? section.data
-          : this.scanner.scanAndRedact(section.data).sanitized) as SectionData;
+          : sanitizeSectionData(adapter, this.scanner, section.data).sanitized) as SectionData;
       } catch {
         return null;
       }
@@ -1881,6 +1887,7 @@ export class SyncEngine {
     if (!this.importer) {
       throw new Error(this.msg('sync.applyMergePlanNoImporter'));
     }
+    const importer = this.importer;
     const appliedIds: SectionId[] = apply.autoApply.map((r) => r.id);
     // 0) 空 autoApply：无物可应用，直接短路（不构造 ZIP、不调 Importer）
     if (appliedIds.length === 0) {
@@ -1906,28 +1913,22 @@ export class SyncEngine {
     const tempSnapshot = bundle.tempSnapshot;
     const zipPath = await this.snapshotToZip(tempSnapshot, this.pullSectionIds());
     try {
-      const plan = await this.importer.createImportPlan(zipPath, {
-        strategy: 'replace', // auto 路径：冲突已在外部分流；这里 replace = 接受导入值
-        resolutions: {},
-        // issue #45：合并路径的映射来自 merge() 记下的远端 sourceHome + 用户映射
+      // issue #136 B：两趟计划 + 待裁决面（判定与理由见 `planMergeApply` 的文档注释；不再兜底 replace）。
+      const { plan, heldReview, heldWarnings } = await planMergeApply({
+        zipPath,
         pathMappings: opts.pathMappings ?? this.lastMergedPathMappings,
+        appliedIds,
+        createImportPlan: (zip, decisions) => importer.createImportPlan(zip, decisions),
+        heldConflictMessage: (count, sections) => this.msg('sync.mergeHeldConflicts', { count: String(count), sections: sections.join(', ') }),
       });
       if (!plan.items.length) {
         // 没有可执行项 → 视为 ok 但空 applied
         return { ok: true, applied: [], restoreId: '', rolledBack: false, review: [], warnings: [] };
       }
       // 2) 兜底：先建快照（拿到 restoreId 给 UI 一键回滚用）
-      const store: SnapshotStore = new FileSnapshotStore({ dir: this.rollbackSnapshotsDir });
-      let snapshot: Snapshot | undefined;
-      try {
-        snapshot = await createSnapshot({
-          ctx: this.ctx,
-          plan,
-          sourceZip: zipPath,
-          store,
-          adapters: this.adapters,
-        });
-      } catch (backupErr) {
+      const snap = await createMergeApplySnapshot({ ctx: this.ctx, plan, zipPath, storeDir: this.rollbackSnapshotsDir, adapters: this.adapters });
+      if (!snap.ok) {
+        const backupErr = snap.error;
         return {
           ok: false,
           applied: [],
@@ -1937,9 +1938,9 @@ export class SyncEngine {
           warnings: [this.msg('sync.preApplySnapshotFailed', { err: backupErr instanceof Error ? backupErr.message : String(backupErr) })],
         };
       }
-      // 3) 真正执行：Importer.executeImportPlan（rollbackOnError 取单一缺省 → 任一失败整体回滚）
-      // 自动同步路径没有密码（凭据载荷无法解密），因此恒不注入 decryptedCredentials；
-      // 加密快照本就不会进入自动同步（无密码无法 prepareSnapshot）。
+      const { store, snapshot } = snap;
+      // 3) 真正执行：rollbackOnError 取单一缺省 → 任一失败整体回滚；自动同步没有密码，
+      // 恒不注入 decryptedCredentials（加密快照本就不进自动同步）。
       const result = await this.importer.executeImportPlan(zipPath, plan, {
         confirm: true,
         rollbackOnError: DEFAULT_ROLLBACK_ON_ERROR,
@@ -1963,13 +1964,11 @@ export class SyncEngine {
           rollbackFull: rb.full,
         };
       }
-      // 4') issue #132：跟随远端删除插件（手动与自动共享此路径）。必须在 exportAppliedSections
-      //     之前 —— 基线要记录「删完之后」的真实清单，否则祖先仍带着刚删的包、每轮重复提删除。
+      // 4') issue #132：跟随远端删除插件（手动与自动共享此路径），必须先于基线重导出 ——
+      //     基线要记录「删完之后」的真实清单，否则祖先仍带着刚删的包、每轮重复提删除。
       // 4'') undo 线索：删掉的插件写进本次回滚快照，恢复计划据此反向重装；记不上只告警。
-      const pluginStep = await applyPluginRemovalStep({
-        appliedIds, plan: await this.pluginRemovalPlan(), enabled: this.deletePlugins,
-        uninstall: (name) => this.ctx.plugins.uninstall(name), msg: this.msg,
-      });
+      const pluginStep = await applyPluginRemovalStep({ appliedIds, plan: await this.pluginRemovalPlan(),
+        enabled: this.deletePlugins, uninstall: (name) => this.ctx.plugins.uninstall(name), msg: this.msg });
       const undoWarnings = await recordPluginRemovalUndo({
         removals: pluginStep.removals, snapshotId: snapshot.id,
         record: store.recordPluginRemovals?.bind(store), msg: this.msg,
@@ -1987,8 +1986,8 @@ export class SyncEngine {
           applied: appliedIds,
           restoreId: snapshot.id,
           rolledBack: false,
-          review: [],
-          warnings: [...(result.warnings ?? []), ...pluginStep.warnings, ...undoWarnings, this.msg('sync.baselineRexportFailed', { sections: appliedIds.join(', ') })],
+          review: heldReview,
+          warnings: [...(result.warnings ?? []), ...pluginStep.warnings, ...undoWarnings, ...heldWarnings, this.msg('sync.baselineRexportFailed', { sections: appliedIds.join(', ') })],
           ...(pluginStep.removals.length === 0 ? {} : { pluginRemovals: pluginStep.removals, needsRestart: true }),
         };
       }
@@ -2003,8 +2002,8 @@ export class SyncEngine {
         applied: appliedIds,
         restoreId: snapshot.id,
         rolledBack: false,
-        review: [],
-        warnings: [...(result.warnings ?? []), ...pluginStep.warnings, ...undoWarnings],
+        review: heldReview,
+        warnings: [...(result.warnings ?? []), ...pluginStep.warnings, ...undoWarnings, ...heldWarnings],
         // 删过插件必须重启（与安装同语义）：报告不能只说「已应用」
         ...(pluginStep.removals.length === 0 ? {} : { pluginRemovals: pluginStep.removals, needsRestart: true }),
       };

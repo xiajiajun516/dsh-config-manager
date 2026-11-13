@@ -24,6 +24,7 @@ import { isPathSafe, normalizePath } from '../utils/paths.ts';
 import { isENOENT } from '../utils/guards.ts';
 import { PLUGIN_PATCH_REF_PREFIX, PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
 import { readEffectivePatchLines, resolveWriteLayer, USER_PATCH_FILE } from '../core/patch-layers.ts';
+import { applyPatchSecretGuard } from '../core/patch-secret-guard.ts';
 import { stripMcpEntries } from './mcp.ts';
 import {
   parsePnpmPatchedDependencies, restorePnpmMachinePaths, sanitizePnpmWorkspacePatches, stripPnpmMachinePaths,
@@ -31,7 +32,7 @@ import {
 import type { LocalPluginTarball, PatchLine, PluginEntry, PluginsSection, PnpmPatchFile } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
-  ImportContext, PlanItem, PluginAreaRef, SectionPreview, ValidationResult,
+  ImportContext, PlanItem, PluginAreaRef, SectionPreview, SensitiveHit, ValidationResult,
 } from '../core/types.ts';
 import { BUILTIN_PLUGIN_DATA_SOURCES, areasForSection } from '../core/plugin-data-registry.ts';
 import type { PluginDataSource } from '../core/plugin-data-registry.ts';
@@ -279,6 +280,21 @@ async function measureLocalSources(plugins: PluginEntry[], ctx: HostContext): Pr
   }
   return sizes;
 }
+/**
+ * issue #136 A：读目标机**当前生效**的 patch 行原文（写回守卫的「本机现值」）。
+ *
+ * 口径与 analyzeImport 判定 Skip/Conflict 时逐字相同（readEffectivePatchLines + lineId 匹配），
+ * 这样「计划阶段看到的现值」与「写回阶段比对的现值」不会分叉。读失败一律当作没有本机行
+ * （保守分支只保护它能证明的本机非空叶子；读不出来时不应假装有值）。
+ */
+async function readLocalPatchRaw(ctx: ImportContext, lineId: string): Promise<unknown> {
+  try {
+    const { lines } = await readEffectivePatchLines(ctx.target.patchFile, ctx.target.profile);
+    return lines.find((l) => l.lineId === lineId)?.raw;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * 由分区载荷派生单元清单（纯函数、零 I/O）。
@@ -370,6 +386,46 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
 
   async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<PluginsSection>> {
     return this.collect(ctx, options, true);
+  }
+  /**
+   * issue #136 C：脱敏**归属标注** —— 把 SecretScanner 的命中路径归属回具体 patch 行。
+   *
+   * 为什么必须做：导出侧把命中字段名/值形状的字符串叶子替换成空串（占位符），语义是「需补录」。
+   * 目标机只看到空串，无法区分「被剥空」与「用户主动写空」——于是合并/导入落地时照抄空串，
+   * 静默抹掉本机同一行里用户手写的明文（行是整行写回的，行内没有粒度）。
+   *
+   * 归属规则：命中路径 `patch[i].<内部路径>` → 第 i 行的 `redactedPaths`（行内相对，原样保留
+   * 扫描器语法，如 `raw.mcp.args.token`）；未命中的行不写该字段（缺省 = 未知，写回侧走保守分支）。
+   *
+   * 纯函数：不改入参；命中不落在 patch 行上（plugins / pnpmWorkspace / localTarballs 等）→ 原样返回。
+   */
+  annotateRedactions(sanitized: unknown, hits: SensitiveHit[]): unknown {
+    if (hits.length === 0) return sanitized;
+    if (sanitized === null || typeof sanitized !== 'object') return sanitized;
+    const section = sanitized as PluginsSection;
+    if (!Array.isArray(section.patch) || section.patch.length === 0) return sanitized;
+    const byLine = new Map<number, Set<string>>();
+    for (const hit of hits) {
+      const m = /^patch\[(\d+)\]\.(.+)$/.exec(hit.path);
+      if (m === null) continue;
+      const index = Number(m[1]);
+      if (!Number.isInteger(index) || index < 0 || index >= section.patch.length) continue;
+      let paths = byLine.get(index);
+      if (paths === undefined) {
+        paths = new Set<string>();
+        byLine.set(index, paths);
+      }
+      const rel = m[2];
+      if (rel === undefined || rel === '') continue;
+      paths.add(rel);
+    }
+    if (byLine.size === 0) return sanitized;
+    const patch = section.patch.map((line, i) => {
+      const paths = byLine.get(i);
+      if (paths === undefined) return line;
+      return { ...line, redactedPaths: [...paths].sort() };
+    });
+    return { ...section, patch };
   }
 
   /**
@@ -1079,11 +1135,32 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     const data = ctx.sections.get('plugins') as PluginsSection | undefined;
     const pl = data?.patch.find((p) => p.lineId === ref);
     if (!pl) return { ok: false, message: msg('adapter.patchMissing', { ref }) };
+    // issue #136 A：写回层守卫 —— 「被脱敏剥空」的叶子不得覆盖本机非空明文。
+    //
+    // 为什么在写回层做（而不是只靠导出侧标注）：协同场景里对方的载荷来自更早版本、第三方工具或
+    // 手工改过，`redactedPaths` 可能缺失；写回是最后一道能同时看见「本机现值」与「将被写下的值」
+    // 的地方，也唯一能区分「被剥空」与「用户主动写空」（显式逐行 useImported 才放行清空）。
+    // 守卫只在 Update/Conflict 上生效；Create 没有本机行可保（新行原样写入）。
+    const guard = applyPatchSecretGuard({
+      importedRaw: pl.raw,
+      localRaw: item.kind === 'Create' ? undefined : await readLocalPatchRaw(ctx, ref),
+      redactedPaths: pl.redactedPaths,
+      // 显式逐行确认 = 用户对本行选了 useImported（全局 replace 策略不算确认）
+      confirmed: item.conflict?.resolution === 'useImported',
+    });
     // 层身份按**语义**映射到目标机：来源是别的 profile 层时不能照抄名字（目标机未必有那个
     // profile，宿主门面会拒绝），一律落到目标机当前 profile 层（与计划项 target.file 同口径）。
     await ctx.target.patchFile.applyPatchChanges(resolveWriteLayer(pl.file, ctx.target.profile), [
-      { lineId: ref, raw: pl.raw, action: item.kind === 'Create' ? 'insert' : 'update' },
+      { lineId: ref, raw: guard.raw, action: item.kind === 'Create' ? 'insert' : 'update' },
     ]);
+    if (guard.kept.length > 0) {
+      // 告警只报行 id 与字段路径，绝不带值（值本身就是密钥）
+      // 报告面用**计划项 id**（`patch:<lineId>`）而不是裸 lineId：报告与计划项要能逐条对上
+      return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchSecretsKept', { ref: item.id, paths: guard.kept.join(', ') }) };
+    }
+    if (guard.cleared.length > 0) {
+      return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchSecretsCleared', { ref: item.id, paths: guard.cleared.join(', ') }) };
+    }
     return { ok: true, needsRestart: true, message: msg('adapter.patchWritten', { ref }) };
   }
 
@@ -1119,6 +1196,21 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
           const pl = raw as unknown;
           if (pl === null || typeof pl !== 'object') {
             issues.push({ path: `patch[${i}]`, message: msg('adapter.validate.recordObject', { subject: 'patch line' }), severity: 'error' });
+            continue;
+          }
+          // issue #136 C：脱敏归属路径（可选；存在时必须是非空字符串数组，写回守卫按它精确比对）。
+          // 空数组/空串一律视为形状错误：空数组表达不了「缺省=未知」，只会让守卫静默失能。
+          const redactedPaths = (pl as { redactedPaths?: unknown }).redactedPaths;
+          if (redactedPaths !== undefined) {
+            if (!Array.isArray(redactedPaths) || redactedPaths.length === 0) {
+              issues.push({ path: `patch[${i}].redactedPaths`, message: msg('adapter.validate.array', { subject: 'patch[].redactedPaths' }), severity: 'error' });
+            } else {
+              for (const [j, p] of redactedPaths.entries()) {
+                if (typeof p !== 'string' || p === '') {
+                  issues.push({ path: `patch[${i}].redactedPaths[${j}]`, message: msg('adapter.validate.string', { subject: 'patch[].redactedPaths[]' }), severity: 'error' });
+                }
+              }
+            }
           }
         }
       }

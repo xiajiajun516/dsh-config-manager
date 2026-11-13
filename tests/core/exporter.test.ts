@@ -520,4 +520,72 @@ test('G-09/H1 文件数超过上限时：按文件截断 + 必须补一条汇总
   });
 });
 
+/* ---------------- issue #136/C：导出把剥空叶子路径归属回具体 patch 行 ---------------- */
+
+/**
+ * 为什么需要（#136 根因的一半）：脱敏把字符串叶子换成空串后，载荷里只剩「空串」，
+ * 导入/同步侧无法区分「脱敏剥空」与「用户主动清空」→ 整行写回时静默抹掉本机明文。
+ * 修复：导出把命中路径按行归属写进该行可选字段 `redactedPaths`（行内相对路径）。
+ */
+test('E-10 导出记录 patch 行剥空路径：字段名命中与值形状命中都归属到所在行，干净行不带字段', async () => {
+  await withTmp(async (dir) => {
+    const src = makeContext('linux', '/home/e10');
+    const secretValue = 'sk-E2E-EXPORT-0001';
+    // 行 1：config.apiKey 走字段名命中；config.headers 走值形状（Bearer）命中
+    src.patchFile.lines.set('line-secrets', {
+      lineId: 'line-secrets',
+      raw: {
+        id: 'demo-plugin',
+        config: {
+          apiKey: secretValue,
+          headers: 'Authorization: Bearer abc12345def',
+        },
+      },
+    });
+    // 行 2：干净行 —— 不得出现 redactedPaths 字段（缺省 = 未知，不能凭空声称「有剥空」）
+    src.patchFile.lines.set('line-clean', {
+      lineId: 'line-clean',
+      raw: { id: 'clean-plugin', config: { baseURL: 'https://example.com' } },
+    });
+    const adapters = createAdapters({ namespaces: [] });
+    const zipPath = path.join(dir, 'dsh-config-e10.zip');
+
+    await new Exporter({
+      ctx: src, adapters,
+      scanner: createSecretScanner(),
+      now: () => new Date('2026-08-14T12:00:00.000Z'),
+    }).export({ includeSecrets: false, outPath: zipPath });
+
+    const archive = parseZip(await fs.readFile(zipPath));
+    const plugins = archive.readEntryJson('plugins/plugins.json') as {
+      patch: { lineId: string; raw: Record<string, unknown>; redactedPaths?: string[] }[];
+    };
+    const secretsLine = plugins.patch.find((l) => l.lineId === 'line-secrets');
+    assert.ok(secretsLine !== undefined, 'patch 行应随载荷导出');
+    assert.deepEqual(
+      secretsLine!.redactedPaths,
+      ['raw.config.apiKey', 'raw.config.headers'],
+      '命中路径必须逐一归属到该行（行内相对路径，含 raw 前缀），且排序稳定',
+    );
+    // 值本身仍被剥空，且路径里绝不夹带值
+    const config = secretsLine!.raw['config'] as { apiKey: string; headers: string };
+    assert.equal(config.apiKey, '', 'apiKey 值应剥离为空串');
+    assert.equal(config.headers, '', 'headers 值应剥离为空串');
+    assert.ok(!JSON.stringify(secretsLine!.redactedPaths).includes('sk-'), 'redactedPaths 只能有路径，不能有值');
+
+    const cleanLine = plugins.patch.find((l) => l.lineId === 'line-clean');
+    assert.ok(cleanLine !== undefined);
+    assert.equal('redactedPaths' in cleanLine!, false, '未命中的行不得带 redactedPaths（缺省 = 未知）');
+
+    // ZIP 全文本仍不含明文（记录路径不得把值带回来）
+    const allText = archive.names()
+      .filter((n) => n !== CHECKSUMS_FILE)
+      .map((n) => Buffer.from(archive.readEntry(n)).toString('utf8'))
+      .join('\n');
+    for (const secret of [secretValue, 'abc12345def']) {
+      assert.ok(!allText.includes(secret), `秘密值 ${secret} 不得写入导出`);
+    }
+  });
+});
+
 
