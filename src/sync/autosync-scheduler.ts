@@ -861,9 +861,14 @@ export class AutoSyncScheduler {
           // issue #136：下行有告警 / 有待裁决叶级项 → 终态只能是 partial。
           // 「推送成功」不能替下行的未完成背书：用户会从 success 得出「两端一样了」，而实际上
           // 有些叶子被有意扣下（保留本机 / 等待裁决）。
-          const degraded = downlinkWarnings.length > 0 || heldLeafSections.length > 0;
+          // 两类降级必须分开说：只有「叶级冲突被扣下」才是冲突待裁决；
+          // 纯告警（插件没装上、undo 有残留等）与冲突无关，套上 'conflict' 会让
+          // 界面上出现「跳过原因：冲突」「另有 N 个分区待确认」，而 conflictedSections 是空的。
+          const heldDegraded = heldLeafSections.length > 0;
+          const degraded = downlinkWarnings.length > 0 || heldDegraded;
           const finalPartial = partial || degraded;
-          const finalSkipReason = skipReason ?? (degraded ? ('conflict' as const) : undefined);
+          const finalSkipReason = skipReason
+            ?? (heldDegraded ? ('conflict' as const) : degraded ? ('warning' as const) : undefined);
           // 扣下的叶级冲突所在分区也要出现在「待处理分区」里（与分区级冲突合并去重）
           const finalConflicted = [...new Set([...reportedConflicted, ...heldLeafSections])];
           const result: AutosyncRunResult = {

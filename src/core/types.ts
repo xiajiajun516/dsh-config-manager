@@ -683,7 +683,8 @@ export interface ConflictDecision {
    * - `'section'`：由**分区级**裁决换算而来（合并落地 `planMergeApply` 的 second pass 把
    *   「该分区已裁决」逐项注入成 `useImported`）。分区级裁决决定「分区是否应用」，
    *   不构成对某一行值的确认，写回守卫不得据此清空本机明文。
-   * - 缺省：未标注来源（老调用方），按逐项语义处理。
+   * - 缺省：未标注来源。写回守卫按**未确认**处理（默认拒绝清空）—— 忘了标注只会少清空，
+   *   不会误清空；确认必须显式写明来源。
    */
   decidedBy?: 'item' | 'section';
 }

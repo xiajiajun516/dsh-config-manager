@@ -1141,6 +1141,57 @@ test('#136/A 守卫：Create（本机没有该行）不拦 —— 新行原样�
   assert.deepEqual(dst.patchFile.lines.get('line-new')?.raw, { id: 'line-new', config: { apiKey: '' } });
 });
 
+test('#136/A 守卫：来源缺省（未标注 decidedBy）按未确认处理 —— 不得清空本机明文', async () => {
+  // 翻转成白名单后的关键性质：未来新增的注入路径如果忘了标来源，只会「少清空」，不会误清空。
+  const localSecret = 'sk-LOCAL-UNLABELED-136';
+  const dst = makeContext('linux', '/home/bob', 'web');
+  dst.patchFile.lines.set('line-a', {
+    lineId: 'line-a',
+    raw: { id: 'line-a', config: { apiKey: localSecret } },
+  });
+  const data = redactedSection('line-a', { id: 'line-a', config: { apiKey: '' } }, ['raw.config.apiKey']);
+  const unlabeled = patchItem('line-a', {
+    kind: 'Update',
+    conflict: { itemId: 'patch:line-a', resolution: 'useImported' },
+  });
+  const applied = await new PluginsAdapter().applyItem(unlabeled, makeImportContext(dst, new Map([['plugins', data]])));
+
+  assert.equal(applied.ok, true);
+  assert.equal(applied.warning, true, '保留本机值必须可见（否则用户以为清空成功）');
+  assert.equal(
+    (dst.patchFile.lines.get('line-a')?.raw as { config: { apiKey: string } }).config.apiKey,
+    localSecret,
+    '没标明裁决来源的 useImported 不算人的逐行确认',
+  );
+});
+
+test('#136/A 守卫：本机 patch 层读不出来 → 该行拒绝写（不按「本机没有这一行」放行）', async () => {
+  const dst = makeContext('linux', '/home/bob', 'web');
+  const localSecret = 'sk-LOCAL-UNREADABLE-136';
+  dst.patchFile.lines.set('line-a', {
+    lineId: 'line-a',
+    raw: { id: 'line-a', config: { apiKey: localSecret } },
+  });
+  const data = redactedSection('line-a', { id: 'line-a', config: { apiKey: '' } }, ['raw.config.apiKey']);
+  const ctx = makeImportContext(dst, new Map([['plugins', data]]));
+  // 层读失败在 readEffectivePatchLines 里被收进 failures（不抛错）—— 覆盖读取端口模拟真实失败
+  ctx.target.patchFile.readPatchLines = async () => {
+    throw new Error('EACCES: permission denied');
+  };
+
+  const applied = await new PluginsAdapter().applyItem(patchItem('line-a'), ctx);
+
+  assert.equal(applied.ok, false, '读不出本机现值 = 无法证明确实安全，不能写');
+  assert.equal(applied.warning, true, '非致命：一行读不出来不得拖垮其余分区');
+  assert.ok(applied.message?.includes('patch:line-a'), `提示要指向具体行: ${applied.message}`);
+  assert.ok(applied.message?.includes('EACCES'), `提示要带失败原因: ${applied.message}`);
+  assert.equal(
+    (dst.patchFile.lines.get('line-a')?.raw as { config: { apiKey: string } }).config.apiKey,
+    localSecret,
+    '零写入：本机明文逐字不动',
+  );
+});
+
 test('#136/C validate：redactedPaths 空数组合法（＝无剥空位置，守卫走保守分支），非数组/空串元素被拦', async () => {
   const adapter = new PluginsAdapter();
   // 空数组不得拦下整包导入：它只是「本行没有剥空位置」，等价于字段缺省。

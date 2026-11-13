@@ -615,7 +615,7 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 **修复（A 写回守卫 / B 落地层 / C 载荷）**：
 
 - **C 载荷可区分剥空与真空**：`PatchLine` 新增可选 `redactedPaths`（`src/schema/types.ts`）；导出侧 `sanitizeSectionData()`（`src/core/section-sanitize.ts:28`）在 `scanAndRedact` 之后调用 adapter 的可选 `annotateRedactions(sanitized, hits)`（`src/core/types.ts` 的 `ConfigAdapter.annotateRedactions`），plugins 实现（`src/adapters/plugins.ts:402`）把 `patch[i].<relPath>` 形式的命中归到第 i 行，写成行内相对路径（如 `raw.config.apiKey`，排序去重，**只给路径不给值**）。exporter 与 sync-engine 的 5 处脱敏全部改走同一函数（`src/core/exporter.ts:354`、`src/sync/sync-engine.ts:892/1046/1396/1513/1750`），保证 `hasLocalChanges` 与载荷同字节。**旧载荷缺该字段 = 位置未知 → 保守分支**。
-- **A 写回层守卫**：`applyPatchSecretGuard()`（`src/core/patch-secret-guard.ts:133`）的判定——声明路径上「导入为空/缺失 + 本机同叶子非空」且**未经该行显式确认** ⇒ 换回本机值并计入 `kept`（报告文案含 patch 行 id 与字段路径、不含值，`src/adapters/plugins.ts:1159` 的 `adapter.patchSecretsKept`）；远端同叶子**真实非空** ⇒ 不保护，照常写入；`item.conflict?.resolution === 'useImported'` **且** `item.conflict.decidedBy ≠ 'section'`（**计划项级**的显式确认）⇒ 放行清空并出 `adapter.patchSecretsCleared`；`Create`（本机无该行）⇒ 不拦。未声明 `redactedPaths` 时保守扫描「导入 `''` + 本机非空串」的叶子，同样保护。
+- **A 写回层守卫**：`applyPatchSecretGuard()`（`src/core/patch-secret-guard.ts:133`）的判定——声明路径上「导入为空/缺失 + 本机同叶子非空」且**未经该行显式确认** ⇒ 换回本机值并计入 `kept`（报告文案含 patch 行 id 与字段路径、不含值，`src/adapters/plugins.ts:1159` 的 `adapter.patchSecretsKept`）；远端同叶子**真实非空** ⇒ 不保护，照常写入；`item.conflict?.resolution === 'useImported'` **且** `item.conflict.decidedBy === 'item'`（**计划项级**的显式确认；白名单判定，来源缺省=未确认）⇒ 放行清空并出 `adapter.patchSecretsCleared`；`Create`（本机无该行）⇒ 不拦。**本机现值读不出来 ⇒ 这一行拒绝写**（`readEffectivePatchLines` 把层读失败收进 `failures` 而不抛错，旧实现只看抛错，于是「有层读不出来」被当成「本机没有这一行」放行=零告警绕过守卫；现在 `failures` 非空即返回 `adapter.patchLocalReadFailed`（非致命 warning，零写入）。未声明 `redactedPaths` 时保守扫描「导入 `''` + 本机非空串」的叶子，同样保护。
 - **B 落地层不再一律 replace**：`applyMergePlan`（`src/sync/sync-engine.ts:1934`）改为两趟计划——第一趟 `strategy: 'merge'` + 空 `resolutions` 探测计划项；只对「adapter ∈ 本轮 `autoApply` 分区（`MergeSectionResult.conflicts` 恒空，故分区裁决已覆盖叶级）」的 `Conflict` 补 `useImported` 再规划一次；仍无裁决的项原样留 `Conflict`（`planItemWritesTarget()`，`src/core/backup.ts:65` 据此不写、状态 `skipped`），并进 `ApplyReport.review`（`ReviewQueueItem`，只给 id/分区，不带值）与 `sync.mergeHeldConflicts` 告警。
 - **自动同步不报「成功且零告警」**：`src/sync/autosync-scheduler.ts:743-744` 把 `applyReport.warnings` 与 `review` 里的分区收进 `downlinkWarnings`/`heldLeafSections`；四条终态分支（推送被冲突挡下、推送成功、纯下行 skipped、纯下行 success）都合并 held 分区进 `conflictedSections`，`degraded` 时 status 降为 `partial`、skipReason 归 `conflict`，并把 `warnings`/`heldSections` 透传到 `AutosyncRunResult` 与历史条目。
 
@@ -625,7 +625,9 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 
 B 的第二趟把「该分区已裁决」注入成 `useImported`，而 A 的守卫最初只看 `resolution === 'useImported'` ⇒ **分区级裁决被误当成人对这一行的确认**，同一条 #136 路径在合并落地（尤其自动同步的 autoApply，零 UI）上仍然抹密钥。实证（`appliedIds=['plugins']` + `applyItemResolution` 复算 + 守卫）：`confirmed=true` → `kept=[]`、`cleared=['raw.config.channels[0].promptApiKey']`、写入值 `''`。
 
-修法定形：`ConflictDecision` 新增可选 `decidedBy?: 'item' | 'section'`（`src/core/types.ts`）——`src/core/conflict-decisions.ts` 里来自 `decisions.resolutions` 的 `useImported` 标 `'item'`；`src/sync/merge-apply-plan.ts` 第二趟注入的那些项在计划返回前标 `'section'`。守卫 `confirmed = resolution === 'useImported' && decidedBy !== 'section'`（`src/adapters/plugins.ts`）。分区级裁决仍然**整行写下去**（远端 patch 改动照常落地），只是被剥空叶子保留本机值 + `adapter.patchSecretsKept` 告警 —— 既不抹密钥，也不会因为「不写」而每轮重复冲突。
+修法定形：`ConflictDecision` 新增可选 `decidedBy?: 'item' | 'section'`（`src/core/types.ts`）——`src/core/conflict-decisions.ts` 里来自 `decisions.resolutions` 的 `useImported` 标 `'item'`；`src/sync/merge-apply-plan.ts` 第二趟注入的那些项在计划返回前标 `'section'`。守卫 `confirmed = resolution === 'useImported' && decidedBy === 'item'`（`src/adapters/plugins.ts`；**白名单**，缺省来源按未确认处理 —— 忘标注只会少清空、不会误清空；`src/routes/sync.ts` 的一键同步逐项决策显式标 `'item'`，因为那是人对该行的确认）。分区级裁决仍然**整行写下去**（远端 patch 改动照常落地），只是被剥空叶子保留本机值 + `adapter.patchSecretsKept` 告警 —— 既不抹密钥，也不会因为「不写」而每轮重复冲突。
+
+**0.9.0 收尾前的三条收紧（先红后绿，已复验）**：①守卫改成白名单 `decidedBy === 'item'` —— 来源缺省按未确认处理（`src/adapters/plugins.test.ts`「来源缺省（未标注 decidedBy）按未确认处理」在 `!== 'section'` 下红于 `actual: '' / expected: 'sk-LOCAL-UNLABELED-136'`；`src/routes/sync.ts` 的一键同步逐项决策显式标 `'item'`，否则新白名单会误伤人对该行的确认）；②本机 patch 层读不出来 ⇒ 该行拒绝写、零写入（同文件「本机 patch 层读不出来 → 该行拒绝写」，旧实现红于 `applied.ok === true`）；③自动同步只把「叶级冲突被扣下」记成 `conflict`，纯下行告警另给 `warning`（`src/sync/autosync-scheduler.test.ts`「只有下行告警、没有叶级冲突 → partial(warning)」，旧实现红于 `actual: 'conflict' / expected: 'warning'`；客户端 `history-model.skipReasonKey('warning')` → `history.autosyncReasonWarning`，钉在 `src/client/sync/history-model.test.ts`）。
 
 回归用例（先红后绿）：`src/adapters/plugins.test.ts`「分区级裁决（decidedBy: section）不算逐行确认 —— 剥空叶子保留本机、其余改动照常落地」在只加类型、未改守卫时失败于 `AssertionError: 分区级裁决不得清空被剥空叶子`，改守卫后通过；同文件「显式逐行确认（decidedBy: item）才允许真的写空」钉住反方向；`src/sync/sync-engine.test.ts`「分区级裁决注入的 useImported 必须标 decidedBy:section」钉住计划返回前的标注与两趟调用（`plans === 2`）。
 
@@ -633,11 +635,14 @@ B 的第二趟把「该分区已裁决」注入成 `useImported`，而 A 的守�
 
 ```text
 $ node --test src/core/patch-secret-guard.test.ts      -> # pass 9   # fail 0
-$ node --test src/adapters/plugins.test.ts             -> # pass 36  # fail 0
+$ node --test src/adapters/plugins.test.ts             -> # pass 38  # fail 0
 $ node --test tests/core/exporter.test.ts              -> # pass 15  # fail 0
 $ node --test src/sync/sync-engine.test.ts             -> # pass 102 # fail 0
-$ node --test src/sync/autosync-scheduler.test.ts      -> # pass 54  # fail 0
-$ npm test                                             -> ℹ tests 5608 ℹ pass 5606 ℹ fail 0 ℹ skipped 2
+$ node --test src/sync/autosync-scheduler.test.ts      -> # pass 55  # fail 0
+$ node --test src/client/sync/history-model.test.ts    -> # pass 20  # fail 0
+$ npm test                                             -> ℹ tests 5611 ℹ pass 5609 ℹ fail 0 ℹ skipped 2
+$ TEMP=.tmp/buildtmp TMP=.tmp/buildtmp npm run build    -> ✔ Build complete
+$ node --test "tests/conformance/*.test.ts"             -> # pass 18  # fail 0
 ```
 
 **守卫（一条一个测试，已全部落地）**：导出把字段名命中与值形状命中的路径都记进该行 `redactedPaths` 且干净行不带字段（`tests/core/exporter.test.ts` E-10）/ 命中归行忽略行外路径、不就地改原对象（`src/adapters/plugins.test.ts`）/ 守卫三分支（剥空保留本机 + warning 含行 id 与字段路径且不含值 / 真实新值照写 / 显式确认才清空）/ 旧载荷保守回落 / `Create` 不拦 / `validate` 拒绝非数组与空串元素、但**放行空数组**（＝无剥空位置，按缺省保守分支） / 叶级 Conflict 不被 replace 兜底且进 `review`+`warnings`（`src/sync/sync-engine.test.ts`）/ 自动同步叶级冲突 skip+warning+终态 `partial`（`src/sync/autosync-scheduler.test.ts`）。

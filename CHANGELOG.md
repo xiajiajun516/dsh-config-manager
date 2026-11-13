@@ -10,12 +10,7 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > the build fails fast if the section is missing, so you cannot forget to update it.
 >
 > **条目落位（按改动性质分组）**：新条目一律先写进 `## [Unreleased]`，并放进对应分组 ——
-> `### 🆕 新增 · Added` / `### 🔧 变更 · Changed` / `### 🐛 修复 · Fixed
-
-- **「磁盘占用」卡的「遗留数据」不再被卡片高度裁掉、也不再与边框紧贴**：遗留目录多的时候整块会超出固定高度卡的可见区，现在这块自己带滚动条；块内补了 8px 内边距，文字不再顶到描边上。
-  **The "Legacy data" section on the Disk usage card no longer gets clipped by the card's fixed height, and its text no longer touches the border**: the block scrolls on its own when there are several legacy directories, and 8px of inner padding keeps the text off the 1px outline.
-
-### 🐛 修复 · Fixed`（`🗑️ 移除 · Removed` / `🔐 安全 · Security` 同理）；
+> `### 🆕 新增 · Added` / `### 🔧 变更 · Changed` / `### 🐛 修复 · Fixed`（`🗑️ 移除 · Removed` / `🔐 安全 · Security` 同理）；
 > 没有内容的分组**不写标题**。已发布的历史版本段保留当时写法，不回改。
 >
 > **一句话一条**：一条 = **一个用户能看懂的更新或修复**（中文一行 + 英文缩进续行），只写「现在能做什么 / 不再怎样」；
@@ -40,8 +35,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
-- **备份里被脱敏清空的插件 patch 字段不再覆盖本机明文**：以前从备份恢复时，配置里被隐去的密钥会以空值写回，静默盖掉本机原有的密钥；现在这类字段保留本机值并给出告警（只给行与字段位置、不给值），只有逐行确认「使用备份配置」才清空（分区级的批量裁决不算，被剥空字段仍保留本机值并告警）。自动同步遇到未裁决的叶级冲突同样保留本机内容、把该行列入待确认，不再报「成功且零告警」。
-  **Plugin patch fields that the backup had blanked for redaction no longer overwrite local plaintext secrets**: restoring used to write the redacted empty value back and silently wipe the key already on this machine; those fields now keep the local value and raise a warning naming the row and field (never the value), and only an explicit per-row "use backup config" clears them (a section-level decision does not count: the blanked fields still keep the local value and warn). Automatic sync likewise keeps local content for unresolved leaf-level conflicts and lists those rows as pending instead of reporting a clean success.
+- **备份里被脱敏清空的插件 patch 字段不再覆盖本机明文**：以前从备份恢复时，配置里被隐去的密钥会以空值写回，静默盖掉本机原有的密钥；现在这类字段保留本机值并给出告警（只给行与字段位置、不给值），只有逐行确认「使用备份配置」才清空（分区级的批量裁决不算，被剥空字段仍保留本机值并告警）。自动同步遇到未裁决的叶级冲突同样保留本机内容、把该行列入待确认，不再报「成功且零告警」；与冲突无关的下行告警不再被说成「冲突」，读不出本机现有配置时那一行会跳过并说明原因，而不是照写。
+  **Plugin patch fields that the backup had blanked for redaction no longer overwrite local plaintext secrets**: restoring used to write the redacted empty value back and silently wipe the key already on this machine; those fields now keep the local value and raise a warning naming the row and field (never the value), and only an explicit per-row "use backup config" clears them (a section-level decision does not count: the blanked fields still keep the local value and warn). Automatic sync likewise keeps local content for unresolved leaf-level conflicts and lists those rows as pending instead of reporting a clean success; downlink warnings unrelated to conflicts are no longer reported as conflicts, and a row whose current local config cannot be read is skipped with an explanation instead of being written anyway.
+
+- **「磁盘占用」卡的「遗留数据」不再被卡片高度裁掉、也不再与边框紧贴**：遗留目录多的时候整块会超出固定高度卡的可见区，现在这块自己带滚动条；块内补了 8px 内边距，文字不再顶到描边上。
+  **The "Legacy data" section on the Disk usage card no longer gets clipped by the card's fixed height, and its text no longer touches the border**: the block scrolls on its own when there are several legacy directories, and 8px of inner padding keeps the text off the 1px outline.
 
 - **「关于」页不再有两个同等醒目的主按钮**：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
   **The About panel no longer shows two equally loud primary buttons**: "Update now" and "Star on GitHub" used to be the same dark primary style side by side; the star link is now an outlined secondary button so the update action is the one that stands out.

@@ -284,15 +284,27 @@ async function measureLocalSources(plugins: PluginEntry[], ctx: HostContext): Pr
  * issue #136 A：读目标机**当前生效**的 patch 行原文（写回守卫的「本机现值」）。
  *
  * 口径与 analyzeImport 判定 Skip/Conflict 时逐字相同（readEffectivePatchLines + lineId 匹配），
- * 这样「计划阶段看到的现值」与「写回阶段比对的现值」不会分叉。读失败一律当作没有本机行
- * （保守分支只保护它能证明的本机非空叶子；读不出来时不应假装有值）。
+ * 这样「计划阶段看到的现值」与「写回阶段比对的现值」不会分叉。
+ *
+ * 读失败**不得**降级成「没有本机行」：那等于跳过守卫、静默覆盖本机明文（#136 的复现条件），
+ * 而且连一条告警都不会有。失败必须显式上抛给 applyItem，由它对这一行返回非致命失败。
  */
-async function readLocalPatchRaw(ctx: ImportContext, lineId: string): Promise<unknown> {
+async function readLocalPatchRaw(
+  ctx: ImportContext,
+  lineId: string,
+): Promise<{ ok: true; raw: unknown } | { ok: false; reason: string }> {
   try {
-    const { lines } = await readEffectivePatchLines(ctx.target.patchFile, ctx.target.profile);
-    return lines.find((l) => l.lineId === lineId)?.raw;
-  } catch {
-    return undefined;
+    const { lines, failures } = await readEffectivePatchLines(ctx.target.patchFile, ctx.target.profile);
+    // 有层读不出来 → 无法证明「本机这一行现在是什么 / 到底有没有」。
+    // readEffectivePatchLines 把层读失败收进 failures（不抛错），此前的实现只 catch 抛错、
+    // 于是「有层读不出来」被当成「本机没有这一行」放行 —— 守卫被绕过且零告警（#136 的复现条件）。
+    // 这里宁可跳过这一行并说明原因，也不按「无本机值」写入。
+    if (failures.length > 0) {
+      return { ok: false, reason: failures.map((f) => `${f.file}: ${f.reason}`).join('; ') };
+    }
+    return { ok: true, raw: lines.find((l) => l.lineId === lineId)?.raw };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -1141,15 +1153,28 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     // 手工改过，`redactedPaths` 可能缺失；写回是最后一道能同时看见「本机现值」与「将被写下的值」
     // 的地方，也唯一能区分「被剥空」与「用户主动写空」（显式逐行 useImported 才放行清空）。
     // 守卫只在 Update/Conflict 上生效；Create 没有本机行可保（新行原样写入）。
+    // 本机现值读不出来 → 无法证明这次写入不会覆盖明文，这一行**拒绝写**。
+    // 非致命（warning）：一行读不出来不该拖垮其余分区，也不该把整笔导入回滚。
+    const localRead = item.kind === 'Create'
+      ? ({ ok: true as const, raw: undefined })
+      : await readLocalPatchRaw(ctx, ref);
+    if (!localRead.ok) {
+      return {
+        ok: false,
+        warning: true,
+        message: msg('adapter.patchLocalReadFailed', { ref: item.id, reason: localRead.reason }),
+      };
+    }
     const guard = applyPatchSecretGuard({
       importedRaw: pl.raw,
-      localRaw: item.kind === 'Create' ? undefined : await readLocalPatchRaw(ctx, ref),
+      localRaw: localRead.raw,
       redactedPaths: pl.redactedPaths,
       // 显式逐行确认 = 用户对本行选了 useImported（全局 replace 策略不算确认）
-      // #136 A：只有**逐项**确认才算「我要这一行按导入值写」；分区级裁决（decidedBy: 'section'，
-      // 由合并落地 planMergeApply 注入）只决定分区是否应用，不构成对本行的确认 —— 否则自动同步
-      // 的 autoApply（零 UI）会把剥空值当用户意图写下去。
-      confirmed: item.conflict?.resolution === 'useImported' && item.conflict?.decidedBy !== 'section',
+      // #136 A：只有**逐项**确认才算「我要这一行按导入值写」。判定必须是**白名单**：
+      // 分区级裁决（decidedBy: 'section'，由合并落地 planMergeApply 注入）只决定分区是否应用，
+      // 不构成对本行的确认；来源缺省（未来新增的注入路径忘了标注）一律按「未确认」处理 ——
+      // 默认放行等于给同类漏洞留后门；翻转成默认拒绝后，忘标注只会少清空、不会误清空。
+      confirmed: item.conflict?.resolution === 'useImported' && item.conflict?.decidedBy === 'item',
     });
     // 层身份按**语义**映射到目标机：来源是别的 profile 层时不能照抄名字（目标机未必有那个
     // profile，宿主门面会拒绝），一律落到目标机当前 profile 层（与计划项 target.file 同口径）。

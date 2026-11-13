@@ -765,6 +765,35 @@ test('runOnce(#136)：纯下行（不上传）扣下叶级冲突 → partial(con
   assert.ok(getEntries().some((e) => e.status === 'partial' && e.direction === 'pull'), '历史留 partial');
 });
 
+test('runOnce(#136)：只有下行告警、没有叶级冲突 → partial(warning)，不冒充 conflict', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const engine = {
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
+    applyMergePlan: async () => ({
+      ok: true,
+      applied: ['settings'] as never,
+      restoreId: 'r1',
+      rolledBack: false,
+      // 无 review 项 ⇒ 没有被扣下的叶级冲突；只有一条与冲突无关的下行告警
+      review: [],
+      warnings: ['插件 foo 安装失败：registry 不可达（其余内容已应用）'],
+    }),
+    push: async () => ({ ok: true, snapshotId: 'snap-warn', sections: ['settings'] as never, warnings: [] }),
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+
+  assert.equal(result.status, 'partial', '下行有内容没落地，终态不能写 success');
+  assert.equal(result.skipReason, 'warning', '告警不是冲突，不得借用 conflict 跳过码');
+  assert.equal(result.conflictedSections, undefined, '没有叶级冲突就不得虚增待处理分区');
+  assert.equal(result.heldSections, undefined);
+  assert.equal(result.warnings?.length, 1, '告警本身仍要透传到结果');
+
+  const entry = getEntries().find((e) => e.status === 'partial');
+  assert.equal(entry?.skipReason, 'warning', '历史同样记 warning（重启后仍能看懂）');
+  assert.equal(entry?.conflictedSections, undefined);
+});
+
 test('start(): 定时器触发后自动重排下一次（周期性后台同步）', async () => {
   // realtime:false 关掉「远端轮询定时器」，本用例只测 interval 兜底排期与重排（每个通道 1 个定时器）。
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };
