@@ -205,7 +205,10 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
            * 混进主表会让用户以为那个合计里已经算过它们（core 刻意把两者分列）。
            */}
           {vm.legacy.length > 0 && (
-            <>
+            /* 遗留数据行数由磁盘上的旧目录决定（可能多条）：整块放进**限高内滚**容器，
+               卡片高度不变、每一行都可达。此前这一块直接铺在卡片 body 里，
+               行数一多就被 .diskUsageCard 的固定高度裁掉（2026-11-13 修复）。 */
+            <div className={css.planScroll + ' ' + css.duLegacyScroll}>
               <div className={css.groupLabel}>{t('diskUsage.legacy.title')}</div>
               {/* 只留「与上方合计的口径差」：不删、不自动清的理由由行内策略标签负责 */}
               <div className={css.cellMeta}>{t('diskUsage.legacy.hint')}</div>
@@ -223,7 +226,7 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
                       逐行再贴一遍只会把这一行挤到溢出（实测最后一段跑出右边界）。 */}
                 </div>
               ))}
-            </>
+            </div>
           )}
           {/* 保留期说明属「机制怎么工作」（MOVE 类）：收进 ⓘ，不常驻占一行 */}
           {exportRetentionDays !== null && (

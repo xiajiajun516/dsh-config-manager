@@ -36,6 +36,8 @@ import { RecoveryPanel } from '../recovery/RecoveryPanel.tsx'
 import type { RecoveryPort } from '../../ui/types.ts'
 import type { IncidentApi } from '../recovery/incident-api.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Segmented } from '../common/ui.tsx'
+import type { ServiceStatus } from '../api.ts'
+import type { DiskUsageReport } from '../../core/disk-usage.ts'
 import { Icon } from '../common/Icon.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
@@ -402,6 +404,31 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
   /** 最近一次复制回执（切片字段的本地别名） */
   const copyResult = state.copyResult
 
+  /**
+   * 本机概况 / 数据目录（2026-11-13 随设计稿落地）：
+   * 「这台机器现在什么状态」原本分散在首页状态行与维护页磁盘卡里 —— 用户要在两个页面之间
+   * 来回跳才能回答「我装了什么版本、数据在哪、占了多大」。这两张卡把它们抬到档案页首屏。
+   *
+   * 数据只读：`status()` 给版本/数据目录/插件数，`getDiskUsage()` 给各子区字节数与文件数。
+   * 任一请求失败就**不渲染对应卡**（不写假 0，也不写「未知」占位）—— 读不到 ≠ 没有。
+   */
+  const [machine, setMachine] = useState<{ status: ServiceStatus | null; disk: DiskUsageReport | null }>({
+    status: null,
+    disk: null,
+  })
+  useEffect(() => {
+    let alive = true
+    void api.status().then(
+      (status) => { if (alive) setMachine((prev) => ({ ...prev, status })) },
+      () => { /* 读不到就整张卡不渲染 */ },
+    )
+    void api.getDiskUsage().then(
+      (disk) => { if (alive) setMachine((prev) => ({ ...prev, disk })) },
+      () => { /* 同上 */ },
+    )
+    return () => { alive = false }
+  }, [api])
+
   return (
     <div className={css.viewBody}>
 
@@ -437,6 +464,46 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
       {subView === 'list' && (
       <>
       <SectionTitle title={t('profiles.title')} info={<InfoHint text={t('profiles.subtitle')} label={t('common.infoHint')} />} />
+
+      {/* —— 本机概况：版本 / 数据目录 / 插件数 / 磁盘占用，回答「这台机器现在什么状态」 —— */}
+      {machine.status !== null && (
+        <Card className={css.card}>
+          <div className={css.groupLabel}>{t('profiles.machine.title')}</div>
+          <div className={css.factGrid}>
+            <div className={css.factCell}>
+              <span className={css.factLabel}>{t('profiles.machine.dshVersion')}</span>
+              <span className={css.factValue}>{machine.status.dshVersion}</span>
+            </div>
+            <div className={css.factCell}>
+              <span className={css.factLabel}>{t('profiles.machine.dataDir')}</span>
+              <span className={css.factValue}>
+                <span className={css.mono} title={machine.status.homeDir ?? undefined}>
+                  {machine.status.homeDir ?? machine.status.profile ?? t('profiles.machine.unknown')}
+                </span>
+              </span>
+            </div>
+            <div className={css.factCell}>
+              <span className={css.factLabel}>{t('profiles.machine.plugins')}</span>
+              <span className={css.factValue}>
+                {machine.status.installedPluginCount === undefined
+                  ? t('profiles.machine.unknown')
+                  : t('profiles.machine.pluginsValue', { count: String(machine.status.installedPluginCount) })}
+              </span>
+            </div>
+            <div className={css.factCell}>
+              <span className={css.factLabel}>{t('profiles.machine.disk')}</span>
+              <span className={css.factValue}>
+                {machine.disk === null
+                  ? t('profiles.machine.unknown')
+                  : t('profiles.machine.diskValue', {
+                    size: formatBytes(machine.disk.totalBytes),
+                    files: String(machine.disk.totalFiles),
+                  })}
+              </span>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* —— 运行状态：当前运行中的 profile + 本插件启动的实例（可打开 / 可停止） —— */}
       <Card className={css.card}>
@@ -736,6 +803,58 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
             })}
           </div>
         </>
+      )}
+
+      {/* —— 数据目录：各子区实际占用（只读；清理入口在「维护与诊断」的磁盘占用卡） —— */}
+      {machine.disk !== null && (
+        <Card className={css.card}>
+          <div className={css.groupLabel}>{t('profiles.dataDir.title')}</div>
+          <div className={css.hint}>{t('profiles.dataDir.hint')}</div>
+          <div className={css.kvRow}>
+            <span className={css.kvKey}>{t('profiles.dataDir.exports')}</span>
+            <span className={css.kvValue}>
+              {machine.disk.areas['exports'].unreadable
+                ? '—'
+                : t('profiles.dataDir.rowValue', {
+                  size: formatBytes(machine.disk.areas['exports'].sizeBytes),
+                  files: String(machine.disk.areas['exports'].fileCount),
+                })}
+            </span>
+          </div>
+          <div className={css.kvRow}>
+            <span className={css.kvKey}>{t('profiles.dataDir.snapshots')}</span>
+            <span className={css.kvValue}>
+              {machine.disk.areas['snapshots'].unreadable
+                ? '—'
+                : t('profiles.dataDir.rowValue', {
+                  size: formatBytes(machine.disk.areas['snapshots'].sizeBytes),
+                  files: String(machine.disk.areas['snapshots'].fileCount),
+                })}
+            </span>
+          </div>
+          <div className={css.kvRow}>
+            <span className={css.kvKey}>{t('profiles.dataDir.sync')}</span>
+            <span className={css.kvValue}>
+              {machine.disk.areas['sync'].unreadable
+                ? '—'
+                : t('profiles.dataDir.rowValue', {
+                  size: formatBytes(machine.disk.areas['sync'].sizeBytes),
+                  files: String(machine.disk.areas['sync'].fileCount),
+                })}
+            </span>
+          </div>
+          <div className={css.kvRow}>
+            <span className={css.kvKey}>{t('profiles.dataDir.rollbackPoints')}</span>
+            <span className={css.kvValue}>
+              {machine.disk.areas['rollback-points'].unreadable
+                ? '—'
+                : t('profiles.dataDir.rowValue', {
+                  size: formatBytes(machine.disk.areas['rollback-points'].sizeBytes),
+                  files: String(machine.disk.areas['rollback-points'].fileCount),
+                })}
+            </span>
+          </div>
+        </Card>
       )}
 
       {/* —— 详情弹窗（只读原文） —— */}

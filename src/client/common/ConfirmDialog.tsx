@@ -87,16 +87,12 @@ export function ConfirmDialog({
         {hasMessage && <div id={messageId}>{message}</div>}
         {children}
       </Modal.Body>
+      {/* 按钮次序（2026-11-13 统一）：**取消在左、主操作在右**。
+          此前这里是「确认在左、取消在右」，与自绘 Footer（LibraryActions / SyncPanel /
+          ReleaseNotesDialog 的「取消 … 主操作」）相反 —— 同一产品里两套次序，用户在不同
+          弹窗里会点错。统一后 danger 确认仍在最右（拇指落点），但**初始焦点仍派给取消**
+          （见下方 cancelRef / onOpenAutoFocus）：次序变了，误触保护不变。 */}
       <Modal.Footer>
-        <Button
-          variant={danger === true ? 'danger' : 'primary'}
-          disabled={busy}
-          loading={busy}
-          onClick={() => { void handleConfirm() }}
-        >
-          {/* 加载图标由 Button 原语按 loading 自动渲染（此处只给文案） */}
-          {confirmLabel ?? ''}
-        </Button>
         <button
           ref={cancelRef}
           type="button"
@@ -107,6 +103,15 @@ export function ConfirmDialog({
         >
           {cancelLabel ?? ''}
         </button>
+        <Button
+          variant={danger === true ? 'danger' : 'primary'}
+          disabled={busy}
+          loading={busy}
+          onClick={() => { void handleConfirm() }}
+        >
+          {/* 加载图标由 Button 原语按 loading 自动渲染（此处只给文案） */}
+          {confirmLabel ?? ''}
+        </Button>
       </Modal.Footer>
     </Modal>
   )

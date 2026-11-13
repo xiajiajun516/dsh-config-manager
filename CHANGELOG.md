@@ -28,6 +28,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🆕 新增 · Added
+
+- **「环境 → 档案」页首屏现在直接告诉你这台机器的状态**：新增「本机概况」卡（DSH 版本 / 数据目录 / 已装插件数 / 磁盘占用）与「数据目录」卡（备份文件、导入前快照、同步覆盖与工作副本、回滚点各占多少与多少文件），不用再跑回首页看状态行、或翻到维护页看磁盘占用。
+  **The Environment → Profiles view now opens with the machine's state**: a new "This machine" card (DSH version, data directory, installed plugins, disk used) plus a "Data directories" card breaking down backups, pre-import snapshots, sync overlay, and rollback points by size and file count — no more jumping to Home or Maintenance to answer those questions.
+
+### 🔧 变更 · Changed
+
+- **确认弹窗的按钮次序统一为「取消在左、确认在右」**：以前删除/停止这类二次确认弹窗把确认放在左边，而其他弹窗是「取消 … 主操作」，两套次序并存容易点错；现在全站一致，初始焦点仍然落在取消上（误触保护不变）。
+  **Confirm dialogs now put Cancel on the left and the primary action on the right**: destructive confirmations used to reverse that order compared with every other dialog; the whole product is consistent now, and focus still starts on Cancel so a stray Enter never fires the destructive action.
+
 ### 🐛 修复 · Fixed
 
 - **「关于」页不再有两个同等醒目的主按钮**：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。

@@ -134,3 +134,11 @@ C-21 | 外壳不一致 | 弹窗类 20 余屏 | 564×720 面板被画成浮在浅
 - C 行：**无待处理项**（C-01…C-21 全部有结论：已闭合 / 判非缺陷 / 阶段 F 决策）。
 - 受影响 PNG 已重渲并覆盖 `shots/<ID>-after.png`：D-01 D-07 D-13 D-14 D-14b D-15 D-16 D-32 T-08（另 12 屏按钮次序回退、D-33/D-37 居中、D-30/D-29/D-34/D-35/D-22/D-28 内容修正的更早批次已在 5e128bf / 之前的提交里）。
 - 仍未开工：**阶段 F（把设计稿落回 `src/client/`）未获批准**，本轮只动 `.stitch-refactor/`。
+
+## C-05 收口（阶段 F，2026-11-13）
+
+用户裁定：统一为「取消在左、主操作在右」。
+
+- 改动：`src/client/common/ConfirmDialog.tsx` 的 `Modal.Footer` 顺序由「确认(Button danger|primary) → 取消(css.ghostButton)」改为「取消 → 确认」。
+- 不变项（误触保护）：`cancelRef` 仍绑定取消按钮，`onOpenAutoFocus` 仍把初始焦点派给取消；`busy` 仍禁用两条路径。
+- 现在全站只有一套次序：ConfirmDialog 与自绘 Footer（`src/client/library/LibraryActions.tsx`、`src/client/sync/SyncPanel.tsx`、`src/client/about/ReleaseNotesDialog.tsx`）一致。
