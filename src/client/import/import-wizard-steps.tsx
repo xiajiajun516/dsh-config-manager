@@ -207,14 +207,13 @@ export function DecryptArchiveStep(props: {
   const { password, onPasswordChange, unlockError, unlocking, onUnlock, onReset, apiT, t } = props
   return (
     <div className={css.viewBody}>
-      {/* 解锁卡（W3 R-3）：徽章 / 标题 / 密码 / 说明 / 动作收进同一张卡，屏幕上只剩一个黑底主按钮。
-          说明句按稿常驻可见（T-02a：标题行 + 说明行）—— 同一句不再另挂 ⓘ，两处重复只是噪声。 */}
+      {/* 解锁卡（W3 R-3）：徽章 / 标题 / 密码 / 动作收进同一张卡，屏幕上只剩一个黑底主按钮。
+          机制句只进标题 ⓘ（DESIGN §7：说明性文案不进正文；info-hint-guard t6-1 钉死这条）。 */}
       <Card className={css.optionsCard}>
         <div className={css.statRow}>
           <Badge kind="error">🔒 {t('import.decrypt.badge')}</Badge>
         </div>
-        <SectionTitle title={t('import.decryptArchive.title')} />
-        <div className={css.hint}>{t('import.decryptArchive.hint')}</div>
+        <SectionTitle title={t('import.decryptArchive.title')} info={<InfoHint text={t('import.decryptArchive.hint')} label={t('common.infoHint')} />} />
         <input
           type="password"
           className={css.input}

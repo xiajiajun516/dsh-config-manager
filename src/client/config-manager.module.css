@@ -2110,6 +2110,18 @@ body {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 恢复页的空态行（P-05）：一句话结论落在**有边框的一行**里，而不是裸文字 ——
+   它下面紧跟磁盘/体检/回滚三张卡，裸文字会被读成「第一张卡的标题」，看不出这是一条状态。
+   只做描边 + 内边距（不做 .empty 那种虚线大空框：那会把三张诊断卡推到首屏之外）。
+   私有类，不覆写共享的 .statusLine 本体（它还被会话体检与回滚卡复用）。 */
+.recoveryEmptyBar {
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--cm-r-3);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
 .empty {
   animation: itemEnter var(--cm-motion-base) var(--cm-motion-ease-out);
   display: flex;
@@ -2733,6 +2745,13 @@ body {
   padding: 8px 16px 12px;
   font-size: var(--cm-fs-base);
   color: var(--dsw-alias-label-secondary);
+}
+
+/* 确认弹窗正文：调用点用 \n\n 分段（如 P-04「删除当前档案」的后果说明分两段）。
+   裸 div 下换行被折叠成空格，两段并成一句读起来像同一条件的补充说明；pre-line 只保留
+   显式换行，不把调用方无意带进来的连续空格变成缩进。 */
+.confirmMessage {
+  white-space: pre-line;
 }
 
 .dialogBodyScroll {
@@ -3474,18 +3493,18 @@ body {
   min-height: 0;
 }
 
-/* —— 磁盘明细：两行式行卡（2026-11-04，替换原四列表格）——
+/* —— 磁盘明细：单行式分区行（2026-11-14，替换 11-04 的两行式）——
  *
- * 为什么换：564px 画布下四列把「回收策略」压到 160px，"Your data / safety net
- * (never auto-removed)" 折成三行；表头再固定吃掉 24px。而这张卡的唯一决定是
- * 「哪几块能删、删了多大」—— 靠的是**比大小**，不是三列对齐。
+ * 为什么再改：这张卡现在渲染的是**13 个真实分区**（不是稿里的 6 组合并行），两行式在
+ * 564px 画布下每行 44px ⇒ 一屏只放得下 8 行左右，且「比大小」被拆到两行（占用在首行、
+ * 策略徽章在次行），扫读顺序变成 Z 字。单行式把同一个决定压缩进一行：
  *
- * 行内层级：
- *   ① 首行 = 区域名（左）+ 占用（右，整卡唯一的右边缘 ⇒ 量级一眼可比）；
- *   ② meta 行 = 文件数 + 回收策略徽章 + 过期量 —— 策略拿到整行宽度，不再折行。
- * 表头由行内语义承担：占用自带单位（4.8 KB），文件数自带「个文件」。
- * 区域名**允许换行**而不是省略号：它是「这是哪块数据」的唯一线索，
- * 长名字截成「Sync config & work…」等于没写；行高增长交给滚动区吸收。 */
+ *   区域名（省略号，全名进 title）· 过期量 · 占用 · 回收策略徽章
+ *
+ * 文件数不再逐行渲染：它不改变「能不能删」的决定，逐行重复 13 次只是噪声；
+ * 总数与占用合计一起放在卡头下面那行（"合计 X · N 个文件"），逐行全量仍在 title 里。
+ * 行高 28px（padding 6px + 13px 行盒子）≈ 两行式的 2/3，13 行不必滚也能读完；
+ * 固定卡高（--cm-disk-card-h）不变，明细区照旧是唯一的滚动区。 */
 .duList {
   display: flex;
   flex-direction: column;
@@ -3493,9 +3512,9 @@ body {
 
 .duRow {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 
@@ -3503,17 +3522,22 @@ body {
   border-bottom: none;
 }
 
-.duRowTop {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-
 .duRowName {
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--cm-fs-table);
   color: var(--dsw-alias-label-primary);
+}
+
+/* 过期量（"其中 4.8 KB 已到回收条件"）：只在存在时出现，紧贴占用左侧 */
+.duRowNote {
+  flex: none;
+  font-size: var(--cm-fs-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
 }
 
 .duRowSize {
@@ -3523,18 +3547,11 @@ body {
   color: var(--dsw-alias-label-primary);
 }
 
-.duRowMeta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+/* 无徽章的策略（"用户数据 / 安全网"）用纯文本，避免 13 行里 13 个同形徽章 */
+.duRowPolicy {
+  flex: none;
   font-size: var(--cm-fs-meta);
   color: var(--dsw-alias-label-tertiary);
-}
-
-.duRowFiles {
-  flex: none;
-  font-variant-numeric: tabular-nums;
 }
 
 /* 卡内小节之间留出间隔（2026-11-01）：表格滚动区下方紧贴的「Legacy data」分组标签

@@ -695,15 +695,14 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                           {t('profiles.launch')}
                         </Button>
                       )}
-                      {/* 2026-11-04：复制 / 重命名 / 删除 收成图标按钮（复制与删除带危险语义）。
-                          三颗文字按钮合起来 ≈150px，全部花在「复制」「重命名」「删除」这六个字上；
-                          它们是**低频且不需要读**的动作 —— 图标 + title + aria-label 已经够认，
-                          省下的宽度还给档案名与徽章。启动/停止仍用文字按钮：那是这一行的主 CTA，
-                          图标化会让「现在能不能点、点了会发生什么」多绕一步。 */}
+                      {/* 2026-11-14（W5 / 稿 P-04）：复制与删除回到**文字按钮** —— 行里同时出现
+                          「启动 / 停止」「复制」「删除」三处动作时，图标按钮要靠悬停才认得出哪个是删除，
+                          而删除是不可恢复操作：它必须自带「危险 → 红描边 + 文字」的自解释。
+                          改名仍是铅笔图标 + aria-label：它是低频操作，四颗文字按钮在 564px 画布上
+                          会挤成一排，扫读反而变慢（复制/删除是每行都要扫的，改名不是）。 */}
                       {caps.duplicate && (
-                        <IconButton
-                          icon={<Icon name="copy" />}
-                          label={t('profiles.duplicate')}
+                        <Button
+                          size="sm"
                           title={t('profiles.duplicateHint')}
                           disabled={state.copying}
                           onClick={() => {
@@ -714,7 +713,9 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                               error: null,
                             })
                           }}
-                        />
+                        >
+                          {t('profiles.duplicate')}
+                        </Button>
                       )}
                       {caps.rename && (
                         <IconButton
@@ -723,12 +724,13 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                           onClick={() => { patch({ renameTargetName: profile.name, renameValue: profile.name, error: null }) }}
                         />
                       )}
-                      <IconButton
-                        icon={<Icon name="delete" />}
-                        label={t('profiles.delete')}
-                        danger
+                      <Button
+                        size="sm"
+                        variant="danger"
                         onClick={() => { patch({ deleteTargetName: profile.name, deleteCurrentConfirmed: false, error: null }) }}
-                      />
+                      >
+                        {t('profiles.delete')}
+                      </Button>
                     </span>
                   </div>
                 </div>

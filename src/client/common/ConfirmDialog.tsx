@@ -32,6 +32,11 @@ export interface ConfirmDialogProps {
   confirmLabel?: string
   /** 取消按钮文案（缺省同 confirmLabel 场景由调用方传；不设默认） */
   cancelLabel?: string
+  /**
+   * 右上角 ✕ 的可访问名（缺省复用 cancelLabel —— 它与 ✕ 是同一个「不改动就退出」语义）。
+   * 本组件没有 `t`（字典按调用点注入），因此不设硬编码兜底：两者都没传时不渲染 ✕（旧行为）。
+   */
+  closeLabel?: string
   /** 危险语义：确认按钮用 danger 样式（删除等不可恢复操作）；缺省 primary */
   danger?: boolean
   /** 外部控制 busy（进行中禁闭）；onConfirm 返回 Promise 时组件自管 */
@@ -52,7 +57,7 @@ export interface ConfirmDialogProps {
  * 自管 busy：onConfirm 返回 Promise 时置 busy 直到 resolve（reject 仍关闭 busy，错误由调用方处理）。
  */
 export function ConfirmDialog({
-  open, title, message, confirmLabel, cancelLabel, danger, busy: busyProp, onConfirm, onCancel, backdropClose, children,
+  open, title, message, confirmLabel, cancelLabel, closeLabel, danger, busy: busyProp, onConfirm, onCancel, backdropClose, children,
 }: ConfirmDialogProps) {
   const [selfBusy, setSelfBusy] = useState(false)
   const busy = busyProp === true || selfBusy
@@ -64,6 +69,8 @@ export function ConfirmDialog({
    *  只设 aria-label 时读屏只会播报标题（如「删除档案」），而**后果说明**不会在打开时被读出。 */
   const messageId = useId()
   const hasMessage = message !== undefined && message !== ''
+  /** ✕ 的可访问名：调用点没单独给就用取消按钮的文案（同一「退出不改动」语义，不硬编码） */
+  const closeText = closeLabel ?? cancelLabel
 
   const handleConfirm = (): void => {
     if (busy) return
@@ -82,9 +89,14 @@ export function ConfirmDialog({
 
   return (
     <Modal open={open} onClose={handleBackdropClose} title={title} busy={busy} onOpenAutoFocus={onOpenAutoFocus} describedById={hasMessage ? messageId : undefined}>
-      <Modal.Header title={title} />
+      {/* C-11（2026-11-14）：此前只有遮罩/Esc/取消三条关闭途径，鼠标用户找不到右上角的出口。
+          busy 时 ✕ 仍在但禁用（与取消按钮同一口径），不做「操作中弹窗突变换高」的那种跳动。 */}
+      {closeText === undefined
+        ? <Modal.Header title={title} />
+        : <Modal.Header title={title} onClose={handleBackdropClose} closeLabel={closeText} closeDisabled={busy} />}
       <Modal.Body scroll>
-        {hasMessage && <div id={messageId}>{message}</div>}
+        {/* pre-line：调用点用 \n\n 分段（D-19「删除当前档案」两段后果说明），裸 div 会把两段压成一行 */}
+        {hasMessage && <div id={messageId} className={css.confirmMessage}>{message}</div>}
         {children}
       </Modal.Body>
       {/* 按钮次序（2026-11-13 统一）：**取消在左、主操作在右**。

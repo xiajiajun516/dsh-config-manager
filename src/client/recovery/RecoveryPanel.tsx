@@ -24,6 +24,7 @@ import {
   Badge, Banner, Button, Card, FoldToggle, SectionTitle, Spinner, StatusDot,
 } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
+import { RefreshIcon } from '../common/Icon.tsx'
 import { Collapse } from '../common/Motion.tsx'
 import { DiskUsageCard } from '../environment/maintenance/DiskUsageCard.tsx'
 import { RollbackCard } from './RollbackCard.tsx'
@@ -487,6 +488,13 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
       <SectionTitle
         title={t('view.recovery')}
         subtitle={needsAttention ? t('recovery.requiredHint') : undefined}
+        action={(
+          /* 静止面板看不出「磁盘/体检/回滚」是刚才的数据还是十分钟前的：恢复页没有轮询，
+             整页只有这一处重新拉取入口（此前只能切页或刷新浏览器）。 */
+          <Button size="sm" loading={state.status === 'loading'} onClick={load}>
+            <RefreshIcon size={12} />{' '}{t('recovery.refresh')}
+          </Button>
+        )}
       />
 
       {/* 事故处置：崩溃归因（上次启动没起来）+ 救援模式（先让 DSH 起得来）。
@@ -548,7 +556,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
           不是没有（t89），那时由上面的告警条解释。2026-11-04：原 92px 虚线空框改一行状态行 ——
           它白占的高度把磁盘 / 体检 / 回滚整块推到首屏之外。 */}
       {state.status === 'ready' && view?.recoveryRequired !== true && view?.incompleteCopiesNotice !== 'unreadable' && (
-        <div className={css.statusLine} role="status"><StatusDot kind="ok" /><span>{t('recovery.empty')}</span></div>
+        <div className={css.statusLine + ' ' + css.recoveryEmptyBar} role="status"><StatusDot kind="ok" /><span>{t('recovery.empty')}</span></div>
       )}
 
       {/* issue #31：残留配置锁（非 journal 事项）——纯锁残留时 incidents 恒为空，
@@ -807,6 +815,10 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
               />
             )}
           </div>
+          {/* 2026-11-14（稿 P-05）：代价与适用场景常显一句 —— 这是**危险动作**的后果说明，
+              不是机制背景；把它关进 ⓘ 等于让用户在按下「进入救援模式」前先悬停才能知道
+              「它会停用依赖校验」。完整改写范围仍在 ⓘ 与确认弹窗里。 */}
+          <div className={css.hint}>{t('recovery.rescue.short')}</div>
           {/* 机制与安全说明收进标题行的 ⓘ（2026-10-12 用户要求说明性文案一律进 ⓘ）：
               危险动作按钮仍在标题行永远可达，折叠体只收「已开启时的生效状态与提示」这类明细。 */}
           <Collapse open={rescueOpen} id={RESCUE_BODY_ID}>

@@ -142,7 +142,18 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
     <Card className={css.activityCard + ' ' + css.diskUsageCard}>
       <div className={css.groupHeader}>
         <span className={css.groupLabel}>{t('diskUsage.title')}</span>
-        {vm !== null && <span className={css.badge}>{vm.summary.total}</span>}
+        {/* 保留期说明属「机制怎么工作」（MOVE 类）：收进标题行的 ⓘ，不再常驻占一行；
+            标题旁也不再挂一颗「合计」徽章 —— 下面那行已经是合计，同一个数同一屏出现两次
+            只会让人先去比对它们。 */}
+        {exportRetentionDays !== null && (
+          <InfoHint
+            text={t('diskUsage.backupRetention', {
+              count: String(report?.backupRetention.keepLast ?? 0),
+              days: String(exportRetentionDays),
+            })}
+            label={infoHintLabel}
+          />
+        )}
         <span className={css.statusSpacer} />
         <IconButton
           icon={<RefreshIcon size={14} />}
@@ -164,54 +175,44 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
 
       {status === 'ready' && vm !== null && (
         <>
-          {/* 路径与文件数本身就是字段值，不再加「统计位置」这类标签占位 */}
-          <div className={css.cellMeta}>
-            <span className={css.mono}>{redact(vm.summary.dataDir)}</span> · {vm.summary.files}
+          {/* 合计一行给出这张卡的两个总数（占用 + 文件数）：逐行不再重复文件数（见下方行注释）。
+              统计根路径仍要可查（它决定「这些数字量的是哪里」），但它是**恒定的上下文**，
+              不是每次体检都变的结论 ⇒ 进 title，不占一行。 */}
+          <div className={css.cellMeta} title={redact(vm.summary.dataDir)}>
+            {t('diskUsage.total', { size: vm.summary.total, files: vm.summary.files })}
           </div>
           {/* 读不到的子区如实说明：既不显示 0，也不整卡报错（硬边界：unreadable ≠ 0） */}
           {vm.summary.anyUnreadable && <div className={css.hint}>{t('diskUsage.partial')}</div>}
 
           {/*
-           * 两行式行卡（2026-11-04）：原先四列表格在 564px 画布下把「回收策略」列压到 160px，
-           * "Your data / safety net (never auto-removed)" 折成三行；表头还固定吃掉 24px。
-           * 现在第一行 = 区域名 + 右对齐占用（唯一右边缘），第二行 = 文件数 + 策略 + 过期量
-           * —— 策略拿到整行宽度，不再折行；表头由行内语义承担（占用单位在数值里，文件数自带
-           * 「个文件」）。desc 进 title：它说明「这块是哪来的」，不改变「能不能删」这个决定。
+           * 单行式分区行（2026-11-14）：这张卡渲染的是 13 个真实分区，两行式每行 44px 时
+           * 一屏只放得下 8 行，且「比大小」被拆到两行（占用在首行、策略徽章在次行）。
+           * 现在一行 = 区域名（超长省略，全名在行 title）· 过期量 · 占用 · 回收策略，
+           * 13 行一屏读完。文件数不逐行渲染（它不改变「能不能删」这个决定），
+           * 总数在合计行、逐行明细留在行 title 里。
+           * desc 进 title：它说明「这块是哪来的」，不改变「能不能删」这个决定。
            */}
           <div className={css.planScroll + ' ' + css.diskUsageScroll + ' ' + css.duList} role="list">
             {vm.rows.map((row) => (
-              <div key={row.id} className={css.duRow} role="listitem" title={row.desc}>
-                <div className={css.duRowTop}>
-                  <span className={css.duRowName}>{row.label}</span>
-                  <span className={css.duRowSize}>
-                    {row.unreadable ? t('diskUsage.unreadable') : row.size}
-                  </span>
-                </div>
-                <div className={css.duRowMeta}>
-                  <span className={css.duRowFiles}>{row.unreadable ? '—' : row.files}</span>
-                  {row.policy === 'regenerable' && <Badge kind="ok">{t('diskUsage.policy.regenerable')}</Badge>}
-                  {row.policy === 'retained' && <Badge kind="info">{t('diskUsage.policy.retained', { retention: row.retention })}</Badge>}
-                  {row.policy === 'protected' && <span>{t('diskUsage.policy.protected')}</span>}
-                  {row.expired !== null && (
-                    <span className={css.cellMetaNoteText}>{t('diskUsage.expiredHint', { size: row.expired })}</span>
-                  )}
-                </div>
+              <div
+                key={row.id}
+                className={css.duRow}
+                role="listitem"
+                title={row.unreadable ? row.desc : `${row.desc} · ${row.files}`}
+              >
+                <span className={css.duRowName} title={row.label}>{row.label}</span>
+                {row.expired !== null && (
+                  <span className={css.duRowNote}>{t('diskUsage.expiredHint', { size: row.expired })}</span>
+                )}
+                <span className={css.duRowSize}>
+                  {row.unreadable ? t('diskUsage.unreadable') : row.size}
+                </span>
+                {row.policy === 'regenerable' && <Badge kind="ok">{t('diskUsage.policy.regenerable')}</Badge>}
+                {row.policy === 'retained' && <Badge kind="info">{t('diskUsage.policy.retained', { retention: row.retention })}</Badge>}
+                {row.policy === 'protected' && <span className={css.duRowPolicy}>{t('diskUsage.policy.protected')}</span>}
               </div>
             ))}
           </div>
-
-          {/* 保留期说明属「机制怎么工作」（MOVE 类）：收进 ⓘ，不常驻占一行 */}
-          {exportRetentionDays !== null && (
-            <div className={css.actionRow} data-inline>
-              <InfoHint
-                text={t('diskUsage.backupRetention', {
-                  count: String(report?.backupRetention.keepLast ?? 0),
-                  days: String(exportRetentionDays),
-                })}
-                label={infoHintLabel}
-              />
-            </div>
-          )}
 
           <div className={css.groupLabel}>{t('diskUsage.clean.title')} <InfoHint text={t('diskUsage.clean.hint')} label={infoHintLabel} /></div>
 

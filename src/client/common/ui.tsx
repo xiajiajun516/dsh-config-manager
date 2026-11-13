@@ -366,15 +366,28 @@ export interface SectionTitleProps {
    * 常驻成 `subtitle` —— 那就把页面又撑长了一行。
    */
   info?: ReactNode
+  /**
+   * 标题行右端的动作控件（刷新 / 体检这类「只作用于本区块」的按钮）。
+   * 2026-11-14：此前调用点只能把按钮塞进 `info` 槽并自己补 `statusSpacer`（见 SyncLogList），
+   * 槽位语义被借用；现在显式给一个 action 槽，内部自带推右的 spacer。
+   * 不传即旧行为（DOM 与之前逐字一致）。
+   */
+  action?: ReactNode
 }
 
-/** 区块标题（页面内二级标题 + 可选副标题 / ⓘ 说明） */
-export function SectionTitle({ title, subtitle, info }: SectionTitleProps) {
+/** 区块标题（页面内二级标题 + 可选副标题 / ⓘ 说明 / 右侧动作） */
+export function SectionTitle({ title, subtitle, info, action }: SectionTitleProps) {
   return (
     <div className={css.sectionTitleBlock}>
       <div className={css.sectionTitleRow}>
         <h3 className={css.sectionTitle}>{title}</h3>
         {info}
+        {action !== undefined && (
+          <>
+            <span className={css.statusSpacer} />
+            {action}
+          </>
+        )}
       </div>
       {subtitle !== undefined && <p className={css.sectionSubtitle}>{subtitle}</p>}
     </div>
