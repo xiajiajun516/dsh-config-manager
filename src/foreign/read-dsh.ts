@@ -178,7 +178,14 @@ export async function readDshLogs(opts: DshReadOptions): Promise<SessionReadOutc
           findings.push({ code: 'source-unreadable', origin: name, detail: 'log-header-incomplete' });
           continue;
         }
-        if (seen.has(header.id)) continue;
+        if (seen.has(header.id)) {
+          /**
+           * 同一 id 出现在两个会话目录（复制/迁移残留）：只保留第一个，但**必须留码** ——
+           * 静默丢会让「导入少了一条会话」在计划里无从解释（本文件顶部第 21-22 行的硬约束）。
+           */
+          findings.push({ code: 'session-id-conflict', origin: header.id, detail: 'duplicate-session-id' });
+          continue;
+        }
         seen.add(header.id);
         bytesRead += data.length;
         files.push({ id: header.id, cwd: header.cwd, version: header.version, name, data });

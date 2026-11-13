@@ -430,6 +430,25 @@ export interface WriteGateRefusal {
 export type WriteGateOutcome = { ok: true } | WriteGateRefusal
 
 /**
+ * 从控制面候选根派生**环境锁目录**（`<root>/locks`）。
+ *
+ * 为什么由根派生而不是让每个调用点多传一个参数：`checkWriteGates` 的 `locksDir` 是**可选**的，
+ * 「少传一个参数」就静默退化成「不查环境锁」。审计 P11-4 正是这么漏掉的：就地修复（repairSessionLogInline）
+ * 不传 locksDir，残留/被持有的环境锁存在时照样改写 `.zstd` 会话字节。
+ * 派生顺序与 `resolveControlRoots` 同源：第一个真实持有 `locks/environment.lock` 的候选根；
+ * 都没有就退回首个候选的 `locks`（读不到即视为无锁，判据仍只由 readLockState 给）。
+ */
+export function locksDirFromControlRoots(controlRoots: readonly string[]): string | undefined {
+  const first = controlRoots[0]
+  if (first === undefined) return undefined
+  for (const root of controlRoots) {
+    const candidate = path.join(root, 'locks')
+    if (fssync.existsSync(path.join(candidate, OWNERSHIP_FILE))) return candidate
+  }
+  return path.join(first, 'locks')
+}
+
+/**
  * 写动作的前置门（与 CLI `sessions repair --fix` 同一判据）。
  *
  * `needsDshStopped`：**改写/搬动会话字节**的动作（会话布局归位 repairSessions、字节级就地修复
@@ -662,7 +681,12 @@ export function sessionRepairRowMessage(facts: SessionRepairRowFacts): string {
  * 而 `session-repair-service` 的 CLI 出入口此前只挂在应用内通道上 —— 离线时用户只能敲命令。
  */
 export async function repairSessionLogInline(
-  options: { home: string; dataDir: string; unitIds: readonly string[]; apply: boolean; expects?: Record<string, { size: number; mtimeMs: number }> },
+  options: {
+    home: string; dataDir: string; unitIds: readonly string[]; apply: boolean
+    expects?: Record<string, { size: number; mtimeMs: number }>
+    /** 环境锁目录（缺省由 controlRoots 派生；显式给出时优先） */
+    locksDir?: string
+  },
   controlRoots: readonly string[],
 ): Promise<InlineRepairOutcome> {
   const base: InlineRepairOutcome = {
@@ -675,8 +699,13 @@ export async function repairSessionLogInline(
   }
   if (options.unitIds.length === 0) return { ...base, ok: false, error: '没有选中任何会话单元。' }
   if (options.apply) {
-    // 与 CLI 写动作共用同一道写入门：改写会话字节必须先停 DSH（+ SAFE MODE + 环境锁）
-    const gate = await checkWriteGates(controlRoots, { needsDshStopped: true })
+    // 与 CLI 写动作共用同一道写入门：改写会话字节必须先停 DSH（+ SAFE MODE + 环境锁）。
+    // 环境锁目录由控制面根派生（审计 P11-4：此前不传 locksDir，锁存在时也照样改写字节）。
+    const locksDir = options.locksDir ?? locksDirFromControlRoots(controlRoots)
+    const gate = await checkWriteGates(controlRoots, {
+      needsDshStopped: true,
+      ...(locksDir !== undefined ? { locksDir } : {}),
+    })
     if (!gate.ok) return { ...base, ok: false, error: gate.reason }
   }
   const svc = await import('../utils/session-repair-service.ts')
@@ -741,9 +770,11 @@ export async function repairSessions(
     done: [], errors: [], notices: [],
   }
   if (options.fix) {
+    // 环境锁目录同样由根派生：调用点漏传时不再静默跳过环境锁检查（与 repairSessionLogInline 同一口径）
+    const locksDir = options.locksDir ?? locksDirFromControlRoots(controlRoots)
     const gate = await checkWriteGates(controlRoots, {
       needsDshStopped: true,
-      ...(options.locksDir !== undefined ? { locksDir: options.locksDir } : {}),
+      ...(locksDir !== undefined ? { locksDir } : {}),
     })
     if (!gate.ok) {
       return { ...base, ok: false, error: gate.reason, errors: [gate.reason] }

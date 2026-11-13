@@ -152,6 +152,23 @@ test('fetchReleases: 错误处理（403 限流 / 404 / 500）', async () => {
   assert.equal(res404.hasMore, false);
 });
 
+test('fetchReleases: 请求挂住时按超时失败，不会永久停在骨架（审计 P8-4）', async () => {
+  let sawSignal = false;
+  const hanging = (_url: string, init?: RequestInit) => {
+    sawSignal = init?.signal instanceof AbortSignal;
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('This operation was aborted', 'AbortError'));
+      });
+    });
+  };
+  await assert.rejects(
+    () => fetchReleases('https://github.com/foo/bar', 1, 5, hanging as unknown as typeof fetch, t, 20),
+    /超时/,
+  );
+  assert.equal(sawSignal, true, '必须把 AbortSignal 交给 fetcher，否则超时无从生效');
+});
+
 test('parseMarkdownBlocks: 解析标题、列表、引用、代码块与段落', () => {
   const md = [
     '# Release 1.0',

@@ -89,6 +89,10 @@ const RESERVED_INTERNAL_PREFIXES: readonly string[] = [
   'dsh-config-manager/environment-fingerprint.token',
   // Phase 6：迁移历史审计目录（统一历史引擎；防 F23 投毒链——不可信导入不得映射到该目录）。
   'dsh-config-manager/migration-history/',
+  // Phase 6+（审计 P12-5）：敏感文件镜像目录（<dataDir>/vault）存的是 .credentials.yaml 等明文镜像，
+  // 与上面几项同属「不可信归档不得映射进来」的 control-plane 区；isSensitiveHomeRel 已在**收集/打包**
+  // 侧按 vault 段拦这种文件，这里补上**导入目标**侧的同一判据，免得 crafted 归档把条目写进镜像目录。
+  'dsh-config-manager/vault/',
   // 注意：不得整段保留 dsh-config-manager/sync/ —— self 分区合法持有 sync/*.json 白名单配置
   //（sync-config / sync-selection / ui-prefs / backup-schedule），会误伤。
   'dsh-config-manager/sync/snapshots/',

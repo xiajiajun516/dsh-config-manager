@@ -179,9 +179,14 @@ export function chatFileChangeAvailable(files: readonly ChatPreviewFileRow[]): b
 export function readRollbackPreviewRemovals(workspace: unknown): string[] {
   const removals = (workspace as { removals?: unknown } | null | undefined)?.removals
   if (!Array.isArray(removals)) return []
+  // 去重集与结果数组分开：此前用 out.includes(item) 线性查重，2 万条路径的回滚预览是
+  // O(n²)，实测主线程阻塞 2.2 s（审计 P8-3），而这一层每次渲染都会重算。Set 把判重降为 O(1)，
+  // 输出顺序仍按引擎给的顺序（不受 Set 插入顺序以外的任何影响）。
+  const seen = new Set<string>()
   const out: string[] = []
   for (const item of removals) {
-    if (typeof item !== 'string' || item === '' || out.includes(item)) continue
+    if (typeof item !== 'string' || item === '' || seen.has(item)) continue
+    seen.add(item)
     out.push(item)
   }
   return out

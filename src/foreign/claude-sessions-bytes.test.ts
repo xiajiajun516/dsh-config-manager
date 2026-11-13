@@ -204,7 +204,13 @@ const GOLDEN: Record<string, string> = {
   'frames-crossing-64k': '7518:d8be900e191b4a2c2c70819790bc0434bc8bffcbfbafbb00016b09bc04edaa8a',
   'orphan-empty-and-unknown': '339:7492bd869daacad62ee75688ad8816e23af259215a360d01de9917cdffadc727',
   'title-only-no-events': 'skip:session-empty',
-  'no-uuid-fallback-ids': '743:1c6ea7a8e76016376da2bff5f50e72e824eb7bce9724af4bee40d41d07d0b6df',
+  /**
+   * 2026-11-14 有意更新（**理由**）：审计 P7-4 修掉了「tool_result 带未知 id 仍照发」的悬空引用。
+   * 本案的 tool_use 没有 id → 合成器铸了 fallback callId，而结果的 tool_use_id 是 'toolu_x'，
+   * 两者对不上：旧实现发出一条指向不存在 tool/call 的 tool/result（743 字节），
+   * 现在按 orphan-tool-result 计数丢弃（666 字节，少一行 result 事件）。
+   */
+  'no-uuid-fallback-ids': '666:88cb76a5a087644466de41f7ace7d82e8e9a1595df271855c963d0688728112f',
   'timestamps-numeric-and-unparsable': '728:64308bcdea6fc439ed190dd56cad74354e9f53f1274821d97a57bc519f3505ce',
   'unicode-and-max-id': '729:a8a5abaca4dc7ab15c499b1c38655972283def0bedd3bb73bc87558e22ef51c7',
   'skip-unsupported-version': 'skip:session-format-unsupported',

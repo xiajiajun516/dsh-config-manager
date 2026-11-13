@@ -11,8 +11,10 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createLocalPluginPackHook } from './local-plugin-host.ts';
-import type { LocalPluginPackHook } from './local-plugin-host.ts';
+import { EventEmitter } from 'node:events';
+
+import { createLocalPluginPackHook, createPackExec } from './local-plugin-host.ts';
+import type { LocalPluginPackHook, PackExecDeps } from './local-plugin-host.ts';
 import type { PackExec } from './local-plugin-pack.ts';
 
 const TARBALL = 'local-pkg-0.1.0.tgz';
@@ -160,4 +162,68 @@ test('无本地源插件：零 spawn、零目录创建', async (t) => {
   assert.equal(fx.calls(), 0);
   assert.deepEqual(res.warnings, []);
   assert.deepEqual(res.oversize, []);
+});
+/* ---------------- 审计 P2-3：pack 超时必须终止整棵进程树 ---------------- */
+
+/** 假子进程：够 defaultExec 用的最小面（on/stdout/stderr/kill + pid），不碰真进程。 */
+function fakeChild(pid: number): {
+  child: EventEmitter & { pid: number; stdout: EventEmitter; stderr: EventEmitter };
+  kills: (string | undefined)[];
+} {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number; stdout: EventEmitter; stderr: EventEmitter; kill: (signal?: string) => boolean;
+  };
+  child.pid = pid;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  const kills: (string | undefined)[] = [];
+  child.kill = (signal?: string) => { kills.push(signal); return true };
+  return { child, kills };
+}
+
+test('P2-3 回归：npm pack 超时 → 终止整棵树，而不是只 kill() 掉包装进程', async () => {
+  // 旧实现超时只 `child.kill()`：Windows 上死的是 cmd.exe 包装进程，npm/pnpm 孙进程成孤儿
+  // 继续往 packDir 写，而调用方 finally 已经 rm 掉 packDir（审计 P2-3 repro 实测孙进程存活）。
+  const { child, kills } = fakeChild(4321);
+  const treesKilled: number[] = [];
+  // 用数组收集而非外部 let：闭包内赋值不会被 TS 的控制流分析看到（会被窄化成 never）
+  const spawns: { file: string; opts: Record<string, unknown> }[] = [];
+  const exec = createPackExec({
+    spawn: ((file: string, _args: readonly string[], opts: Record<string, unknown>) => {
+      spawns.push({ file, opts });
+      return child;
+    }) as unknown as PackExecDeps['spawn'],
+    killTree: (c) => { treesKilled.push(c.pid ?? -1) },
+  });
+
+  const pending = exec('npm', ['pack'], { cwd: os.tmpdir(), timeoutMs: 5 });
+  child.stderr.emit('data', 'npm ERR! partial output');
+  const res = await pending;
+
+  assert.equal(res.code, 1);
+  assert.match(res.stderr, /超时|timed out/, '超时失败仍要回结构化结果（不 reject）');
+  assert.match(res.stderr, /npm ERR! partial output/, '已收集的 stderr 要带出来，供调用方定位');
+  assert.deepEqual(treesKilled, [4321], '超时必须走整树终止（killTree），pid 是子进程 pid');
+  assert.deepEqual(kills, [], '不得只 kill() 包装进程：孙进程会成孤儿继续写已删目录');
+  assert.equal(spawns[0]?.opts.detached, process.platform !== 'win32',
+    'POSIX 必须 detached 自成进程组，killTree 的负 pid 才杀得到整棵树');
+});
+
+test('P2-3：正常退出不误杀（close 先到 → 清定时器、不调 killTree）', async () => {
+  const { child, kills } = fakeChild(4322);
+  const treesKilled: number[] = [];
+  const exec = createPackExec({
+    spawn: (() => child) as unknown as PackExecDeps['spawn'],
+    killTree: (c) => { treesKilled.push(c.pid ?? -1) },
+  });
+
+  const pending = exec('npm', ['pack'], { cwd: os.tmpdir(), timeoutMs: 5_000 });
+  child.stdout.emit('data', 'local-pkg-0.1.0.tgz\n');
+  child.emit('close', 0);
+  const res = await pending;
+
+  assert.equal(res.code, 0);
+  assert.equal(res.stdout, 'local-pkg-0.1.0.tgz\n');
+  assert.deepEqual(treesKilled, [], '正常结束不得终止任何进程树');
+  assert.deepEqual(kills, []);
 });

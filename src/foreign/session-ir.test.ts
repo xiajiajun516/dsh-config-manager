@@ -252,3 +252,70 @@ test('未闭合工具调用：不伪造 result、callId 非空、后续事件与
   assert.equal(rows.filter((r) => r.type === 'user/message').length, 2, '中断之后的消息不得被吞掉');
   assert.equal(rows[rows.length - 1]?.type, 'user/message');
 });
+
+/* ---------------- 工具结果的三种「静默丢失」路径（2026-11-14 审计 P7-1/2/4/5） ---------------- */
+
+function synthOf(messages: readonly IrMessage[]): { rows: DshSessionRow[]; stats: SynthesisStats } {
+  const s = stats();
+  const rows = synthesizeDshRows(
+    { id: 's9', cwd: 'D:/proj', createdAt: NOW, records: messages.length, messages },
+    { title: '', titleSource: { kind: 'fallback' }, emptyBlocks: [], provider: 'claude-code', reasoningEffort: 'medium', maxTokens: 8192 },
+    s,
+    NOW,
+  );
+  return { rows, stats: s };
+}
+
+/** P7-1：同一条 user 记录既含 tool_result 又含 text —— 文本必须另发一条 user/message，不能消失且不能无计数。 */
+test('user 记录同时含 tool_result 与 text：文本作为独立 user/message 发出', () => {
+  const { rows, stats: s } = synthOf([
+    irMessage(irFallbackMessageId(0), 'user', [irTextBlock('开始')], { time: NOW }),
+    irMessage(irFallbackMessageId(1), 'assistant', [irToolCallBlock('t1', 'terminal', { command: 'ls' })], { time: NOW + 1 }),
+    irMessage(irFallbackMessageId(2), 'user', [irToolResultBlock('t1', 'ok', false), irTextBlock('MARKER-TEXT')], { time: NOW + 2 }),
+  ]);
+  const humanTexts = rows
+    .filter((r) => r.type === 'user/message')
+    .map((r) => (r.data as { source: { kind: string }; content: { text?: string }[] }));
+  const fromUser = humanTexts.filter((m) => m.source.kind === 'user').flatMap((m) => m.content.map((c) => c.text ?? ''));
+  assert.ok(fromUser.join('|').includes('MARKER-TEXT'), '用户文本被静默吞掉了：' + JSON.stringify(rows.map((r) => r.type)));
+  assert.equal(s.userMessages, 2, '结果块之后的文本也要计入 userMessages');
+  assert.equal(s.toolResults, 1, '同一条记录里的 tool/result 仍必须发出');
+  assert.equal(rows.filter((r) => r.type === 'tool/result').length, 1);
+});
+
+/** P7-4：非空 id 但不在未决表里 = 悬空引用，必须计数丢弃（不得发指向不存在调用的结果）。 */
+test('tool_result 带未知 id：按 orphan-tool-result 计数，不产出悬空 callId', () => {
+  const { rows, stats: s } = synthOf([
+    irMessage(irFallbackMessageId(0), 'user', [irTextBlock('开始')], { time: NOW }),
+    irMessage(irFallbackMessageId(1), 'assistant', [irToolCallBlock('t1', 'terminal', { command: 'ls' })], { time: NOW + 1 }),
+    irMessage(irFallbackMessageId(2), 'user', [irToolResultBlock('t1', 'ok', false), irToolResultBlock('t-unknown', 'x', false)], { time: NOW + 2 }),
+  ]);
+  const results = rows.filter((r) => r.type === 'tool/result');
+  assert.deepEqual(results.map((r) => (r.data as { message: { source: { callId: string } } }).message.source.callId), ['t1']);
+  assert.equal(s.ignored['orphan-tool-result'], 1, '悬空 id 必须可见地计数');
+});
+
+/** P7-2：缺 id 的结果不得回填到**上一个回合**已闭合的调用上（openCallIds 必须按回合清空）。 */
+test('回合闭合后缺 id 的 tool_result 不回填上一回合的调用', () => {
+  const { rows } = synthOf([
+    irMessage(irFallbackMessageId(0), 'user', [irTextBlock('turn1')], { time: NOW }),
+    irMessage(irFallbackMessageId(1), 'assistant', [irToolCallBlock('turn1-call', 'terminal', { command: 'a' })], { time: NOW + 1 }),
+    irMessage(irFallbackMessageId(2), 'user', [irTextBlock('turn2')], { time: NOW + 2 }),
+    irMessage(irFallbackMessageId(3), 'assistant', [irToolCallBlock('turn2-call', 'terminal', { command: 'b' })], { time: NOW + 3 }),
+    irMessage(irFallbackMessageId(4), 'user', [irToolResultBlock('', 'late', false)], { time: NOW + 4 }),
+  ]);
+  const result = rows.find((r) => r.type === 'tool/result');
+  const callId = (result?.data as { message: { source: { callId: string } } } | undefined)?.message.source.callId;
+  assert.equal(callId, 'turn2-call', '缺 id 的结果只能配对当前回合仍未结算的调用，不能跨回合回填');
+});
+
+/** P7-5：assistant 记录里携带的 tool_result 无处归位 —— 必须计数（绝不静默丢弃）。 */
+test('assistant 记录携带 tool_result：按 assistant-tool-result 计数', () => {
+  const { rows, stats: s } = synthOf([
+    irMessage(irFallbackMessageId(0), 'user', [irTextBlock('开始')], { time: NOW }),
+    irMessage(irFallbackMessageId(1), 'assistant', [irToolCallBlock('t1', 'terminal', { command: 'ls' }), irToolResultBlock('t1', 'ok', false)], { time: NOW + 1 }),
+  ]);
+  assert.equal(s.ignored['assistant-tool-result'], 1, '助手记录里的结果块不得无声消失');
+  assert.equal(s.toolResults, 0);
+  assert.equal(rows.filter((r) => r.type === 'tool/result').length, 0);
+});

@@ -34,6 +34,7 @@ export const zh = {
   // 更新内容拉取失败（GitHub API）：错误对象里也必须是当前语言
   'about.releaseNotes.rateLimited': 'GitHub API 速率限制（Rate limit exceeded），请稍后再试或直接在 GitHub 上查看。',
   'about.releaseNotes.fetchFailed': 'GitHub API 请求失败 ({status} {statusText})',
+  'about.releaseNotes.timeout': 'GitHub API 请求超时（{seconds} 秒无响应），请检查网络或代理后重试。',
   'about.snippet.plugin': '- 插件版本 / Plugin: {version}',
   'about.snippet.dsh': '- DSH 版本 / DSH: {version}',
   'about.snippet.platform': '- 平台 / Platform: {platform}',
@@ -88,6 +89,7 @@ export const en: Record<keyof typeof zh, string> = {
   'about.snippet.environment': '### Environment',
   'about.releaseNotes.rateLimited': 'GitHub API rate limit exceeded — please try again later, or view the release notes directly on GitHub.',
   'about.releaseNotes.fetchFailed': 'GitHub API request failed ({status} {statusText})',
+  'about.releaseNotes.timeout': 'GitHub API request timed out after {seconds}s — check your network or proxy and try again.',
   'about.snippet.plugin': '- Plugin version: {version}',
   'about.snippet.dsh': '- DSH version: {version}',
   'about.snippet.platform': '- Platform: {platform}',

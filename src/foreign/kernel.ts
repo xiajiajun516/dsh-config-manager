@@ -123,8 +123,15 @@ export function stripUserInfo(url: string): { url: string; stripped: boolean } {
   const rest = url.slice(scheme + 3);
   const at = rest.indexOf('@');
   if (at < 0) return { url, stripped: false };
-  const slash = rest.indexOf('/');
-  if (slash >= 0 && at > slash) return { url, stripped: false };
+  /**
+   * userinfo 只可能出现在 authority 段里：@ 若落在第一个 '/'、'?' 或 '#' 之后，
+   * 它就是 path/query/fragment 里的普通字符（无路径 URL 的 `?k=a@b` 曾把整条 URL 截成 `https://b`）。
+   * 纯字符判定，不用正则。
+   */
+  const boundary = [rest.indexOf('/'), rest.indexOf('?'), rest.indexOf('#')]
+    .filter((i) => i >= 0)
+    .sort((a, b) => a - b)[0];
+  if (boundary !== undefined && at > boundary) return { url, stripped: false };
   return { url: url.slice(0, scheme + 3) + rest.slice(at + 1), stripped: true };
 }
 

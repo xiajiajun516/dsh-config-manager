@@ -98,6 +98,19 @@ export async function refsToSection(refs: BlobRefsSection, sink: BlobSink): Prom
     if (data === null) {
       throw new Error(engineMsg('sync.blobMissing', { hash: ref.blobHash, path: ref.relativePath }));
     }
+    // 内容寻址仓的引用自带 sha256（+ 字节数），取回后必须自证（审计 P6-3）。
+    // 注释承诺「远端仓被清理坏/被手工删过」必须硬失败，但此前只覆盖「删了」：
+    // 内容被改、半截写、base64 传输丢字符都会畅通无阻地把错误字节当成会话原样写回，
+    // 而「静默损坏」比「硬失败」更糟 —— 用户看不到任何错误，只发现对话内容变了。
+    const actualHash = sha256Hex(data);
+    if (actualHash !== ref.blobHash || (ref.sizeBytes !== undefined && data.byteLength !== ref.sizeBytes)) {
+      throw new Error(engineMsg('sync.blobCorrupt', {
+        hash: ref.blobHash,
+        path: ref.relativePath,
+        actual: actualHash,
+        size: String(data.byteLength),
+      }));
+    }
     files.push({ relativePath: ref.relativePath, data, contentHash: ref.blobHash });
   }
   return { version: 1, files };

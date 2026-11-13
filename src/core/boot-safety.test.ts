@@ -136,3 +136,28 @@ test('S-10 DSH 核心 bundle 探测失败：只告警、绝不剪（剪掉等于
   const saved = JSON.parse(h.written[0]?.text ?? '{}') as { dsh: { profile: { bundles: string[] } } };
   assert.deepEqual(saved.dsh.profile.bundles, ['@deepseek-ai/dsh-base'], '核心 bundle 必须原样留在清单里');
 });
+
+test('S-11 bundles 含非字符串条目：必须真的从写回数组剔除（不能只按展示名比名字）', async () => {
+  const h = harness({ [PKG_REL]: pkgText(['@deepseek-ai/dsh-base', 42, 'ghost-plugin']) }, ['@deepseek-ai/dsh-base']);
+  const report = await auditBootSafety(h.deps);
+  assert.equal(report.verdict, 'repaired');
+  assert.ok(report.issues.some((i) => i.id === 'bundlesUnresolved' && i.fixed === true));
+  assert.equal(h.written.length, 1);
+  const saved = JSON.parse(h.written[0]?.text ?? '{}') as { dsh: { profile: { bundles: unknown[] } } };
+  // 审计 P3-2：drop 集合里非字符串条目的 name 是 describeEntry 生成的展示名（'42'），
+  // 拿它去比数组里的真实条目 42 永不相等，写回后条目仍在却仍报 repaired。
+  assert.equal(saved.dsh.profile.bundles.includes(42), false, '非字符串条目（42）不得留在写回数组里');
+  assert.deepEqual(saved.dsh.profile.bundles, ['@deepseek-ai/dsh-base'], '非字符串条目（42）必须真的从写回数组剔除');
+});
+
+test('S-12 写回调用没抛错但盘面没变：必须报未修好（绝不把「调用成功」当「已修」）', async () => {
+  const h = harness({ [PKG_REL]: pkgText(['ghost-plugin']) }, []);
+  const report = await auditBootSafety({
+    ...h.deps,
+    // 写调用本身成功，但没有落到 readText 能看到的地方（半写 / 缓存 / 被并发覆盖）
+    writeText: async () => {},
+  });
+  assert.equal(report.verdict, 'unsafe', '盘面没变却报 repaired 等于对用户撒谎');
+  assert.ok(ids(report).includes('bundlesUnresolvedUnfixed'));
+  assert.ok(!report.issues.some((i) => i.id === 'bundlesUnresolved' && i.fixed === true));
+});

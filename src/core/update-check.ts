@@ -94,6 +94,57 @@ export interface UpdateCheckDeps {
 type ProbeResult = { ok: true; version: string } | { ok: false; error: string }
 
 /**
+ * **按字节**有界地读响应体；超过 `maxBytes` 返回 null（调用方给 'registry response too large'）。
+ *
+ * 为什么不是 `text.length`：它数的是 UTF-16 代码单元，一个 CJK 字符占 3 个 UTF-8 字节 ⇒
+ * 120KB 的中文响应 `text.length` 只有 40K，上限形同虚设（审计 P11-6）。
+ * 顺序：Content-Length 预检（有就先拒，一个字节都不读）→ 流式累计，越界立刻 abort
+ * （不把大响应读进内存）→ 没有 body 流的运行时退回 arrayBuffer 量 byteLength。
+ */
+async function readBoundedBody(
+  res: Response, maxBytes: number, controller: AbortController,
+): Promise<string | null> {
+  // 防御：真实 Response 一定有 headers/body，但注入的替身（脚本、极简 mock）可能只给 text()。
+  // 缺什么就退化成「全量读 + 字节口径判定」——判据不变，只是失去流式提前止损。
+  const declared = typeof res.headers?.get === 'function' ? res.headers.get('content-length') : null
+  if (declared !== null) {
+    const n = Number(declared)
+    if (Number.isFinite(n) && n > maxBytes) {
+      controller.abort()
+      return null
+    }
+  }
+  const body = (res as { body?: ReadableStream<Uint8Array> | null }).body
+  if (body === null || body === undefined) {
+    const bytes = typeof res.arrayBuffer === 'function'
+      ? new Uint8Array(await res.arrayBuffer())
+      : new TextEncoder().encode(await res.text())
+    return bytes.byteLength > maxBytes ? null : new TextDecoder('utf-8').decode(bytes)
+  }
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      controller.abort()
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    chunks.push(value)
+  }
+  const merged = new Uint8Array(total)
+  let at = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, at)
+    at += chunk.byteLength
+  }
+  return new TextDecoder('utf-8').decode(merged)
+}
+
+/**
  * 探测 npm latest（无缓存、无状态）。任何异常都被收成 `{ ok:false, error }`：
  * 网络错误 / 超时 / 非 2xx / 体积超限 / JSON 畸形 / 版本号形态不认识。
  */
@@ -109,8 +160,8 @@ export async function probeLatestVersion(deps: UpdateCheckDeps = {}): Promise<Pr
       headers: { accept: 'application/json' },
     })
     if (!res.ok) return { ok: false, error: `registry returned HTTP ${res.status}` }
-    const text = await res.text()
-    if (text.length > UPDATE_CHECK_MAX_BYTES) return { ok: false, error: 'registry response too large' }
+    const text = await readBoundedBody(res, UPDATE_CHECK_MAX_BYTES, controller)
+    if (text === null) return { ok: false, error: 'registry response too large' }
     let payload: unknown
     try {
       payload = JSON.parse(text) as unknown

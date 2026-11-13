@@ -486,6 +486,33 @@ test('V-F1 写门：存在残留锁时写动作被拒（文档与防线一致）
   })
 })
 
+test('V-F1c 写门：就地修复（POST /sessions/inline-repair）同受环境锁拦截（审计 P11-4）', async () => {
+  await withConsole(async (handle, paths) => {
+    const { cookie } = await bootstrap(handle)
+    // 错位会话 → /sessions 页渲染出确认表单（动作 token 本次控制台通用，从那里取）
+    const { encodeZstdFrame } = await import('../../utils/zstd-frame.ts')
+    const dir = path.join(paths.homeDir, 'sessions', '--D-Ghost-proj--', 'session-inline')
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, 'session.v3.jsonl.zstd'), Buffer.concat([
+      encodeZstdFrame(Buffer.from(JSON.stringify({ version: 3, id: 'session-inline', cwd: 'D:/Real/proj' }) + '\n', 'utf8')),
+      encodeZstdFrame(Buffer.from('{"seq":1}\n', 'utf8')),
+    ]))
+    // stale 锁（ownership 指向不存在的 pid）：就地修复此前不传 locksDir ⇒ 照样改写 .zstd 字节
+    await fs.mkdir(paths.locksDir, { recursive: true })
+    await fs.writeFile(path.join(paths.locksDir, 'environment.lock'), JSON.stringify({
+      schemaVersion: 1, op: 'test-op', target: 'x', lockVersion: '0.1.0',
+      owner: { instanceId: 'dead-instance', instanceStartedAt: Date.now() - 600_000, pid: 999_999_999, hostname: 'h' },
+      createdAt: Date.now() - 600_000,
+    }))
+    const html = await getPage(handle, cookie!, '/sessions')
+    const token = actionTokenOf(html)
+    const res = await postForm(handle, cookie!, '/sessions/inline-repair', { 'unit:ghost/session-inline': 'on', token })
+    assert.equal(res.status, 409, res.body.slice(0, 300))
+    assert.match(res.body, /就地修复未执行（写入门拒绝）/, '被门拒绝（而不是进到逐条执行后的「有未完成项」）')
+    assert.match(res.body, /环境锁/)
+  })
+})
+
 test('V-F2 读不到 ≠ 没有：快照/导出目录不可读时首页给出横幅，而不是「没有」', async () => {
   await withConsole(async (handle, paths) => {
     const { cookie } = await bootstrap(handle)

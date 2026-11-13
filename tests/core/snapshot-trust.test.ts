@@ -285,6 +285,15 @@ test('W-01: isReservedInternalRel 大小写不敏感（Windows case-insensitive 
   assert.equal(isReservedInternalRel('DSH-CONFIG-MANAGER\\TRANSACTIONS\\ACTIVE\\x.json'), true, '反斜杠 + 大小写变体须命中');
 });
 
+test('W-01c: isReservedInternalRel 拒绝凭据镜像目录 vault/（审计 P12-5）', () => {
+  assert.equal(isReservedInternalRel('dsh-config-manager/vault/.credentials.yaml'), true);
+  assert.equal(isReservedInternalRel('DSH-Config-Manager/VAULT/x'), true, '大小写变体须命中');
+  assert.equal(isReservedInternalRel('dsh-config-manager/../dsh-config-manager/vault/.credentials.yaml'), true, '`..` 变体须命中');
+  // 反向：普通 sync 配置与自建同名目录不得被误伤
+  assert.equal(isReservedInternalRel('dsh-config-manager/sync/sync-config.json'), false);
+  assert.equal(isReservedInternalRel('my-vault/config.json'), false);
+});
+
 test('W-01b: isReservedInternalRel 折叠 .. / .（Reviewer B P0：宿主 fs resolve 会折叠，此处必须同样折叠）', () => {
   // 宿主 DshFileSystemFacade.abs 用 resolve(join(home, rel))，会折叠 `..`。
   // 攻击者用 `dsh-config-manager/../dsh-config-manager/snapshots/...` 若只在未折叠串上判前缀 → 绕过。

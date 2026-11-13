@@ -65,10 +65,36 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **The recovery panel no longer locks up after a failure**: when the verify or execute step was refused (locked, conflicting, timed out) the execute / retry / dismiss buttons stayed disabled until the panel was reopened; the failure now resets them and shows the reason.
 - **插件清单没读齐时的补勾不再反复触发自身**：自动补勾每轮都会生成一个新队列，导致状态写入与副作用反复触发；现在内容相同就不再写回。
   **Auto-ticks waiting for a plugin listing no longer re-trigger themselves**: each pass produced a new queue object, so the state write and its side effects kept firing; an unchanged queue is now left alone.
-- - **写回启动补丁时字符串一律保持字符串，空值不再变成 null、`True` 不再变成布尔、`007` 不再变成 7**：以前插件每改动这一层一次，写下去的字符串值就会被主程序读成别的类型——空字符串读成 null、数字样子的串读成数字、`.inf` 读成无穷大；依赖字符串配置的插件（例如技能列表里带空串的那类）重启即报校验错误，用户看到的是「我什么都没改，它自己坏了」。现在写回给每个字符串值加引号，主程序读到的就是当初写进去的那份字面量；以前已经写坏的字段仍需按已知限制里的指引手工改回。（issue #135）
+- **写回启动补丁时字符串一律保持字符串，空值不再变成 null、`True` 不再变成布尔、`007` 不再变成 7**：以前插件每改动这一层一次，写下去的字符串值就会被主程序读成别的类型——空字符串读成 null、数字样子的串读成数字、`.inf` 读成无穷大；依赖字符串配置的插件（例如技能列表里带空串的那类）重启即报校验错误，用户看到的是「我什么都没改，它自己坏了」。现在写回给每个字符串值加引号，主程序读到的就是当初写进去的那份字面量；以前已经写坏的字段仍需按已知限制里的指引手工改回。（issue #135）
   **Strings written back into the startup patch stay strings — an empty value no longer turns into null, `True` into a boolean or `007` into 7**: every time the plugin rewrote that layer, the host read the saved strings as other types — an empty string became null, numeric-looking text became a number, `.inf` became infinity — and plugins that validate string config (a skill list containing an empty entry, for instance) failed at startup, which looked like «I changed nothing and it broke itself». Every string value is now quoted on write, so the host reads exactly what was saved; fields already damaged by earlier versions still need the manual fix described in known limits. (issue #135)
 - **「关于」页不再有两个同等醒目的主按钮**：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
   **The About panel no longer shows two equally loud primary buttons**: "Update now" and "Star on GitHub" used to be the same dark primary style side by side; the star link is now an outlined secondary button so the update action is the one that stands out.
+- **自动同步的「还剩 X 分钟」会自己走了**：以前这个数字只在打开面板那一刻算一次，之后一直停在原值（到期也不会自己变成「已到期」）；现在它按时间自行递减，跨过零点就显示已到期。
+  **The auto-sync "next run in X minutes" badge now counts down**: the number used to be computed once when the panel rendered and then froze (it never turned into "due" either); it now decreases on its own and switches to "due" when it reaches zero.
+- **启动自检不再把「没修好」报成「已修复」**：引擎清单里混入数字这类非法条目时，以前报告说修好了、盘面其实一字未改（下次启动又原样报错）；现在写回后回读确认，没真的落盘就如实报「仍未修复」。
+  **Startup self-repair no longer reports "fixed" when nothing changed on disk**: an invalid engine entry such as a number used to be reported as repaired although the file was untouched, so the same error returned on the next start; the write-back is now read back and a still-present entry is reported as unfixed.
+- **缺字段的旧快照不再让恢复计划整体报错**：早先版本或手工改过的快照没有文件清单时，以前一进恢复计划就抛内部类型错误；现在按「没有可还原的文件」处理，计划照常给出。
+  **Older snapshots without a file list no longer break the restore plan**: a snapshot missing that field used to throw an internal type error as soon as the plan was built; it is now treated as having no files to restore and the plan is produced normally.
+- **会话目录读不出来时不再谎报「磁盘上没有这些会话」**：以前读取失败（权限、路径类型不对）会被当成空目录，于是把所有会话都列成「需人工清理的幽灵条目」；现在只有真的不存在才算空，其余情况明确报「扫描失败」，不给出可疑名单。
+  **An unreadable sessions directory no longer produces a false "these sessions are gone" report**: read failures (permissions, wrong path type) used to count as an empty directory and listed every session as a ghost needing manual cleanup; only a genuinely missing directory counts as empty now, and other failures are reported as a failed scan.
+- **导入外部来源的会话时，工具结果不再接错回合、也不会吞掉同一条消息里的文字**：以前一条消息里同时有文字与工具结果时，工具结果会被挂到上一个回合的函数调用上，纯文字消息则整条丢弃；现在工具结果只接自己回合的调用，文字照常保留。
+  **Imported third-party sessions no longer attach tool results to the wrong turn or drop the text next to them**: when one message carried both text and tool results, the results were attached to a previous turn's call and the text-only message was dropped entirely; results now stay in their own turn and the text is kept.
+- **脱敏不再把带用户名和查询串的链接截成一个孤零零的主机名，重复的会话 id 也明确报冲突**：以前 `https://host?token=...` 这类地址会被截成域名的一部分；来自同一个 id 的两份会话文件以前会被静默合并，现在保留一份并报告冲突。
+  **Redaction no longer truncates a link with credentials or a query string down to a bare host, and duplicate session ids are reported**: addresses such as `https://host?token=...` used to be cut mid-domain; two session files sharing one id used to be merged silently and now keep one copy and report the conflict.
+- **「关于」页的更新日志请求不会无限转圈**：GitHub 接口挂住不返回时，以前那一栏永远停在加载中；现在 10 秒无响应就报「请求超时」，并提示检查网络或代理。
+  **The release-notes request on the About panel no longer spins forever**: when the GitHub API hung, that section stayed in its loading state; it now fails after 10 seconds with a timeout message telling you to check the network or proxy.
+- **同步取回的大文件会先自证再落盘**：远端仓里的会话内容被改坏（长度对不上或哈希不符）时，以前会把这段坏字节当成你的会话原样写回，界面上看不出任何异常；现在直接报「校验不符」并拒绝写入。
+  **Large files pulled from a sync channel are verified before they overwrite yours**: when a blob in the remote store was corrupted (wrong length or hash), the bad bytes used to be written back as your sessions with no visible error; it is now refused with a hash-mismatch message.
+- **导入时不能再把文件写进凭据明文目录**：备份包里若带 `dsh-config-manager/vault/` 下的条目，导入会拒绝落地——这个目录存的是解密后的凭据镜像，任何来源的包都不该往里写。
+  **Imports can no longer write into the plaintext credential directory**: entries under `dsh-config-manager/vault/` in a package are refused on import; that directory holds decrypted credential mirrors and no package should be able to write there.
+- **停止一个怎么也不退出的档案时，不再误报「停止失败」**：强杀之后窗口进程要过一会儿才消失，以前立刻回查就判失败（面板还留着一条其实已停的心跳）；现在会短暂等待退出再判定，仍杀不掉才报失败。
+  **Stopping a profile that refuses to exit no longer reports a false failure**: after a forced kill the process takes a moment to disappear, and the immediate recheck used to report failure while a stale heartbeat stayed on the panel; the stop now waits briefly for the exit and only reports failure if it truly survives.
+- **命令行里的「就地修复会话」也受环境锁保护**：与图形界面同一道写入门，锁被占用或状态不明时拒绝改写会话文件，不再绕过。
+  **Inline session repair from the CLI now honours the environment lock**: it goes through the same write gate as the UI, so a held or unknown lock refuses the rewrite instead of being bypassed.
+- **更新检查按字节判断响应大小**：以前用字符数比上限，中文等三字节字符能让一份 120 KB 的响应被当成 40 KB 放行；现在按真实字节判定，超大响应提前中断，不再整个读进内存。
+  **The update check measures response size in bytes**: the limit used to compare character counts, so a 120 KB response full of three-byte characters passed as 40 KB; it is measured in real bytes now and an oversized response is cut off early instead of being read into memory.
+- **打包插件超时不再留下后台进程**：以前超时只结束外层的命令包装进程，真正干活的 npm 进程继续在已删除的临时目录里写文件；现在整棵进程树一起终止。
+  **A timed-out plugin pack no longer leaves processes behind**: the timeout used to kill only the wrapper command while the real npm process kept writing into an already-deleted temp directory; the whole process tree is terminated now.
 
 ## [0.8.2] - 2026-11-12
 

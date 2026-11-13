@@ -667,6 +667,36 @@ test('m3-poll: 同一 kind 重复 watchRunning 不重复启动', async () => {
   assert.equal(runsCalls, calls, 'stop 后无遗留轮询')
 })
 
+test('m3-poll: stop→start 不留孤儿发现链（审计 P8-1）', async () => {
+  let runsCalls = 0
+  const api = makeApi({
+    runs: async () => {
+      runsCalls += 1
+      return []
+    },
+  })
+  const store = new RunStore({ storage: null, pollIntervalMs: 5 })
+  store.exportFlow(api)
+  // 基线：一条链在 60ms 内的请求数
+  store.watchRunning('export', 5)
+  await sleep(60)
+  const oneChain = runsCalls
+  assert.ok(oneChain >= 3, `基线窗口内确实发生了轮询（实测 ${oneChain}）`)
+  // 取消后立刻重启（RecoveryPanel 被 423 拒绝后用户重试就是这条路径）：
+  // 只删标记不撤定时器时，旧链在集合重新 add 后复活，与新链并发 ⇒ 计数逼近链数倍数
+  store.stopRunWatch('export')
+  runsCalls = 0
+  store.watchRunning('export', 5)
+  store.stopRunWatch('export')
+  store.watchRunning('export', 5)
+  await sleep(60)
+  store.stopRunWatch('export')
+  assert.ok(
+    runsCalls <= Math.ceil(oneChain * 1.5),
+    `stop→start 不得叠加链（单链 ${oneChain} 次，实测 ${runsCalls} 次）`,
+  )
+})
+
 /* ------------------------------------------------------------- 订阅语义 */
 
 test('subscribe/notify: patch 触发监听器，退订后不再通知', () => {

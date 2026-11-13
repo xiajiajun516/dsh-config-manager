@@ -4,7 +4,7 @@
  * 约定：只接收「渲染所需的数据 + 回调」；React 状态、副作用与网络调用仍由
  * SyncPanel 持有（单一状态源）；可测纯逻辑在 src/ui/sync-settings-view.ts。
  */
-import { useId } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { UiT } from '../../ui/i18n.ts'
@@ -22,6 +22,39 @@ import type { ChannelSyncState } from './sync-view.ts'
 import { autosyncIntervalKey } from '../../ui/sync-settings-view.ts'
 import type { SyncAutosyncIntervalKey } from '../../ui/sync-settings-view.ts'
 import css from '../config-manager.module.css'
+
+/**
+ * 倒计时本地推进的节拍（15s）。
+ *
+ * 审计 P9-3：徽章文案的粒度是分钟（formatIntervalDuration 向上取整到分钟），15s 已足够
+ * 让「还剩 X 分钟」在可见范围内按分钟递减，同时几乎不占 CPU。
+ */
+const AUTOSYNC_COUNTDOWN_TICK_MS = 15_000
+
+/**
+ * 让宿主给的「距上次同步已过 ms」在组件内继续走（审计 P9-3）。
+ *
+ * 语义冲突在哪：`elapsedMs` 是宿主在 /sync/status 那一刻算好的**快照**，而徽章说的是
+ * 「距下次自动同步还剩多久」——一个会随时间流逝的相对量。此前组件只在渲染时算一次，
+ * 于是文字永远停在打开页面那一秒（页面上也没有别的计时器：全 client 只有 RunsCenter 有）。
+ *
+ * 做法：以快照到达时刻为锚点，把本地流逝的时间叠上去；快照本身变了（宿主重算过、
+ * 或用户改了间隔）就换锚点，避免新旧基准互相污染。返回 null = 从未运行，没有倒计时。
+ */
+function useAdvancingElapsedMs(snapshotElapsedMs: number | null): number | null {
+  const anchor = useMemo(
+    () => (snapshotElapsedMs === null ? null : { snapshotElapsedMs, at: Date.now() }),
+    [snapshotElapsedMs],
+  )
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (snapshotElapsedMs === null) return undefined
+    const timer = setInterval(() => { setTick((n) => (n + 1) % 1_000_000) }, AUTOSYNC_COUNTDOWN_TICK_MS)
+    return () => { clearInterval(timer) }
+  }, [snapshotElapsedMs])
+  if (anchor === null) return null
+  return anchor.snapshotElapsedMs + Math.max(0, Date.now() - anchor.at)
+}
 
 /** 间隔下拉的取值顺序（t42：随卡片一起从主文件迁出）。 */
 const AUTOSYNC_INTERVAL_OPTIONS: AutosyncInterval[] = ['5m', '15m', '30m', '60m', '6h', '12h', '24h']
@@ -50,9 +83,13 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
   const autoApplyTier: AutosyncAutoApplyTier = settings.autosync?.autoApplyTier ?? 'medium'
   const conflictPolicy: AutosyncConflictPolicy = settings.autosync?.conflictPolicy ?? 'local'
   const autosyncText = settings.autosync !== null ? autosyncStatusText(settings.autosync, uiT) : t('autosync.statusNever')
-  /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期） */
-  const autosyncCountdownMs = settings.autosync !== null && settings.autosync.elapsedMs >= 0
-    ? computeAutosyncCountdown(settings.autosync.elapsedMs, autosyncIntervalMs(settings.autosync.interval))
+  /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期）—— elapsedMs 先经本地推进，见 hook 注释 */
+  const snapshotElapsedMs = settings.autosync !== null && settings.autosync.elapsedMs >= 0
+    ? settings.autosync.elapsedMs
+    : null
+  const advancingElapsedMs = useAdvancingElapsedMs(snapshotElapsedMs)
+  const autosyncCountdownMs = advancingElapsedMs !== null && settings.autosync !== null
+    ? computeAutosyncCountdown(advancingElapsedMs, autosyncIntervalMs(settings.autosync.interval))
     : null
   // issue #79：本轮为什么没同步 / 失败了什么，必须看得见 —— 此前只写进 info 级日志
   // （默认日志级别 warn），界面恒无提示，用户只能去翻 sync-autosync.json。
