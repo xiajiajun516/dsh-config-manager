@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as yaml from 'js-yaml';
+import * as yaml4 from 'js-yaml4';
 
 import { describePatchYamlError, dumpPatchDocument, isPatchJsExpr, loadPatchDocument } from './patch-yaml.ts';
 
@@ -87,6 +88,89 @@ test('describePatchYamlError：只取首行，源码片段（可能含内联密�
   const realSafe = describePatchYamlError(real);
   assert.equal(realSafe.includes('\n'), false, '真实解析错误的摘要同样只有一行: ' + realSafe);
   assert.ok(realSafe.length > 0);
+});
+
+/* ------------------------------ 跨大版本读回（issue #135） ------------------------------ */
+
+/**
+ * DSH 侧的读端：桌面版随包 js-yaml 4.3.2（`app.asar` 内的 `/dsh/node_modules/js-yaml`）。
+ * 它装成 devDependency 别名 `js-yaml4`（运行时依赖仍只有 5.x 的 `js-yaml`）。
+ *
+ * 为什么必须真读 4.x：既有那条「写回保真」是 `load(dump(x))` 自环 —— 5.x 自己读自己恒等，
+ * 于是「空标量 / 裸标量关键字」这类跨版本分歧在自环里根本看不见（#135 就是这么漏掉的）。
+ * 而 DSH 才是这份文件的真实读者：它是 4.x，按 YAML 1.1 隐式解析。
+ */
+const JsExpr4 = new yaml4.Type('tag:yaml.org,2002:js', {
+  kind: 'scalar',
+  construct: (data) => ({ __jsExpr: String(data) }),
+});
+const DSH_READER_SCHEMA = yaml4.JSON_SCHEMA.extend([JsExpr4]);
+
+/** 完全按 DSH 的口径读回一份 patch 文本。 */
+function loadAsDsh(text: string): unknown {
+  return yaml4.load(text, { schema: DSH_READER_SCHEMA });
+}
+
+/** 会被 4.x 改判类型的字符串：空串 + YAML 1.1 的 null / 布尔 / 进制 / 浮点特例。 */
+const AMBIGUOUS_STRINGS = [
+  '',
+  'Null',
+  'NULL',
+  '~',
+  'True',
+  'False',
+  '007',
+  '-007',
+  '+7',
+  '0x10',
+  '0o17',
+  '0b101',
+  '.inf',
+  '.Inf',
+  '.nan',
+  '.NaN',
+];
+
+test('#135 写回空字符串是显式空串，4.x 不会读成 null', () => {
+  const text = dumpPatchDocument({ config: { constraints: '' } });
+  assert.match(text, /constraints: (''|"")/, '空串必须带引号，实际输出:\n' + text);
+  assert.deepEqual(loadAsDsh(text), { config: { constraints: '' } });
+});
+
+test('#135 16 种歧义字符串在 map / list 两个位置都能被 4.x 读回（32/32）', () => {
+  const inMap: Record<string, string> = {};
+  const inList: Record<string, string[]> = {};
+  AMBIGUOUS_STRINGS.forEach((value, index) => {
+    inMap['k' + index] = value;
+    inList['k' + index] = [value];
+  });
+  assert.deepEqual(loadAsDsh(dumpPatchDocument(inMap)), inMap, 'map 位置必须 16/16');
+  assert.deepEqual(loadAsDsh(dumpPatchDocument(inList)), inList, 'list 位置必须 16/16');
+});
+
+test('#135 两个读端读到同一份值（行为锁定：dump 里不得留 4.x 歧义标量）', () => {
+  const doc = {
+    constraints: '',
+    reserved: null,
+    count: 3,
+    enabled: true,
+    pkg: '@deepseek-ai/dsh-mcp-client',
+    spaced: ' ',
+    wordIsNull: 'null',
+    expr: { __jsExpr: '(function(){ return true })()' },
+  };
+  const text = dumpPatchDocument(doc);
+  assert.deepEqual(loadAsDsh(text), loadPatchDocument(text), 'DSH 读到的值必须与插件读到的相同:\n' + text);
+  assert.deepEqual(loadPatchDocument(text), doc, '5.x 侧仍要保真');
+});
+
+test('#135 forceQuotes 不改变 !!js：短标签与块标量照旧往返，4.x 侧同样读到 {__jsExpr}', () => {
+  const doc = loadPatchDocument(SAMPLE);
+  const text = dumpPatchDocument(doc);
+  assert.ok(text.includes('!!js '), '短标签保留');
+  assert.ok(text.includes('!!js |'), '块标量形态保持（带标签的标量不加引号）');
+  assert.deepEqual(loadAsDsh(text), doc, '4.x 必须读到同样的 {__jsExpr}');
+  assert.deepEqual(loadPatchDocument(text), doc);
 });
 
 /* ---------------------------------- 接线守卫（源码级） ---------------------------------- */

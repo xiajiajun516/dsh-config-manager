@@ -123,6 +123,7 @@
 - **本插件是 bundle 包**：隔离实例挂载必须进 `dsh.profile.bundles`；读路径零写入，对账只在安装成功后。
 - **档案启动子进程必须直启入口文件**（`shell:false`，Electron 用 `ELECTRON_RUN_AS_NODE=1`）：Windows「cmd 包装 + `detached`」会吞孙进程 stdio ⇒ 日志恒空、抓不到 token URL；上限 30 秒。
 - **`cordis.patch.yml` 的 `!!js` 方言读写只有 `src/utils/patch-yaml.ts` 一处**：「存在但解析不了」拒绝覆盖（ENOENT 才是空层）；pnpm 同树布局推导也只有一处，多候选对不上不猜。
+- **patch 写回必须 `forceQuotes: true`**：DSH 的读端是 js-yaml 4.x，不加引号会把空串 / `True` / `007` 读成 null / 布尔 / 数字（32 处发散）→ `docs/evidence/profiles-and-instances.md`。
 - **插件数据分区收录面**：只有内置来源表 + 已安装插件自述的 `dsh.dataDirs`（包内声明绝不构成写入授权）；`cache` 与 `excludeRel` 命中永不收录；区域被环境变量覆盖即报码跳过。
 - **两个分区的根是系统主目录（`HostContext.osHomeDir`/`homeFs`），不是 `$DSH_HOME`**：I/O 一律 `fsForSection()`；缺 `homeFs` 显式报码，绝不退回 `ctx.fs`。
 - **离线 CLI 不收集 `pluginData`/`pluginAssets`**（显式 `--sections` 提示改用 GUI）；归属键只有 npm 包名，`pluginFiles` 无包名即不猜，注册表有而清单无不可勾。

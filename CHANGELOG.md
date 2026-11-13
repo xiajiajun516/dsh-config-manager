@@ -40,7 +40,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
-- **「关于」页不再有两个同等醒目的主按钮**：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
+- **写回启动补丁时字符串一律保持字符串，空值不再变成 null、`True` 不再变成布尔、`007` 不再变成 7**：以前插件每改动这一层一次，写下去的字符串值就会被主程序读成别的类型——空字符串读成 null、数字样子的串读成数字、`.inf` 读成无穷大；依赖字符串配置的插件（例如技能列表里带空串的那类）重启即报校验错误，用户看到的是「我什么都没改，它自己坏了」。现在写回给每个字符串值加引号，主程序读到的就是当初写进去的那份字面量；以前已经写坏的字段仍需按已知限制里的指引手工改回。（issue #135）
+  **Strings written back into the startup patch stay strings — an empty value no longer turns into null, `True` into a boolean or `007` into 7**: every time the plugin rewrote that layer, the host read the saved strings as other types — an empty string became null, numeric-looking text became a number, `.inf` became infinity — and plugins that validate string config (a skill list containing an empty entry, for instance) failed at startup, which looked like «I changed nothing and it broke itself». Every string value is now quoted on write, so the host reads exactly what was saved; fields already damaged by earlier versions still need the manual fix described in known limits. (issue #135)：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
   **The About panel no longer shows two equally loud primary buttons**: "Update now" and "Star on GitHub" used to be the same dark primary style side by side; the star link is now an outlined secondary button so the update action is the one that stands out.
 
 ## [0.8.2] - 2026-11-12

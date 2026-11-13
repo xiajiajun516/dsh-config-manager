@@ -53,9 +53,21 @@ export function loadPatchDocument(text: string): unknown {
   return load(text, { schema: PATCH_YAML_SCHEMA })
 }
 
-/** 写回 patch 文档：`{__jsExpr}` 还原成 `!!js`，其余按 DSH 的 schema 打印。 */
+/**
+ * 写回 patch 文档：`{__jsExpr}` 还原成 `!!js`，字符串一律带引号（issue #135）。
+ *
+ * `forceQuotes` 不是风格偏好，而是**跨大版本读回的前提**：本插件装在 js-yaml 5.x 上打印，
+ * DSH 本体用 4.x 读回（桌面版随包 4.3.2）。5.x 的渲染器只按自己的解析规则决定要不要加引号，
+ * 于是 `""` `Null` `~` `True` `007` `0x10` `.inf` 这类**字符串**被写成裸标量，
+ * 4.x 按 YAML 1.1 隐式解析成 `null` / `true` / `7` / `16` / `Infinity` —— 两边读到不同的值，
+ * 把该字段声明为必填 string 的插件启动时直接 ZodError。
+ *
+ * 代价（已知且接受）：字符串值普遍带引号；普通多行字符串从 `|` 块退化为双引号 + `\n`
+ * （`!!js` 的块标量带标签，不受影响）。只影响写出去的字节，读侧语义不变：
+ * 已经写成空标量的历史文件仍由 `loadPatchDocument` 读成 `""`，该层下次被写回时自动复原。
+ */
 export function dumpPatchDocument(value: unknown): string {
-  return dump(value, { schema: PATCH_YAML_SCHEMA })
+  return dump(value, { schema: PATCH_YAML_SCHEMA, forceQuotes: true })
 }
 
 /**
