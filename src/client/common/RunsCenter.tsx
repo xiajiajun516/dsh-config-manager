@@ -23,6 +23,7 @@ import { cancelDialogModel, runCards, runSummary } from '../../ui/runs-view.ts'
 import type { CancelDecision, CancelDialogModel, RunCardModel } from '../../ui/runs-view.ts'
 import { runStateProgress } from '../run-store.ts'
 import { Badge, Banner, Button, Card, Empty } from './ui.tsx'
+import { Icon } from './Icon.tsx'
 import { InfoHint } from './InfoHint.tsx'
 import { SkeletonList } from './Skeleton.tsx'
 import { Modal } from './Modal.tsx'
@@ -196,7 +197,7 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
         const run = (runs ?? []).find((r) => r.runId === card.runId)
         if (run === undefined) return null
         return (
-          <Card key={card.runId}>
+          <Card key={card.runId} className={css.runsCardStack}>
             <div className={css.runsCardHead}>
               <span className={css.runsCardTitle}>{t(card.kindLabelKey as CmKey)}</span>
               <Badge kind={badgeKind(card.status)}>{t(card.statusLabelKey as CmKey)}</Badge>
@@ -204,13 +205,22 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
               {/* 相对时间：没有它，「正在跑」和「几小时前就结束的僵尸卡片」长得一模一样 */}
               <span className={css.runsCardTime}>{t(card.time.key as CmKey, card.time.params)}</span>
             </div>
-            <ProgressBar
-              event={runStateProgress(run)}
-              active={card.status === 'running'}
-              // 失败的任务绝不能渲染成「成功绿」（结束态的默认色是 success）
-              failed={card.status === 'failed'}
-              t={api.t}
-            />
+            {/* 进度条与右端状态标签同排：设计稿把「执行中/已完成/已失败」放到条尾，
+                颜色与填充同源（data-status 决定），不靠左端百分比自解释。 */}
+            <div className={css.runsProgressRow}>
+              <ProgressBar
+                event={runStateProgress(run)}
+                active={card.status === 'running'}
+                // 失败的任务绝不能渲染成「成功绿」（结束态的默认色是 success）
+                failed={card.status === 'failed'}
+                t={api.t}
+              />
+              <span className={css.runsProgressStatus} data-status={card.status}>
+                {t(card.status === 'running'
+                  ? 'runs.progress.running'
+                  : card.status === 'failed' ? 'runs.progress.failed' : 'runs.progress.done')}
+              </span>
+            </div>
             {card.counts !== null && (
               <div className={css.runsCounts}>
                 {t('runs.counts', {
@@ -231,10 +241,13 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
             {/* 终止请求已到、还没到安全点：把「等了多久」写出来，并在等太久时给出出路。
                 没有这一行，用户只能看到按钮点了没反应。 */}
             {card.cancelWait !== null && (
-              <div className={card.cancelWait.stuck ? css.runsWarnNote : css.hint}>
-                {card.cancelWait.minutes > 0
-                  ? t('runs.cancelWaiting', { minutes: String(card.cancelWait.minutes) })
-                  : t('runs.cancelWaitingJustNow')}
+              <div className={css.runsWarnNote}>
+                <Icon name="clock" size={12} />
+                <span>
+                  {card.cancelWait.minutes > 0
+                    ? t('runs.cancelWaiting', { minutes: String(card.cancelWait.minutes) })
+                    : t('runs.cancelWaitingJustNow')}
+                </span>
                 {card.cancelWait.stuck && (
                   <div className={css.runsWarnNoteDetail}>{t('runs.cancelStuck')}</div>
                 )}
@@ -248,7 +261,7 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
                   </Button>
                 )}
                 {card.awaitingDecision && (
-                  <Button size="sm" variant="primary" onClick={() => { openDialog(run) }}>{t('runs.decideNow')}</Button>
+                  <Button size="sm" onClick={() => { openDialog(run) }}>{t('runs.decideNow')}</Button>
                 )}
                 {card.canCancel && (
                   // 先发终止请求（引擎在**下一个计划项边界**暂停并把 run 置为待决策），
@@ -365,19 +378,19 @@ function LockCard(props: {
   const kind = lockKind(state)
   const attention = kind === 'attention'
   return (
-    <Card>
+    <Card className={css.runsCardStack}>
       <div className={css.runsCardHead}>
         <span className={css.runsCardTitle}>{t('runs.lock.title')}</span>
         <Badge kind={attention ? 'warn' : 'info'}>
           {attention ? t('runs.lock.needsAction') : t('runs.lock.held')}
         </Badge>
       </div>
-      <div className={css.hint}>
+      <div className={css.runsLockDesc}>
         {attention ? t('runs.lock.attentionDesc') : t('runs.lock.heldDesc')}
       </div>
       {attention && (
         <div className={css.runsCardActions}>
-          <Button size="sm" variant="primary" loading={busy} disabled={busy} onClick={onRecover}>
+          <Button size="sm" variant="danger" loading={busy} disabled={busy} onClick={onRecover}>
             {t('runs.lock.recover')}
           </Button>
         </div>
