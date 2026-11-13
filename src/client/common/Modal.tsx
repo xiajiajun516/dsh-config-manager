@@ -72,6 +72,10 @@ export interface ModalProps {
    *  确认框的「后果说明」必须被屏幕阅读器读到 —— 只设 aria-label 时打开弹窗只播报标题。
    *  传 id 而不是文本，是为了让可见正文本身就是被描述的那一段（不重复渲染、不动视觉）。 */
   describedById?: string
+  /** 竖屏定位（默认 `'center'`）：`'top'` 时卡片锚定在视口上方 80px，用于命令面板这类
+   *  「从顶部落下的搜索条」—— 居中弹窗放在那里会读成一个尚未填写的表单。
+   *  不传即保持原居中行为（类名逐字不变），既有调用点不受影响。 */
+  placement?: 'top' | 'center'
   /** 卡片额外内联样式（如 ReleaseNotes 的自定义宽度/最大高度）；常规布局仍走 CSS 类 */
   cardStyle?: CSSProperties
   children?: ReactNode
@@ -80,7 +84,7 @@ export interface ModalProps {
 /**
  * 统一弹窗容器（Radix Dialog）。busy 时禁用 Esc 与遮罩关闭。
  */
-export function Modal({ open, onClose, title, wide, busy, onOpenAutoFocus, cardStyle, describedById, children }: ModalProps) {
+export function Modal({ open, onClose, title, wide, busy, onOpenAutoFocus, placement, cardStyle, describedById, children }: ModalProps) {
   /**
    * Portal 容器解析 —— 三条纪律（顺序即重要性，别改回 useEffect）：
    *
@@ -114,8 +118,11 @@ export function Modal({ open, onClose, title, wide, busy, onOpenAutoFocus, cardS
       {container !== null && (
       <Dialog.Portal container={container}>
         <Dialog.Overlay className={css.dialogMask} />
+        {/* 定位类二选一（2026-11-14 D-30）：`.dialogTop` 与 `.dialogContentCenter` 各自带
+            position / top / left / transform / animation，同时挂会互相覆盖 —— 所以按 placement 装配一个。
+            不传 placement 时装配的仍是居中类，与本次改动前逐字一致。 */}
         <Dialog.Content
-          className={`${css.dialogContentCenter} ${css.dialogCard}${wide === true ? ` ${css.dialogWide}` : ''}`}
+          className={`${placement === 'top' ? css.dialogTop : css.dialogContentCenter} ${css.dialogCard}${wide === true ? ` ${css.dialogWide}` : ''}`}
           style={cardStyle}
           aria-label={title}
           // 说明文本（危险确认的后果）必须进无障碍树：Radix 只在存在 Dialog.Description 时

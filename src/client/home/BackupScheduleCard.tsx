@@ -217,6 +217,11 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
         <span className={css.groupLabel}>{t('backupSchedule.title')}</span>
         <InfoHint text={t('backupSchedule.hint')} label={t('common.infoHint')} />
         <span className={css.statusSpacer} />
+        {/* 次序按设计稿（2026-11-14 D-01）：立即备份（ghost）在左、保存（primary）在右 ——
+            主操作收在动作行右端，与 .actionRow / .dialogFooter 的既有收尾方向一致。 */}
+        <Button size="sm" loading={running} disabled={saving || !(saved?.enabled ?? false)} onClick={runNow}>
+          {t('backupSchedule.runNow')}
+        </Button>
         <Button
           variant="primary"
           size="sm"
@@ -226,9 +231,6 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
           title={dirty ? undefined : t('backupSchedule.saved')}
         >
           {t('backupSchedule.save')}
-        </Button>
-        <Button size="sm" loading={running} disabled={saving || !(saved?.enabled ?? false)} onClick={runNow}>
-          {t('backupSchedule.runNow')}
         </Button>
       </div>
 
@@ -244,8 +246,10 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
       {status === 'ready' && (
         <>
           {/* 事实行：状态 / 间隔 / 上次运行（全部取宿主权威值，不受草稿影响） */}
-          <div className={css.factGrid} style={{ marginTop: 8 }}>
-            <div className={css.factCell} style={{ gridColumn: 'span 2' }}>
+          {/* 带框卡格（D-01）：`.factBox` 与 `.factGrid` 挂在同一个元素上 —— 边框由 home 私有类提供，
+              共享的 .factGrid 本体未改（它还被同步/工作目录三张卡引用）。前两格不再各自跨两列。 */}
+          <div className={`${css.factGrid} ${css.factBox}`}>
+            <div className={css.factCell}>
               <span className={css.factLabel}>{t('snapshots.status')}</span>
               <span className={css.factValue}>
                 <span className={css.infoValue}>
@@ -254,7 +258,7 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
                 </span>
               </span>
             </div>
-            <div className={css.factCell} style={{ gridColumn: 'span 2' }}>
+            <div className={css.factCell}>
               <span className={css.factLabel}>{t('backupSchedule.interval')}</span>
               <span className={css.factValue}>{intervalFactText()}</span>
             </div>
@@ -361,8 +365,10 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
                 ? t('retention.unit')
                 : field === 'keepMonthly' ? t('retention.months') : t('retention.years')
               return (
-                <label key={field} className={css.field} style={{ margin: 0 }}>
-                  <span className={css.fieldLabel}>
+                /* 保留策略的三张数字卡（D-01）：标题跨满整行，「数字 + 单位」压在卡右下。
+                   卡格样式走 home 私有类 .retentionCard —— 共享 .field / .fieldLabel 本体未动。 */
+                <label key={field} className={css.retentionCard}>
+                  <span className={css.retentionCardLabel}>
                     {field === 'keepLast'
                       ? t('retention.keepLast')
                       : field === 'keepMonthly' ? t('retention.keepMonthly') : t('retention.keepYearly')}
@@ -375,7 +381,6 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
                     step={1}
                     value={retentionDraft[field]}
                     disabled={busy}
-                    style={{ width: 88 }}
                     onChange={(event) => {
                       const raw = event.target.value
                       const parsed = raw === '' ? 0 : Number(raw)

@@ -1304,28 +1304,36 @@ body {
 
 /* —— 命令面板（⌘K，UI v2 §5.3）——
    它挂在 Modal（Radix Dialog）里，所以遮罩/focus trap/Esc 都是现成的；这里只管内容排版。 */
+/* D-30（2026-11-14 设计稿）：浮层顶部的**无框**输入条 —— 只留一条底边分隔线。
+   原先是一个完整描边输入框（h32 + 1px 边框 + 圆角 + 输入底色），放进 420 宽的顶部浮层后
+   读起来像「小浮层里又嵌了一个搜索框」；设计稿要的是「浮层本身就是一条搜索栏」。 */
 .paletteInput {
   width: 100%;
   box-sizing: border-box;
-  height: 32px;
+  height: 44px;
   padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: var(--cm-r-2);
-  background: var(--dsw-specific-input-major);
+  border: 0;
+  border-bottom: 1px solid var(--cm-line-1);
+  border-radius: 0;
+  background: transparent;
   font: inherit;
   font-size: var(--cm-fs-title);
   color: var(--dsw-alias-label-primary);
 }
 
+/* 无框输入条画不了整圈焦点环（四周没有框可描）：只把底边点亮。 */
 .paletteInput:focus-visible {
   outline: none;
-  border-color: var(--cm-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--cm-accent) 18%, transparent);
+  border-bottom-color: var(--cm-accent);
 }
 
-/* 限高内滚：与 planScroll / reportScroll / pickerList 同一条长列表纪律 */
+/* 限高内滚：与 planScroll / reportScroll / pickerList 同一条长列表纪律。
+   D-30：列表是浮层 Body（flex column）里唯一可伸缩的一段 —— 撑满输入条与底部提示之间，
+   浮层高度由内容决定时它按 280px 上限收口；上下各留 8px，提示行吸底后不会贴住最后一行。 */
 .paletteList {
-  margin-top: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 8px 0;
   max-height: 280px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1390,8 +1398,11 @@ body {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* D-30：提示行吸底 —— Body 是 flex column，列表撑满后余下的空间被 margin-top:auto 吃掉，
+   结果再少提示也压在浮层底部（设计稿的「输入 44 / 列表 280 / 提示 32」三段比例）。 */
 .paletteHint {
-  margin-top: 8px;
+  flex: 0 0 auto;
+  margin-top: auto;
   padding-top: 6px;
   border-top: 1px solid var(--dsw-alias-border-l1);
   font-size: var(--cm-fs-meta);
@@ -2766,6 +2777,42 @@ body {
   max-height: min(620px, calc(100vh - 64px), 92%);
 }
 
+/* 顶部锚定变体（<Modal placement="top">，2026-11-14 D-30 命令面板）：
+   与默认的居中定位互斥 —— Modal 按 placement 二选一装配类名，所以这里**自带**整套定位与
+   入场动画，不依赖 .dialogContentCenter 的属性（两者叠挂会争同一批属性）。
+   顶距 80px：浮层贴画布上部、下方仍露出压暗的页面，读起来是「从顶部落下的一层面板」，
+   而不是又一个居中弹窗。max-height 按顶距留出下沿余量，矮窗口也不会顶出视口。 */
+.dialogTop {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  /* 高度上限仍然叠沿用卡片自己的 600 档，只在顶距吃掉的空间上收口（112 = 顶 80 + 下沿 32）。 */
+  max-height: min(600px, calc(100vh - 112px));
+  z-index: var(--cm-z-modal);
+  animation: dialogIn var(--cm-motion-base) var(--cm-motion-ease-out);
+}
+
+/* 关闭退场必须自带一条：居中变体的 dialogOut 收尾把 transform 拉回 translate(-50%,-50%)，
+   顶部变体直接套用会在关闭的那一帧瞬移到屏幕中央。 */
+.dialogTop[data-state='closed'] {
+  animation: dialogOutTop var(--cm-motion-fast) var(--cm-motion-ease-out);
+}
+
+@keyframes dialogOutTop {
+  to {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialogTop,
+  .dialogTop[data-state='closed'] {
+    animation: none;
+  }
+}
+
 /* 弹窗底部按钮区：右对齐，顶部分隔线，与正文区分 */
 .dialogFooter {
   justify-content: flex-end;
@@ -3768,6 +3815,18 @@ body {
   border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
+/* D-01 事实网格的**外框**（2026-11-14 设计稿「带框卡格」）：
+   .factGrid 被 4 个文件共用（备份位置 / 同步通道 / 同步总开关 / 工作目录），给它加描边会连带
+   改掉那三张卡 —— 所以框只挂在 home 定时备份卡这一处，作为私有类与 .factGrid 并联使用
+   （同一个元素两个类，不为一个边框新增包裹层）。
+   前两格不再各自跨两列：外框定了边界之后，两格平分整行才是设计稿的比例。 */
+.factBox {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--cm-line-1);
+  border-radius: var(--cm-r-3);
+}
+
 .factGrid {
   display: grid;
   /* 列数跟内容走（2026-11-01）：原来写死 4 列，而事实行实际只有「上次同步 / 可同步分区」
@@ -3799,6 +3858,42 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* D-01 保留策略的**三张数字卡**（2026-11-14 设计稿）：原先三个 label.field 是裸表单列并排，
+   读起来像一整行没对齐的输入框。现在每项自成一张带框卡格 —— 标题跨两列，「数字 + 单位」压在
+   卡右下。仍是 home 私有类：共享 .field / .fieldLabel / .input / .hint 的本体一个字没改。 */
+.retentionCard {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--cm-line-1);
+  border-radius: var(--cm-r-3);
+}
+
+.retentionCardLabel {
+  grid-column: 1 / -1;
+  font-size: var(--cm-fs-meta);
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 卡内数字框收窄贴右：88px 会把「个月 / 年」这类单位挤出卡格。 */
+.retentionCard > .input {
+  width: 64px;
+  justify-self: end;
+  text-align: right;
+}
+
+.retentionCard > .hint {
+  grid-column: 2;
+  align-self: center;
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* 上次同步：从事实格移进徽章行行尾（2026-11-01）。删掉「可同步分区」那格之后，
@@ -6728,6 +6823,11 @@ button.profileRowMain:hover {
   flex-direction: column;
   gap: 4px;
   margin-bottom: 10px;
+  /* D-24（2026-11-14 设计稿）：告警与指引是「读一眼再决定」的同一类文本，收进一个浅灰提示块。
+     原先裸文本直接压在清单上方，两行 11px 灰字与下面的行卡同色同距，读起来像清单的一部分。 */
+  padding: 8px 10px;
+  border-radius: var(--cm-r-2);
+  background: color-mix(in srgb, var(--cm-text-1) 4%, transparent);
 }
 
 .rollbackToolbar {
