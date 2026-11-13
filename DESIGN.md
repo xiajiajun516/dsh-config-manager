@@ -1388,6 +1388,28 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   - 响应式：`.grid` 用 `auto-fit/minmax(280px)` 收窄即换行；表格允许横向滚动，不做移动端专属布局
     （救急台的使用场景是本机浏览器）。
 
+### 2026-11 照稿重构新增类（`.stitch-refactor` 设计稿落地）
+
+本轮按 54 份设计稿逐屏重构，新类**一律私有**（单屏前缀 + 单处引用），共享原语（`.card`/`.actionRow`/`.statRow`/`.statusSpacer`/`.iconBtn`/`.reportList`）本体零改动；跨屏需要的新形态先在本节登记再复用。
+
+| 屏 | 类 | 意图 |
+| --- | --- | --- |
+| 活动（RunsCenter） | `.runsCenter` `.runsCardStack` `.runsProgressRow` `.runsProgressStatus` `.runsLockDesc` `.runsLogLine` | 卡片内元素零外边距；进度条与状态字同排；锁卡说明降级；日志尾部单行省略、末行主色 |
+| 迁移历史 | `.historyTightCard` `.historyControlRow` `.historyControlRowEnd` `.historySearch` `.historySearchInput` `.historyGroup` | 策略/过滤两卡压成两行；搜索框外壳化（描边在框上，focus-within 整框变色），不再内嵌滚动盒 |
+| 同步 | `.channelCompactRow` `.confirmMessage` | 未配置通道单行矮态（覆盖 `.cardTitleRow` 的 baseline+8px） |
+| 导入 | `.dropZone` `.dropZoneIcon` `.conflictBulk` | 选文件拖放区（虚线 `line-2` + `r-3`）；冲突项批量操作纵向成组 |
+| 市场 | `.marketView` `.marketListCard(Fill)` `.marketItem(List/Head/Main/Desc/Meta)` `.marketSearchBox` `.marketSearchInput` `.marketFilterMeta` `.marketRepoRow` `.marketLoginCard` `.marketLoginRow` `.marketUploadCard` `.marketMyListCard` `.marketMyListHead` `.marketMyItem*` `.myconfigsView` | 页签为作用域内独立胶囊（不动共享 `.modeTabs`）；筛选卡定高吃满剩余高度；条目「名称/说明/元信息」三段；我的配置限高内滚 |
+| 环境 | `.duRowNote` `.duRowPolicy` | 磁盘占用每分区一行（名称·过期量·占用·策略），文件数并入 `title` |
+| 恢复 | `.recoveryEmptyBar` `.factBox` | 空态条；事实格带框（与 `.factGrid` 同类名并联，不新增包裹层） |
+| 备份 | `.retentionCard` `.retentionCardLabel` | 保留策略三张数字卡（输入右对齐、单位提示贴格尾） |
+| 命令面板 | `.paletteInput` `.paletteList` `.paletteHint` | 顶部浮层：输入条 44 高只留底边线、列表吃满剩余高度、提示行吸底 |
+| Modal | `.dialogTop`（+`dialogOutTop`） | `placement="top"` 的定位与退场；缺省仍居中，退出动画必须跟随定位类（否则关闭帧瞬移到屏幕中央） |
+
+三条纪律（本轮踩到过的）：
+- `.marketListCard` 必须 `overflow: visible`，否则卡内 Select 弹层被裁；定高靠外层 `.marketListCardFill`。
+- `.factBox` 与 `.factGrid` 并联而非新包裹层；`.rollbackWarnings` 复用现成私有类，不新建 `.previewHintBox`。
+- `.paletteInput` 的底边线落在 `.dialogBody` 16px 内距内：贴卡边需负 margin，会被 `css-scale-guard` 的间距白名单拦（只放行 `-4px` 一次），按「不破守卫」保留内缩。
+
 ---
 
 ## 7. 文案与安全呈现

@@ -35,6 +35,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+- **界面统一到新设计语言**：首页、产物库、同步、环境、恢复与各个弹窗改用同一套卡片、分隔线与按钮层级——关键动作更显眼，次要动作降为幽灵按钮，长列表在不撑长整页的前提下内滚。
+  **Unified visual language**: Home, Library, Sync, Environment, Recovery and every dialog now share one card, divider and button hierarchy — primary actions stand out, secondary ones step back, and long lists scroll inside their own box.
+- **同步**：通道卡直接以通道名作标题，未配置的通道收成一行；同步记录可就地刷新，推送结果按分区显示条数；「新建私有仓库」从下拉选项提为独立按钮。
+  **Sync**: channel cards are titled by channel name, unconfigured channels collapse to one line, the history list refreshes in place, push results show per-section counts, and "create a private repository" is now its own button.
+- **导入**：选文件改成拖放区；冲突项的批量操作收进一处；外部导入的分区名按界面语言显示，明细行可悬停看全文；兼容性提示收进 ⓘ。
+  **Import**: file selection is a drop zone, conflict bulk actions sit together, foreign-import section names follow the UI language with full detail on hover, and the compatibility note moves into an ⓘ.
+- **市场**：页签与筛选条重排，条目分「名称 / 说明 / 元信息」三段；我的配置列表限高内滚，星标、作者与时间仍在一行可见。
+  **Market**: tabs and filters are reorganised, entries split into name / description / meta, and the my-configs list scrolls inside a fixed height with star, author and time still visible.
+- **环境、恢复与备份**：磁盘占用改为每分区一行并给出合计；配置的复制与删除改成文字按钮；恢复页与活动面板的刷新、进度提到标题行；命令面板改成顶部浮层；备份保留策略改成三张数字卡。
+  **Environment, Recovery, Backup**: disk usage is one line per section plus a total, copy/delete become text buttons, refresh and progress move to the section header, the command palette is a top overlay, and retention policies become three numeric cards.
 - **「磁盘占用」卡里那块「遗留数据」整块去掉了**：它只是几个不再被读取的旧目录（例如迁移前的 checkpoints），既不进合计也不能一键清，单独占一块反而让卡片显得零碎；这些目录仍会如实出现在无遗留数据时的常规扫描里，体积与文件数不受影响。
   **The "Legacy data" block on the Disk usage card is gone**: it only listed a few directories the plugin no longer reads (pre-migration checkpoints, for instance), which counted toward no total and could not be cleaned from there, so the block made the card look fragmented for no decision value.
 - **确认弹窗的按钮次序统一为「取消在左、确认在右」**：以前删除/停止这类二次确认弹窗把确认放在左边，而其他弹窗是「取消 … 主操作」，两套次序并存容易点错；现在全站一致，初始焦点仍然落在取消上（误触保护不变）。
