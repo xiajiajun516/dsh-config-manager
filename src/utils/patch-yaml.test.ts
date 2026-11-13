@@ -111,22 +111,38 @@ function loadAsDsh(text: string): unknown {
   return yaml4.load(text, { schema: DSH_READER_SCHEMA });
 }
 
-/** 会被 4.x 改判类型的字符串：空串 + YAML 1.1 的 null / 布尔 / 进制 / 浮点特例。 */
+/**
+ * 会被 4.x 改判类型的字符串：空串 + YAML 1.1 的 null / 布尔 / 进制 / 浮点特例。
+ *
+ * 这是**回归样本**，不是完备性证明 —— 完备性来自 `forceQuotes` 对每个字符串值都生效
+ * （见下一条「输出必须是带引号标量」的结构性断言）。清单实测来源：24 种串 × map/list
+ * 共 48 处发散，判据与明细在 `docs/evidence/profiles-and-instances.md`。
+ */
 const AMBIGUOUS_STRINGS = [
   '',
   'Null',
   'NULL',
   '~',
   'True',
+  'TRUE',
   'False',
+  'FALSE',
   '007',
   '-007',
   '+7',
+  '012',
+  '-012',
+  '+1',
   '0x10',
+  '0x1F',
   '0o17',
   '0b101',
+  '0b1010',
+  '.5',
+  '-.5',
   '.inf',
   '.Inf',
+  '-.inf',
   '.nan',
   '.NaN',
 ];
@@ -137,15 +153,29 @@ test('#135 写回空字符串是显式空串，4.x 不会读成 null', () => {
   assert.deepEqual(loadAsDsh(text), { config: { constraints: '' } });
 });
 
-test('#135 16 种歧义字符串在 map / list 两个位置都能被 4.x 读回（32/32）', () => {
+test('#135 每种歧义字符串在 map / list 两个位置都能被 4.x 读回（' + AMBIGUOUS_STRINGS.length * 2 + '/' + AMBIGUOUS_STRINGS.length * 2 + '）', () => {
   const inMap: Record<string, string> = {};
   const inList: Record<string, string[]> = {};
   AMBIGUOUS_STRINGS.forEach((value, index) => {
     inMap['k' + index] = value;
     inList['k' + index] = [value];
   });
-  assert.deepEqual(loadAsDsh(dumpPatchDocument(inMap)), inMap, 'map 位置必须 16/16');
-  assert.deepEqual(loadAsDsh(dumpPatchDocument(inList)), inList, 'list 位置必须 16/16');
+  const total = AMBIGUOUS_STRINGS.length;
+  assert.deepEqual(loadAsDsh(dumpPatchDocument(inMap)), inMap, `map 位置必须 ${total}/${total}`);
+  assert.deepEqual(loadAsDsh(dumpPatchDocument(inList)), inList, `list 位置必须 ${total}/${total}`);
+});
+
+/**
+ * 完备性断言（不依赖清单）：写出去的**每个字符串值**都必须是带引号标量。
+ * 带引号的标量在任何 schema 下都是 string，这正是 forceQuotes 能盖住未知怪串的原因；
+ * 一旦有人「优化掉引号」，这条先红 —— 与 4.x 清单无关。
+ */
+test('#135 输出里的字符串值一律是带引号标量（完备性不靠清单）', () => {
+  const samples = [...AMBIGUOUS_STRINGS, 'hello', 'a b', 'x:y', '- z', '#tag', '@deepseek-ai/dsh-mcp-client', '  ', '多行\n第二行'];
+  for (const value of samples) {
+    const text = dumpPatchDocument({ k: value });
+    assert.match(text, /^k: ['"]/, '字符串值必须带引号，实际: ' + JSON.stringify(value) + ' -> ' + JSON.stringify(text));
+  }
 });
 
 test('#135 两个读端读到同一份值（行为锁定：dump 里不得留 4.x 歧义标量）', () => {
@@ -171,6 +201,18 @@ test('#135 forceQuotes 不改变 !!js：短标签与块标量照旧往返，4.x 
   assert.ok(text.includes('!!js |'), '块标量形态保持（带标签的标量不加引号）');
   assert.deepEqual(loadAsDsh(text), doc, '4.x 必须读到同样的 {__jsExpr}');
   assert.deepEqual(loadPatchDocument(text), doc);
+});
+
+/**
+ * 已知识别缺口（**记录，不是达标**）：js-yaml 5 的 `forceQuotes` 只作用于**值**，键名不在范围内。
+ * 于是数值样式的键名在 DSH 的 4.x 侧会被解析成数字/布尔/null 再被 JS 强制回字符串，键名变形。
+ * 真机 patch 的键名都是插件名/配置字段名（普通标识符），不受影响；哪天 js-yaml 也给键加引号，
+ * 这条会变红 —— 届时删掉它并更新 docs/evidence/profiles-and-instances.md 的相邻缺口一节。
+ */
+test('#135 已知缺口：键名不受 forceQuotes 保护（数值样式键名会被 4.x 改名）', () => {
+  const text = dumpPatchDocument({ '012': 'v' });
+  assert.equal(text, "012: 'v'\n", '当前行为：键名裸写（这是缺口，不是期望）');
+  assert.deepEqual(loadAsDsh(text), { '12': 'v' }, '4.x 侧键名变形：012 -> 12');
 });
 
 /* ---------------------------------- 接线守卫（源码级） ---------------------------------- */
