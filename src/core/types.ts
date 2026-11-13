@@ -673,7 +673,20 @@ export type GlobalConflictStrategy = 'merge' | 'replace' | 'skipExisting';
  */
 export type SessionFormatDisposition = 'abort' | 'skip' | 'guide';
 
-export interface ConflictDecision { itemId: string; resolution: ItemResolution; }
+export interface ConflictDecision {
+  itemId: string;
+  resolution: ItemResolution;
+  /**
+   * 这条裁决是**谁**下的（issue #136 A）：
+   * - `'item'`：用户对该计划项逐项决策（`decisions.resolutions[id]`，含导入页的逐行确认）——
+   *   适配器可把它当作「我确实要这一行按导入值写」的确认。
+   * - `'section'`：由**分区级**裁决换算而来（合并落地 `planMergeApply` 的 second pass 把
+   *   「该分区已裁决」逐项注入成 `useImported`）。分区级裁决决定「分区是否应用」，
+   *   不构成对某一行值的确认，写回守卫不得据此清空本机明文。
+   * - 缺省：未标注来源（老调用方），按逐项语义处理。
+   */
+  decidedBy?: 'item' | 'section';
+}
 
 export interface PathMapping {
   oldPrefix: string;

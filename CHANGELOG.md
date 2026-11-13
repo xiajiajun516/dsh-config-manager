@@ -40,8 +40,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
-- **备份里被脱敏清空的插件 patch 字段不再覆盖本机明文**：以前从备份恢复时，配置里被隐去的密钥会以空值写回，静默盖掉本机原有的密钥；现在这类字段保留本机值并给出告警（只给行与字段位置、不给值），只有对该行显式确认「使用备份配置」才清空。自动同步遇到未裁决的叶级冲突同样保留本机内容、把该行列入待确认，不再报「成功且零告警」。
-  **Plugin patch fields that the backup had blanked for redaction no longer overwrite local plaintext secrets**: restoring used to write the redacted empty value back and silently wipe the key already on this machine; those fields now keep the local value and raise a warning naming the row and field (never the value), and only an explicit "use backup config" on that row clears them. Automatic sync likewise keeps local content for unresolved leaf-level conflicts and lists those rows as pending instead of reporting a clean success.
+- **备份里被脱敏清空的插件 patch 字段不再覆盖本机明文**：以前从备份恢复时，配置里被隐去的密钥会以空值写回，静默盖掉本机原有的密钥；现在这类字段保留本机值并给出告警（只给行与字段位置、不给值），只有逐行确认「使用备份配置」才清空（分区级的批量裁决不算，被剥空字段仍保留本机值并告警）。自动同步遇到未裁决的叶级冲突同样保留本机内容、把该行列入待确认，不再报「成功且零告警」。
+  **Plugin patch fields that the backup had blanked for redaction no longer overwrite local plaintext secrets**: restoring used to write the redacted empty value back and silently wipe the key already on this machine; those fields now keep the local value and raise a warning naming the row and field (never the value), and only an explicit per-row "use backup config" clears them (a section-level decision does not count: the blanked fields still keep the local value and warn). Automatic sync likewise keeps local content for unresolved leaf-level conflicts and lists those rows as pending instead of reporting a clean success.
 
 - **「关于」页不再有两个同等醒目的主按钮**：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
   **The About panel no longer shows two equally loud primary buttons**: "Update now" and "Star on GitHub" used to be the same dark primary style side by side; the star link is now an outlined secondary button so the update action is the one that stands out.

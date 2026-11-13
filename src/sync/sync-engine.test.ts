@@ -957,6 +957,67 @@ test('#136 B：叶级未裁决 Conflict 不再被 replace 兜底 —— 计划�
   }
 });
 
+test('#136 A：分区级裁决注入的 useImported 必须标 decidedBy:section —— 否则被当成人对该行的确认', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-apply-section-'));
+  const localDir = path.join(tmp, 'snapshots');
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    let plans = 0;
+    // 第一趟（探测）返回叶级 Conflict；第二趟（带分区级 resolutions）返回裁决结果 Update
+    mock.createPlanImpl = async () => {
+      plans += 1;
+      const conflict = plans === 1;
+      return {
+        items: [{
+          id: 'patch:imagegen',
+          kind: conflict ? 'Conflict' : 'Update',
+          adapter: 'plugins',
+          description: 'patch 行 imagegen 与本机不同',
+          severity: conflict ? 'warning' : 'info',
+          target: { adapter: 'plugins', ref: 'imagegen' },
+          ...(conflict ? {} : { conflict: { itemId: 'patch:imagegen', resolution: 'useImported' } }),
+        }],
+        globalStrategy: 'merge',
+        pathMappings: [],
+        missingSecrets: [],
+        needsRestart: false,
+        estimatedActions: { plugins: 1 } as Record<string, number>,
+      };
+    };
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, localSnapshotsDir: localDir, mockImporter: mock,
+    });
+    const apply: SyncApplyPlan = {
+      autoApply: [{
+        id: 'plugins',
+        decision: 'useRemote',
+        conflicts: [],
+        merged: { version: 1, plugins: [], patch: [{ file: 'cordis.patch.yml', lineId: 'imagegen', raw: { id: 'imagegen' } }] } as never,
+      }],
+      review: [],
+      skipped: [],
+    };
+
+    const report = await engine.applyMergePlan(apply);
+
+    assert.equal(report.ok, true);
+    assert.equal(plans, 2, 'plugins 已被分区级裁决覆盖 → 必须补第二趟带 resolutions 的计划');
+    const plan = mock.receivedPlan as {
+      items: { id: string; kind: string; conflict?: { resolution?: string; decidedBy?: string } }[];
+    };
+    const item = plan.items.find((i) => i.id === 'patch:imagegen');
+    assert.equal(item?.kind, 'Update');
+    assert.equal(item?.conflict?.resolution, 'useImported');
+    assert.equal(item?.conflict?.decidedBy, 'section', '分区级裁决必须标明来源，写回守卫才会保留本机明文');
+    assert.deepEqual(report.review, [], '分区级裁决已覆盖的项不算待裁决');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('applyMergePlan: 空 autoApply → 直接返回 ok:true 空报告（无 Importer 调用）', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-apply-empty-'));
   try {

@@ -1041,7 +1041,52 @@ test('#136/A 守卫：远端真实非空新值照常写入（不回归）', asyn
   );
 });
 
-test('#136/A 守卫：显式逐行确认（useImported）才允许真的写空，且确认事实进报告', async () => {
+test('#136/A 守卫：分区级裁决（decidedBy: section）不算逐行确认 —— 剥空叶子保留本机、其余改动照常落地', async () => {
+  const localSecret = 'sk-LOCAL-SECTION-136';
+  const dst = makeContext('linux', '/home/bob', 'web');
+  dst.patchFile.lines.set('imagegen', {
+    lineId: 'imagegen',
+    raw: {
+      id: 'imagegen',
+      config: { channels: [{ model: 'gpt-image-1', promptApiKey: localSecret }] },
+      disabled: false,
+    },
+  });
+  const data = redactedSection('imagegen', {
+    id: 'imagegen',
+    config: { channels: [{ model: 'gpt-image-2', promptApiKey: '' }] },
+    disabled: true,
+  }, ['raw.config.channels[0].promptApiKey']);
+  // 合并落地路径：planMergeApply 第二趟把分区级裁决注入成 useImported，来源标 section
+  const sectionDecided = patchItem('imagegen', {
+    kind: 'Update',
+    conflict: { itemId: 'patch:imagegen', resolution: 'useImported', decidedBy: 'section' },
+  });
+
+  const applied = await new PluginsAdapter().applyItem(
+    sectionDecided,
+    makeImportContext(dst, new Map([['plugins', data]])),
+  );
+
+  assert.equal(applied.ok, true, '分区级裁决仍要整行写下去，只是剥空叶子除外');
+  assert.equal(applied.warning, true, '分区级裁决保留本机值时必须有可见 warning');
+  assert.ok(applied.message?.includes('patch:imagegen'), `告警应带 patch 行 id: ${applied.message}`);
+  assert.ok(
+    applied.message?.includes('raw.config.channels[0].promptApiKey'),
+    `告警应带字段路径: ${applied.message}`,
+  );
+  assert.ok(!applied.message?.includes(localSecret), '告警绝不能带本机值');
+
+  const written = dst.patchFile.lines.get('imagegen')?.raw as {
+    config: { channels: { model: string; promptApiKey: string }[] };
+    disabled: boolean;
+  };
+  assert.equal(written.config.channels[0]?.promptApiKey, localSecret, '分区级裁决不得清空被剥空叶子');
+  assert.equal(written.config.channels[0]?.model, 'gpt-image-2', '远端其余改动照常落地');
+  assert.equal(written.disabled, true, '同行的非剥空字段照常写入');
+});
+
+test('#136/A 守卫：显式逐行确认（decidedBy: item）才允许真的写空，且确认事实进报告', async () => {
   const dst = makeContext('linux', '/home/bob', 'web');
   dst.patchFile.lines.set('line-a', {
     lineId: 'line-a',
@@ -1050,7 +1095,7 @@ test('#136/A 守卫：显式逐行确认（useImported）才允许真的写空�
   const data = redactedSection('line-a', { id: 'line-a', config: { apiKey: '' } }, ['raw.config.apiKey']);
   const confirmed = patchItem('line-a', {
     kind: 'Update',
-    conflict: { itemId: 'patch:line-a', resolution: 'useImported' },
+    conflict: { itemId: 'patch:line-a', resolution: 'useImported', decidedBy: 'item' },
   });
   const applied = await new PluginsAdapter().applyItem(confirmed, makeImportContext(dst, new Map([['plugins', data]])));
 

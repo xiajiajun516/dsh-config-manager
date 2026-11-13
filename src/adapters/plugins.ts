@@ -1146,7 +1146,10 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       localRaw: item.kind === 'Create' ? undefined : await readLocalPatchRaw(ctx, ref),
       redactedPaths: pl.redactedPaths,
       // 显式逐行确认 = 用户对本行选了 useImported（全局 replace 策略不算确认）
-      confirmed: item.conflict?.resolution === 'useImported',
+      // #136 A：只有**逐项**确认才算「我要这一行按导入值写」；分区级裁决（decidedBy: 'section'，
+      // 由合并落地 planMergeApply 注入）只决定分区是否应用，不构成对本行的确认 —— 否则自动同步
+      // 的 autoApply（零 UI）会把剥空值当用户意图写下去。
+      confirmed: item.conflict?.resolution === 'useImported' && item.conflict?.decidedBy !== 'section',
     });
     // 层身份按**语义**映射到目标机：来源是别的 profile 层时不能照抄名字（目标机未必有那个
     // profile，宿主门面会拒绝），一律落到目标机当前 profile 层（与计划项 target.file 同口径）。

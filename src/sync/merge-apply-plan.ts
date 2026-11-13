@@ -60,11 +60,21 @@ export async function planMergeApply(input: PlanMergeApplyInput): Promise<MergeA
   const decidable = probePlan.items.filter((i) => i.kind === 'Conflict' && decidedSections.has(i.adapter));
   let plan = probePlan;
   if (decidable.length > 0) {
-    plan = await input.createImportPlan(input.zipPath, {
+    const injected = new Set(decidable.map((i) => i.id));
+    const decidedPlan = await input.createImportPlan(input.zipPath, {
       strategy: 'merge',
-      resolutions: Object.fromEntries(decidable.map((i) => [i.id, 'useImported' as const])),
+      resolutions: Object.fromEntries([...injected].map((id) => [id, 'useImported' as const])),
       pathMappings: input.pathMappings,
     });
+    // #136 A：这些 `useImported` 是**分区级**裁决换来的，不是人对这一行的确认 ——
+    // 标成 `decidedBy: 'section'`，写回守卫据此只保留被剥空叶子（其余照常落地）。
+    // 漏标就会让自动同步（零 UI）把脱敏剥离的空值当用户主动清空写下去。
+    plan = {
+      ...decidedPlan,
+      items: decidedPlan.items.map((i) => (i.conflict && injected.has(i.id)
+        ? { ...i, conflict: { ...i.conflict, decidedBy: 'section' as const } }
+        : i)),
+    };
   }
   const held = plan.items.filter((i) => i.kind === 'Conflict');
   const heldReview: ReviewQueueItem[] = held.map((i) => ({
