@@ -1201,11 +1201,13 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
             issues.push({ path: `patch[${i}]`, message: msg('adapter.validate.recordObject', { subject: 'patch line' }), severity: 'error' });
             continue;
           }
-          // issue #136 C：脱敏归属路径（可选；存在时必须是非空字符串数组，写回守卫按它精确比对）。
-          // 空数组/空串一律视为形状错误：空数组表达不了「缺省=未知」，只会让守卫静默失能。
+          // issue #136 C：脱敏归属路径（可选；存在时必须是字符串数组、元素非空，写回守卫按它精确比对）。
+          // **空数组合法**：语义就是「本行没有剥空位置」，守卫按缺省（保守分支）处理。
+          // 不把空数组当形状错误 —— 第三方 exporter 写出 `[]` 时拦下整包导入，代价远大于收益，
+          // 而且凝死一个「字段在但内容空」与「字段缺省」不等价的契约，纯属自找兼容债。
           const redactedPaths = (pl as { redactedPaths?: unknown }).redactedPaths;
           if (redactedPaths !== undefined) {
-            if (!Array.isArray(redactedPaths) || redactedPaths.length === 0) {
+            if (!Array.isArray(redactedPaths)) {
               issues.push({ path: `patch[${i}].redactedPaths`, message: msg('adapter.validate.array', { subject: 'patch[].redactedPaths' }), severity: 'error' });
             } else {
               for (const [j, p] of redactedPaths.entries()) {

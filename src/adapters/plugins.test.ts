@@ -1141,13 +1141,19 @@ test('#136/A 守卫：Create（本机没有该行）不拦 —— 新行原样�
   assert.deepEqual(dst.patchFile.lines.get('line-new')?.raw, { id: 'line-new', config: { apiKey: '' } });
 });
 
-test('#136/C validate：redactedPaths 形状（空数组 / 空串元素）必须被拦下', async () => {
+test('#136/C validate：redactedPaths 空数组合法（＝无剥空位置，守卫走保守分支），非数组/空串元素被拦', async () => {
   const adapter = new PluginsAdapter();
+  // 空数组不得拦下整包导入：它只是「本行没有剥空位置」，等价于字段缺省。
   const empty = await adapter.validate(
     { version: 1, plugins: [], patch: [{ file: 'x.yml', lineId: 'a', raw: {}, redactedPaths: [] }] } as PluginsSection,
   );
-  assert.equal(empty.valid, false);
-  assert.ok(empty.issues.some((i) => i.path === 'patch[0].redactedPaths' && i.severity === 'error'));
+  assert.equal(empty.valid, true, `空数组应放行: ${JSON.stringify(empty.issues)}`);
+
+  const notArray = await adapter.validate(
+    { version: 1, plugins: [], patch: [{ file: 'x.yml', lineId: 'a', raw: {}, redactedPaths: 'raw.config.apiKey' }] } as unknown as PluginsSection,
+  );
+  assert.equal(notArray.valid, false);
+  assert.ok(notArray.issues.some((i) => i.path === 'patch[0].redactedPaths' && i.severity === 'error'));
 
   const blank = await adapter.validate(
     { version: 1, plugins: [], patch: [{ file: 'x.yml', lineId: 'a', raw: {}, redactedPaths: [''] }] } as PluginsSection,

@@ -640,6 +640,6 @@ $ node --test src/sync/autosync-scheduler.test.ts      -> # pass 54  # fail 0
 $ npm test                                             -> ℹ tests 5608 ℹ pass 5606 ℹ fail 0 ℹ skipped 2
 ```
 
-**守卫（一条一个测试，已全部落地）**：导出把字段名命中与值形状命中的路径都记进该行 `redactedPaths` 且干净行不带字段（`tests/core/exporter.test.ts` E-10）/ 命中归行忽略行外路径、不就地改原对象（`src/adapters/plugins.test.ts`）/ 守卫三分支（剥空保留本机 + warning 含行 id 与字段路径且不含值 / 真实新值照写 / 显式确认才清空）/ 旧载荷保守回落 / `Create` 不拦 / `validate` 拒绝空数组与空串元素 / 叶级 Conflict 不被 replace 兜底且进 `review`+`warnings`（`src/sync/sync-engine.test.ts`）/ 自动同步叶级冲突 skip+warning+终态 `partial`（`src/sync/autosync-scheduler.test.ts`）。
+**守卫（一条一个测试，已全部落地）**：导出把字段名命中与值形状命中的路径都记进该行 `redactedPaths` 且干净行不带字段（`tests/core/exporter.test.ts` E-10）/ 命中归行忽略行外路径、不就地改原对象（`src/adapters/plugins.test.ts`）/ 守卫三分支（剥空保留本机 + warning 含行 id 与字段路径且不含值 / 真实新值照写 / 显式确认才清空）/ 旧载荷保守回落 / `Create` 不拦 / `validate` 拒绝非数组与空串元素、但**放行空数组**（＝无剥空位置，按缺省保守分支） / 叶级 Conflict 不被 replace 兜底且进 `review`+`warnings`（`src/sync/sync-engine.test.ts`）/ 自动同步叶级冲突 skip+warning+终态 `partial`（`src/sync/autosync-scheduler.test.ts`）。
 
 
