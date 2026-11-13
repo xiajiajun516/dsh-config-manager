@@ -25,7 +25,7 @@ import { ConflictCollector } from '../../ui/conflict-view.ts'
 import type { ItemResolution } from '../../core/types.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { redact } from '../../security/redaction.ts'
-import { Banner, Chip } from '../common/ui.tsx'
+import { Banner, Button, Chip } from '../common/ui.tsx'
 import css from '../config-manager.module.css'
 
 export interface ConflictListProps {
@@ -97,26 +97,26 @@ export function ConflictList({ collector, t, onChanged }: ConflictListProps) {
     <div className={css.conflictList}>
       {unresolved > 0 && <Banner kind="warn">{t('import.conflicts.unresolved', { count: String(unresolved) })}</Banner>}
 
-      {/* 批量决策按钮（无冲突项时禁用；均为次操作——覆盖性决策不诱导，逐项选边为主） */}
-      <div className={css.actionRow}>
-        <button
-          type="button"
-          className={css.ghostButton}
-          data-size="sm"
+      {/* 批量决策按钮（无冲突项时禁用；均为次操作——覆盖性决策不诱导，逐项选边为主）。
+          纵向各占一行（W3 R-7）：两条文案都长，横向 wrap 会把「全部使用备份配置」挤到第二行右侧，
+          读起来像同组的次级选项；各自独占一行、左对齐才看得出是两条并列的整批决策。 */}
+      <div className={css.conflictBulk}>
+        <Button
+          variant="ghost"
+          size="sm"
           disabled={!hasConflicts}
           onClick={() => { resolveAll(collector, 'keepCurrent', setTick, onChanged) }}
         >
           {t('import.conflicts.keepCurrentAll')}
-        </button>
-        <button
-          type="button"
-          className={css.ghostButton}
-          data-size="sm"
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
           disabled={!hasConflicts}
           onClick={() => { resolveAll(collector, 'useImported', setTick, onChanged) }}
         >
           {t('import.conflicts.useImportedAll')}
-        </button>
+        </Button>
       </div>
 
       {items.map((view) => {

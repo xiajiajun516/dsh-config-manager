@@ -4062,6 +4062,26 @@ body {
   min-height: 280px;
 }
 
+/* 选择 ZIP 的投放容器（W3 R-1）：与 .empty 同一套虚线观感 / token，但语义是「主按钮的
+   落点」而非空态，focus 态由容器内的主按钮自己表达，因此不复用 .empty 本体（它还有 4 处引用）。 */
+.dropZone {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 16px;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: var(--cm-r-3);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.dropZoneIcon {
+  color: var(--dsw-alias-label-tertiary);
+}
+
 /* ------------------------------------------------------------------
    内容选择器（ContentPicker · Phase 1 条目级导出选择）
    两级树：分区（可折叠）→ 最小可拆单元。与只读的「分区构成」网格
@@ -4396,6 +4416,16 @@ body {
   margin-bottom: 10px;
 }
 
+/* 批量决策按钮纵向排列（W3 R-7）：两条文案都长，横向 .actionRow 会把第二条挤到右侧、
+   读成同组次级项；各自独占一行、左对齐，压在冲突清单之上。 */
+.conflictBulk {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
 .conflictItem {
   border: 1px solid color-mix(in srgb, var(--cm-warn) 35%, transparent);
   border-radius: var(--cm-r-3);
@@ -4591,12 +4621,15 @@ body {
   min-width: 0;
 }
 
-/* 路径选择弹窗：当前目录条 + 一层条目列表（长列表由 Modal.Body scroll 限高内滚） */
+/* 路径选择弹窗：当前目录条 + 一层条目列表（长列表由 Modal.Body scroll 限高内滚）。
+   当前目录条按「路径输入框」的观感收口（R-15 降级形态：分段面包屑缺数据 D-2，
+   这里只把单串路径做成有边框的圆角块，不做前端切分 —— UNC / 盘符 / 根目录都无法可靠推断）。 */
 .pickerPath {
   box-sizing: border-box;
   width: 100%;
-  padding: 4px 8px;
-  border-radius: var(--cm-r-2);
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--cm-r-3);
   background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

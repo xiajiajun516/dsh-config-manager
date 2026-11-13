@@ -41,6 +41,7 @@ import { SkeletonList } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { redact } from '../../security/redaction.ts'
+import { sectionLabeler } from '../common/section-labels.ts'
 import css from '../config-manager.module.css'
 
 export interface ForeignImportViewProps {
@@ -264,7 +265,8 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
                   {row.applicable ? t('foreign.lossy.applies') : t('foreign.lossy.notApplies')}
                 </Badge>
               )}
-              <span className={css.skipText}>
+              {/* detail 在窄画布上会被折行截断（T-03 剩余缺陷）：title 兜住完整原文，不加布局、不加 CSS。 */}
+              <span className={css.skipText} title={redact(row.detail)}>
                 <strong>{redact(row.title)}</strong>{' '}
                 {redact(row.detail)}
               </span>
@@ -306,7 +308,7 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
           <div className={css.groupLabel}>{t('foreign.previewTitle')} <InfoHint text={t('foreign.previewDryRun')} label={t('common.infoHint')} /></div>
           <div className={css.statRow}>
             <Badge kind="ok">
-              {t('foreign.previewSections', { sections: produced.sections.join(' · ') })}
+              {t('foreign.previewSections', { sections: produced.sections.map(sectionLabeler(t)).join(' · ') })}
             </Badge>
             {produced.credentialRefs.length > 0
               ? <Badge kind="warn">{t('foreign.credentialRefs', { count: String(produced.credentialRefs.length) })}</Badge>

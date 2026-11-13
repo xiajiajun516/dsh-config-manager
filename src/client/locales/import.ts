@@ -22,6 +22,8 @@ export const zh = {
   'import.select.file': '已选择：{name}',
   'import.compatibility.title': '兼容性',
   'import.compatibility.score': '兼容性评分：{score}',
+  // 评分口径（W3 R-4）：只列真正参与评分的四类原因；路径与密钥是独立徽章，不进评分。
+  'import.compatibility.hint': '评分只看备份格式、DSH 版本方向、平台与包内缺失分区，不阻断导入；具体原因见下方逐条说明。',
   'import.preview.title': '导入预览',
   'import.preview.willChange': '将变更 {count} 项',
   'import.preview.unchanged': '已一致跳过 {count} 项',
@@ -117,6 +119,7 @@ export const en: Record<keyof typeof zh, string> = {
   'import.select.file': 'Selected: {name}',
   'import.compatibility.title': 'Compatibility',
   'import.compatibility.score': 'Compatibility score: {score}',
+  'import.compatibility.hint': 'The score only reflects the backup schema, DSH version direction, platform and sections missing from the package. It never blocks the import — see the reasons below.',
   'import.preview.title': 'Import Preview',
   'import.preview.willChange': '{count} {count, plural, item|items} will change',
   'import.preview.unchanged': '{count} {count, plural, item|items} already identical (skipped)',

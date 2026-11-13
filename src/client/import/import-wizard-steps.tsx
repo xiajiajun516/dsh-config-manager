@@ -17,6 +17,7 @@ import {
   Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle,
 } from '../common/ui.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
+import { ImportIcon } from '../common/Icon.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner, ErrorList } from '../common/ErrorBanner.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
@@ -113,19 +114,10 @@ export function SelectStep(props: {
           void onPickFile(file)
         }}
       />
-      {selectModel.selectedName !== null && (
-        /* 已选文件是**值**，不是说明：用徽章承载（原先是一句「已选择：xxx」），
-           data-testid 保持不变以便既有守卫继续定位。 */
-        <div className={css.statRow} data-testid="import-selected-file">
-          <Badge kind="info">{t('import.select.file', { name: selectModel.selectedName })}</Badge>
-        </div>
-      )}
-      <div className={css.actionRow} style={{ marginBottom: 0 }}>
-        {selectModel.selectedName !== null && (
-          <Button variant="ghost" onClick={onCancel}>
-            {t('import.select.cancel')}
-          </Button>
-        )}
+      {/* 投放容器（W3 R-1）：只承载图标与主按钮，不做拖拽（宿主没有 drop 能力，
+          写「拖拽到此处」就是承诺做不到的事）；点击目标仍是那颗唯一的主按钮。 */}
+      <div className={css.dropZone}>
+        <ImportIcon size={22} className={css.dropZoneIcon} />
         <Button
           variant="primary"
           loading={uploading}
@@ -134,6 +126,20 @@ export function SelectStep(props: {
           {t(browseLabelKey(selectModel.selectedName !== null))}
         </Button>
       </div>
+      {selectModel.selectedName !== null && (
+        /* 已选文件是**值**，不是说明：用徽章承载（原先是一句「已选择：xxx」），
+           data-testid 保持不变以便既有守卫继续定位。 */
+        <div className={css.statRow} data-testid="import-selected-file">
+          <Badge kind="info">{t('import.select.file', { name: selectModel.selectedName })}</Badge>
+        </div>
+      )}
+      {selectModel.selectedName !== null && (
+        <div className={css.actionRow} style={{ marginBottom: 0 }}>
+          <Button variant="ghost" onClick={onCancel}>
+            {t('import.select.cancel')}
+          </Button>
+        </div>
+      )}
       {error !== null && <ErrorBanner error={error} onRetry={onReset} t={apiT} />}
     </div>
   )
@@ -201,27 +207,35 @@ export function DecryptArchiveStep(props: {
   const { password, onPasswordChange, unlockError, unlocking, onUnlock, onReset, apiT, t } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.decryptArchive.title')} info={<InfoHint text={t('import.decryptArchive.hint')} label={t('common.infoHint')} />} />
-      <input
-        type="password"
-        className={css.input}
-        autoComplete="off"
-        placeholder={t('import.decryptArchive.passwordPlaceholder')}
-        value={password}
-        onChange={(e: ChangeEvent<HTMLInputElement>) => { onPasswordChange(e.target.value) }}
-      />
-      {unlockError !== null && <ErrorBanner error={unlockError} t={apiT} />}
-      <div className={css.actionRow}>
-        <Button variant="ghost" onClick={onReset}>{t('import.select.reselect')}</Button>
-        <Button
-          variant="primary"
-          loading={unlocking}
-          disabled={password === ''}
-          onClick={onUnlock}
-        >
-          {t('import.decryptArchive.unlock')}
-        </Button>
-      </div>
+      {/* 解锁卡（W3 R-3）：徽章 / 标题 / 密码 / 说明 / 动作收进同一张卡，屏幕上只剩一个黑底主按钮。
+          说明句按稿常驻可见（T-02a：标题行 + 说明行）—— 同一句不再另挂 ⓘ，两处重复只是噪声。 */}
+      <Card className={css.optionsCard}>
+        <div className={css.statRow}>
+          <Badge kind="error">🔒 {t('import.decrypt.badge')}</Badge>
+        </div>
+        <SectionTitle title={t('import.decryptArchive.title')} />
+        <div className={css.hint}>{t('import.decryptArchive.hint')}</div>
+        <input
+          type="password"
+          className={css.input}
+          autoComplete="off"
+          placeholder={t('import.decryptArchive.passwordPlaceholder')}
+          value={password}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => { onPasswordChange(e.target.value) }}
+        />
+        {unlockError !== null && <ErrorBanner error={unlockError} t={apiT} />}
+        <div className={css.actionRow} style={{ marginBottom: 0 }}>
+          <Button variant="ghost" onClick={onReset}>{t('import.select.reselect')}</Button>
+          <Button
+            variant="primary"
+            loading={unlocking}
+            disabled={password === ''}
+            onClick={onUnlock}
+          >
+            {t('import.decryptArchive.unlock')}
+          </Button>
+        </div>
+      </Card>
     </div>
   )
 }

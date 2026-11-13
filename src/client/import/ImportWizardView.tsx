@@ -150,7 +150,7 @@ function CompatibilityStep(props: {
   const notes = compatibilityNotes(analysis.compatibilityReasons)
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.compatibility.title')} />
+      <SectionTitle title={t('import.compatibility.title')} info={<InfoHint text={t('import.compatibility.hint')} label={t('common.infoHint')} />} />
       <div className={css.statRow}>
         <Badge kind={compatibilityBadgeKind(level)}>
           {t('import.compatibility.score', { score: t(scoreKey) })}
