@@ -264,6 +264,7 @@ export const zh = {
   'autosync.lastMessage': '本轮消息',
   // 同步历史（含自动同步记录）
   'history.title': '同步历史',
+  'history.refresh': '刷新',
   'history.empty': '尚无同步历史',
   'history.emptyHint': '完成首次推送 / 从远端合并 / 自动同步后，这里会显示记录。',
   'history.colTime': '时间',
@@ -296,6 +297,8 @@ export const zh = {
   // 触发通道（同步历史「由哪个通道触发」）
   'history.channelGit': 'GitHub',
   'history.channelWebdav': 'WebDAV',
+  'history.channelS3': 'S3',
+  'history.channelGist': 'Gist',
   // 列表头部统计摘要（需求 4F）
   'history.stats.total': '共 {count} 条',
   'history.stats.autosync': '自动同步 {count}',
@@ -719,6 +722,7 @@ export const en: Record<keyof typeof zh, string> = {
   'autosync.skipReasonConflictCount': '{reason} ({n} more {n, plural, section|sections} on the remote need confirmation — handle them on the sync page)',
   'autosync.lastMessage': 'Last message',
   'history.title': 'Sync History',
+  'history.refresh': 'Refresh',
   'history.empty': 'No sync history yet',
   'history.emptyHint': 'Records appear here after your first push / merge from remote / auto sync.',
   'history.colTime': 'Time',
@@ -750,6 +754,8 @@ export const en: Record<keyof typeof zh, string> = {
   // Trigger channel (which channel triggered this history entry)
   'history.channelGit': 'GitHub',
   'history.channelWebdav': 'WebDAV',
+  'history.channelS3': 'S3',
+  'history.channelGist': 'Gist',
   // List header stats summary (requirement 4F)
   'history.stats.total': '{count} total',
   'history.stats.autosync': '{count} auto sync',

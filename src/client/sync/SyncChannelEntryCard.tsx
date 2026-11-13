@@ -14,7 +14,7 @@ import { formatSyncStatusTimestamp, formatSyncUrlPreview, workdirStateKey, workd
 import { needsGitToken, SYNC_CHANNEL_LABEL_KEY } from './sync-view.ts'
 import css from '../config-manager.module.css'
 
-/** 同步通道入口卡：通道徽章 + 配置状态 + 状态事实行 + 打开配置弹窗 + 断开该通道配置。 */
+/** 同步通道入口卡：通道名（标题）+ 配置状态 + 状态事实行 + 打开配置弹窗 + 断开该通道配置。 */
 export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repoUrl, webdavUrl, s3Endpoint, gistId, onOpen, onClear, expanded, contentId, onToggleExpanded }: {
   t: TranslateNS<'config-manager-sync'>
   channel: SyncChannel
@@ -51,10 +51,27 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
       : channel === 'gist'
         ? gistId
         : repoUrl
+  // 未配置 = 矮态单行（UI v2 §2.2-3）：通道名 + 未配置徽章 + 配置入口。
+  // 三行（标题 / 徽章行 / 按钮行）在四张卡里叠出约 100px 的空骨架，而未配置卡没有任何
+  // 可读事实可放 —— 收成一行 ≈56px，四张卡才读得出「哪条没配」。断开与折叠体只属于已配置态。
+  if (!remoteReady) {
+    return (
+      <Card>
+        <div className={`${css.cardTitleRow} ${css.channelCompactRow ?? ''}`}>
+          <span className={css.groupLabel}>{t(SYNC_CHANNEL_LABEL_KEY[channel])} <InfoHint text={t('channel.openHint')} label={t('common.infoHint')} /></span>
+          <Badge kind="warn">{t('channel.notConfigured')}</Badge>
+          <span className={css.statusSpacer} />
+          <Button variant="ghost" size="sm" onClick={onOpen}>
+            {t('channel.open')}
+          </Button>
+        </div>
+      </Card>
+    )
+  }
   return (
     <Card>
       <div className={css.cardTitleRow}>
-        <span className={css.groupLabel}>{t('channel.title')} <InfoHint text={t('channel.openHint')} label={t('common.infoHint')} /></span>
+        <span className={css.groupLabel}>{t(SYNC_CHANNEL_LABEL_KEY[channel])} <InfoHint text={t('channel.openHint')} label={t('common.infoHint')} /></span>
         {/* 上次同步是单条事实，贴标题行右端（见 .cardTitleRow 注释） */}
         <span className={css.statusSpacer} />
         <span className={css.factInline}>
@@ -63,10 +80,7 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
         </span>
       </div>
       <div className={css.statRow}>
-        <Badge kind="info">{t(SYNC_CHANNEL_LABEL_KEY[channel])}</Badge>
-        <Badge kind={remoteReady ? 'ok' : 'warn'}>
-          {remoteReady ? t('channel.configured') : t('channel.notConfigured')}
-        </Badge>
+        <Badge kind="ok">{t('channel.configured')}</Badge>
         {channel === 'git' && statusInfo?.credentialConfigured === true && (
           <Badge kind="ok">{t('config.tokenSaved')}</Badge>
         )}
@@ -91,21 +105,19 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
           <Badge kind={workdirKind}>{t(workdirKey)}</Badge>
         )}
       </div>
-      {/* 远端地址（Workbench：未配置时也要给硬事实）。
+      {/* 远端地址（Workbench：给硬事实）。
           配置状态只由上面那排徽章表达：同一张卡里用「徽章 + 事实行」两处说同一件事，
           用户得比对两遍才知道是不是同一状态。 */}
-      {remoteReady && (
-        <div className={css.factGrid} style={{ marginTop: 8 }}>
-          <div className={css.factCell}>
-            <span className={css.factLabel}>{t('channel.currentUrl')}</span>
-            <span className={css.factValue}>
-              <span className={css.mono}>
-                {formatSyncUrlPreview(previewRemote)}
-              </span>
+      <div className={css.factGrid} style={{ marginTop: 8 }}>
+        <div className={css.factCell}>
+          <span className={css.factLabel}>{t('channel.currentUrl')}</span>
+          <span className={css.factValue}>
+            <span className={css.mono}>
+              {formatSyncUrlPreview(previewRemote)}
             </span>
-          </div>
+          </span>
         </div>
-      )}
+      </div>
       <div className={css.actionRowTop}>
         {/* ghost 而不是 primary（2026-11-01）：本页唯一的主行动是「把本地改动推上去 /
             把远端拉下来」，而那是下方 pickSyncPrimary 决定的那颗按钮。
@@ -113,13 +125,11 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
         <Button variant="ghost" onClick={onOpen}>
           {t('channel.open')}
         </Button>
-        {/* 断开出口：只有**配置过**的通道才渲染（未配置时这个按钮没有意义，也不该存在）。
+        {/* 断开出口：走到这里的通道都已配置（未配置在上方早退），所以恒有可断开的东西。
             危险操作用 danger 变体 + ConfirmDialog 二次确认（DESIGN.md §8.11）。 */}
-        {remoteReady && (
-          <Button variant="danger" onClick={onClear}>
-            {t('channel.clear')}
-          </Button>
-        )}
+        <Button variant="danger" onClick={onClear}>
+          {t('channel.clear')}
+        </Button>
         {onToggleExpanded !== undefined && (
           <>
             <span className={css.statusSpacer} />

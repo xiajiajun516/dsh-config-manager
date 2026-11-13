@@ -214,6 +214,14 @@ test('sync-view: push 成功报告 → ok 头部含快照 id + 分区透传', ()
   assert.deepEqual(view?.sections, ['settings', 'plugins'])
 })
 
+test('sync-view: push 报告带预览条数 → counts 透传（D-12 名称 · 条数）', () => {
+  const report: SyncPushReport = { ok: true, snapshotId: 'sync-2', sections: ['settings', 'plugins'], warnings: [] }
+  const view = pushReportView(report, zhUiT, { settings: 12, plugins: 3 })
+  assert.deepEqual(view?.counts, { settings: 12, plugins: 3 })
+  // 没有预览（缺省第三参）→ 空对象，渲染侧只显分区名
+  assert.deepEqual(pushReportView(report, zhUiT)?.counts, {})
+})
+
 test('sync-view: push 失败报告 → error 显示引擎 message', () => {
   const report: SyncPushReport = { ok: false, snapshotId: '', sections: [], warnings: [], message: '全部导出失败' }
   const view = pushReportView(report, zhUiT)

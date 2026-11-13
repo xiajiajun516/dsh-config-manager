@@ -180,6 +180,20 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, signedIn, busy, on
             onOpen={() => { if (!loaded && !loading) void load() }}
             onChange={pick}
           />
+          {/* 新建私有仓库是**明确动作**，不该藏在「选择已有仓库」的下拉里（UI v2 §8.13）：
+              下拉里那一条现在只作为同一动作的别名保留，真正的入口在这颗按钮上。 */}
+          <Button
+            size="sm"
+            disabled={busy || creating}
+            aria-expanded={createOpen}
+            onClick={() => {
+              setCreateOpen((v) => !v)
+              setNameError(null)
+              setCreateError(null)
+            }}
+          >
+            {t('repoPicker.create')}
+          </Button>
           <Button size="sm" loading={loading} disabled={busy} onClick={() => { void load(true) }}>
             {t('repoPicker.refresh')}
           </Button>

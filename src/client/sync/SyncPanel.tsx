@@ -64,7 +64,7 @@ import { reportPreviewFailure } from './preview-failure.ts'
 import { savedConfigState } from './config-save-state.ts'
 import {
   channelMapOf, channelStateMap, computeGithubLoginView, computeSyncButtons, defaultChannelSyncState,
-  githubPollMessage, isClientChannel, pushReportView, readStoredChannel,
+  githubPollMessage, isClientChannel, pushReportView, readStoredChannel, sectionCountsOf,
   gistSessionsRiskKey,
   initialSyncSections, normalizeSessionsLimit, syncSectionOptions, writeStoredChannel,
 } from './sync-view.ts'
@@ -98,6 +98,7 @@ import { UnreadableSnapshotsBanner } from './UnreadableSnapshotsBanner.tsx'
 import { SyncProbeRow } from './SyncProbeRow.tsx'
 import { deviceLabel } from './remote-device-view.ts'
 import { PushPreviewCard } from './PushPreviewCard.tsx'
+import { PushReportSections } from './PushReportSections.tsx'
 import { MergeModal } from './MergeModal.tsx'
 import { SyncActivityBar } from './SyncActivityBar.tsx'
 import { SyncConfirmView } from './SyncConfirmView.tsx'
@@ -183,6 +184,8 @@ interface SyncUiState {
   savingConfig: boolean
   busy: 'sync' | 'push' | 'pull' | 'rollback' | null
   pushReport: SyncPushReport | null
+  /** D-12：推送前从只读预览派生的 sectionId → 条数（预览缺失时为空 ⇒ 结果弹窗只显示分区名）。 */
+  pushSectionCounts: Record<string, number>
   /** P0-②：push 前只读预览弹窗（preview 结果 + 打开状态；非敏感，切 tab/刷新不丢） */
   pushPreview: PushPreviewSlice
   /**
@@ -258,6 +261,7 @@ const initial: SyncUiState = {
   savingConfig: false,
   busy: null,
   pushReport: null,
+  pushSectionCounts: {},
   pullReport: null,
   pushPreview: { preview: null, open: false },
   confirmSession: null,
@@ -887,7 +891,9 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
 
   /** P0-②：确认弹窗里点「确认推送」→ 真正推送（复用既有 push 语义）。 */
   const runPush = async (): Promise<void> => {
-    patch({ busy: 'push', pushReport: null })
+    // D-12：条数只能取这次推送前的预览（成功分支会把 pushPreview 清空），必须在 await 之前抓。
+    const pushSectionCounts = sectionCountsOf(stateRef.current.pushPreview.preview?.sections)
+    patch({ busy: 'push', pushReport: null, pushSectionCounts })
     try {
       // 推送前先把加密密码落库（下次推送不必重输）
       await persistEncryptPassword()
@@ -1169,7 +1175,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const cloudIssues: CloudFormIssue[] = validateCloudForm(formOf(state))
   /** 激活通道的远端就绪态（弹窗 / 页面级判断用） */
   const remoteReady = remoteReadyOf(state.channel)
-  const pushView = pushReportView(state.pushReport, uiT)
+  const pushView = pushReportView(state.pushReport, uiT, state.pushSectionCounts)
   const githubView = computeGithubLoginView(
     state.github.phase, state.github.userCode, state.github.verificationUri, state.github.error, uiT,
   )
@@ -1509,12 +1515,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               {pushView !== null && (<>
                 <Banner kind={pushView.kind === 'ok' ? 'ok' : 'error'}>{pushView.headline}</Banner>
                 {pushView.sections.length > 0 && (
-                  <div>
-                    <span className={css.fieldLabel}>{t('sections.title')}</span>
-                    <div className={css.statRow}>
-                      {pushView.sections.map((s) => <Badge key={s} kind="info">{s}</Badge>)}
-                    </div>
-                  </div>
+                  <PushReportSections sections={pushView.sections} counts={pushView.counts}
+                    sectionName={(id) => sectionName(id as SectionId)} label={t('sections.title')} />
                 )}
                 {pushView.warnings.length > 0 && (
                   <div>

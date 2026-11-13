@@ -588,19 +588,45 @@ export interface PushReportView {
   kind: 'ok' | 'error';
   headline: string;
   sections: string[];
+  /**
+   * 分区 id → 本次推送前只读预览给出的条数（D-12「名称 · 条数」）。
+   * 报告本身不带 per-section 计数，所以这里只能由调用方在推送前从预览捕获；
+   * 没预览过（或预览已过期）时是空对象 ⇒ 渲染侧只显示分区名，不猜数字。
+   */
+  counts: Readonly<Record<string, number>>;
   warnings: string[];
 }
 
-/** push 报告 → 渲染模型（ok 头部带快照 id；失败显示引擎 message；分区与告警透传） */
-export function pushReportView(report: SyncPushReport | null, t: UiT): PushReportView | null {
+/**
+ * 推送前预览的 sections → 「分区 id → 条数」（D-12 用）。
+ * 只认预览里真实给出的 count；没有预览（undefined）或空列表 ⇒ 空对象，渲染侧不猜数字。
+ */
+export function sectionCountsOf(
+  sections: readonly { section: string; count: number }[] | undefined,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const row of sections ?? []) counts[row.section] = row.count;
+  return counts;
+}
+
+/**
+ * push 报告 → 渲染模型（ok 头部带快照 id；失败显示引擎 message；分区与告警透传）。
+ * `countsBySection` 是推送前那次预览的 sectionId → count（宿主不随报告回传计数，见上）。
+ */
+export function pushReportView(
+  report: SyncPushReport | null,
+  t: UiT,
+  countsBySection: Readonly<Record<string, number>> = {},
+): PushReportView | null {
   if (report === null) return null;
   if (!report.ok) {
-    return { kind: 'error', headline: report.message ?? t('sync.pushFailed'), sections: report.sections, warnings: report.warnings };
+    return { kind: 'error', headline: report.message ?? t('sync.pushFailed'), sections: report.sections, counts: countsBySection, warnings: report.warnings };
   }
   return {
     kind: 'ok',
     headline: t('sync.pushOk', { id: report.snapshotId }),
     sections: report.sections,
+    counts: countsBySection,
     warnings: report.warnings,
   };
 }
