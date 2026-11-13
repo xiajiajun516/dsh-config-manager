@@ -369,6 +369,12 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
         (recovery) => { patch({ status: 'ready', recovery }) },
         () => { /* 状态刷新失败静默 */ },
       )
+    }).catch((err) => {
+      // verify 被拒（423 mutation-locked、409、404、500 或 5 分钟客户端超时）时也必须复位：
+      // 末级 then 没有 onRejected 会让 running 永久 true，execute/retry/dismiss 三入口全被早退锁死（审计 P8-2）。
+      patch({ running: false })
+      runStore.stopRunWatch('recovery')
+      toast.error(redactErrorText(err))
     })
   }
 
@@ -395,6 +401,11 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
         (recovery) => { patch({ status: 'ready', recovery }) },
         () => { /* 静默 */ },
       )
+    }).catch((err) => {
+      // 同 execute：verify 被拒也要复位 running/watch（审计 P8-2）。
+      patch({ running: false })
+      runStore.stopRunWatch('recovery')
+      toast.error(redactErrorText(err))
     })
   }
 

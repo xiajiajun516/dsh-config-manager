@@ -172,9 +172,11 @@ export function copyDirCommand(
   const s = isWindows(platform) ? psQuote(src) : shellQuote(src)
   const d = isWindows(platform) ? psQuote(dest) : shellQuote(dest)
   if (isWindows(platform)) {
-    return `Remove-Item -Recurse -Force ${d} -ErrorAction SilentlyContinue; Copy-Item -Recurse ${s} ${d} -ErrorAction SilentlyContinue`
+    // 删旧目标可失败（本来不存在）；复制失败必须让命令退出码非零 —— 备份是删除前唯一兜底。
+    return `Remove-Item -Recurse -Force ${d} -ErrorAction SilentlyContinue; Copy-Item -Recurse ${s} ${d} -ErrorAction Stop`
   }
-  return `rm -rf ${d}; cp -r ${s} ${d} 2>/dev/null; true`
+  // 同上：不吞 stderr、不用 `; true` 抹平退出码（审计 P11-7）。
+  return `rm -rf ${d} && cp -r ${s} ${d}`
 }
 
 /* ------------------------------------------------------------ 计划 */
@@ -186,6 +188,8 @@ export interface ReinstallStep {
   command: string
   /** 是否属于危险（触及 ~/.dsh 数据）动作 */
   dangerous: boolean
+  /** 失败即中止后续所有步骤（仅备份步：它失败时后面的清空无兜底，必须停） */
+  critical?: boolean
 }
 
 export interface ReinstallPlan {
@@ -267,6 +271,8 @@ export async function buildReinstallPlan(
       label: engineMsg('core.reinstall.stepBackupHome'),
       command: copyDirCommand(dshHome, `${dshHome}.reinstall-backup`, platform),
       dangerous: true,
+      // 备份失败 → 后面的 settings/profiles/sessions/credentials 清空没有抢救副本，必须中止。
+      critical: true,
     })
   }
   if (selection.has('settings')) {

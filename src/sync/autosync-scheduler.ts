@@ -404,32 +404,42 @@ export class AutoSyncScheduler {
     });
   }
 
-  /** 兜底间隔定时器：每个 enabled 通道按各自 interval 排一次性定时器，触发后只重排自己。 */
+  /**
+   * 兜底间隔定时器：每个 enabled 通道按各自 interval 排一次性定时器，触发后**只重排自己**。
+   *
+   * 早期实现是「清掉全部通道再统一重排」：webdav 5m 每跑一轮就把 git 30m 的定时器清掉重排，
+   * 30m 永远等不到 → 纯定时器模式下慢通道永久饥饿（审计 P5-1，虚拟时钟 180min 实测 git 只跑 1 次）。
+   */
   private scheduleIntervalTimers(): void {
     for (const timer of this.timers.values()) this.clearTimer(timer);
     this.timers.clear();
     // 通道清单唯一来源 = SYNC_CHANNELS（此前同一数组在本文件写了两遍：漏改一处即某通道永不排期）
-    const channels = SYNC_CHANNELS;
-    for (const channel of channels) {
-      void this.readConfig(channel).then((cfg) => {
-        if (this.stopped || !cfg.enabled) return;
-        const ms = intervalToMs(cfg.interval);
-        const timer = this.setTimer(() => {
-          // 一次性定时器：触发后立即从表移除，避免 reload() 清理到已失效的句柄
-          this.timers.delete(channel);
-          if (this.stopped) return;
-          void this.runOnce(channel, { reason: 'interval' })
-            .catch((err) => {
-              this.host.log.error(`自动同步定时触发失败（${channel}）`, { error: err instanceof Error ? err.message : String(err) });
-            })
-            .then(() => {
-              // 只重排 interval 定时器（远端轮询有自己的节奏，绝不互相重置）
-              if (!this.stopped) this.scheduleIntervalTimers();
-            });
-        }, ms);
-        this.timers.set(channel, timer);
-      }).catch(() => { /* 读配置失败静默 */ });
-    }
+    for (const channel of SYNC_CHANNELS) this.scheduleChannelTimer(channel);
+  }
+
+  /** 单个通道的一次性 interval 排期（触发后只重排这一个通道）。 */
+  private scheduleChannelTimer(channel: SyncTransportType): void {
+    const existing = this.timers.get(channel);
+    if (existing !== undefined) this.clearTimer(existing);
+    this.timers.delete(channel);
+    void this.readConfig(channel).then((cfg) => {
+      if (this.stopped || !cfg.enabled) return;
+      const ms = intervalToMs(cfg.interval);
+      const timer = this.setTimer(() => {
+        // 一次性定时器：触发后立即从表移除，避免 reload() 清理到已失效的句柄
+        this.timers.delete(channel);
+        if (this.stopped) return;
+        void this.runOnce(channel, { reason: 'interval' })
+          .catch((err) => {
+            this.host.log.error(`自动同步定时触发失败（${channel}）`, { error: err instanceof Error ? err.message : String(err) });
+          })
+          .then(() => {
+            // 只重排自己的 interval 定时器（远端轮询有自己的节奏，别的通道也不得被本通道重置）
+            if (!this.stopped) this.scheduleChannelTimer(channel);
+          });
+      }, ms);
+      this.timers.set(channel, timer);
+    }).catch(() => { /* 读配置失败静默 */ });
   }
 
   /**

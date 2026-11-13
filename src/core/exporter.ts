@@ -16,6 +16,7 @@ import { stringifyJsonSafe } from '../utils/json.ts';
 import { buildManifest, CHECKSUMS_FILE, MANIFEST_FILE, EXPORTER_NAME } from '../schema/manifest.ts';
 import { SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../schema/config.ts';
 import { DEFAULT_SENSITIVE_RELS, refreshVault } from '../security/vault.ts';
+import { isSensitiveHomeRel } from '../utils/paths.ts';
 import { writeZip } from '../utils/zip.ts';
 import { formatDateOnly } from '../utils/time.ts';
 import { msgOf } from './messages.ts';
@@ -414,8 +415,24 @@ export class Exporter {
       if (isFileSection(section.sectionId)) {
         const prefix = SECTION_FILE_PREFIXES[section.sectionId]!;
         const files = (section.data as { files?: { relativePath: string; data: Uint8Array }[] }).files ?? [];
+        // 打包侧兜底（审计 P2-1 P0）：第三方插件数据分区的根是**系统主目录**，收集侧已按同一判据
+        // 剔除凭据文件；这里再判一次，防止「收集侧漏判 / 消费者手工构造 section」把整文件秘密写进 ZIP。
+        // 判据唯一来源 = utils/paths.ts 的 isSensitiveHomeRel。
+        const guardCredentials = section.sectionId === 'pluginData' || section.sectionId === 'pluginAssets';
+        let droppedSensitive = 0;
+        let droppedSample = '';
         for (const file of files) {
+          if (guardCredentials && isSensitiveHomeRel(file.relativePath)) {
+            droppedSensitive += 1;
+            if (droppedSample === '') droppedSample = file.relativePath;
+            continue;
+          }
           entries.push({ name: `${prefix}${file.relativePath}`, data: file.data });
+        }
+        if (droppedSensitive > 0) {
+          warnings.push(this.msg('export.pluginDataSensitiveSkipped', {
+            count: String(droppedSensitive), sample: droppedSample,
+          }));
         }
         continue;
       }

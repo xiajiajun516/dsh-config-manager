@@ -150,6 +150,46 @@ test('导入白名单：包外路径一律 Error，applyItem 也拒绝；包内�
   assert.equal(await dst.fs.exists('AGENTS.md'), false);
 });
 
+test('审计 P2-1（P0 回归）：凭据形状文件永不进入 pluginData/pluginAssets 出包，导入侧同样拒绝', async () => {
+  const src = ctxFor(HOME);
+  await seedHome(src);
+  // 真机形态：插件把 token / 凭据放在自己的区域里（region 在来源表内，路径不越界）
+  await src.fs.writeFile('.mnemon/credentials.yaml', bytes('token: SECRET-VALUE'));
+  await src.fs.writeFile('.mnemon/vault/oauth.json', bytes('{"access_token":"SECRET-VALUE"}'));
+  await src.fs.writeFile('.dsh-wallpaper-engine/secrets.json', bytes('{"key":"SECRET-VALUE"}'));
+  await src.fs.writeFile('.dsh-wallpaper-engine/.env.local', bytes('API_KEY=SECRET-VALUE'));
+
+  const config = new PluginDataAdapter('pluginData', { env: {} });
+  const out = await config.export(src, { includeSecrets: false });
+  const shipped = out.data.files.map((f) => f.relativePath)
+  for (const rel of ['.mnemon/credentials.yaml', '.mnemon/vault/oauth.json', '.dsh-wallpaper-engine/secrets.json', '.dsh-wallpaper-engine/.env.local']) {
+    assert.ok(!shipped.includes(rel), `凭据形状文件不得出包：${rel}`)
+  }
+  assert.deepEqual(shipped.sort(), ['.dsh-wallpaper-engine/config.json', '.mnemon/runtime/MEMORY.md'], '正常配置文件照常出包')
+  // 剔除必须可见（不是静默少带）
+  assert.ok(
+    out.warnings.some((w) => w.includes('凭据文件')),
+    `剔除凭据文件必须进 warnings，实际：${JSON.stringify(out.warnings)}`,
+  )
+
+  // 导入侧：即使包里被塞进凭据形状路径（伪造的包），也必须判 Error 且 applyItem 拒绝
+  const forged: FilesSection = {
+    version: 1,
+    files: [
+      { relativePath: '.mnemon/credentials.yaml', data: bytes('token: x'), contentHash: sha256Hex(bytes('token: x')) },
+      { relativePath: '.mnemon/vault/oauth.json', data: bytes('{}'), contentHash: sha256Hex(bytes('{}')) },
+    ],
+  }
+  const dst = ctxFor('/home/bob')
+  const sections = new Map<string, unknown>([['pluginData', forged]])
+  const items = await config.analyzeImport(forged, makeImportContext(dst, sections))
+  assert.equal(items.filter((i) => i.kind === 'Error').length, 2, '凭据形状路径必须在计划期判 Error')
+  const first = items[0]!
+  const r = await config.applyItem(first, makeImportContext(dst, sections))
+  assert.equal(r.ok, false, 'applyItem 必须拒绝（纵深防御）')
+  assert.equal(await dst.fs.exists('.mnemon/credentials.yaml'), false)
+});
+
 test('自述声明（dsh.dataDirs）：已安装插件的区域可导出、可导入；未声明的插件目录仍被拒', async () => {
   const ctx = ctxFor(HOME);
   await ctx.fs.writeFile('profiles/web/package.json', bytes(JSON.stringify({ dependencies: { 'dsh-fake': '^1.0.0' } })));

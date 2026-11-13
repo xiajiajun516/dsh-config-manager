@@ -163,3 +163,34 @@ test('redact：scheme://user:password@host 的密码段被掩码（用户名保�
   // createRedactor 与 redact 同源（同一份规则）
   assert.equal(createRedactor()('https://u:p4ssword@h/x').includes('p4ssword'), false);
 });
+
+/* ---------------- 结构化 colon 形态的边界（审计 P12-2 / P12-3，2026-11-13 实测） ---------------- */
+
+test('redact：colon 值不跨行 —— 后续行的敏感字段不会被前一行吞掉', () => {
+  // 原值域 [^,;}] 含 \n：'note: ok' 一路吞到行尾，整段只匹配一次、字段名是 note ⇒ password 明文透传。
+  const input = 'note: hello\npassword: s3cr3t-value';
+  const out = redact(input);
+  assert.equal(out.includes('s3cr3t-value'), false, '第二行的 password 值必须被掩');
+  assert.ok(out.startsWith('note: hello\n'), '不敏感行原样保留（含换行）');
+  assert.equal(redact(out), out, '幂等');
+});
+
+test('redact：JSON 里出现 colon 值形态时，收尾引号不得被吞（输出仍是合法 JSON）', () => {
+  // 原值域含 "：'{"error":"Authorization: Bearer abc"}' 把 JSON 收尾引号一起替换 ⇒ JSON.parse 抛错。
+  const input = JSON.stringify({ error: 'Authorization: Bearer abc-123', code: 1 });
+  const out = redact(input);
+  assert.doesNotThrow(() => JSON.parse(out), '脱敏后必须仍是合法 JSON');
+  assert.equal(out.includes('abc-123'), false, 'Bearer 载荷被掩');
+  assert.equal(redact(out), out, '幂等');
+});
+
+test('redact：同一行多个 field: value 逐个判定（不因首个字段不敏感而整行跳过）', () => {
+  const out = redact('note: hello password: hunter2');
+  assert.equal(out.includes('hunter2'), false, '同一行第二个敏感字段必须被掩');
+  assert.ok(out.startsWith('note: hello'), '前一个不敏感字段保留');
+  // 带引号值保留引号形态（只替换引号内的值，引号本身不动）
+  assert.equal(redact('password: "x9"'), 'password: "***REDACTED***"');
+  // URL 值的冒号不得导致误截断（值里带冒号仍整体保留）
+  assert.equal(redact('endpoint: https://h/a:b'), 'endpoint: https://h/a:b');
+});
+

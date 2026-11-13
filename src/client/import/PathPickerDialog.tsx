@@ -22,6 +22,7 @@ import type { BrowseErrorCode, BrowseResult } from '../../core/path-browse.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Modal } from '../common/Modal.tsx'
+import { redact } from '../../security/redaction.ts'
 import { Banner, Button, Spinner } from '../common/ui.tsx'
 import { FileIcon, FolderIcon } from '../common/Icon.tsx'
 import css from '../config-manager.module.css'
@@ -100,7 +101,7 @@ export function PathPickerDialog({ open, api, t, startPath, onPick, onClose }: P
       },
       (error: unknown) => {
         if (!alive) return
-        setState({ kind: 'failed', detail: error instanceof Error ? error.message : String(error) })
+        setState({ kind: 'failed', detail: redact(error instanceof Error ? error.message : String(error)) })
       },
     )
     return () => { alive = false }

@@ -19,7 +19,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicWriteFileSync } from '../utils/atomic-write.ts'
-import { readTextSafe, sanitizeFilePart } from './dsh-profile-io.ts'
+import { legacyRuntimeFileName, readTextSafe, runtimeFileName } from './dsh-profile-io.ts'
 import { DshProfileError } from './dsh-profile-manager.ts'
 import { profilesMsg } from './messages.ts'
 import { resolveProcessControl, stopPid, type ProcessControlDeps } from './process-control.ts'
@@ -132,9 +132,21 @@ export class DshProfileRuntimeRegistry {
     return join(this.dataDir, RUNTIME_DIR_NAME)
   }
 
-  /** 某个 profile 的心跳文件绝对路径 */
+  /** 某个 profile 的心跳文件绝对路径（名字哈希保证唯一，见 runtimeFileName） */
   fileFor(name: string): string {
-    return join(this.dir(), `${sanitizeFilePart(name)}.json`)
+    return join(this.dir(), runtimeFileName(name))
+  }
+
+  /** 旧版心跳文件（升级清理用：名字清洗多对一，旧文件可能已被别的 profile 覆盖过） */
+  private legacyFileFor(name: string): string {
+    return join(this.dir(), legacyRuntimeFileName(name))
+  }
+
+  /** 删掉自己那份旧版心跳（升级后不留双份；不碰别人的文件） */
+  private dropLegacyHeartbeat(name: string): void {
+    const legacy = this.legacyFileFor(name)
+    if (legacy === this.fileFor(name)) return
+    rmSync(legacy, { force: true })
   }
 
   /** 自报/刷新心跳（幂等；apply 时写一次，之后由 startHeartbeat 定期刷）。 */
@@ -149,12 +161,14 @@ export class DshProfileRuntimeRegistry {
     }
     mkdirSync(this.dir(), { recursive: true })
     atomicWriteFileSync(this.fileFor(this.name), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o644 })
+    this.dropLegacyHeartbeat(this.name)
     return record
   }
 
   /** 撤回自己的心跳（dispose 时；正常退出的实例不留垃圾文件）。 */
   withdraw(): void {
     rmSync(this.fileFor(this.name), { force: true })
+    this.dropLegacyHeartbeat(this.name)
   }
 
   /**

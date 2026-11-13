@@ -1378,3 +1378,80 @@ test('runOnce: 真有改动时不带 idle（卡片必须留下，它解释刚才
   assert.ok(recent.length > 0, '有活干必然留下 run 记录');
   assert.equal(isIdleAutosyncRun(recent[0]!), false, '有改动的轮次不得被当成空转过滤掉');
 });
+
+
+/**
+ * 审计 P5-1 回归：慢通道的 interval 定时器不得被其它通道的运行重置。
+ *
+ * 修复前 scheduleIntervalTimers() 先清掉**所有**通道的定时器再统一重排：webdav 5m 每跑一轮
+ * 就把 git 30m 的定时器换成新的，30m 永远等不到（纯定时器模式下慢通道永久饥饿）。
+ * 断言口径：git 的 30m 定时器句柄必须**同一个 id 一直存活**，不被三次 webdav 触发重建。
+ */
+test('P5-1 回归：一个通道到点只重排自己，另一通道的定时器不被清除', async () => {
+  const MIN = 60_000;
+  const configs = new Map<SyncTransportType, AutosyncConfig>();
+  for (const ch of SYNC_CHANNELS) {
+    configs.set(ch, { enabled: false, interval: '30m', startupMinIntervalMs: 0, consecutiveFailures: 0, realtime: false });
+  }
+  configs.set('git', { enabled: true, interval: '30m', startupMinIntervalMs: 0, consecutiveFailures: 0, realtime: false });
+  configs.set('webdav', { enabled: true, interval: '5m', startupMinIntervalMs: 0, consecutiveFailures: 0, realtime: false });
+
+  type TimerRec = { id: number; fn: () => void; ms: number; cleared: boolean };
+  const timers: TimerRec[] = [];
+  let seq = 0;
+  let clock = 1_000_000_000_000;
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => false,
+    merge: async () => ({ planId: 'p', upserts: [], deletes: [], conflicts: [], entries: [] }),
+  };
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp/p5-1',
+    host: { log: nullLogger() },
+    makeSyncEngine: () => engine as unknown as SyncEngine,
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(clock),
+    readConfig: async (ch: SyncTransportType) => configs.get(ch) as AutosyncConfig,
+    writeConfig: async (ch: SyncTransportType, c: AutosyncConfig) => { configs.set(ch, c); },
+    readSyncConfigFn: async (ch: SyncTransportType) => (ch === 'webdav'
+      ? { schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com/dav' } }
+      : { schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } }) as SyncConfig,
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: (fn: () => void, ms: number) => {
+      seq += 1;
+      timers.push({ id: seq, fn, ms, cleared: false });
+      return seq as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimer: (t: ReturnType<typeof setTimeout>) => {
+      const rec = timers.find((x) => x.id === Number(t));
+      if (rec !== undefined) rec.cleared = true;
+    },
+    minTriggerGapMs: 0,
+  });
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 40; i += 1) await new Promise((r) => setImmediate(r));
+  };
+  scheduler.start();
+  await flush();
+  try {
+    const gitTimer = timers.find((t) => !t.cleared && t.ms === 30 * MIN);
+    assert.ok(gitTimer, 'git 的 30m interval 定时器应已排上');
+    const gitTimerId = gitTimer.id;
+
+    for (let round = 1; round <= 3; round += 1) {
+      clock += 5 * MIN;
+      const webdavTimer = timers.find((t) => !t.cleared && t.ms === 5 * MIN);
+      assert.ok(webdavTimer, '第 ' + String(round) + ' 轮应有 webdav 的 5m 定时器');
+      webdavTimer.cleared = true;
+      webdavTimer.fn();
+      await flush();
+      const stillGit = timers.find((t) => t.id === gitTimerId);
+      assert.equal(stillGit?.cleared, false, '第 ' + String(round) + ' 轮 webdav 到点后 git 的 30m 定时器不得被清除/重建');
+    }
+  } finally {
+    scheduler.stop();
+  }
+});
+

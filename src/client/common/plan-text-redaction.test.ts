@@ -318,6 +318,63 @@ const RENDER_POINTS: RenderPoint[] = [
     bare: /const redactErrorText = \(err: unknown\): string => err instanceof Error \? err\.message : String\(err\)/,
     why: '运行中心错误文本（2 处，同文件其它 3 处已脱敏）',
   },
+  /* ---------------- 审计 P9-2（error state → 自绘 Banner / 列表）登记 ---------------- */
+  {
+    id: 'lib-restore-plan-error-state',
+    file: 'src/client/library/LibraryActions.tsx',
+    redacted: R('planFingerprint: undefined, error: redactErrorText(err)'),
+    bare: R('planFingerprint: undefined, error: err instanceof Error ? err.message : String(err)'),
+    why: '恢复计划失败原因存进 plan.error 后由 <Banner kind="error">{plan.error}</Banner> 直接渲染（宿主 message 可能含路径/token/env 片段）',
+  },
+  {
+    id: 'lib-inspect-backup-error-state',
+    file: 'src/client/library/LibraryActions.tsx',
+    redacted: R('error: redactErrorText(err), result: null'),
+    bare: R('error: err instanceof Error ? err.message : String(err), result: null'),
+    why: '「查看与对比」失败原因存进 inspect.error 后由 Banner 直接渲染',
+  },
+  {
+    id: 'export-inventory-error-state',
+    file: 'src/client/export/ExportView.tsx',
+    redacted: R('setInvError(redactErrorText(err))'),
+    bare: R('setInvError(err instanceof Error ? err.message : String(err))'),
+    why: '分区清单读取失败文本（宿主异常 / 网络中断原文）由 Banner 直接渲染',
+  },
+  {
+    id: 'path-picker-browse-error-state',
+    file: 'src/client/import/PathPickerDialog.tsx',
+    redacted: R('detail: redact(error instanceof Error ? error.message : String(error))'),
+    bare: R('detail: error instanceof Error ? error.message : String(error)'),
+    why: '目录列举失败文本（含请求的绝对路径）由 Banner 直接渲染',
+  },
+  {
+    id: 'sync-confirm-apply-error-state',
+    file: 'src/client/sync/SyncConfirmView.tsx',
+    redacted: R("    } catch (err) {\n      setPhase('failed');\n      setError(redact(err instanceof Error ? err.message : String(err)));\n    }\n  };\n\n  const runCancel"),
+    bare: R("    } catch (err) {\n      setPhase('failed');\n      setError(err instanceof Error ? err.message : String(err));\n    }\n  };\n\n  const runCancel"),
+    why: '一致性应用失败原因（api.applyItems 抛出的宿主文本）由 Banner 直接渲染',
+  },
+  {
+    id: 'sync-confirm-rollback-error-state',
+    file: 'src/client/sync/SyncConfirmView.tsx',
+    redacted: R("    } catch (err) {\n      setPhase('failed');\n      setError(redact(err instanceof Error ? err.message : String(err)));\n    }\n  };\n\n  const busy"),
+    bare: R("    } catch (err) {\n      setPhase('failed');\n      setError(err instanceof Error ? err.message : String(err));\n    }\n  };\n\n  const busy"),
+    why: '回滚失败原因（api.rollback 抛出的宿主文本）由 Banner 直接渲染',
+  },
+  {
+    id: 'sync-confirm-result-warnings',
+    file: 'src/client/sync/SyncConfirmView.tsx',
+    redacted: R('result.warnings.map((w, i) => <li key={i}>{redact(w)}</li>)'),
+    bare: R('result.warnings.map((w, i) => <li key={i}>{w}</li>)'),
+    why: '应用结果 warnings（宿主按分区拼装，可能回显本地配置值/路径）逐条渲染',
+  },
+  {
+    id: 'sync-panel-push-warnings',
+    file: 'src/client/sync/SyncPanel.tsx',
+    redacted: R('pushView.warnings.map((w, i) => <li key={i}>{redact(w)}</li>)'),
+    bare: R('pushView.warnings.map((w, i) => <li key={i}>{w}</li>)'),
+    why: '推送结果 warnings 逐条渲染（同一类宿主文本）',
+  },
   /* ---------------- 「工作区 + 会话回滚」卡（t12：新组件登记） ---------------- */
   {
     id: 'rollback-card-error-text',

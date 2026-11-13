@@ -40,9 +40,32 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **确认弹窗的按钮次序统一为「取消在左、确认在右」**：以前删除/停止这类二次确认弹窗把确认放在左边，而其他弹窗是「取消 … 主操作」，两套次序并存容易点错；现在全站一致，初始焦点仍然落在取消上（误触保护不变）。
   **Confirm dialogs now put Cancel on the left and the primary action on the right**: destructive confirmations used to reverse that order compared with every other dialog; the whole product is consistent now, and focus still starts on Cancel so a stray Enter never fires the destructive action.
 
+### 🔐 安全 · Security
+
+- **第三方插件区域里的凭据文件再也不进导出包**：以前插件把自己的 token、OAuth 凭据或 `.env` 放在自己的数据目录里（这在真机上很常见），导出「插件数据 / 插件资产」分区会把这些明文原样打进 ZIP；现在这类文件在导出与导入两侧都被剔除并拒绝，导出结果会告诉你剔除了几个、首个是哪个。
+  **Credential files inside third-party plugin areas no longer ship in export packages**: plugins commonly keep tokens, OAuth credentials or `.env` files in their own data directories, and exporting the plugin-data / plugin-assets sections used to copy them into the ZIP verbatim; such files are now dropped on export and rejected on import, and the export result states how many were skipped and which one came first.
+- **报错与结果文本里的凭据不再原样显示**：有几处错误提示与同步结果列表直接显示了主程序返回的原文，里面可能带路径、令牌或本地配置值；现在统一先脱敏再显示，同时修好了脱敏在跨行文本上把下一行一起吞掉的问题（脱敏后的 JSON 仍然是合法 JSON）。
+  **Credential-bearing error and result text is no longer shown verbatim**: a few error banners and sync result lists rendered the host's raw message, which can carry paths, tokens or local config values; every one of them is now redacted first, and redaction no longer swallows the following line when the value spans lines (redacted JSON stays valid JSON).
+
 ### 🐛 修复 · Fixed
 
-- **写回启动补丁时字符串一律保持字符串，空值不再变成 null、`True` 不再变成布尔、`007` 不再变成 7**：以前插件每改动这一层一次，写下去的字符串值就会被主程序读成别的类型——空字符串读成 null、数字样子的串读成数字、`.inf` 读成无穷大；依赖字符串配置的插件（例如技能列表里带空串的那类）重启即报校验错误，用户看到的是「我什么都没改，它自己坏了」。现在写回给每个字符串值加引号，主程序读到的就是当初写进去的那份字面量；以前已经写坏的字段仍需按已知限制里的指引手工改回。（issue #135）
+- **长任务不再被「等待同步锁超时」误杀**：以前超时计时把任务自己干活的时间也算成等锁，于是只要单个任务跑得比上限久（测试里 1.5 秒就够），就会报「同步工作副本正被另一个同步任务占用」；现在只有真的排队等锁才计时。
+  **Long tasks are no longer failed by a lock-wait timeout**: the deadline used to include the time the task itself spent working, so anything slower than the bound (1.5 s in tests) reported that the sync working copy was busy; only genuine queueing now counts.
+- **重装的兜底备份失败会立刻停手**：以前备份这一步失败也照样往下清空 `~/.dsh`，等于把唯一退路丢了；现在备份失败直接中止，后面的清空步骤一步都不会执行。
+  **A failed safety backup now stops reinstall immediately**: previously the wipe of `~/.dsh` proceeded even when the backup step failed, throwing away the only way back; the remaining steps are now skipped entirely.
+- **主程序正在运行时拒绝重装**：与导入、恢复等写操作同一道门，避免在 DSH 运行时删改它的数据目录。
+  **Reinstall is refused while the host is running**: it now goes through the same gate as import and restore instead of editing the data directory of a live DSH.
+- **两个名字相近的配置档案不再互相顶掉心跳**：`web` 与 `web!` 这类名字以前映射到同一个心跳文件，第二个档案一启动就把第一个的心跳删掉（面板会误判为「已停止」）；现在文件名带名字指纹，互不影响。
+  **Similarly named profiles no longer overwrite each other's heartbeat**: names like `web` and `web!` used to map to one heartbeat file, so starting the second deleted the first (the panel then reported it as stopped); the file name now carries a hash of the profile name.
+- **救援模式不会被另一个档案偷偷覆盖**：一个档案已经进入救援时，再为另一个档案进入会被拒绝并说明原因——备份文件只有一份，覆盖就等于把上一份原件永久替换成空壳。退出救援后仍可正常进入。
+  **Rescue mode can no longer be silently taken over by another profile**: entering rescue for a second profile while one is active is refused with the reason, because the backup slot is shared and overwriting it would replace the previous originals with stubs; exiting first still works.
+- **自动同步的各条通道各自计时**：以前任意一条通道到点都会把所有通道的定时器重排一遍，短周期通道因此被长周期通道拖住（5 分钟的 webdav 要等 30 分钟的 git）；现在一条到点只重排它自己。
+  **Auto-sync channels keep their own schedules**: any channel firing used to reschedule every channel's timer, so a 5-minute channel could be starved behind a 30-minute one; a firing channel now only reschedules itself.
+- **恢复面板在失败后不再卡死**：校验或执行被拒绝（改锁中、冲突、超时）后，「执行 / 重试 / 关闭」以前会一直保持灰不可点，只能重开面板；现在失败即复位按钮并显示原因。
+  **The recovery panel no longer locks up after a failure**: when the verify or execute step was refused (locked, conflicting, timed out) the execute / retry / dismiss buttons stayed disabled until the panel was reopened; the failure now resets them and shows the reason.
+- **插件清单没读齐时的补勾不再反复触发自身**：自动补勾每轮都会生成一个新队列，导致状态写入与副作用反复触发；现在内容相同就不再写回。
+  **Auto-ticks waiting for a plugin listing no longer re-trigger themselves**: each pass produced a new queue object, so the state write and its side effects kept firing; an unchanged queue is now left alone.
+- - **写回启动补丁时字符串一律保持字符串，空值不再变成 null、`True` 不再变成布尔、`007` 不再变成 7**：以前插件每改动这一层一次，写下去的字符串值就会被主程序读成别的类型——空字符串读成 null、数字样子的串读成数字、`.inf` 读成无穷大；依赖字符串配置的插件（例如技能列表里带空串的那类）重启即报校验错误，用户看到的是「我什么都没改，它自己坏了」。现在写回给每个字符串值加引号，主程序读到的就是当初写进去的那份字面量；以前已经写坏的字段仍需按已知限制里的指引手工改回。（issue #135）
   **Strings written back into the startup patch stay strings — an empty value no longer turns into null, `True` into a boolean or `007` into 7**: every time the plugin rewrote that layer, the host read the saved strings as other types — an empty string became null, numeric-looking text became a number, `.inf` became infinity — and plugins that validate string config (a skill list containing an empty entry, for instance) failed at startup, which looked like «I changed nothing and it broke itself». Every string value is now quoted on write, so the host reads exactly what was saved; fields already damaged by earlier versions still need the manual fix described in known limits. (issue #135)
 - **「关于」页不再有两个同等醒目的主按钮**：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
   **The About panel no longer shows two equally loud primary buttons**: "Update now" and "Star on GitHub" used to be the same dark primary style side by side; the star link is now an outlined secondary button so the update action is the one that stands out.

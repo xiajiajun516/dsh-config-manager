@@ -26,7 +26,7 @@ import {
   pickerSummary,
   pluginEntryPickState, pluginEntrySelectedCount, pluginEntryTotalCount, pluginEntryUnreadSections, pluginTree,
   pluginTreePickState, pluginTreeSelectedCount, pluginTreeTotalCount, pluginTreeUnreadSections,
-  applyPluginPendingChecks, sameSelection, sectionCountState, sectionExpandable, sectionPickState,
+  applyPluginPendingChecks, samePendingChecks, sameSelection, sectionCountState, sectionExpandable, sectionPickState,
   selectAll, selectedUnitCount, tailWeightedEllipsis, togglePluginEntry, togglePluginTree, toggleSection,
   toggleUnit, toggleUnitGroup,
   unitChecked, visibleUnits,
@@ -226,7 +226,9 @@ export function ContentPicker({
   useEffect(() => {
     if (pendingChecks.length === 0) return
     const { selection, remaining } = applyPluginPendingChecks(value, nodes, tree, pendingChecks)
-    setPendingChecks(remaining)
+    // 内容不变绝不写回：applyPluginPendingChecks 每轮返回新数组，无条件 setState 会让本 effect
+    // 依赖 [pendingChecks] 自激成无界重渲染（清单读不到时页面卡死，审计 P9-1）。
+    if (!samePendingChecks(remaining, pendingChecks)) setPendingChecks(remaining)
     if (!sameSelection(selection, value)) commit(selection)
     // tree/nodes 变化即代表清单到货；value 变化来自本次补齐本身（此时队列已空，直接返回）
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -74,15 +74,21 @@ test('R-04 rmCommand：平台可注入——Windows Remove-Item / Unix rm -rf', 
   assert.equal(rmCommand("/home/o'brien", 'linux'), "rm -rf '/home/o'\\''brien'");
 });
 
-test('R-05 copyDirCommand：平台可注入——先删旧再拷', () => {
+test('R-05 copyDirCommand：平台可注入——先删旧再拷，复制失败必须非零退出', () => {
   assert.equal(
     copyDirCommand('/src', '/dest', 'win32'),
-    "Remove-Item -Recurse -Force '/dest' -ErrorAction SilentlyContinue; Copy-Item -Recurse '/src' '/dest' -ErrorAction SilentlyContinue",
+    "Remove-Item -Recurse -Force '/dest' -ErrorAction SilentlyContinue; Copy-Item -Recurse '/src' '/dest' -ErrorAction Stop",
   );
   assert.equal(
     copyDirCommand('/src', '/dest', 'linux'),
-    "rm -rf '/dest'; cp -r '/src' '/dest' 2>/dev/null; true",
+    "rm -rf '/dest' && cp -r '/src' '/dest'",
   );
+  // 审计 P11-7 回归：复制步不得以 `; true` 或 `-ErrorAction SilentlyContinue` 吞掉失败退出码
+  const unix = copyDirCommand('/src', '/dest', 'linux');
+  assert.equal(/;\s*true\s*$/.test(unix), false, 'Unix 复制步不得用 ; true 抹平退出码');
+  assert.equal(unix.includes('2>/dev/null'), false, 'Unix 复制步不得吞 stderr');
+  const win = copyDirCommand('/src', '/dest', 'win32');
+  assert.equal(/Copy-Item[^;]*-ErrorAction Stop$/.test(win), true, 'Windows 复制步必须 -ErrorAction Stop');
 });
 
 test('R-06 resolvePnpmStoreDir：PNPM_STORE_PATH 优先，否则按注入平台默认', () => {
@@ -281,6 +287,33 @@ test('R-CLI runCli reinstall --dry-run：只做计划，不执行步骤命令', 
   assert.ok(out.join('\n').includes('重装计划'), '输出重装计划标题');
   const stepCmds = calls.filter((c) => c !== 'npm root -g');
   assert.deepEqual(stepCmds, [], `dry-run 除路径解析外不应执行任何步骤命令，got: ${JSON.stringify(stepCmds)}`);
+});
+
+test('R-CLI runCli reinstall --yes：检测到 DSH 正在运行 → 拒绝执行且不动任何步骤（审计 P11-5 回归）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'p11-5-reinstall-'));
+  try {
+    const runningDir = path.join(tmp, 'dsh-config-manager', 'running');
+    await fs.mkdir(runningDir, { recursive: true });
+    await fs.writeFile(path.join(runningDir, 'web.json'), JSON.stringify({
+      schemaVersion: 1, name: 'web', pid: process.pid, port: 3099,
+      startedAt: new Date().toISOString(), updatedAt: Date.now(),
+    }));
+    const calls: string[] = [];
+    const out: string[] = [];
+    const io = { log: (s: string) => out.push(s), error: (s: string) => out.push(s) };
+    const code = await runCli(
+      ['reinstall', '--yes'],
+      io,
+      { DSH_HOME: tmp },
+      { exec: async (cmd: string) => { calls.push(cmd); return '/fake/global'; }, platform: 'linux' },
+    );
+    assert.equal(code, 1, '有实例在跑时清空 plugins/data 必须拒绝（CLI 与救急台同一道写入门）');
+    assert.ok(out.join('\n').includes('DSH 正在运行'), '拒绝理由要写明检测到 DSH 正在运行');
+    const stepCmds = calls.filter((c) => c !== 'npm root -g');
+    assert.deepEqual(stepCmds, [], `拒绝后不得执行任何步骤命令，got: ${JSON.stringify(stepCmds)}`);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
 });
 
 test('R-CLI runCli reinstall --list：仅列清单，不执行任何命令、不询问', async () => {

@@ -135,6 +135,21 @@ test('链上排队也计入超时：排在长任务后面的调用按时失败�
   assert.equal(await slow, 'slow');
 });
 
+test('fn 自身耗时不算等锁超时：拿到锁后跑多久都由调用方决定（审计 P12-1 回归）', async (t) => {
+  // 旧实现把 timeoutMs race 在整条链上：inspectWorkDir（lockTimeoutMs=1500 的只读自检）里的真实
+  // git 调用一超过 1.5 s 就被判「正被另一个同步任务占用」，文案撒谎、且隔离复跑必红。
+  // 新语义：timeoutMs 只约束「拿到锁」，拿到之后 fn 的耗时与锁无关。
+  const dir = await makeDir(t);
+  const t0 = Date.now();
+  const result = await withWorkdirLock(dir, async () => {
+    await new Promise((r) => setTimeout(r, 220));
+    return 'slow-ok';
+  }, { timeoutMs: 40 });
+  const elapsed = Date.now() - t0;
+  assert.equal(result, 'slow-ok', 'fn 超过 timeoutMs 仍必须返回结果，而不是伪造等锁冲突');
+  assert.ok(elapsed >= 200, '确实跑满了 fn 的耗时（实测 ' + String(elapsed) + 'ms）');
+});
+
 test('异常也释放锁：fn 抛错后下一次仍能拿到锁（不会把后续同步永久卡死）', async (t) => {
   const dir = await makeDir(t);
   await assert.rejects(withWorkdirLock(dir, async () => { throw new Error('boom'); }), /boom/);

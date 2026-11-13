@@ -20,8 +20,22 @@ export const REDACTED = '***REDACTED***';
 const JSON_FIELD_RE = /"([A-Za-z0-9_.\-]+)"\s*:\s*"([^"]*)"/g;
 /** kv 值到空白/逗号/分号/&（& 截断：避免吞掉 URL query 的后续参数） */
 const KV_FIELD_RE = /([A-Za-z0-9_.\-]+)\s*=\s*([^\s,;&]+)/g;
-/** colon 值允许空格（如 `Authorization: Bearer xyz`），到逗号/分号/右大括号截断 */
-const COLON_FIELD_RE = /([A-Za-z0-9_.\-]+)\s*:\s*([^,;}]+)/g;
+/**
+ * colon 形态的**带引号值**（`"field": "value"` 之外的非 JSON 文本，如 `password: "x"`）。
+ * 单独一条是为了「保留引号」：替换只动引号内的值，输出仍是合法 JSON / 合法带引号文本。
+ */
+const QUOTED_COLON_FIELD_RE = /([A-Za-z0-9_.\-]+)\s*:\s*"([^"\n\r]*)"/g;
+/**
+ * colon 值允许空格（如 `Authorization: Bearer xyz`），到逗号/分号/右大括号/**换行/引号**截断。
+ *
+ * 为什么值域必须排除 \n 与 "（审计 P12-2/P12-3，2026-11-13 实测）：
+ *  - 原值域 `[^,;}]` 含换行 ⇒ `note: ok\npassword: s3cr3t` 里首个不敏感字段一路吞到行尾，
+ *    整段只匹配一次、字段名是 note，于是 password 明文透传；
+ *  - 还含 `"` ⇒ `{"error":"Authorization: Bearer abc"}` 会把 JSON 的收尾引号一起替换掉，
+ *    脱敏后 `JSON.parse` 直接抛 Unterminated string。
+ */
+const COLON_FIELD_RE =
+  /([A-Za-z0-9_.\-]+)[ \t]*:[ \t]*([^\s,;}\n\r"][^,;}\n\r"]{0,199}?)(?=\s+[A-Za-z0-9_.\-]+[ \t]*:|[,;}\n\r"]|$)/g;
 
 /* ---------------- 值形状模式（包含式，字段名无关） ---------------- */
 
@@ -123,10 +137,12 @@ function replaceSensitiveField(text: string, re: RegExp, blacklist: readonly str
  * 现在只由调用方决定正则实例的生命周期（模块级常量 / 每次预编译），流水线本身不再有副本。
  */
 function redactPipeline(
-  text: string, blacklist: readonly string[], json: RegExp, kv: RegExp, colon: RegExp,
+  text: string, blacklist: readonly string[], json: RegExp, quotedColon: RegExp, kv: RegExp, colon: RegExp,
 ): string {
-  // 1. 结构化字段形态（顺序：JSON → kv → colon；JSON 键不会被后续形态二次命中）
+  // 1. 结构化字段形态（顺序：JSON → 带引号 colon → kv → 裸 colon）；
+  //    JSON 键不会被后续形态二次命中；带引号 colon 先跑，免得裸 colon 吃掉收尾引号。
   let out = replaceSensitiveField(text, json, blacklist);
+  out = replaceSensitiveField(out, quotedColon, blacklist);
   out = replaceSensitiveField(out, kv, blacklist);
   out = replaceSensitiveField(out, colon, blacklist);
   // 2. 值形状模式（字段名无关，包含式）
@@ -143,7 +159,7 @@ function redactPipeline(
  * 输出仍保留结构化形态（JSON 行合法）。
  */
 export function redact(text: string, blacklist: readonly string[] = []): string {
-  return redactPipeline(text, blacklist, JSON_FIELD_RE, KV_FIELD_RE, COLON_FIELD_RE);
+  return redactPipeline(text, blacklist, JSON_FIELD_RE, QUOTED_COLON_FIELD_RE, KV_FIELD_RE, COLON_FIELD_RE);
 }
 
 /** 对象级掩码：字段名命中敏感名单 → 整值替换（返回新对象，不改原对象；结构与类型保留） */
@@ -165,9 +181,10 @@ export function redactValue(value: unknown, blacklist: readonly string[] = []): 
  */
 export function createRedactor(blacklist: readonly string[] = []): (text: string) => string {
   const json = new RegExp(JSON_FIELD_RE.source, 'g');
+  const quotedColon = new RegExp(QUOTED_COLON_FIELD_RE.source, 'g');
   const kv = new RegExp(KV_FIELD_RE.source, 'g');
   const colon = new RegExp(COLON_FIELD_RE.source, 'g');
-  return (text: string): string => redactPipeline(text, blacklist, json, kv, colon);
+  return (text: string): string => redactPipeline(text, blacklist, json, quotedColon, kv, colon);
 }
 
 /** 默认名单（文档用；redact 的默认附加名单为空，内置判定已含 DEFAULT_SECRET_FIELD_NAMES） */

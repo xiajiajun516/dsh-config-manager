@@ -232,6 +232,15 @@ export async function withWorkdirLock<T>(
   // 上一个 300 s 的同步后面时，计时从轮到它那一刻才清零，超时上限形同失效（2026-10-27 现场）。
   const started = now();
 
+  /**
+   * 是否已经**拿到锁**（timeoutMs 只约束「等锁」，拿到之后 fn 自己的耗时不受它管）。
+   *
+   * 为什么必须分开（审计 P12-1 P1，真机 #104 复现）：旧实现对整条链 race 一个 timeoutMs，
+   * 于是 `inspectWorkDir`（lockTimeoutMs=1500 的只读自检）里的真实 git 调用只要跑过 1.5 s，
+   * 就被判成「等锁超时」—— 错误文案说「正被另一个同步任务占用」，实际根本没有竞争；
+   * 单文件隔离复跑同样必红（30 s 处抛锁冲突）。等锁与干活是两件事，不能共用一个死线。
+   */
+  let acquired = false;
   const run = async (): Promise<T> => {
     // 排队期间调用方已超时放弃：轮到它时直接失败，**不执行 fn**，免得被遗弃的请求稍后仍去驱动工作副本
     if (now() - started >= timeoutMs) throw new WorkdirLockError(workDir, now() - started);
@@ -243,6 +252,7 @@ export async function withWorkdirLock<T>(
       await sleep(POLL_INTERVAL_MS);
       release = await tryAcquire(lockPath, workDir, staleMs, now);
     }
+    acquired = true;
     try {
       return await fn();
     } finally {
@@ -257,11 +267,15 @@ export async function withWorkdirLock<T>(
   chains.set(key, tail);
 
   // 硬上界：timeoutMs 是「拿到锁」的上限，不是「开始计时后」的上限。只用 run 内的计时不够 ——
-  // 排在长任务后面的调用永远轮不到自己计时，界面就被历史任务拖着走。这里直接对链头 race，
-  // 超时 reject；被放弃的 run 之后还会被链唤醒，但入口的过期检查让它立刻抛（不碰工作副本）。
+  // 排在长任务后面的调用永远轮不到自己计时，界面就被历史任务拖着走。这里对链头 race，超时 reject；
+  // 被放弃的 run 之后还会被链唤醒，但入口的过期检查让它立刻抛（不碰工作副本）。
+  // 关键：**拿到锁之后不再受这条死线约束**（见上面 acquired 的说明）。
   let rejectDeadline: ((reason: Error) => void) | undefined;
   const deadline = new Promise<never>((_, reject) => { rejectDeadline = reject; });
-  const timer = setTimeout(() => { rejectDeadline?.(new WorkdirLockError(workDir, timeoutMs)); }, timeoutMs);
+  const timer = setTimeout(() => {
+    if (acquired) return;
+    rejectDeadline?.(new WorkdirLockError(workDir, timeoutMs));
+  }, timeoutMs);
   // unref：这个计时器不该拖住进程退出（缺省 300 s）
   if (typeof timer.unref === 'function') timer.unref();
   try {

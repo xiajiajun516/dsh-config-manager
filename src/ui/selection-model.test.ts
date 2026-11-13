@@ -10,7 +10,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  applyPluginPendingChecks, buildExportRequest, buildSelectedPlan, defaultSelection,
+  applyPluginPendingChecks, buildExportRequest, buildSelectedPlan, defaultSelection, samePendingChecks,
   defaultSelectionFromPlan, effectiveImportPlan, effectiveImportSelection, filterSections,
   filterPluginTree, groupPickState, groupSelectedCount, groupUnits, HIGH_RISK_ADAPTERS, isHighRiskAdapter,
   isPlanItemExcluded, isPluginTreeSection, isUnitSelected, PLUGIN_TREE_SECTIONS,
@@ -1030,6 +1030,20 @@ test('待补勾：清单没到齐时留在队列（绝不假装已勾），到�
   const alpha = tree2.entries.find((e) => e.name === 'alpha')!
   assert.equal(pluginEntrySelectedCount(done.selection, alpha), 3, '补齐后 = 该插件名下全部叶子')
   assert.equal(pluginEntryPickState(done.selection, alpha), 'all')
+})
+
+test('samePendingChecks：队列内容等价即视为同一队列（审计 P9-1 回归，防 effect 自激）', () => {
+  const a = [{ key: 'plugin-root', kind: 'root' as const }]
+  // applyPluginPendingChecks 每轮返回新数组：内容相同必须判等，否则 setState → effect 自激
+  assert.equal(samePendingChecks([...a], a), true, '同内容的两个数组必须判等')
+  assert.equal(samePendingChecks(a, [{ key: 'plugin-root', kind: 'root' as const }]), true)
+  assert.equal(samePendingChecks([], []), true)
+  assert.equal(samePendingChecks(a, []), false, '长度不同不等')
+  assert.equal(samePendingChecks(a, [{ key: 'other', kind: 'root' }]), false, 'key 不同不等')
+  assert.equal(samePendingChecks(a, [{ key: 'plugin-root', kind: 'entry' }]), false, 'kind 不同不等')
+  assert.equal(
+    samePendingChecks([...a, ...a], a), false, '重复项也不等（长度不同）',
+  )
 })
 
 test('「插件」一级区块展开前要读的分区：插件清单自己没读到也要报（否则展开后没有读取入口）', () => {

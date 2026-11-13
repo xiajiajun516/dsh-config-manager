@@ -1522,7 +1522,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                   <div>
                     <span className={css.fieldLabel}>{t('warnings.title')}</span>
                     <ul className={css.warnList}>
-                      {pushView.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                      {pushView.warnings.map((w, i) => <li key={i}>{redact(w)}</li>)}
                     </ul>
                   </div>
                 )}

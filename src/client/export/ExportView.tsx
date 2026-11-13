@@ -138,7 +138,7 @@ export function ExportView({ api, t }: ExportViewProps) {
     } catch (err) {
       // 请求整体失败（宿主异常 / 网络中断）：本次在途分区全部计为读取失败（UI-07 的复现路径）
       setInvFailed((prev) => [...new Set([...prev.filter((s) => !todo.includes(s)), ...todo])])
-      setInvError(err instanceof Error ? err.message : String(err))
+      setInvError(redactErrorText(err))
     } finally {
       for (const s of todo) invInFlight.current.delete(s)
       setInvPending((prev) => prev.filter((s) => !todo.includes(s)))

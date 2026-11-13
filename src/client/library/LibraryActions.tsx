@@ -163,7 +163,7 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
           },
           (err) => {
             if (!mounted.current || gen !== generation.current) return
-            setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: false, plan: null, changeSummary: undefined, planFingerprint: undefined, error: err instanceof Error ? err.message : String(err) })
+            setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: false, plan: null, changeSummary: undefined, planFingerprint: undefined, error: redactErrorText(err) })
             reportPending(row.key, null)
           },
         )
@@ -238,7 +238,7 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
             if (mounted.current && gen === generation.current) setInspect({ name, loading: false, error: null, result })
           } catch (err) {
             if (mounted.current && gen === generation.current) {
-              setInspect({ name, loading: false, error: err instanceof Error ? err.message : String(err), result: null })
+              setInspect({ name, loading: false, error: redactErrorText(err), result: null })
             }
           }
         })()

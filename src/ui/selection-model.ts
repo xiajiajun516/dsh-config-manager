@@ -1312,6 +1312,24 @@ export function applyPluginPendingChecks(
   return { selection: out, remaining }
 }
 
+/**
+ * 两条待补勾队列是否等价（同序、同 key、同 kind）。
+ *
+ * 为什么必须有它：`applyPluginPendingChecks` 每轮都返回**新数组**（内容可完全不变）。
+ * 调用方若无条件写回 state，effect 依赖 [pendingChecks, …] 就会自激成无界重渲染
+ * （清单读不到时队列永不出队 → 页面卡死，审计 P9-1）。
+ */
+export function samePendingChecks(
+  a: readonly PluginPendingCheck[],
+  b: readonly PluginPendingCheck[],
+): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i]!.key !== b[i]!.key || a[i]!.kind !== b[i]!.kind) return false
+  }
+  return true
+}
+
 /** 勾上该插件前还需要读取哪些分区的清单（展开/点击时触发惰性读取）。 */
 export function pluginEntryUnreadSections(entry: PluginTreeEntry): SectionId[] {
   const out: SectionId[] = []

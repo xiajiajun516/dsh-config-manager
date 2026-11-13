@@ -26,7 +26,7 @@
  *  - **环境变量覆盖即跳过**：区域声明的 env 存在且解析结果与默认位置不同 → 报码跳过，绝不猜新位置。
  *  - **不产生用户可见散文**：告警与计划项文案一律走消息目录（i18n 铁律）。
  */
-import { normalizePath } from '../utils/paths.ts';
+import { isSensitiveHomeRel, normalizePath } from '../utils/paths.ts';
 import { engineMsg } from './messages.ts';
 import { listFilesDetailed } from './link-report.ts';
 import type { RecursiveListing } from '../utils/recursive-walk.ts';
@@ -225,7 +225,25 @@ export class PluginDataAdapter extends FileCollectionAdapter {
         paths.push(p);
       }
     }
-    listing.paths = paths;
+    // 凭据文件永不进第三方数据分区（审计 P2-1 P0）：分区根是系统主目录，来源含插件自述声明，
+    // 声明 `.dsh` 就会把 ~/.dsh/.credentials.yaml 当配置带走 —— 收集侧先剔一次（打包侧还有同判据的兜底）。
+    const kept: string[] = [];
+    let sensitiveSkipped = 0;
+    let sensitiveSample = '';
+    for (const p of paths) {
+      if (!isSensitiveHomeRel(p)) {
+        kept.push(p);
+        continue;
+      }
+      sensitiveSkipped += 1;
+      if (sensitiveSample === '') sensitiveSample = p;
+    }
+    if (sensitiveSkipped > 0) {
+      warnings.push(engineMsg('adapter.pluginDataSensitiveSkipped', {
+        count: String(sensitiveSkipped), sample: sensitiveSample,
+      }));
+    }
+    listing.paths = kept;
     this.pendingWarnings = warnings;
     return listing;
   }
@@ -291,7 +309,7 @@ export class PluginDataAdapter extends FileCollectionAdapter {
       const ref = item.target?.ref;
       if (ref === undefined) return item;
       const rel = normalizeHomeRel(ref);
-      if (rel !== null && areaOfPath(entries, rel) !== null) return item;
+      if (rel !== null && areaOfPath(entries, rel) !== null && !isSensitiveHomeRel(rel)) return item;
       return {
         id: item.id,
         ...(item.unitId !== undefined ? { unitId: item.unitId } : {}),
@@ -316,7 +334,7 @@ export class PluginDataAdapter extends FileCollectionAdapter {
     if (ref !== undefined) {
       const rel = normalizeHomeRel(ref);
       const entries = await this.allowedEntries(ctx.target);
-      if (rel === null || areaOfPath(entries, rel) === null) {
+      if (rel === null || areaOfPath(entries, rel) === null || isSensitiveHomeRel(rel)) {
         return { ok: false, message: engineMsg('adapter.pluginDataPathNotAllowed', { path: ref }) };
       }
     }
