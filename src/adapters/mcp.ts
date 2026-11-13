@@ -22,6 +22,8 @@ import type {
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { locatePatchLineLayer, readEffectivePatchLines, resolveWriteLayer } from '../core/patch-layers.ts';
+import { findPatchKeyHazards } from '../utils/patch-yaml.ts';
+import { patchKeyHazardMessage } from './patch-key-guard.ts';
 import {
   MCP_CONNECTOR_STORE_REL, buildConnectorRecord, comparableConnector, exportConnectorBlock,
   findConnectorRecord, mergeConnectorIntoStoreText, pickConnectorKey, readConnectorStore,
@@ -153,6 +155,17 @@ const MCP_BUNDLE_NAME = '@deepseek-ai/dsh-mcp-client';
  * 上才回落 url 猜测（issue #133：此前写回丢了这个字段，stdio/http 只能靠 url 有没有值猜）。
  */
 export function buildMcpPatchLine(lineId: string, server: McpServerEntry): Record<string, unknown> {
+  return { id: lineId, name: MCP_BUNDLE_NAME, config: mcpPatchConfig(server) };
+}
+
+/**
+ * 写进 patch 行的 `config`。
+ *
+ * 单独抽出来是因为**键名守卫**（issue #137）要检查同一份对象：`env` / `headers` 的键名完全由
+ * 用户的 MCP 配置决定，`007` / `~` 这类名字会被 DSH 的 4.x 读端改判、空键会让整份文件解析失败。
+ * 守卫必须与真正写盘的形状同源，否则查的和写的不是同一份东西。
+ */
+function mcpPatchConfig(server: McpServerEntry): Record<string, unknown> {
   const config: Record<string, unknown> = { serverName: server.serverName, transport: server.type };
   if (server.type === 'streamable-http') {
     config['url'] = server.url;
@@ -163,7 +176,7 @@ export function buildMcpPatchLine(lineId: string, server: McpServerEntry): Recor
     if (server.env !== undefined) config['env'] = server.env;
     if (server.cwd !== undefined) config['cwd'] = server.cwd;
   }
-  return { id: lineId, name: MCP_BUNDLE_NAME, config };
+  return config;
 }
 
 /** 连接器计划项的 id 前缀（导入时按前缀分派到 applyConnectorItem） */
@@ -331,6 +344,27 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
       const comparable = { ...server } as Record<string, unknown>;
       delete comparable.sourceLineId;
       delete comparable.sourceFile;
+      // 与目标一致 ⇒ 不会写盘，键名风险不归我们管（先判 Skip 以免误报）。
+      if (existing) {
+        const existingComparable = { ...existing } as Record<string, unknown>;
+        delete existingComparable.sourceLineId;
+        delete existingComparable.sourceFile;
+        if (isDeepStrictEqual(existingComparable, comparable)) {
+          items.push({ id, kind: 'Skip', adapter: 'mcp', description: msg('adapter.mcpSame', { serverName: server.serverName }), severity: 'info' });
+          continue;
+        }
+      }
+      // issue #137：env / headers 的键名完全由用户配置决定，写出去的键名会被 DSH 的 4.x 读端改判
+      // （空键更会让整份文件解析失败）。命中即降级成本项「预判阻断」：本项不写、不整笔回滚。
+      const hazard = findPatchKeyHazards(mcpPatchConfig(server))[0];
+      if (hazard) {
+        const refForMessage = existing?.sourceLineId ?? server.sourceLineId ?? newLineId(server.serverName);
+        items.push({
+          id, kind: 'Error', adapter: 'mcp',
+          description: patchKeyHazardMessage(msg, refForMessage, hazard), severity: 'error',
+        });
+        continue;
+      }
       if (!existing) {
         const lineId = server.sourceLineId && targetLines.some((l) => l.lineId === server.sourceLineId)
           ? `${server.sourceLineId}-imported`
@@ -344,20 +378,17 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
           target: { adapter: 'mcp', ref: lineId, file: resolveWriteLayer(server.sourceFile, ctx.target.profile) },
         });
       } else {
+        // 已在上方判过「一致 ⇒ Skip」，到这里只可能是真差异；existingComparable 仍要给 detail 用
         const existingComparable = { ...existing } as Record<string, unknown>;
         delete existingComparable.sourceLineId;
         delete existingComparable.sourceFile;
-        if (isDeepStrictEqual(existingComparable, comparable)) {
-          items.push({ id, kind: 'Skip', adapter: 'mcp', description: msg('adapter.mcpSame', { serverName: server.serverName }), severity: 'info' });
-        } else {
-          items.push({
-            id, kind: 'Conflict', adapter: 'mcp',
-            description: msg('adapter.mcpDiff', { serverName: server.serverName }),
-            detail: `current=${JSON.stringify(existingComparable)} imported=${JSON.stringify(comparable)}`.slice(0, 200),
-            severity: 'warning',
-            target: { adapter: 'mcp', ref: existing.sourceLineId, file: existing.sourceFile },
-          });
-        }
+        items.push({
+          id, kind: 'Conflict', adapter: 'mcp',
+          description: msg('adapter.mcpDiff', { serverName: server.serverName }),
+          detail: `current=${JSON.stringify(existingComparable)} imported=${JSON.stringify(comparable)}`.slice(0, 200),
+          severity: 'warning',
+          target: { adapter: 'mcp', ref: existing.sourceLineId, file: existing.sourceFile },
+        });
       }
     }
     items.push(...await this.analyzeConnectors(data, ctx));

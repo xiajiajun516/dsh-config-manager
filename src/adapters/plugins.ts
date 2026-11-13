@@ -22,6 +22,8 @@ import { engineMsg } from './messages.ts';
 import { stringifyJsonSafe } from '../utils/json.ts';
 import { isPathSafe, normalizePath } from '../utils/paths.ts';
 import { isENOENT } from '../utils/guards.ts';
+import { findPatchKeyHazards } from '../utils/patch-yaml.ts';
+import { patchKeyHazardMessage } from './patch-key-guard.ts';
 import { PLUGIN_PATCH_REF_PREFIX, PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
 import { readEffectivePatchLines, resolveWriteLayer, USER_PATCH_FILE } from '../core/patch-layers.ts';
 import { stripMcpEntries } from './mcp.ts';
@@ -877,14 +879,27 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       // 层身份随计划项走：applyItem 按 pl.file 写回，导入前快照按 target.file 记原行，
       // 两者必须是同一层，否则回滚会把另一层改坏（issue #71）。
       const layer = resolveWriteLayer(pl.file, ctx.target.profile);
+      // 与目标一致 ⇒ 一个字节都不会写，键名风险不归我们管（见下方守卫）；先判 Skip 以免误报。
+      if (tl && isDeepStrictEqual(tl.raw, pl.raw)) {
+        items.push({ id, kind: 'Skip', adapter: 'plugins', description: msg('adapter.patchLineSame', { lineId: pl.lineId }), severity: 'info' });
+        continue;
+      }
+      // issue #137：写侧的 forceQuotes 只保**值**，键名仍会被 4.x 改判（空键更会让整份文件解析失败）。
+      // 命中即降级成本项「预判阻断」—— 本项不写、不触发整笔回滚，其余行照常导入。
+      const hazard = findPatchKeyHazards(pl.raw)[0];
+      if (hazard) {
+        items.push({
+          id, kind: 'Error', adapter: 'plugins',
+          description: patchKeyHazardMessage(msg, pl.lineId, hazard), severity: 'error',
+        });
+        continue;
+      }
       if (!tl) {
         items.push({
           id, kind: 'Create', adapter: 'plugins',
           description: msg('adapter.patchLineCreate', { lineId: pl.lineId }), severity: 'info',
           target: { adapter: 'plugins', ref: pl.lineId, file: layer },
         });
-      } else if (isDeepStrictEqual(tl.raw, pl.raw)) {
-        items.push({ id, kind: 'Skip', adapter: 'plugins', description: msg('adapter.patchLineSame', { lineId: pl.lineId }), severity: 'info' });
       } else {
         items.push({
           id, kind: 'Conflict', adapter: 'plugins',

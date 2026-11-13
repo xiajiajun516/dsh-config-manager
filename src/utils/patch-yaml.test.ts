@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import * as yaml from 'js-yaml';
 import * as yaml4 from 'js-yaml4';
 
-import { describePatchYamlError, dumpPatchDocument, isPatchJsExpr, loadPatchDocument } from './patch-yaml.ts';
+import { describePatchYamlError, dumpPatchDocument, findPatchKeyHazards, isPatchJsExpr, loadPatchDocument } from './patch-yaml.ts';
 
 /** 真机形态（issue #75 报告的那一行）：顶层行 + 行内 JS 表达式 + 嵌套 config。 */
 const SAMPLE = [
@@ -235,4 +235,84 @@ test('接线守卫：patch 门面与 boot-safety 的 YAML 解析都必须走本�
     'boot-safety 的 parseYaml 必须是方言：启动关键 yaml 含两层 cordis.patch.yml',
   );
   assert.equal(index.includes('yaml.dump('), false, 'src/index.ts 不得再用裸 yaml.dump 写 patch 文件');
+});
+
+/* ------------------------ 键名跨大版本守卫（issue #137） ------------------------ */
+
+test('#137 空键名 → parse-fail（顶层 / 数组元素 / 嵌套 map 都要定位到）', () => {
+  assert.deepEqual(findPatchKeyHazards({ '': 'v' }), [{ path: '', key: '', effect: 'parse-fail' }]);
+  assert.deepEqual(findPatchKeyHazards({ items: [{ '': 'v' }] }), [{ path: 'items[0]', key: '', effect: 'parse-fail' }]);
+  assert.deepEqual(findPatchKeyHazards({ config: { env: { '': 'v' } } }), [{ path: 'config.env', key: '', effect: 'parse-fail' }]);
+});
+
+test('#137 4.x 会改判的键名 → rename（全部实测命中）', () => {
+  const keys = [
+    '~', 'Null', 'NULL', 'True', 'TRUE', 'False', 'FALSE',
+    '007', '-007', '+7', '012', '-012', '+1', '00', '000', '0007',
+    '0x10', '0x1F', '0o17', '0b101', '0b1010',
+    '.5', '.5e2', '00.5', '.inf', '.Inf', '.INF', '-.inf', '.nan', '.NaN', '.NAN',
+  ];
+  for (const key of keys) {
+    assert.deepEqual(findPatchKeyHazards({ [key]: 'v' }), [{ path: '', key, effect: 'rename' }], '键 ' + JSON.stringify(key) + ' 必须命中');
+  }
+});
+
+test('#137 安全键名一个都不许拦（误伤比漏拦更贵：用户改不动自己的配置）', () => {
+  const safe = [
+    'docs', 'a b', 'k:v', 'k#v', 'k #v', '@scope/pkg', '.cjs', 'yes', 'no', 'on', 'off',
+    '1_000', '1:20', '12:34:56', '2020-01-01', '2020-01-01T00:00:00Z', '1.2', '1.2.3', '1.0', '0.',
+    '0', '-0', '7', '-7', '80', '1e3', '1E3', '1.0e+3', '1.5E-3', 'e3', '1e',
+    '0X10', '0O17', '0B101', '+.5', '-.5', '-0.5', 'Infinity', 'NaN', 'inf', 'nan',
+    'null', 'true', 'false', '...', '...x',
+  ];
+  for (const key of safe) {
+    assert.deepEqual(findPatchKeyHazards({ [key]: 'v' }), [], '键 ' + JSON.stringify(key) + ' 不该被拦');
+  }
+});
+
+/**
+ * 语料 = 手写边角 + 生成式数字形态。断言的是「检测器判据 === 真 4.x 判据」：
+ * 只有两边完全一致，规则表（AMBIGUOUS_KEYS）才不会悄悄漂移成误伤或漏拦。
+ */
+const KEY_CORPUS: string[] = (() => {
+  const keys = new Set<string>([
+    '~', 'null', 'Null', 'NULL', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE',
+    '...', '---', '--- x', '...x', 'docs', 'a b', 'k:v', 'k#v', 'k #v', '@scope/pkg', '.cjs',
+    'yes', 'no', 'on', 'off', '1_000', '1:20', '12:34:56', '2020-01-01', '2020-01-01T00:00:00Z',
+    '1.2', '1.2.3', '1.0', '0.', '0', '-0', '7', '-7', '80', '1e3', '1E3', '1.0e+3', '1.5E-3',
+    '0X10', '0O17', '0B101', '+.5', '-.5', '-0.5', '+.5e2', 'Infinity', 'NaN', 'inf', 'nan', 'e3', '1e',
+    ':', 'x:', ':x', 'x :y', '<x>', '[x]', '{x}', '&x', '*', '|', '1 2', 'a:b:c',
+  ]);
+  for (const body of ['7', '007', '012', '0x10', '0o17', '0b101', '.5', '00.5', '.5e2', '1.0', '1e3', '.inf', '.NaN']) {
+    for (const sign of ['', '-', '+']) keys.add(sign + body);
+  }
+  // 空键名单独断言：4.x 的报错文案随位置变化，混进语料只会让失败信息更吵
+  keys.delete('');
+  return [...keys];
+})();
+
+test('#137 检测器判据与真 4.x 完全一致（' + KEY_CORPUS.length + ' 项语料，防规则表漂移）', () => {
+  const mismatched: { key: string; realRisk: boolean; guarded: boolean }[] = [];
+  for (const key of KEY_CORPUS) {
+    const text = dumpPatchDocument({ [key]: 'v' });
+    let realRisk: boolean;
+    try {
+      const read = loadAsDsh(text);
+      const keys = read !== null && typeof read === 'object' ? Object.keys(read as Record<string, unknown>) : [];
+      realRisk = keys.length !== 1 || keys[0] !== key;
+    } catch {
+      // 4.x 整份读不了：比改判更糟，同样算风险（空键名 / 文档分隔符形态）
+      realRisk = true;
+    }
+    const guarded = findPatchKeyHazards({ [key]: 'v' }).length > 0;
+    if (realRisk !== guarded) mismatched.push({ key, realRisk, guarded });
+  }
+  assert.deepEqual(mismatched, [], '检测器与 4.x 不一致的键：AMBIGUOUS_KEYS 需要更新');
+});
+
+test('#137 跳过 {__jsExpr} 子树，且不怕 YAML 锚点造出的环', () => {
+  assert.deepEqual(findPatchKeyHazards({ a: [{ __jsExpr: '007' }] }), [], '{__jsExpr} 是我们的内存形态，不是用户键名');
+  const cyclic: Record<string, unknown> = { ok: 'v' };
+  cyclic['self'] = cyclic;
+  assert.deepEqual(findPatchKeyHazards(cyclic), [], '环必须只走一次（否则守卫自己会爆栈）');
 });

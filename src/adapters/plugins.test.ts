@@ -952,3 +952,27 @@ test('④ 可移植性：本机 pnpm-workspace.yaml 存在但读不出来 → �
     '读不到就不写：本机文件逐字不动',
   );
 });
+
+test('#137 plugins: patch 行键名会被 DSH 读端改判 → 计划项降级为 Error（不写、不整笔回滚）', async () => {
+  const adapter = new PluginsAdapter();
+  const data = {
+    version: 1,
+    plugins: [],
+    patch: [
+      { lineId: 'nums', file: 'cordis.patch.yml', raw: { id: 'nums', name: 'pkg-a', config: { '007': 1 } } },
+      { lineId: 'empty', file: 'cordis.patch.yml', raw: { id: 'empty', name: 'pkg-a', config: { '': 1 } } },
+      { lineId: 'ok', file: 'cordis.patch.yml', raw: { id: 'ok', name: 'pkg-a', config: { mode: 'x' } } },
+    ],
+  } as unknown as PluginsSection;
+  const dst = makeContext('linux', '/home/bob');
+  const sections = new Map([['plugins', data]]);
+  const items = await adapter.analyzeImport(data, makeImportContext(dst, sections));
+  const byId = new Map(items.map((i) => [i.id, i]));
+
+  assert.equal(byId.get('patch:nums')?.kind, 'Error');
+  assert.match(byId.get('patch:nums')!.description, /007/);
+  assert.equal(byId.get('patch:empty')?.kind, 'Error');
+  assert.match(byId.get('patch:empty')!.description, /解析失败/);
+  assert.equal(byId.get('patch:ok')?.kind, 'Create', '正常键名照旧 Create');
+  assert.equal(byId.get('patch:nums')?.target, undefined, '被拦的项没有写入面，不该认领 target');
+});

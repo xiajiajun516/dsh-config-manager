@@ -71,6 +71,90 @@ export function dumpPatchDocument(value: unknown): string {
 }
 
 /**
+ * 键名在 DSH 读端（js-yaml 4.x）的**改判**形态。
+ *
+ * 为什么需要单独一层检查：`forceQuotes`（issue #135）只保**值**，键名是 js-yaml 自己决定加不加
+ * 引号的 —— 5.x 只给「YAML 1.2 会改判」的键加引号，1.1-only 的形态（`007`、`True`、`.5`、`~`）
+ * 一律裸写，于是 4.x 把键读成 `7` / `true` / `0.5` / `null`：配置静默改名，插件读不到自己的键。
+ * 空键名更糟 —— `: 'v'` 会让 4.x **整份文件解析失败**（该层所有行一起失效）。
+ */
+export type PatchKeyHazardEffect = 'parse-fail' | 'rename'
+
+/** 一处键名风险。 */
+export interface PatchKeyHazard {
+  /** 键所在容器的路径（`''` = 顶层；数组元素记作 `items[3]`） */
+  path: string
+  /** 出问题的键名原文（空串 = 空键名） */
+  key: string
+  /** `parse-fail` = 4.x 整份文件解析失败；`rename` = 键被改判成数字 / 布尔 / null */
+  effect: PatchKeyHazardEffect
+}
+
+/**
+ * 4.x（YAML 1.1 隐式解析）会改判的裸键形态 —— **只列实测会改判的**。
+ *
+ * 实测口径（`.tmp` 之外不留脚本，结论进 docs/evidence）：`0X10` / `0B101` / `+.5` / `-.5` /
+ * `1_000` / `2020-01-01` / `yes` / `1.2`（5.x 自己会加引号或两端都是字符串）一律**不算**风险。
+ */
+const AMBIGUOUS_KEYS: readonly RegExp[] = [
+  /^~$/,
+  /^(?:null|Null|NULL|true|True|TRUE|false|False|FALSE)$/,
+  /^[-+]?0x[0-9a-fA-F]+$/,
+  /^[-+]?0b[01]+$/,
+  /^[-+]?0o[0-7]+$/,
+  /^[-+]?\d+$/,
+  /^(?:[-+]?\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/,
+  /^[-+]?\.(?:inf|Inf|INF)$/,
+  /^\.(?:nan|NaN|NAN)$/,
+]
+
+/** 5.x 会把键裸写吗（不加引号）—— 用真 dumper 判，不靠推断引号规则。 */
+function isKeyWrittenBare(key: string): boolean {
+  try {
+    return dumpPatchDocument({ [key]: 'x' }).startsWith(`${key}:`)
+  } catch {
+    return false
+  }
+}
+
+function keyHazardEffect(key: string): PatchKeyHazardEffect | null {
+  if (key === '') return 'parse-fail'
+  if (!isKeyWrittenBare(key)) return null
+  // 文档分隔符写进键位会把整份文件切成两段（`--- x: v` 连 5.x 自己都读不回来）
+  if (key === '---' || key.startsWith('--- ')) return 'parse-fail'
+  return AMBIGUOUS_KEYS.some((pattern) => pattern.test(key)) ? 'rename' : null
+}
+
+/**
+ * 找出一个 patch 行里**会跨大版本读坏**的键名（issue #137）。
+ *
+ * 只扫键、不扫值（值由 `dumpPatchDocument` 的 `forceQuotes` 兜住）；`{__jsExpr}` 是本模块的
+ * 内存形态不是用户键名，整棵子树跳过；YAML 锚点可以造环，同一对象只走一次。
+ * 返回空数组 = 这一行写出去 4.x / 5.x 读到的键名一致。
+ */
+export function findPatchKeyHazards(value: unknown): PatchKeyHazard[] {
+  const hazards: PatchKeyHazard[] = []
+  const seen = new Set<object>()
+  const walk = (node: unknown, path: string): void => {
+    if (node === null || typeof node !== 'object') return
+    if (isPatchJsExpr(node)) return
+    if (seen.has(node)) return
+    seen.add(node)
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => walk(item, `${path}[${index}]`))
+      return
+    }
+    for (const [key, child] of Object.entries(node as Record<string, unknown>)) {
+      const effect = keyHazardEffect(key)
+      if (effect !== null) hazards.push({ path, key, effect })
+      walk(child, path === '' ? key : `${path}.${key}`)
+    }
+  }
+  walk(value, '')
+  return hazards
+}
+
+/**
  * 解析报错的**安全摘要**：只取首行。
  *
  * 为什么必须截断：js-yaml 的 `Error.message` 会在首行之后附带**出错处的源码片段**，而

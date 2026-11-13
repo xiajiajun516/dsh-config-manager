@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { McpAdapter, extractMcpServers, buildMcpPatchLine, mcpServerUnitId, mcpConnectorUnitId } from './mcp.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
 import type { PlanItem } from '../core/types.ts';
+import type { McpExportSection } from './mcp.ts';
 
 test('mcp: extractMcpServers 兼容单行与 insert 块', () => {
   const lines = [
@@ -417,5 +418,33 @@ test('mcp 条目级：单元 id 与 export 自洽（勾哪个就带出哪个）'
     const inOauth = (picked.data.connectors?.oauthConnections ?? []).some((c) => mcpConnectorUnitId(c.key) === unit.id);
     assert.equal(inServers || inConnections || inOauth, true, '单元 ' + unit.id + ' 被列出，勾选后却不在导出里');
   }
+});
+
+test('#137 mcp: env / headers 的键名会被 DSH 读端改判 → 计划项降级为 Error（本项不写、不整笔回滚）', async () => {
+  const adapter = new McpAdapter();
+  const data = {
+    version: 1,
+    servers: [
+      { serverName: 'with-env', type: 'stdio', command: 'node', env: { '007': 'v' }, sourceLineId: 'mcp-num' },
+      { serverName: 'with-empty', type: 'stdio', command: 'node', env: { '': 'v' }, sourceLineId: 'mcp-empty' },
+      { serverName: 'clean', type: 'stdio', command: 'node', env: { NORMAL: 'v' }, sourceLineId: 'mcp-clean' },
+    ],
+  } as unknown as McpExportSection;
+  const dst = makeContext('linux', '/home/bob', 'web');
+  const items = await adapter.analyzeImport(data, makeImportContext(dst, new Map([['mcp', data]])));
+  const byId = new Map(items.map((i) => [i.id, i]));
+
+  const numeric = byId.get('mcp:with-env');
+  assert.equal(numeric?.kind, 'Error', '键 007 会被 4.x 读成 7 → 必须拦');
+  assert.equal(numeric?.severity, 'error');
+  assert.match(numeric!.description, /007/, '文案要点名是哪个键，否则用户无从下手');
+  assert.match(numeric!.description, /mcp-num/, '文案要点名是哪一行');
+  assert.equal(numeric?.target, undefined, '被拦的项没有写入面，不该认领 target');
+
+  const empty = byId.get('mcp:with-empty');
+  assert.equal(empty?.kind, 'Error', '空键名会让 4.x 整份文件解析失败 → 必须拦');
+  assert.match(empty!.description, /解析失败/);
+
+  assert.equal(byId.get('mcp:clean')?.kind, 'Create', '正常键名照旧 Create');
 });
 

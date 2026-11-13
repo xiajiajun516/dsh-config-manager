@@ -10,12 +10,7 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > the build fails fast if the section is missing, so you cannot forget to update it.
 >
 > **条目落位（按改动性质分组）**：新条目一律先写进 `## [Unreleased]`，并放进对应分组 ——
-> `### 🆕 新增 · Added` / `### 🔧 变更 · Changed` / `### 🐛 修复 · Fixed
-
-- **「磁盘占用」卡里那块「遗留数据」整块去掉了**：它只是几个不再被读取的旧目录（例如迁移前的 checkpoints），既不进合计也不能一键清，单独占一块反而让卡片显得零碎；这些目录仍会如实出现在无遗留数据时的常规扫描里，体积与文件数不受影响。
-  **The "Legacy data" block on the Disk usage card is gone**: it only listed a few directories the plugin no longer reads (pre-migration checkpoints, for instance), which counted toward no total and could not be cleaned from there, so the block made the card look fragmented for no decision value.
-
-### 🐛 修复 · Fixed`（`🗑️ 移除 · Removed` / `🔐 安全 · Security` 同理）；
+> `### 🆕 新增 · Added` / `### 🔧 变更 · Changed` / `### 🐛 修复 · Fixed`（`🗑️ 移除 · Removed` / `🔐 安全 · Security` 同理）；
 > 没有内容的分组**不写标题**。已发布的历史版本段保留当时写法，不回改。
 >
 > **一句话一条**：一条 = **一个用户能看懂的更新或修复**（中文一行 + 英文缩进续行），只写「现在能做什么 / 不再怎样」；
@@ -33,15 +28,23 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🆕 新增 · Added
+
+- **写回补丁前先检查配置项的键名**：键名会被主程序读成数字、布尔或空（`007`、`True`、`~` 这类），或者干脆是空键名（会让主程序整份配置读不出来）时，这一项不再被写入，导入结果直接告诉你哪个键、改成加引号的写法；同一批里其它项照常导入，不会因为一个坏键全部回滚。（issue #137）
+  **Patch write-back now checks config key names before writing**: when a key would be read by the host as a number, a boolean or null (`007`, `True` or `~`, for instance), or when it is an empty key that makes the host fail to parse the whole file, that item is skipped instead of written and the import result names the key and the quoted form to use; the other items in the same import still apply, so one bad key never rolls everything back. (issue #137)
+
 ### 🔧 变更 · Changed
 
+- **「磁盘占用」卡里那块「遗留数据」整块去掉了**：它只是几个不再被读取的旧目录（例如迁移前的 checkpoints），既不进合计也不能一键清，单独占一块反而让卡片显得零碎；这些目录仍会如实出现在无遗留数据时的常规扫描里，体积与文件数不受影响。
+  **The "Legacy data" block on the Disk usage card is gone**: it only listed a few directories the plugin no longer reads (pre-migration checkpoints, for instance), which counted toward no total and could not be cleaned from there, so the block made the card look fragmented for no decision value.
 - **确认弹窗的按钮次序统一为「取消在左、确认在右」**：以前删除/停止这类二次确认弹窗把确认放在左边，而其他弹窗是「取消 … 主操作」，两套次序并存容易点错；现在全站一致，初始焦点仍然落在取消上（误触保护不变）。
   **Confirm dialogs now put Cancel on the left and the primary action on the right**: destructive confirmations used to reverse that order compared with every other dialog; the whole product is consistent now, and focus still starts on Cancel so a stray Enter never fires the destructive action.
 
 ### 🐛 修复 · Fixed
 
 - **写回启动补丁时字符串一律保持字符串，空值不再变成 null、`True` 不再变成布尔、`007` 不再变成 7**：以前插件每改动这一层一次，写下去的字符串值就会被主程序读成别的类型——空字符串读成 null、数字样子的串读成数字、`.inf` 读成无穷大；依赖字符串配置的插件（例如技能列表里带空串的那类）重启即报校验错误，用户看到的是「我什么都没改，它自己坏了」。现在写回给每个字符串值加引号，主程序读到的就是当初写进去的那份字面量；以前已经写坏的字段仍需按已知限制里的指引手工改回。（issue #135）
-  **Strings written back into the startup patch stay strings — an empty value no longer turns into null, `True` into a boolean or `007` into 7**: every time the plugin rewrote that layer, the host read the saved strings as other types — an empty string became null, numeric-looking text became a number, `.inf` became infinity — and plugins that validate string config (a skill list containing an empty entry, for instance) failed at startup, which looked like «I changed nothing and it broke itself». Every string value is now quoted on write, so the host reads exactly what was saved; fields already damaged by earlier versions still need the manual fix described in known limits. (issue #135)：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
+  **Strings written back into the startup patch stay strings — an empty value no longer turns into null, `True` into a boolean or `007` into 7**: every time the plugin rewrote that layer, the host read the saved strings as other types — an empty string became null, numeric-looking text became a number, `.inf` became infinity — and plugins that validate string config (a skill list containing an empty entry, for instance) failed at startup, which looked like «I changed nothing and it broke itself». Every string value is now quoted on write, so the host reads exactly what was saved; fields already damaged by earlier versions still need the manual fix described in known limits. (issue #135)
+- **「关于」页不再有两个同等醒目的主按钮**：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
   **The About panel no longer shows two equally loud primary buttons**: "Update now" and "Star on GitHub" used to be the same dark primary style side by side; the star link is now an outlined secondary button so the update action is the one that stands out.
 
 ## [0.8.2] - 2026-11-12
