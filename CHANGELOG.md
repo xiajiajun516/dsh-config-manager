@@ -10,7 +10,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > the build fails fast if the section is missing, so you cannot forget to update it.
 >
 > **条目落位（按改动性质分组）**：新条目一律先写进 `## [Unreleased]`，并放进对应分组 ——
-> `### 🆕 新增 · Added` / `### 🔧 变更 · Changed` / `### 🐛 修复 · Fixed`（`🗑️ 移除 · Removed` / `🔐 安全 · Security` 同理）；
+> `### 🆕 新增 · Added` / `### 🔧 变更 · Changed` / `### 🐛 修复 · Fixed
+
+- **「磁盘占用」卡的「遗留数据」不再被卡片高度裁掉、也不再与边框紧贴**：遗留目录多的时候整块会超出固定高度卡的可见区，现在这块自己带滚动条；块内补了 8px 内边距，文字不再顶到描边上。
+  **The "Legacy data" section on the Disk usage card no longer gets clipped by the card's fixed height, and its text no longer touches the border**: the block scrolls on its own when there are several legacy directories, and 8px of inner padding keeps the text off the 1px outline.
+
+### 🐛 修复 · Fixed`（`🗑️ 移除 · Removed` / `🔐 安全 · Security` 同理）；
 > 没有内容的分组**不写标题**。已发布的历史版本段保留当时写法，不回改。
 >
 > **一句话一条**：一条 = **一个用户能看懂的更新或修复**（中文一行 + 英文缩进续行），只写「现在能做什么 / 不再怎样」；
@@ -27,11 +32,6 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > 体例细节、分组表、发版两道门禁与写后自检命令见项目 skill `.dsh/skills/changelog-writing/SKILL.md`（DSH 会自动发现并加载）。
 
 ## [Unreleased]
-
-### 🆕 新增 · Added
-
-- **「环境 → 档案」页首屏现在直接告诉你这台机器的状态**：新增「本机概况」卡（DSH 版本 / 数据目录 / 已装插件数 / 磁盘占用）与「数据目录」卡（备份文件、导入前快照、同步覆盖与工作副本、回滚点各占多少与多少文件），不用再跑回首页看状态行、或翻到维护页看磁盘占用。
-  **The Environment → Profiles view now opens with the machine's state**: a new "This machine" card (DSH version, data directory, installed plugins, disk used) plus a "Data directories" card breaking down backups, pre-import snapshots, sync overlay, and rollback points by size and file count — no more jumping to Home or Maintenance to answer those questions.
 
 ### 🔧 变更 · Changed
 

@@ -3421,6 +3421,9 @@ body {
   max-height: 108px;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  /* 容器自带 1px 描边 + bg-base（.planScroll）：没有内边距时组标题与首行会顶到描边上
+     （2026-11-13 真机截图：文字与卡片紧贴）。8px 与 .duRow 的左右呼吸一致。 */
+  padding: 8px;
 }
 
 .duRow {
