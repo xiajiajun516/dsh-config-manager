@@ -503,11 +503,11 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
         </Card>
       ) : (
         <>
-          {/* 3. 最近活动表（**首页最后一个数据块**）。2026-11-01：不再用 .fillCard 撑满视口 ——
-              8 行记录撑到 400px 后，卡内下方留出约 150px 纯空区，被读成「表格还没加载完」
-              （app-screens §4.2：卡内 >40px 空带读作未完成）。现在卡片高度随内容，
-              行数多时由 .activityRows 的 max-height 内滚；页底留白属于页面层级，读起来是完整的。 */}
-          <Card className={css.activityCard}>
+          {/* 3. 最近活动表（**首页最后一个数据块**）。2026-11-14：卡片重新吃满剩余高度 ——
+              用户要求「骨架铺满整页、加载完成后不位移」：高度随内容时，骨架（5 行）只占半页，
+              数据一到卡片长高、整页被推下去。现在卡片边界恒等于可用空间，行数多时列表内滚；
+              卡内空带由行本身铺满（骨架按一屏行数生成），不再是「下半截空一条」。 */}
+          <Card className={css.activityCard + ' ' + css.activityCardFill}>
             <div className={css.activityHeader}>
               <span className={css.activityTitle}>{t('overview.activity.title')}</span>
               {/* 加载态不写字（2026-11-04 用户第二条）：列头右侧原先挂「加载中…」，
@@ -529,8 +529,10 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
             {historyState === 'loading'
               ? (
                 <div className={css.activityRows}>
-                  {/* 骨架行与真实行同一 grid / 行高 / 分隔线，装在同一个滚动容器里 */}
-                  <SkeletonActivityRows count={5} label={t('common.loading')} />
+                  {/* 骨架行与真实行同一 grid / 行高 / 分隔线，装在同一个滚动容器里。
+                      行数按**一屏**给（16 × 38.5px ≈ 616px，覆盖 564×720 画布的活动区），
+                      多出来的部分被滚动容器裁掉 —— 占位因此铺满整张卡，而不是只铺半页。 */}
+                  <SkeletonActivityRows count={16} label={t('common.loading')} />
                 </div>
               )
               : activity.length === 0

@@ -1153,6 +1153,14 @@ body {
   overflow: hidden;
 }
 
+/* 空态卡吃满剩余高度（2026-11-14 用户要求）：.libraryListState 已经「吃掉剩余高度」，
+   但子项 .empty 只有内容高（≈76px）居中 —— 余下的几百像素全空着，整页读成「这里坏了」。
+   只在本页把空态拉满，**不改共享 .empty 本体**（它被 30+ 处当紧凑条用）。 */
+.libraryEmptyFill > .empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .artifactRow {
   border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 60%, transparent);
 }
@@ -3492,6 +3500,15 @@ body {
   min-height: 0;
 }
 
+/* 首页最近活动卡：**恒吃满剩余高度**（2026-11-14 用户反馈「骨架只铺到页面一半，数据到货后
+   卡片长高、整页往下推」）—— 骨架 / 空态 / 已加载三种状态同一个盒子，列表在内部滚动，
+   卡片边界不动，页面因此不发生位移。
+   为什么单开一个类而不是给 .activityCard 加 grow：那张类卡同时被 .diskUsageCard 复用
+   （环境页磁盘占用卡是**固定高度**，语义相反），grow 会溢出它的高度契约。 */
+.activityCardFill {
+  flex: 1 1 auto;
+}
+
 /* —— 磁盘占用卡（固定高度；内部滚动） ——
  *
  * 需求（用户实测）：磁盘占用卡必须**高度固定**，且与下方的备份文件卡之间有间距。
@@ -3623,11 +3640,11 @@ body {
 }
 
 .activityRows {
-  /* v3 曾让卡片吃掉首页剩余高度（.fillCard）并让列表伸展。2026-11-01 改为限高内滚：
-     撑满那一刻，8 行记录下方会空出约 150px 纯背景，读起来是「还在加载」，而不是
-     「这里本来就这么高」（app-screens §4.2 / §10：空得零散像没做完）。
-     现在卡片高度随内容，行数超过上限时本容器内滚 —— 长列表纪律与 .planScroll 一致。 */
-  max-height: 460px;
+  /* 与 .activityCard 成对：卡片吃掉剩余高度后，由本容器**填满卡片并自己内滚**
+     （2026-11-14 用户要求「骨架与真实态都铺满整页、加载完成不位移」：
+     原 460px 限高会让卡片比可用空间矮，页底空出一大片，数据到货时又长高）。
+     scrollbar-gutter 保留：滚动条出现/消失时行宽不跳。 */
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   /* 2026-11-01 视觉 pass：去掉列表自带的 1px 外框与 bg-base 深底。
@@ -5651,6 +5668,74 @@ body {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* —— 迁移历史加载骨架（2026-11-14）——
+ * 骨架**复用真实页的容器类**（.statRow / .historyTightCard / .historyControlRow /
+ * .historyGroup / .historyRow / .historyMeta），这里只定义占位条的宽高。
+ * 为什么这么做：旧骨架是独立的 SkeletonTable（3 列 5 行的表格盒），而真实页是
+ * 「徽章行 + 两张单行控件卡 + 分组两行式行卡」—— 两套几何 ⇒ 数据到货时整页重排
+ * （用户反馈「占位动画大小不对、加载后页面形变」）。容器类共用后几何不可能再漂移。 */
+.historySkeletonBadge {
+  flex: none;
+  width: 64px;
+  height: 18px;
+  border-radius: var(--cm-r-2);
+}
+
+.historySkeletonBadgeSm {
+  flex: none;
+  width: 28px;
+  height: 18px;
+  border-radius: var(--cm-r-2);
+}
+
+.historySkeletonLabel {
+  flex: none;
+  width: 96px;
+  height: 11px;
+}
+
+/* 下拉 / 输入框的占位：与 .historySearch 同高（28px）、同圆角，读起来是「一个控件位」 */
+.historySkeletonControl {
+  flex: none;
+  width: 104px;
+  height: 28px;
+  border-radius: var(--cm-r-2);
+}
+
+/* 搜索框位：不吃满整行（真实搜索框 flex:1，但加载态没有「地址/关键词语义」可表达） */
+.historySkeletonSearch {
+  flex: 1 1 120px;
+  min-width: 120px;
+  height: 28px;
+  border-radius: var(--cm-r-2);
+}
+
+/* 按钮位：与 sm 文字按钮同高（26px） */
+.historySkeletonButton {
+  flex: none;
+  width: 68px;
+  height: 26px;
+  border-radius: var(--cm-r-2);
+}
+
+.historySkeletonTime {
+  flex: none;
+  width: 58px;
+  height: 11px;
+}
+
+.historySkeletonSections {
+  flex: none;
+  width: 88px;
+  height: 11px;
+}
+
+.historySkeletonSummary {
+  display: block;
+  width: 78%;
+  height: 11px;
+}
+
 /* 历史页的控件行：第一行「筛什么」（三个维度下拉 + 搜索框），第二行「拿到之后做什么」。
    不用 .actionRow 的理由是它 margin 0 0 10px，两行时会多出一段不均匀的空隙。 */
 .historyControlRow {
@@ -7072,6 +7157,38 @@ button.profileRowMain:hover {
   min-height: 0;
   overflow: auto;
   padding: 8px;
+}
+
+/* —— 回滚点加载骨架（2026-11-14）——
+ * 骨架复用真实容器（.rollbackToolbar / .rollbackLedger / .rollbackSessions /
+ * .rollbackLedgerMain / .rollbackGroup），只有占位条尺寸在此定义。
+ * 旧骨架是三张 SkeletonList 卡（≈210px），真实卡只有一行工具栏（≈26px）+ 一行说明 ⇒
+ * 卡片从 210 缩到 ~100，环境页整页往上跳（用户反馈「卡片大小与占位动画不符」）。 */
+.rollbackSkeletonSummary {
+  flex: none;
+  width: 42%;
+  max-width: 220px;
+  height: 11px;
+}
+
+.rollbackSkeletonButton {
+  flex: none;
+  width: 72px;
+  height: 26px;
+  border-radius: var(--cm-r-2);
+}
+
+/* 台账弹窗内的左侧会话条目 / 右侧回滚点行 */
+.rollbackSkeletonSession {
+  width: 100%;
+  height: 42px;
+  border-radius: var(--cm-r-2);
+}
+
+.rollbackSkeletonPoint {
+  width: 100%;
+  height: 30px;
+  border-radius: var(--cm-r-2);
 }
 
 /* 用户自由文本（已脱敏）：单行省略，全文进 title */

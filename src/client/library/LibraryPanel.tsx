@@ -280,7 +280,9 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
       )}
 
       {/* 加载态 / 空态与列表**同一条高度契约**（.libraryListState）：三者都吃掉剩余高度，
-          底栏因此恒贴底（只在有数据时才需要列表本身，空态不该让页面塌成半截）。 */}
+          底栏因此恒贴底（只在有数据时才需要列表本身，空态不该让页面塌成半截）。
+          2026-11-14 用户要求：空态卡本身也要吃满这块空间（.libraryEmptyFill）——
+          此前它只有内容高、居中悬在几百像素的空白里，整页读成「这里坏了」。 */}
       {/* 还有来源在路上（本机两源已就绪但为空）时也走加载态：绝不先给「暂无产物」的结论。
           与空态共用同一个 .libraryListState 契约（守卫要求恰好两处：加载态 + 空态）。 */}
       {(loading || (anySourcePending && filtered.length === 0)) && (
@@ -292,7 +294,7 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
       )}
 
       {!loading && !anySourcePending && filtered.length === 0 && (
-        <div className={css.libraryListState}>
+        <div className={css.libraryListState + ' ' + css.libraryEmptyFill}>
           <Empty>
             {lib.query.trim() !== '' || lib.sourceFilter !== null
               ? t('library.emptyFiltered')

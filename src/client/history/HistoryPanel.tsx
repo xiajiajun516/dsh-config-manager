@@ -16,7 +16,6 @@ import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Empty } from '../common/ui.tsx'
 import { Icon } from '../common/Icon.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
-import { SkeletonTable } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -157,10 +156,63 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
     }
   }
 
+  // 加载态：**整页骨架照抄真实页的壳**（徽章行 → 清理卡 → 过滤卡 → 列表卡）。
+  // 容器类全部复用真实类，只有文字与控件换成占位条 ⇒ 数据到货时位置与高度都不跳。
+  // 2026-11-14 用户反馈：旧骨架是一张 3 列表格（SkeletonTable），真实页却是「徽章行 +
+  // 两张单行控件卡 + 分组两行式行卡」，两套几何 ⇒ 数据一到整页重排、高矮差一多半。
   if (state.status === 'loading') {
     return (
       <div className={css.viewBody}>
-        <SkeletonTable label={t('history.loading')} />
+        <div className={css.statRow} role="status" aria-busy="true" aria-label={t('history.loading')}>
+          <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+          <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+          <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+          <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+        </div>
+        {/* 自动清理卡：标签 + 上限下拉 + 当前条数徽章 + 行尾「立即清理」 */}
+        <Card className={css.historyTightCard}>
+          <div className={css.historyControlRow}>
+            <span className={css.skeletonBar + ' ' + css.historySkeletonLabel} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonControl} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+            <span className={css.statusSpacer} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonButton} />
+          </div>
+        </Card>
+        {/* 过滤 + 导出卡：三个维度下拉 + 搜索框；第二行两颗按钮 */}
+        <Card className={css.historyTightCard}>
+          <div className={css.historyControlRow}>
+            <span className={css.skeletonBar + ' ' + css.historySkeletonControl} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonControl} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonControl} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonSearch} />
+          </div>
+          <div className={css.historyControlRowEnd}>
+            <span className={css.skeletonBar + ' ' + css.historySkeletonButton} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonButton} />
+          </div>
+        </Card>
+        {/* 列表卡：组头（类型 + 条数徽章）+ 两行式行卡 */}
+        <Card>
+          <div className={css.historyGroup}>
+            <div className={css.statRow}>
+              <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+              <span className={css.skeletonBar + ' ' + css.historySkeletonBadgeSm} />
+            </div>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <div key={i} className={css.historyRow}>
+                <div className={css.historyRowMain}>
+                  <div className={css.historyMeta}>
+                    <span className={css.skeletonBar + ' ' + css.historySkeletonTime} />
+                    <span className={css.skeletonBar + ' ' + css.historySkeletonBadgeSm} />
+                    <span className={css.skeletonBar + ' ' + css.historySkeletonSections} />
+                  </div>
+                  <span className={css.skeletonBar + ' ' + css.historySkeletonSummary} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     )
   }

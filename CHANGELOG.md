@@ -61,6 +61,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **加载中的占位块现在和真实内容同尺寸**：首页的最近活动、环境页的「工作区 + 会话回滚」、产物库和迁移历史以前骨架只铺半页、或者比真卡高一大截，数据一到整页就重排；现在占位块直接复用真实卡片的容器，数据到货时位置和高度都不动，首页活动卡与产物库空态还各自占满剩余空间。
+  **Loading placeholders are now the size of the real content**: skeletons on Home's recent activity, the environment page's workspace/rollback card, the Library and migration history used to fill half the page or stand much taller than the real card, so the page reflowed the moment data arrived; placeholders now reuse the real card containers, so positions and heights stay put, and both the activity card and the library empty state fill the remaining space.
 - **长任务不再被「等待同步锁超时」误杀**：以前超时计时把任务自己干活的时间也算成等锁，于是只要单个任务跑得比上限久（测试里 1.5 秒就够），就会报「同步工作副本正被另一个同步任务占用」；现在只有真的排队等锁才计时。
   **Long tasks are no longer failed by a lock-wait timeout**: the deadline used to include the time the task itself spent working, so anything slower than the bound (1.5 s in tests) reported that the sync working copy was busy; only genuine queueing now counts.
 - **重装的兜底备份失败会立刻停手**：以前备份这一步失败也照样往下清空 `~/.dsh`，等于把唯一退路丢了；现在备份失败直接中止，后面的清空步骤一步都不会执行。
