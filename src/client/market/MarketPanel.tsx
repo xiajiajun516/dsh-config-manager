@@ -26,7 +26,7 @@ import type { ConfigManagerApi } from '../api.ts'
 import type { ImportResult, ItemResolution } from '../../core/types.ts'
 import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
+import { InspectIcon } from '../common/Icon.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
 import { effectiveImportSelection, type Selection } from '../../ui/selection-model.ts'
@@ -424,7 +424,15 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
   }
 
   return (
-    <div className={css.viewBody}>
+    /* 浏览列表模式整屏定高（.marketFill）：筛选卡吃满剩余高度、条目在卡内滚动，
+       整页不跟着条目数变长（视觉稿 T-04：筛选卡 flex-1）。详情页不套定高，保持整页滚动。 */
+    <div
+      className={
+        state.subView === 'browse' && !downloadOpen
+          ? `${css.viewBody} ${css.marketView} ${css.marketFill}`
+          : `${css.viewBody} ${css.marketView}`
+      }
+    >
       {/* 子视图切换（§4.6）：浏览市场 / 我的配置（低频面板状态镜像 runStore，切 tab/刷新不丢） */}
       <div className={css.modeTabs} role="tablist">
         <button
@@ -471,7 +479,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
       {/* 列表视图的表头与市场操作卡：进入条目向导页时整块让位（P2 起向导是**页面**，
           不再在列表之上叠弹窗） */}
       {!downloadOpen && (<>
-      <SectionTitle title={t('section.label')} info={<InfoHint text={t('section.description')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('section.label')} tooltip={t('section.description')} />
 
       {/* 市场操作行（2026-11-01）：原为一张卡，卡里只有标题 + 两个按钮，右侧四百多像素永远空着
           （app-screens §4.2 卡内死空间，白吃约 50px）。改成标题与动作同一行 —— 它本来就是
@@ -595,9 +603,15 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
         </>
       )}
 
-      {/* 条目列表（浏览） */}
+      {/* 条目列表（浏览）：整卡吃满剩余高度（.marketListCard），条目在卡内滚动 */}
       {!downloadOpen && (
-        <Card>
+        <Card
+          className={
+            !state.browsing && state.loadError === null && filtered.length > 0
+              ? `${css.marketListCard} ${css.marketListCardFill}`
+              : css.marketListCard
+          }
+        >
           {/* 加载失败必须说清原因并可就地重试：此前把 loadError 渲染成中性空态文案
               （「内置市场尚未加载，请先『拉取最新』」），错误原文被整个丢弃 ——
               用户只会反复点刷新，永远不知是宿主没就绪、网络不通还是本地 index 读不出来。 */}
@@ -615,13 +629,17 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
                 窄画布（宿主设置弹窗 564px）下 2 列优于 4 列。 */}
             <div className={css.marketFilterGrid}>
               {/* 搜索 + 类别过滤 + 来源筛选 + 排序（2026-08-21 新增；状态镜像 runStore） */}
-              <input
-                type="text"
-                className={`${css.input} ${css.marketFilterSearch}`}
-                value={state.search}
-                placeholder={t('list.searchPlaceholder')}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ search: e.target.value }) }}
-              />
+              {/* 搜索框：12px 放大镜内嵌 + 无描边 input（描边归外壳，聚焦时整框变色） */}
+              <div className={`${css.marketSearchBox} ${css.marketFilterSearch}`}>
+                <InspectIcon size={12} />
+                <input
+                  type="text"
+                  className={css.marketSearchInput}
+                  value={state.search}
+                  placeholder={t('list.searchPlaceholder')}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ search: e.target.value }) }}
+                />
+              </div>
               <Select
                 value={state.category}
                 ariaLabel={t('list.categoriesAll')}
@@ -679,27 +697,27 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
           </>)}
           {state.browsing && <SkeletonList label={t('list.loading')} />}
           {!state.browsing && state.loadError === null && state.items.length === 0 && <Empty>{t('list.noItems')}</Empty>}
-          {/* 条目卡片列表 */}
+          {/* 条目列表（视觉稿 T-04）：分隔线行 + 卡内滚动；名称/版本一行、作者·描述一行、徽章一行 */}
           {!state.browsing && state.loadError === null && filtered.length > 0 && (
-            <div className={css.snapshotList}>
+            <div className={css.marketItemList}>
               {filtered.map((it) => {
                 // 来源徽章（阶段 1：条目级来源仓库）：官方 ok / 第三方 warn，文案走字典
                 const sourceKind = sourceBadgeKind(it, marketUrl)
                 return (
-                  <div key={it.id} className={css.statRow} style={{ paddingTop: 4 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className={css.conflictHead}>
+                  <div key={it.id} className={css.marketItem}>
+                    <div className={css.marketItemMain}>
+                      <div className={`${css.conflictHead} ${css.marketItemHead}`}>
                         <span className={css.conflictId}>{it.name}</span>
                         {it.version !== undefined && <Badge kind="info">{it.version}</Badge>}
                       </div>
                       {(it.author !== undefined || it.description !== undefined) && (
-                        <span className={css.hint}>
+                        <span className={css.marketItemDesc}>
                           {it.author !== undefined ? `${it.author}` : ''}
                           {it.author !== undefined && it.description !== undefined ? ' · ' : ''}
                           {it.description ?? ''}
                         </span>
                       )}
-                      <div className={css.statRow}>
+                      <div className={css.marketItemMeta}>
                         <Badge kind={sourceKind}>
                           {sourceKind === 'ok' ? t('list.sourceOfficial') : t('list.sourcePersonal')}
                         </Badge>
@@ -708,7 +726,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
                           {cacheLabel(it.cacheState)}
                         </Badge>
                         {it.stars !== undefined && (
-                          <Badge kind="info" title={t('list.starsHint')}>{t('list.stars', { count: String(it.stars) })}</Badge>
+                          <Badge kind="info">{t('list.stars', { count: String(it.stars) })}</Badge>
                         )}
                       </div>
                     </div>

@@ -16,6 +16,7 @@ import {
   parseRuntimeRecord, runtimeRecordLive,
 } from './dsh-profile-runtime.ts'
 import { DshProfileError } from './dsh-profile-manager.ts'
+import { runtimeFileName } from './dsh-profile-io.ts'
 
 interface HarnessOptions {
   name?: string
@@ -75,13 +76,13 @@ test('announce / listActive / withdraw：自报 → 可见 → 自撤', () => {
     assert.equal(written.name, 'web')
     assert.equal(written.pid, 111)
     assert.equal(written.port, 3080)
-    assert.equal(existsSync(join(h.dir, 'web.json')), true)
+    assert.equal(existsSync(join(h.dir, runtimeFileName('web'))), true)
     const active = h.registry.listActive()
     assert.deepEqual(active.map((r) => r.name), ['web'])
     assert.equal(active[0]?.port, 3080)
     h.registry.withdraw()
     assert.deepEqual(h.registry.listActive(), [])
-    assert.equal(existsSync(join(h.dir, 'web.json')), false)
+    assert.equal(existsSync(join(h.dir, runtimeFileName('web'))), false)
   } finally { h.cleanup() }
 })
 
@@ -118,8 +119,29 @@ test('listActive：死心跳 / 过期心跳 / 坏文件都会被清掉（进程�
     writeFileSync(join(h.dir, 'stale.json'), JSON.stringify(stale))
     const active = h.registry.listActive()
     assert.deepEqual(active.map((r) => r.name), ['web'], '只留活着的自己')
-    assert.deepEqual(readdirSync(h.dir).sort(), ['web.json'], '死/坏心跳文件已清理')
+    assert.deepEqual(readdirSync(h.dir).sort(), [runtimeFileName('web')], '死/坏心跳文件已清理')
   } finally { h.cleanup() }
+})
+
+test('心跳文件名必须唯一：清洗后同形的两个 profile 不得共用/互删心跳（审计 P11-2 回归）', () => {
+  // 旧实现 <sanitizeFilePart(name)>.json：'web' 与 'web!' 都落成 web.json ⇒ 后写的覆盖先写的，
+  // listActive 只看得到一个，withdraw 还会删掉别人的心跳（对方从此「不可见」，又能被重复启动）。
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-runtime-'))
+  try {
+    const mk = (name: string, pid: number) => new DshProfileRuntimeRegistry({
+      dataDir: dir, name, pid,
+      deps: { isAlivePid: (p) => p === pid, killPid: () => {}, now: () => 1_000_000, sleep: () => Promise.resolve() },
+    })
+    const a = mk('web', 111)
+    const b = mk('web!', 222)
+    a.announce()
+    b.announce()
+    assert.notEqual(a.fileFor('web'), b.fileFor('web!'), '清洗同形的两个名字必须落到不同文件')
+    assert.equal(readdirSync(join(dir, 'running')).length, 2, '两个实例各留一份心跳')
+    b.withdraw()
+    assert.equal(existsSync(a.fileFor('web')), true, 'B 自撤不得删掉 A 的心跳')
+    assert.deepEqual(a.listActive().map((r) => r.name), ['web'], 'A 仍可见')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('stopExternal：停**别的**实例（按它的心跳 pid），成功后删除它的心跳', async () => {
@@ -142,7 +164,7 @@ test('stopExternal：停**别的**实例（按它的心跳 pid），成功后删
     assert.equal(stopped.name, 'cmtest')
     assert.deepEqual(a.killed, ['222:graceful'])
     assert.deepEqual(a.registry.listActive().map((r) => r.name), ['web'], 'B 的心跳已被删')
-    assert.equal(existsSync(join(a.dir, 'cmtest.json')), false)
+    assert.equal(existsSync(join(a.dir, runtimeFileName('cmtest'))), false)
   } finally { a.cleanup(); b.cleanup() }
 })
 
@@ -165,7 +187,7 @@ test('stopExternal：没有心跳 → notRunning；停自己 → currentProfile�
       () => h.registry.stopExternal('cmtest'),
       (e: unknown) => e instanceof DshProfileError && e.code === 'stopFailed' && e.message.includes('222'),
     )
-    assert.equal(existsSync(join(h.dir, 'cmtest.json')), true, '杀不掉就不删心跳（否则会以为它已经没了）')
+    assert.equal(existsSync(join(h.dir, runtimeFileName('cmtest'))), true, '杀不掉就不删心跳（否则会以为它已经没了）')
     forced.cleanup()
   } finally { h.cleanup() }
 })
@@ -184,10 +206,10 @@ test('startHeartbeat：按 refreshMs 定期 announce，stop() 之后不再刷', 
     const stop = h.registry.startHeartbeat()
     assert.equal(intervalMs, RUNTIME_REFRESH_MS)
     assert.notEqual(box.fn, null)
-    const before = JSON.parse(readFileSync(join(h.dir, 'web.json'), 'utf8')) as { updatedAt: number }
+    const before = JSON.parse(readFileSync(join(h.dir, runtimeFileName('web')), 'utf8')) as { updatedAt: number }
     h.tick(5_000)
     box.fn?.()
-    const after = JSON.parse(readFileSync(join(h.dir, 'web.json'), 'utf8')) as { updatedAt: number }
+    const after = JSON.parse(readFileSync(join(h.dir, runtimeFileName('web')), 'utf8')) as { updatedAt: number }
     assert.equal(after.updatedAt, before.updatedAt + 5_000, '心跳被刷新（判活靠它）')
     stop()
     stop()

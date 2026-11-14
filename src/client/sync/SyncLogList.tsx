@@ -20,7 +20,8 @@ import {
   projectSyncHistoryEntries, summarizeSyncHistory,
 } from './history-model.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Badge, Card, SectionTitle } from '../common/ui.tsx'
+import { Badge, Button, Card, SectionTitle } from '../common/ui.tsx'
+import { RefreshIcon } from '../common/Icon.tsx'
 import { SkeletonTable } from '../common/Skeleton.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import css from '../config-manager.module.css'
@@ -34,7 +35,7 @@ export function SyncLogList({ api, t }: SyncLogListProps): ReactNode {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [entries, setEntries] = useState<SyncHistoryEntry[]>([])
-  /** 重试计数（错误态点「重试」递增 → 重新加载） */
+  /** 重载计数（错误态「重试」与卡头「刷新」都递增 → 重新拉一次 /sync/history） */
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
@@ -61,7 +62,8 @@ export function SyncLogList({ api, t }: SyncLogListProps): ReactNode {
   const rows = useMemo(() => projectSyncHistoryEntries(entries), [entries])
   const stats = useMemo(() => summarizeSyncHistory(rows), [rows])
 
-  if (loading) return <SkeletonTable label={t('common.loading')} />
+  // 骨架只在「还没有任何行」时占位：手动刷新不该把整张卡换成骨架（用户会以为列表没了）
+  if (loading && entries.length === 0) return <SkeletonTable label={t('common.loading')} />
   if (error !== null) {
     return (
       <ErrorBanner
@@ -85,7 +87,14 @@ export function SyncLogList({ api, t }: SyncLogListProps): ReactNode {
     <Card>
       {/* 条数只在下面那排统计徽章里给一次：标题里的 (12) 与「共 12 条」是同一个数，
           两处并列时用户要先比对才敢确定它们说的是同一件事 */}
-      <SectionTitle title={t('history.title')} />
+      {/* 刷新走 SectionTitle 的 action 槽：它渲在标题同一行的右侧（内部自带推右的 spacer），
+          垂直居中跟标题一致。 */}
+      <SectionTitle
+        title={t('history.title')}
+        action={<Button size="sm" loading={loading} onClick={() => { setReloadKey((k) => k + 1) }}>
+          <RefreshIcon size={12} />{' '}{t('history.refresh')}
+        </Button>}
+      />
       {/* 头部统计摘要（先扫结论）；失败/跳过仅在存在时出现，并给语义色 */}
       <div className={css.statRow} aria-label={t('history.stats.summary')}>
         <Badge kind="info">{t('history.stats.total', { count: String(stats.total) })}</Badge>
@@ -197,9 +206,11 @@ function AutosyncRow({ entry, t }: { entry: AutosyncHistoryEntry; t: TranslateNS
   )
 }
 
-/** 通道徽章：git → GitHub，webdav → WebDAV；未知/缺失不渲染（不猜）。 */
+/** 通道徽章：git → GitHub，webdav → WebDAV，s3 → S3，gist → Gist；未知/缺失不渲染（不猜）。 */
 function ChannelBadge({ transport, t }: { transport?: string; t: TranslateNS<'config-manager-sync'> }): ReactNode {
   if (transport === 'git') return <Badge kind="info">{t('history.channelGit')}</Badge>
   if (transport === 'webdav') return <Badge kind="info">{t('history.channelWebdav')}</Badge>
+  if (transport === 's3') return <Badge kind="info">{t('history.channelS3')}</Badge>
+  if (transport === 'gist') return <Badge kind="info">{t('history.channelGist')}</Badge>
   return null
 }

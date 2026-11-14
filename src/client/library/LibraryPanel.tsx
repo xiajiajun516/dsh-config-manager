@@ -27,7 +27,6 @@ import { Badge, Button, Card, Empty } from '../common/ui.tsx'
 import { snapshotOriginOf, snapshotOriginState } from '../../ui/snapshots-view.ts'
 import { SkeletonRows } from '../common/Skeleton.tsx'
 import { redact } from '../../security/redaction.ts'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { ArtifactRowView, type ArtifactPendingAction } from './ArtifactRow.tsx'
 import css from '../config-manager.module.css'
 
@@ -210,12 +209,12 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
    * 行首来源徽章：档案名恒显示；只有「已知当前档案且不同」时才升到 warn 并带差异说明
    * （宿主没给当前档案时只显示名字 —— 那是无法证明的结论）。
    */
-  const originBadgeOf = (row: ArtifactRow): { label: string; hint?: string; kind: 'info' | 'warn' } | undefined => {
+  const originBadgeOf = (row: ArtifactRow): { label: string; kind: 'info' | 'warn' } | undefined => {
     if (row.kind !== 'snapshot') return undefined
     const profile = originOfSnapshot.get(row.ref.snapshotId ?? '')
     if (profile === undefined) return undefined
     return snapshotOriginState({ originProfile: profile }, currentProfile ?? undefined) === 'foreign'
-      ? { label: profile, hint: t('library.origin.foreign'), kind: 'warn' }
+      ? { label: profile, kind: 'warn' }
       : { label: profile, kind: 'info' }
   }
 
@@ -280,7 +279,9 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
       )}
 
       {/* 加载态 / 空态与列表**同一条高度契约**（.libraryListState）：三者都吃掉剩余高度，
-          底栏因此恒贴底（只在有数据时才需要列表本身，空态不该让页面塌成半截）。 */}
+          底栏因此恒贴底（只在有数据时才需要列表本身，空态不该让页面塌成半截）。
+          2026-11-14 用户要求：空态卡本身也要吃满这块空间（.libraryEmptyFill）——
+          此前它只有内容高、居中悬在几百像素的空白里，整页读成「这里坏了」。 */}
       {/* 还有来源在路上（本机两源已就绪但为空）时也走加载态：绝不先给「暂无产物」的结论。
           与空态共用同一个 .libraryListState 契约（守卫要求恰好两处：加载态 + 空态）。 */}
       {(loading || (anySourcePending && filtered.length === 0)) && (
@@ -292,7 +293,7 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
       )}
 
       {!loading && !anySourcePending && filtered.length === 0 && (
-        <div className={css.libraryListState}>
+        <div className={css.libraryListState + ' ' + css.libraryEmptyFill}>
           <Empty>
             {lib.query.trim() !== '' || lib.sourceFilter !== null
               ? t('library.emptyFiltered')
@@ -340,12 +341,11 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
         {encryptedCount > 0 && (
           <Badge kind="warn">{uiT('library.summary.encrypted', { count: encryptedCount })}</Badge>
         )}
-        <InfoHint text={t('backupFiles.hint')} label={t('common.infoHint')} />
         <span className={css.statusSpacer} />
         {/* 底栏四个入口，只有「导出」是这一页的产品级动作（把本机配置打成可分享的包）；
             其余三个是「拿别人的东西进来 / 去别处找」。主按钮只留一个，否则整屏没有焦点
             （app-screens §13：强调色应用在数据与至多一个控件上）。 */}
-        <Button size="sm" variant="primary" onClick={onOpenExport}>{t('library.new.export')}</Button>
+        <Button size="sm" variant="primary" onClick={onOpenExport} title={t('backupFiles.hint')}>{t('library.new.export')}</Button>
         <Button size="sm" onClick={() => { onOpenTask('import') }}>{t('library.new.import')}</Button>
         <Button size="sm" onClick={() => { onOpenTask('market') }}>{t('library.new.market')}</Button>
         <Button size="sm" onClick={onOpenPublish}>{t('task.title.publish')}</Button>

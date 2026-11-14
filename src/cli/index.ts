@@ -833,6 +833,19 @@ async function runReinstall(
       return 1;
     }
 
+    // AGENTS「CLI 与救急台同一道写入门」第三道：DSH 未运行。
+    // 清空 settings/plugins/data 会删掉运行中实例的 profiles 与 sessions（审计 P11-5）。
+    if (plan.wipeConfig) {
+      const runningGate = await checkWriteGates(
+        resolveControlRoots({ dataRoot: options.dataRoot, dataDir: options.dataDir }, env),
+        { needsDshStopped: true },
+      );
+      if (!runningGate.ok) {
+        io.error(`拒绝执行：${runningGate.reason}`);
+        return 1;
+      }
+    }
+
     // 执行（Phase 2 锁：reinstall 卸载/清扫/重装属 GLOBAL destructive，必须成功获取环境锁）
     const lockHome = resolveDshHome(env);
     const lock = new EnvironmentLockManager({
@@ -889,6 +902,11 @@ async function runReinstall(
               const reason = err instanceof Error ? err.message : String(err);
               failed.push({ label: step.label, command: step.command, reason });
               io.error(`✘ ${step.label} — ${reason}`);
+              // 备份步（critical）失败时后面的清空没有抢救副本：中止剩余步骤（审计 P11-7）。
+              if (step.critical === true) {
+                io.error('✘ 兜底备份失败，已中止后续清空步骤（未删除任何 ~/.dsh 数据）/ backup failed, aborting remaining steps');
+                return;
+              }
             }
           }
         };

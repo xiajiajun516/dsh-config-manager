@@ -10,12 +10,7 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > the build fails fast if the section is missing, so you cannot forget to update it.
 >
 > **条目落位（按改动性质分组）**：新条目一律先写进 `## [Unreleased]`，并放进对应分组 ——
-> `### 🆕 新增 · Added` / `### 🔧 变更 · Changed` / `### 🐛 修复 · Fixed
-
-- **「磁盘占用」卡里那块「遗留数据」整块去掉了**：它只是几个不再被读取的旧目录（例如迁移前的 checkpoints），既不进合计也不能一键清，单独占一块反而让卡片显得零碎；这些目录仍会如实出现在无遗留数据时的常规扫描里，体积与文件数不受影响。
-  **The "Legacy data" block on the Disk usage card is gone**: it only listed a few directories the plugin no longer reads (pre-migration checkpoints, for instance), which counted toward no total and could not be cleaned from there, so the block made the card look fragmented for no decision value.
-
-### 🐛 修复 · Fixed`（`🗑️ 移除 · Removed` / `🔐 安全 · Security` 同理）；
+> `### 🆕 新增 · Added` / `### 🔧 变更 · Changed` / `### 🐛 修复 · Fixed`（`🗑️ 移除 · Removed` / `🔐 安全 · Security` 同理）；
 > 没有内容的分组**不写标题**。已发布的历史版本段保留当时写法，不回改。
 >
 > **一句话一条**：一条 = **一个用户能看懂的更新或修复**（中文一行 + 英文缩进续行），只写「现在能做什么 / 不再怎样」；
@@ -33,16 +28,160 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🆕 新增 · Added
+
+- **写回补丁前先检查配置项的键名**：键名会被主程序读成数字、布尔或空（`007`、`True`、`~` 这类），或者干脆是空键名（会让主程序整份配置读不出来）时，这一项不再被写入，导入结果直接告诉你哪个键、改成加引号的写法；同一批里其它项照常导入，不会因为一个坏键全部回滚。（issue #137）
+- **手机端也能用配置管家（dsh-Go 原生插件）**：在 dsh-Go 1.0.16 及以上的「全部功能 → 配置管家」里就能看版本与同步健康、把备份导出到手机的 DSH-Go 下载目录、导入 ZIP（先试运行，冲突逐项裁决）、拉取并应用同步差异、预览并执行恢复，不必再打开网页版；加密备份、缺凭据的项和远程主机模式会明确让你到电脑端处理。
+  **Config Manager now lives in the dsh-Go app (native plugin)**: on dsh-Go 1.0.16 and newer, "All features → Config Manager" shows version and sync health, exports a backup into the phone's DSH-Go download folder, imports a ZIP (dry run first, conflicts decided item by item), pulls and applies sync differences, and previews then runs a restore without opening the web UI; encrypted backups, items missing credentials and remote-host mode tell you to finish those on the desktop.
+
+  **Patch write-back now checks config key names before writing**: when a key would be read by the host as a number, a boolean or null (`007`, `True` or `~`, for instance), or when it is an empty key that makes the host fail to parse the whole file, that item is skipped instead of written and the import result names the key and the quoted form to use; the other items in the same import still apply, so one bad key never rolls everything back. (issue #137)
+
+- **远端仓库里多了一份「最新配置」目录**：用 git 通道推送后，仓库根（或你配置的子目录）下会多出 `latest/`，里面永远是最新那份明文快照的内容，方便你自己或别的工具直接读，不必先翻快照列表；它与快照在**同一次提交**里写入，不会出现「快照已更新、`latest/` 还是旧的」的中间状态。它只是副本：删掉不影响任何功能，下次推送会补回来；加密快照不生成它（会给出明确提示），远端保留策略也不因它多留快照。（issue #141）
+  **The remote repo now carries a "latest config" folder**: after a git-channel push, the repo root (or your configured subdirectory) gains `latest/`, always holding the newest plaintext snapshot's content so you or another tool can read it directly without listing snapshots; it is written in the **same commit** as the snapshot, so there is never a moment where the snapshot is newer than `latest/`. It is only a copy — deleting it breaks nothing and the next push restores it; encrypted snapshots do not produce it (you get an explicit notice), and remote retention still counts snapshots only. (issue #141)
+
 ### 🔧 变更 · Changed
 
+- **磁盘占用的清理区重新排过**：清理哪块、要不要连带回收过期备份、可立即释放多少这三行现在是统一行距的一组，两处容量数字各自紧挨着它对应的那句话，右侧只留一颗「立即清理」按钮（以前勾选框贴着上一行标题、两个容量数字一个靠文字一个顶到最右边）。
+  **The cleanup area in disk usage is rearranged**: what gets cleaned, whether to reclaim expired backups as well, and how much can be freed right now sit as one group with an even rhythm, each size badge sits next to the line it belongs to, and the right edge carries a single "Clean now" button.
+- **说明文字改成悬停才出现，界面上不再有灰点图标**：原来每个 ⓘ 里的那句话（机制怎么工作、边界与限制、凭据写到哪儿、输入规则）现在挂在该标题、标签或按钮上，鼠标悬停即读；页面上一个说明图标都不剩，界面回到「标签 + 控件」。真正必须当场看到的东西（校验错误、危险操作后果、状态、空态、禁用原因）仍然常驻；同步设置页的段名与每一行标签也都带上了说明，悬停即读。
+  **Explanations now appear on hover, and the grey ⓘ icons are gone**: every sentence that used to hide behind an ⓘ (how it works, limits, where credentials go, input rules) is attached to its title, label or button, so hovering reads it; the page keeps only labels and controls. Anything you must see on the spot — validation errors, dangerous-action consequences, status, empty states, disabled reasons — stays visible; the group headings and every row label in the sync settings dialog carry their explanation too.
+
+- **内容没变就不再新建同步快照**：推送前先比内容，和远端最新一份完全一致时不写远端、不建目录、也不产生提交，结果直接说「内容未变化，已跳过」并沿用那份快照；确实想留一份新快照时，在推送确认里勾「内容未变化也新建快照」。拉取方向同样按内容判断——远端换了 id 但内容一致，不再被当成有新东西。（issue #140）
+  **No new sync snapshot when nothing changed**: a push compares content first and, when it matches the latest remote snapshot exactly, writes nothing, creates no folder and no commit, reports "No content changes — skipped" and reuses that snapshot; tick "create a new snapshot even when content is unchanged" in the push confirmation when you do want a fresh copy. Pulling uses the same content check, so a snapshot re-created with identical content no longer looks like remote news. (issue #140)
+
+- **界面统一到新设计语言**：首页、产物库、同步、环境、恢复与各个弹窗改用同一套卡片、分隔线与按钮层级——关键动作更显眼，次要动作降为幽灵按钮，长列表在不撑长整页的前提下内滚。
+  **Unified visual language**: Home, Library, Sync, Environment, Recovery and every dialog now share one card, divider and button hierarchy — primary actions stand out, secondary ones step back, and long lists scroll inside their own box.
+- **同步**：通道卡直接以通道名作标题，页面只留已经配置好的通道；其余通道收进末尾那张「添加通道」卡，点开在弹窗里挑通道、再进配置。同步记录可就地刷新，推送结果按分区显示条数；「新建私有仓库」从下拉选项提为独立按钮。
+  **Sync**: channel cards are titled by channel name and only configured channels keep one; the rest wait behind an "Add channel" card at the end, which opens a dialog to pick a channel and configure it. The history list refreshes in place, push results show per-section counts, and "create a private repository" is now its own button.
+- **同步设置收进一个弹窗**：「同步分区」「自动同步」「加密与密钥导出」「解密密码」现在都在「设置」弹窗里，分「同步内容」「设置」两个页签（第二页最初叫「自动同步与密码」，已按用户要求改名）；通道卡上只留一行摘要——选了多少分区、加密开没开，按「同步」之前一眼能看见。自动同步的开关与策略项搬进弹窗后，通道卡回到「摘要 + 两个方向按钮 + 快照行」三段。设置项改成「标签在左、控件在右」的行式布局，同页的输入框与下拉统一 240 宽、右边界对齐；原先挂在「插件」分区勾选下的「跟随远端删除插件」也搬进这一页（它是一条件随策略，不是分区内容）。加密设置标题里的「（安全选项）」括注一并去掉。这两页上的 ⓘ 说明图标全部移除——每行的标签就是控件名；说明文字后来改成悬停标题（见上一条）。「加密备份」原来挤在「加密与密钥导出」段头右侧，一段名与一控件名同处一行读起来像两件事，现在它单独占一行，和下面两个密码框、导出密钥完全对齐。
+  **Sync settings moved into one dialog**: sections, auto sync, encryption & secret export, and the decryption password now live behind a "Settings" button, split into two tabs — "Content" and "Settings"; the channel card keeps a single summary line (how many sections are ticked, whether the snapshot is encrypted) so you can see both before syncing. With the auto-sync switch and policies moved into the dialog, the channel card is back to summary + two direction buttons + the snapshot row. Settings are now label-left / control-right rows with every input and select 240 wide so their right edges line up, and "Delete plugins to follow the remote" moved here as well — it is a follow-up policy, not section content. The "(Security Options)" suffix is gone from the encryption heading, and every ⓘ on both tabs is removed — each row's label is the control's name, so the explanations live in `DESIGN.md` and the code instead of behind an icon (a later round put them on hover). "Encrypt backups" used to sit in the group heading of "Encryption & secret export", a section name and a control name on one line; it now has a row of its own, aligned with the two password fields and the secret-export row below it.
+- **设置型勾选框换成弹性开关**：「自动同步」「本地改动即时同步」「启用定时备份」「加密备份」「导出密钥」这五个「开/关某个功能」的地方，现在是拨动式开关——圆点带轻微过冲地滑到另一端，行进中不变形（不再有「拉长成胶囊」那类中间帧）；键盘能聚焦、空格切换，关掉系统动效时退化为瞬时切换。列表多选、执行前的选项与危险确认仍是勾选框：那些勾是「这次要做的事」，不是「这台机器的状态」。
+  **Feature toggles became springy switches**: the five on/off settings — auto sync, sync-on-change, scheduled backup, encrypted backups, secret export — are now switches whose knob slides across with a slight overshoot and never deforms mid-travel; they stay keyboard-operable (Tab + Space) and fall back to an instant flip when the system reduces motion. Multi-select lists, pre-run options and destructive confirmations keep checkboxes: those ticks mean "do it this run", not "this machine's state".
+- **导入**：选文件改成拖放区；冲突项的批量操作收进一处；外部导入的分区名按界面语言显示，明细行与兼容性提示可悬停看全文。
+  **Import**: file selection is a drop zone, conflict bulk actions sit together, foreign-import section names follow the UI language, and full detail (including the compatibility note) now reads on hover.
+- **市场**：页签与筛选条重排，条目分「名称 / 说明 / 元信息」三段；我的配置列表限高内滚，星标、作者与时间仍在一行可见。
+  **Market**: tabs and filters are reorganised, entries split into name / description / meta, and the my-configs list scrolls inside a fixed height with star, author and time still visible.
+- **产物库**：快照对比、备份查看与恢复报告里的条目按「圆点 + 名称 + 说明」重排，迁移前咨询把每个维度的分数按好坏分色；删除远端快照时若它正是当前基线，会单独提示而不是塞进一句话里；拉取与下载显示进度条；内容选择器始终显示「已选 N / M」。
+  **Library**: diff, inspect and restore-report entries are laid out as dot + name + description, the pre-migration consult colours each dimension score by how good it is, deleting a remote snapshot that is your current baseline gets its own notice instead of a clause in one sentence, pull and download show a progress bar, and the content picker always shows "N/M selected".
+- **环境、恢复与备份**：磁盘占用改为每分区一行并给出合计；配置的复制与删除改成文字按钮；恢复页与活动面板的刷新、进度提到标题行；命令面板改成顶部浮层；备份保留策略改成三张数字卡。
+  **Environment, Recovery, Backup**: disk usage is one line per section plus a total, copy/delete become text buttons, refresh and progress move to the section header, the command palette is a top overlay, and retention policies become three numeric cards.
+- **「磁盘占用」卡里那块「遗留数据」整块去掉了**：它只是几个不再被读取的旧目录（例如迁移前的 checkpoints），既不进合计也不能一键清，单独占一块反而让卡片显得零碎；这些目录仍会如实出现在无遗留数据时的常规扫描里，体积与文件数不受影响。
+  **The "Legacy data" block on the Disk usage card is gone**: it only listed a few directories the plugin no longer reads (pre-migration checkpoints, for instance), which counted toward no total and could not be cleaned from there, so the block made the card look fragmented for no decision value.
 - **确认弹窗的按钮次序统一为「取消在左、确认在右」**：以前删除/停止这类二次确认弹窗把确认放在左边，而其他弹窗是「取消 … 主操作」，两套次序并存容易点错；现在全站一致，初始焦点仍然落在取消上（误触保护不变）。
   **Confirm dialogs now put Cancel on the left and the primary action on the right**: destructive confirmations used to reverse that order compared with every other dialog; the whole product is consistent now, and focus still starts on Cancel so a stray Enter never fires the destructive action.
 
+- **「只读预览 · 零写入」直接写在标题后面**：恢复、回退、会话整理计划与外部导入预览这四处，「现在这一步不会改动磁盘、要确认才执行」不再藏进图标，标题后面一句话就说清。
+  **"Read-only preview · zero writes" now sits right next to the heading**: on recovery, rewind, the session-layout plan and the foreign-import preview, one clause says that this step writes nothing until you confirm.
+- **同步分区直接标出默认参与状态**：「可移植 · 默认同步」与「平台相关 / 设备相关 · 默认不同步」，勾选前就知道哪些分区要自己动手才会同步。
+  **Sync sections now state their default**: "Portable · synced by default" versus "Platform-dependent / Device-specific · off by default", so you can see which sections need a manual tick before you start ticking.
+### 🗑️ 移除 · Removed
+
+- **同步通道配置弹窗去掉了「立即保存」按钮**：表单本来就是改完即存，按钮既改变不了结果也给不出新信息；现在关掉弹窗再进来，值还在，成功时标题行只闪过一枚「已保存」徽章。
+  **The "Save now" button is gone from the sync channel dialog**: the form already saves as you type, so the button changed nothing and told you nothing new; reopen the dialog and your values are still there, with a short "Saved" badge in the header on success.
+- **一批只复述控件名的说明去掉了（两轮）**：提示只留在「删了会让人做错决定」的地方——不可逆后果、凭据去向、后台静默行为、输入规则与看不出来的边界；后续又把交互自证（勾会话自动勾上它所属工作区）、同屏已有同义句子（默认导出分区、保留策略的生效范围、新建仓库必为私有、已保存密码留空即沿用）与纯背景（备注存在哪、构成卡怎么估）一并删掉。会话体检那张卡上重复的长说明也只剩弹窗里一处。
+  **A batch of notes that merely restated a control's name is gone (two rounds)**: hints now cover only what would change a decision — irreversible consequences, where credentials go, silent background behaviour, input rules and invisible boundaries; a follow-up round also dropped what the UI proves by itself (checking a session checks its workspace), what another sentence on the same screen already says (the default export scope, which items the retention policy covers, that a new repository is always private, that a saved password is reused when the field is left empty) and pure background (where the note is stored, how the composition figures are estimated). The duplicated long note on the sessions card also survives only inside its dialog.
+- **同步页不再有「在产物库查看远端快照」那一行**：远端快照本来就在产物库的来源页签里，多一条指路按钮只是给同步页加噪音。
+  **The "view remote snapshots in Library" line is gone from Sync**: remote snapshots already live under the Library source tabs, so the pointer only added noise to the sync page.
+
+### 🔐 安全 · Security
+
+- **第三方插件区域里的凭据文件再也不进导出包**：以前插件把自己的 token、OAuth 凭据或 `.env` 放在自己的数据目录里（这在真机上很常见），导出「插件数据 / 插件资产」分区会把这些明文原样打进 ZIP；现在这类文件在导出与导入两侧都被剔除并拒绝，导出结果会告诉你剔除了几个、首个是哪个。
+  **Credential files inside third-party plugin areas no longer ship in export packages**: plugins commonly keep tokens, OAuth credentials or `.env` files in their own data directories, and exporting the plugin-data / plugin-assets sections used to copy them into the ZIP verbatim; such files are now dropped on export and rejected on import, and the export result states how many were skipped and which one came first.
+- **报错与结果文本里的凭据不再原样显示**：有几处错误提示与同步结果列表直接显示了主程序返回的原文，里面可能带路径、令牌或本地配置值；现在统一先脱敏再显示，同时修好了脱敏在跨行文本上把下一行一起吞掉的问题（脱敏后的 JSON 仍然是合法 JSON）。
+  **Credential-bearing error and result text is no longer shown verbatim**: a few error banners and sync result lists rendered the host's raw message, which can carry paths, tokens or local config values; every one of them is now redacted first, and redaction no longer swallows the following line when the value spans lines (redacted JSON stays valid JSON).
+
 ### 🐛 修复 · Fixed
 
+- **自动同步的「待裁决」终于能点进去处理，也不再每分钟记一条同样的记录**：远端有别的设备推过的新内容时，首页那条记录整行可点、直接进同步页的合并确认，同步设置里的自动同步一栏同时写明是哪几个分区在等你裁决、从什么时候开始等；同一种冲突连着出现只保留一条记录（以前是每 60 秒写一条，200 条历史被同一句话占满），真正推进成功或失败的轮次照旧逐条留痕。
+  **"Needs decision" entries from auto sync are now actionable, and the same conflict is logged once**: when another device has pushed newer content, the home row is clickable and opens the merge confirmation on the sync page, while the auto-sync section says which sections are waiting and since when; a repeated identical conflict keeps a single entry (it used to add one every 60 seconds, filling the 200-entry history with the same sentence), and rounds that really push or fail are still logged one by one.
+- **自动同步的后台轮询不再每轮重跑一次本机全部内容的打包**：只在远端真的有新内容时才重新检查本机改动，省掉每分钟一次的重复导出（本机源插件多时这一轮要跑几十秒，机器会明显发烫、变卡）；本机改动仍由「本地改动即时同步」与定时兜底负责。
+  **Background auto-sync polling no longer re-exports all local content on every round**: local changes are re-checked only when the remote actually has something new, so the once-a-minute repeat export is gone (with several local source plugins one round took tens of seconds and kept the machine busy); local changes are still handled by sync-on-change and the interval fallback.
+- **回滚预览里每行的文件图标重新对齐成一列**：带逐行勾选的那份清单（设置页回滚卡的回滚预览）以前每行的「+2 −2 / 行数未统计」会掉到勾选框下面、图标整列跟着右移，看着像清单排版坏了；现在勾选框、图标、路径、行数各占固定一列，图标逐行落在同一条竖线上，删除项没有勾选框也留出同样一格；清单四周补了内边距，文字与行数不再紧贴边框。
+  **File icons in the rollback preview line up again**: in the version with per-file checkboxes (the preview opened from the rollback card in Settings) each row's "+2 −2" or "lines not counted" used to drop below the checkbox and push the icon one column right; the checkbox, icon, path and line counts now each keep a fixed column, so every icon sits on the same vertical line and deleted files reserve the same cell even though they cannot be ticked; the list also gained padding, so text and counts no longer sit hard against its border.
+- **让 agent 触发的同步带上你勾选的 MCP 等可选分区**：以前让模型推送或拉取时，即使你在同步分区里勾了「MCP」，快照里也不会带上它，还会提示该分区不可移植、已跳过；现在与界面手动同步一致，勾选的可选分区照常进入快照，会话内容仍然永远不上行。（issue #138）
+  **Agent-triggered sync now carries the optional sections you ticked, MCP included**: previously a push or pull requested by the model shipped without MCP even though you had ticked it in the sync sections, and reported the section as non-portable and skipped; it now matches manual sync from the UI, and session content still never goes up.
+- **窄窗口下「更多 ▾」能正常展开**：页签放不下收进「更多」时，点开不再只剩一条缝——导航条过去会把弹层跟着一起裁掉，现在菜单完整浮在分段条下方，选中项与「我在这一页」的高亮都不变。
+  **The "More" menu opens properly in a narrow window**: when tabs no longer fit and move under "More", opening it shows the whole menu below the strip instead of a sliver — the nav strip used to clip the layer along with itself; the checked item and the current-page highlight are unchanged.
+- **断开同步通道会先等在途保存落定**：断开时若还有一次配置保存在路上，最多等 5 秒让它结束；等不到就提示稍后再点一次，而不是先弹「已断开」——旧保存不会再把你刚断开的地址写回，断开之后新保存的地址也不会再被悄悄删掉。
+  **Disconnecting a sync channel now waits for an in-flight save**: if a settings save is still on the wire, disconnect waits up to 5 seconds for it; if it does not settle you are asked to try again rather than being told it is gone — an old save can no longer write the settings back, and a configuration saved after disconnecting is no longer silently deleted.
+- **运行中心的取消确认框会在任务落定后自动关闭**：任务被宿主超时自动裁决、或已在别处结案时，框不再一直挂着挡住后续等待；确认过一个任务之后，其它正在等你的任务仍然会弹出来。
+  **The runs-center cancel prompt closes itself once the run settles**: when the host auto-decides on timeout or the run finishes elsewhere, the prompt no longer lingers and blocks other pending runs; after confirming one run, other runs still waiting on you still prompt.
+- **加载中的占位块现在和真实内容同尺寸**：首页的最近活动、环境页的「工作区 + 会话回滚」、产物库和迁移历史以前骨架只铺半页、或者比真卡高一大截，数据一到整页就重排；现在占位块直接复用真实卡片的容器，数据到货时位置和高度都不动，首页活动卡与产物库空态还各自占满剩余空间。
+  **Loading placeholders are now the size of the real content**: skeletons on Home's recent activity, the environment page's workspace/rollback card, the Library and migration history used to fill half the page or stand much taller than the real card, so the page reflowed the moment data arrived; placeholders now reuse the real card containers, so positions and heights stay put, and both the activity card and the library empty state fill the remaining space.
+- **长任务不再被「等待同步锁超时」误杀**：以前超时计时把任务自己干活的时间也算成等锁，于是只要单个任务跑得比上限久（测试里 1.5 秒就够），就会报「同步工作副本正被另一个同步任务占用」；现在只有真的排队等锁才计时。
+  **Long tasks are no longer failed by a lock-wait timeout**: the deadline used to include the time the task itself spent working, so anything slower than the bound (1.5 s in tests) reported that the sync working copy was busy; only genuine queueing now counts.
+- **重装的兜底备份失败会立刻停手**：以前备份这一步失败也照样往下清空 `~/.dsh`，等于把唯一退路丢了；现在备份失败直接中止，后面的清空步骤一步都不会执行。
+  **A failed safety backup now stops reinstall immediately**: previously the wipe of `~/.dsh` proceeded even when the backup step failed, throwing away the only way back; the remaining steps are now skipped entirely.
+- **主程序正在运行时拒绝重装**：与导入、恢复等写操作同一道门，避免在 DSH 运行时删改它的数据目录。
+  **Reinstall is refused while the host is running**: it now goes through the same gate as import and restore instead of editing the data directory of a live DSH.
+- **两个名字相近的配置档案不再互相顶掉心跳**：`web` 与 `web!` 这类名字以前映射到同一个心跳文件，第二个档案一启动就把第一个的心跳删掉（面板会误判为「已停止」）；现在文件名带名字指纹，互不影响。
+  **Similarly named profiles no longer overwrite each other's heartbeat**: names like `web` and `web!` used to map to one heartbeat file, so starting the second deleted the first (the panel then reported it as stopped); the file name now carries a hash of the profile name.
+- **救援模式不会被另一个档案偷偷覆盖**：一个档案已经进入救援时，再为另一个档案进入会被拒绝并说明原因——备份文件只有一份，覆盖就等于把上一份原件永久替换成空壳。退出救援后仍可正常进入。
+  **Rescue mode can no longer be silently taken over by another profile**: entering rescue for a second profile while one is active is refused with the reason, because the backup slot is shared and overwriting it would replace the previous originals with stubs; exiting first still works.
+- **自动同步的各条通道各自计时**：以前任意一条通道到点都会把所有通道的定时器重排一遍，短周期通道因此被长周期通道拖住（5 分钟的 webdav 要等 30 分钟的 git）；现在一条到点只重排它自己。
+  **Auto-sync channels keep their own schedules**: any channel firing used to reschedule every channel's timer, so a 5-minute channel could be starved behind a 30-minute one; a firing channel now only reschedules itself.
+- **恢复面板在失败后不再卡死**：校验或执行被拒绝（改锁中、冲突、超时）后，「执行 / 重试 / 关闭」以前会一直保持灰不可点，只能重开面板；现在失败即复位按钮并显示原因。
+  **The recovery panel no longer locks up after a failure**: when the verify or execute step was refused (locked, conflicting, timed out) the execute / retry / dismiss buttons stayed disabled until the panel was reopened; the failure now resets them and shows the reason.
+- **插件清单没读齐时的补勾不再反复触发自身**：自动补勾每轮都会生成一个新队列，导致状态写入与副作用反复触发；现在内容相同就不再写回。
+  **Auto-ticks waiting for a plugin listing no longer re-trigger themselves**: each pass produced a new queue object, so the state write and its side effects kept firing; an unchanged queue is now left alone.
 - **写回启动补丁时字符串一律保持字符串，空值不再变成 null、`True` 不再变成布尔、`007` 不再变成 7**：以前插件每改动这一层一次，写下去的字符串值就会被主程序读成别的类型——空字符串读成 null、数字样子的串读成数字、`.inf` 读成无穷大；依赖字符串配置的插件（例如技能列表里带空串的那类）重启即报校验错误，用户看到的是「我什么都没改，它自己坏了」。现在写回给每个字符串值加引号，主程序读到的就是当初写进去的那份字面量；以前已经写坏的字段仍需按已知限制里的指引手工改回。（issue #135）
-  **Strings written back into the startup patch stay strings — an empty value no longer turns into null, `True` into a boolean or `007` into 7**: every time the plugin rewrote that layer, the host read the saved strings as other types — an empty string became null, numeric-looking text became a number, `.inf` became infinity — and plugins that validate string config (a skill list containing an empty entry, for instance) failed at startup, which looked like «I changed nothing and it broke itself». Every string value is now quoted on write, so the host reads exactly what was saved; fields already damaged by earlier versions still need the manual fix described in known limits. (issue #135)：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
+  **Strings written back into the startup patch stay strings — an empty value no longer turns into null, `True` into a boolean or `007` into 7**: every time the plugin rewrote that layer, the host read the saved strings as other types — an empty string became null, numeric-looking text became a number, `.inf` became infinity — and plugins that validate string config (a skill list containing an empty entry, for instance) failed at startup, which looked like «I changed nothing and it broke itself». Every string value is now quoted on write, so the host reads exactly what was saved; fields already damaged by earlier versions still need the manual fix described in known limits. (issue #135)
+- **「关于」页不再有两个同等醒目的主按钮**：以前「立即更新」和「在 GitHub 上 Star」都是深色主按钮，同屏抢注意力；现在 Star 降为描边次按钮，要更新时眼睛先落在「立即更新」上。
   **The About panel no longer shows two equally loud primary buttons**: "Update now" and "Star on GitHub" used to be the same dark primary style side by side; the star link is now an outlined secondary button so the update action is the one that stands out.
+- **自动同步的「还剩 X 分钟」会自己走了**：以前这个数字只在打开面板那一刻算一次，之后一直停在原值（到期也不会自己变成「已到期」）；现在它按时间自行递减，跨过零点就显示已到期。
+  **The auto-sync "next run in X minutes" badge now counts down**: the number used to be computed once when the panel rendered and then froze (it never turned into "due" either); it now decreases on its own and switches to "due" when it reaches zero.
+- **启动自检不再把「没修好」报成「已修复」**：引擎清单里混入数字这类非法条目时，以前报告说修好了、盘面其实一字未改（下次启动又原样报错）；现在写回后回读确认，没真的落盘就如实报「仍未修复」。
+  **Startup self-repair no longer reports "fixed" when nothing changed on disk**: an invalid engine entry such as a number used to be reported as repaired although the file was untouched, so the same error returned on the next start; the write-back is now read back and a still-present entry is reported as unfixed.
+- **缺字段的旧快照不再让恢复计划整体报错**：早先版本或手工改过的快照没有文件清单时，以前一进恢复计划就抛内部类型错误；现在按「没有可还原的文件」处理，计划照常给出。
+  **Older snapshots without a file list no longer break the restore plan**: a snapshot missing that field used to throw an internal type error as soon as the plan was built; it is now treated as having no files to restore and the plan is produced normally.
+- **会话目录读不出来时不再谎报「磁盘上没有这些会话」**：以前读取失败（权限、路径类型不对）会被当成空目录，于是把所有会话都列成「需人工清理的幽灵条目」；现在只有真的不存在才算空，其余情况明确报「扫描失败」，不给出可疑名单。
+  **An unreadable sessions directory no longer produces a false "these sessions are gone" report**: read failures (permissions, wrong path type) used to count as an empty directory and listed every session as a ghost needing manual cleanup; only a genuinely missing directory counts as empty now, and other failures are reported as a failed scan.
+- **导入外部来源的会话时，工具结果不再接错回合、也不会吞掉同一条消息里的文字**：以前一条消息里同时有文字与工具结果时，工具结果会被挂到上一个回合的函数调用上，纯文字消息则整条丢弃；现在工具结果只接自己回合的调用，文字照常保留。
+  **Imported third-party sessions no longer attach tool results to the wrong turn or drop the text next to them**: when one message carried both text and tool results, the results were attached to a previous turn's call and the text-only message was dropped entirely; results now stay in their own turn and the text is kept.
+- **脱敏不再把带用户名和查询串的链接截成一个孤零零的主机名，重复的会话 id 也明确报冲突**：以前 `https://host?token=...` 这类地址会被截成域名的一部分；来自同一个 id 的两份会话文件以前会被静默合并，现在保留一份并报告冲突。
+  **Redaction no longer truncates a link with credentials or a query string down to a bare host, and duplicate session ids are reported**: addresses such as `https://host?token=...` used to be cut mid-domain; two session files sharing one id used to be merged silently and now keep one copy and report the conflict.
+- **「关于」页的更新日志请求不会无限转圈**：GitHub 接口挂住不返回时，以前那一栏永远停在加载中；现在 10 秒无响应就报「请求超时」，并提示检查网络或代理。
+  **The release-notes request on the About panel no longer spins forever**: when the GitHub API hung, that section stayed in its loading state; it now fails after 10 seconds with a timeout message telling you to check the network or proxy.
+- **同步取回的大文件会先自证再落盘**：远端仓里的会话内容被改坏（长度对不上或哈希不符）时，以前会把这段坏字节当成你的会话原样写回，界面上看不出任何异常；现在直接报「校验不符」并拒绝写入。
+  **Large files pulled from a sync channel are verified before they overwrite yours**: when a blob in the remote store was corrupted (wrong length or hash), the bad bytes used to be written back as your sessions with no visible error; it is now refused with a hash-mismatch message.
+- **导入时不能再把文件写进凭据明文目录**：备份包里若带 `dsh-config-manager/vault/` 下的条目，导入会拒绝落地——这个目录存的是解密后的凭据镜像，任何来源的包都不该往里写。
+  **Imports can no longer write into the plaintext credential directory**: entries under `dsh-config-manager/vault/` in a package are refused on import; that directory holds decrypted credential mirrors and no package should be able to write there.
+- **停止一个怎么也不退出的档案时，不再误报「停止失败」**：强杀之后窗口进程要过一会儿才消失，以前立刻回查就判失败（面板还留着一条其实已停的心跳）；现在会短暂等待退出再判定，仍杀不掉才报失败。
+  **Stopping a profile that refuses to exit no longer reports a false failure**: after a forced kill the process takes a moment to disappear, and the immediate recheck used to report failure while a stale heartbeat stayed on the panel; the stop now waits briefly for the exit and only reports failure if it truly survives.
+- **命令行里的「就地修复会话」也受环境锁保护**：与图形界面同一道写入门，锁被占用或状态不明时拒绝改写会话文件，不再绕过。
+  **Inline session repair from the CLI now honours the environment lock**: it goes through the same write gate as the UI, so a held or unknown lock refuses the rewrite instead of being bypassed.
+- **更新检查按字节判断响应大小**：以前用字符数比上限，中文等三字节字符能让一份 120 KB 的响应被当成 40 KB 放行；现在按真实字节判定，超大响应提前中断，不再整个读进内存。
+  **The update check measures response size in bytes**: the limit used to compare character counts, so a 120 KB response full of three-byte characters passed as 40 KB; it is measured in real bytes now and an oversized response is cut off early instead of being read into memory.
+- **打包插件超时不再留下后台进程**：以前超时只结束外层的命令包装进程，真正干活的 npm 进程继续在已删除的临时目录里写文件；现在整棵进程树一起终止。
+  **A timed-out plugin pack no longer leaves processes behind**: the timeout used to kill only the wrapper command while the real npm process kept writing into an already-deleted temp directory; the whole process tree is terminated now.
+- **删除一个装满依赖的档案不再让面板卡住十几秒**：档案目录里往往有几万个文件，以前是在请求线程里同步删，期间心跳、实例状态、同步定时器全部停摆（面板表现成「后端没反应」）；现在删除在后台推进，界面照常响应。
+  **Deleting a profile full of dependencies no longer freezes the panel for seconds**: a profile directory can hold tens of thousands of files, and the removal used to run synchronously inside the request, stalling heartbeats, instance status and sync timers (the panel looked unresponsive); it now runs asynchronously while the UI stays live.
+- **迁移历史目录读不出来时不再显示「暂无记录」**：权限不足或路径类型不对时，以前被当成空目录，历史页显示 0 条、自动清理也当作没东西可删；现在明确报「读取失败」，只有目录真的不存在才算空。
+  **An unreadable migration-history directory no longer shows "no records"**: permission problems or a wrong path type used to count as an empty directory, so the history page showed zero entries and auto-pruning found nothing to delete; a read failure is now reported, and only a genuinely missing directory counts as empty.
+- **扫描外部来源会话时不再白读另一代次的整份日志**：装了新版 DSH 的机器上两代日志并存，以前为了看一眼文件头就把另一代那几十 MB 的日志整份读进内存再丢掉；现在只读文件头判定代次，别的代次直接跳过。
+  **Scanning third-party sessions no longer reads entire logs from the other generation**: machines that ran both DSH generations have both kinds of logs, and the scan used to read tens of megabytes just to inspect the first line before discarding it; it now reads only the header to decide the generation and skips the rest.
+- **命令面板里搜 gist 或 s3 也能找到「同步」了**：以前通道搜索词是手抄的一份名单，只抄了 git 与 webdav，用另外两个通道的人搜不到这条命令；现在搜索词直接跟着同步通道清单走，加通道不会再漏。
+  **Searching gist or s3 in the command palette now finds Sync**: the channel keywords used to be a hand-copied list that only covered git and webdav, so people on the other two channels got nothing; the keywords now follow the channel catalogue, so a new channel cannot be missed.
+- **导出报告里的文件大小到 GB 级不再写成 2048.0 MB**：超过 1 GiB 会显示成 GB，大小算不出来时也不再出现 NaN MB。
+  **Export reports no longer render gigabytes as 2048.0 MB**: sizes past 1 GiB show in GB, and an unknown size no longer turns into NaN MB.
+- **中文界面里的导出报告不再夹着半句英文**：分区计数以前直接把内部措辞拼进句子（settings (18 namespaces, 3 files)），现在与导出摘要共用同一套文案组装。
+  **The export report no longer mixes English fragments into a Chinese UI**: section counts used to paste internal wording straight into the sentence; they now share one formatter with the export summary.
+- **迁移前咨询失败时会告诉你失败了**：以前请求出错被吞掉，界面只显示「暂无咨询结论」，看起来和宿主不支持这个功能一样；现在把失败原因报出来。
+  **A failed pre-migration consultation now says it failed**: the error used to be swallowed so the UI just showed no consultation result, which looked the same as a host that does not support the feature; the reason is shown now.
+- **解锁加密包后若分析失败，界面回到解锁这一步**：以前解锁成功后再出错，状态停在「已解锁但还在解锁页」的混合态；现在失败即回滚解锁态，重新输入密码即可再来。
+  **A failure right after unlocking an encrypted archive returns to the unlock step**: an error after a successful unlock used to leave the flow unlocked but still on the unlock page; the unlocked state is rolled back so entering the password again just works.
+- **删远端快照不再留下指向已删对象的索引条目**：以前对象先删、索引后改，索引写失败时远端会留一条指向不存在对象的记录，之后按它拉取直接失败；现在先摘索引再删对象，最坏只留下可补删的孤儿对象。
+  **Deleting a remote snapshot no longer leaves index entries pointing at deleted objects**: the object used to be removed first, so a failed index write left a dangling entry that made the next pull fail outright; the index entry is removed first now, and the worst case is an orphan object that can be cleaned up later.
+- **远端索引一时读不到时不再被当成空索引整份覆盖**：以前网络抖动或返回格式坏掉都算「没有条目」，随后的写入会把已登记的条目全冲掉；现在只有明确的不存在才算空，其它情况直接报错重试。
+  **A temporarily unreadable remote index is no longer treated as empty and overwritten**: a network hiccup or a malformed response used to count as no entries, and the next write wiped every entry already there; only a definite absence counts as empty now, everything else fails and retries.
+- **备份校验不再把兄弟快照里的文件认成本快照的**：以前路径检查按字符串前缀比较，../snap10/... 这种同前缀的兄弟目录能绕过校验；现在按真实路径段判定，越界直接拒绝。
+  **Backup verification no longer accepts files from a sibling snapshot**: the path check compared string prefixes, so a sibling directory sharing the prefix passed; it now compares real path segments and refuses anything outside.
+- **恢复预览把「存在但读不出」如实标成读不出**：文件权限导致读失败时，以前被算成「新增」（看起来磁盘上没有），现在与目录形态一致，标成读不出并跳过。
+  **Restore preview reports present-but-unreadable as such**: a file that failed to read because of permissions used to count as newly added (as if it were absent); it is now labelled unreadable and skipped, matching how directories are handled.
+- **外部来源的插件文件数恰好等于上限时不再误报「已截断」**：读取上限内的文件也会被报成截断，让人以为漏了内容；现在只有真的超过上限才算截断。
+  **Third-party plugin reads no longer report truncation when the file count lands exactly on the limit**: reading everything within the cap was still reported as truncated, suggesting content was dropped; only a real overflow counts now.
+- **复制配置档案失败时不再留下一个删不掉的空目录**：以前目标目录建好、标记写失败就撒手，这个目录既不在列表里、删除又报找不到；现在失败即整个回滚。
+  **A failed profile copy no longer leaves an undeletable empty directory**: the target directory was created before the marker write, so a marker failure left something invisible in the list yet reported as missing on delete; it is rolled back entirely now.
 
 ## [0.8.2] - 2026-11-12
 

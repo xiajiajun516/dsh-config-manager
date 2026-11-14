@@ -426,8 +426,8 @@ function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImag
           <ChatEntryCopyAction text={bubble.text} t={t} />
           {/* 回退入口：**只有图标**（无文字标签、无边框按钮样式），与时间戳/复制图标同一行同观感 ——
               2026-10-10 用户第二条要求「回退按钮只有一个 icon 而不是一个按钮」。可见文案退到
-              aria-label/title；禁用原因是原生 title 里的一句话（InfoHint 的 Portal 钉在插件设置页
-              根节点，聊天区不存在）。按钮始终留在原地（禁用而不是消失）：入口可见性不随判据漂移。 */}
+              aria-label/title；禁用原因是原生 title 里的一句话。按钮始终留在原地（禁用而不是消失）：
+              入口可见性不随判据漂移。 */}
           {/* 开关**关闭时整颗收起**（issue #88 明确要求「入口收起」，不是置灰；2026-10-17 起连登记
               都会被撤销，整条气泡交回宿主原生渲染，这里只是兜底的那一层）。
               与上面那条「入口可见性不随判据漂移」不冲突：那说的是**暂时读不到点**这类判据，

@@ -55,6 +55,11 @@ test('t0 frontmatter 切分与 URL userinfo 剥离的边界', () => {
   assert.equal(frontmatterProblem(['---', 'name: a', 'description: ok', '---', 'body'].join(NL)), null);
   assert.deepEqual(stripUserInfo('https://u:p@h/mcp'), { url: 'https://h/mcp', stripped: true });
   assert.deepEqual(stripUserInfo('https://h/path@x'), { url: 'https://h/path@x', stripped: false });
+  // 无路径 URL 的 query 里出现 @ 不是 userinfo（曾把整条 URL 截成 https://b）
+  assert.deepEqual(stripUserInfo('https://h?k=a@b'), { url: 'https://h?k=a@b', stripped: false });
+  assert.deepEqual(stripUserInfo('https://h?email=a@b&x=1'), { url: 'https://h?email=a@b&x=1', stripped: false });
+  assert.deepEqual(stripUserInfo('https://h#a@b'), { url: 'https://h#a@b', stripped: false });
+  assert.deepEqual(stripUserInfo('https://u:p@h?k=1'), { url: 'https://h?k=1', stripped: true });
   assert.deepEqual(stripUserInfo('npx'), { url: 'npx', stripped: false });
 });
 

@@ -22,7 +22,8 @@ const MAIN = 'MyConfigsView.tsx';
 const PARTS: readonly { file: string; component: string; markers: readonly string[] }[] = [
   { file: 'MyConfigsLoginCard.tsx', component: 'MyConfigsLoginCard', markers: ['renderDeviceCode', 'myconfigs.login.userCode'] },
   { file: 'MyConfigsWizard.tsx', component: 'MyConfigsWizard', markers: ['css.hiddenFile', 'css.radioLabel', 'Modal.Body'] },
-  { file: 'MyConfigsList.tsx', component: 'MyConfigsList', markers: ['css.snapshotList', 'css.rowActions'] },
+  // T-05 按设计稿重排行结构后，列表段特征类名从 statRow/snapshotList/rowActions 换成自有类（2026-11-13）
+  { file: 'MyConfigsList.tsx', component: 'MyConfigsList', markers: ['css.marketMyItemList', 'css.marketMyItemActions'] },
   { file: 'MyConfigsInstall.tsx', component: 'MyConfigsInstall', markers: ['marketDetailView(', 'detailView.canImport'] },
 ];
 

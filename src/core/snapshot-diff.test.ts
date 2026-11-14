@@ -8,7 +8,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { SNAPSHOT_DIFF_LIMITS, snapshotFileDiff, summarizeRestoreChanges } from './snapshot-diff.ts';
+import { SNAPSHOT_DIFF_LIMITS, readSide, snapshotFileDiff, summarizeRestoreChanges } from './snapshot-diff.ts';
+import type { SideReadIo } from './snapshot-diff.ts';
 import type { RestorePlan } from './restore.ts';
 
 interface Fixture {
@@ -235,6 +236,77 @@ test('S-10 目录当文件：unreadable（不抛错、不递归）', async () =>
     await fx.writeBlob('blobs/d', 'content\n');
     const diff = await snapshotFileDiff({ snapshotDir: fx.snapshotDir, homeDir: fx.homeDir, kind: 'fileRestore', target: 'adir', blobPath: 'blobs/d' });
     assert.equal(diff.reason, 'unreadable');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+/* ---------------- P2-6：「存在但读不出」不得被判成不存在（审计回归） ---------------- */
+
+/** 造一个只带 errno code 的错误（真机上只有 EACCES 一类能触发该分支，Windows 无 ACL 夹具可造） */
+function errnoError(code: string): Error {
+  return Object.assign(new Error(`${code}: simulated`), { code });
+}
+
+test('P2-6: stat 成功但 readFile 抛 EACCES ⇒ 存在但读不出（与目录分支同形态，绝不判成不存在）', async () => {
+  const fx = await makeFixture();
+  try {
+    await fx.write('locked.yaml', 'a: 1\n');
+    const lockedAbs = path.join(fx.homeDir, 'locked.yaml');
+    const maxBytes = SNAPSHOT_DIFF_LIMITS.maxStatSideBytes;
+
+    const readable = await readSide(lockedAbs, maxBytes);
+    assert.equal(readable.exists, true);
+    assert.equal(readable.unreadable, false);
+    assert.equal(readable.text, 'a: 1\n');
+
+    // 既有形态：路径是目录（同函数非普通文件分支）——「读不出」必须与它逐字段一致
+    await fs.mkdir(path.join(fx.homeDir, 'adir'), { recursive: true });
+    const asDir = await readSide(path.join(fx.homeDir, 'adir'), maxBytes);
+
+    const deniedIo: SideReadIo = {
+      stat: async () => ({ isFile: () => true, size: 6 }),
+      readFile: async () => { throw errnoError('EACCES'); },
+    };
+    const denied = await readSide(lockedAbs, maxBytes, deniedIo);
+    // bytes 是各来源自己的 stat 体积（目录 vs 6 字节文件），形态比的是 exists/unreadable/text 这些标志
+    assert.deepEqual(
+      { ...denied, bytes: 0 }, { ...asDir, bytes: 0 },
+      '「存在但读不出」必须沿用既有不可读形态（exists:true + unreadable:true + text:null）',
+    );
+    assert.equal(denied.exists, true, '判成不存在会让恢复预览把只读文件显示成「新增」');
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('P2-6: 只有 ENOENT 才算不存在（stat 侧 EACCES = 读不出；stat 后 read 报 ENOENT = 真的没了）', async () => {
+  const fx = await makeFixture();
+  try {
+    const abs = path.join(fx.homeDir, 'gone.yaml');
+    const maxBytes = SNAPSHOT_DIFF_LIMITS.maxStatSideBytes;
+
+    // 真·不存在
+    const missing = await readSide(abs, maxBytes);
+    assert.equal(missing.exists, false);
+
+    // stat 拿不到状态（EACCES）= 路径在、只是读不了
+    const statDenied: SideReadIo = {
+      stat: async () => { throw errnoError('EACCES'); },
+      readFile: async () => Buffer.from('x'),
+    };
+    const fromStatDenied = await readSide(abs, maxBytes, statDenied);
+    assert.equal(fromStatDenied.exists, true);
+    assert.equal(fromStatDenied.unreadable, true);
+
+    // stat 与 read 之间被删掉（read 报 ENOENT）= 当时确实不存在
+    const vanished: SideReadIo = {
+      stat: async () => ({ isFile: () => true, size: 10 }),
+      readFile: async () => { throw errnoError('ENOENT'); },
+    };
+    const fromVanished = await readSide(abs, maxBytes, vanished);
+    assert.equal(fromVanished.exists, false);
+    assert.equal(fromVanished.unreadable, false);
   } finally {
     await fx.cleanup();
   }

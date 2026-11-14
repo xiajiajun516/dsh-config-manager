@@ -42,7 +42,6 @@ import { ContentPicker } from '../common/ContentPicker.tsx'
 import { SectionComposition } from '../common/SectionComposition.tsx'
 import { sectionLabel, sectionLabeler } from '../common/section-labels.ts'
 import { Modal } from '../common/Modal.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { PreviewIcon } from '../common/Icon.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
@@ -138,7 +137,7 @@ export function ExportView({ api, t }: ExportViewProps) {
     } catch (err) {
       // 请求整体失败（宿主异常 / 网络中断）：本次在途分区全部计为读取失败（UI-07 的复现路径）
       setInvFailed((prev) => [...new Set([...prev.filter((s) => !todo.includes(s)), ...todo])])
-      setInvError(err instanceof Error ? err.message : String(err))
+      setInvError(redactErrorText(err))
     } finally {
       for (const s of todo) invInFlight.current.delete(s)
       setInvPending((prev) => prev.filter((s) => !todo.includes(s)))
@@ -386,9 +385,6 @@ export function ExportView({ api, t }: ExportViewProps) {
         <Button loading={invLoading} disabled={running} title={t('picker.title')} onClick={openPicker}>
           {invLoading ? null : <PreviewIcon size={13} />} {t('picker.title')}
         </Button>
-        {/* 工具栏「模式提示」属「机制怎么工作 + 省事提示」（MOVE 类）：收进 ⓘ，
-            不再常驻占首屏一行（默认导出推荐分区 + 去哪里调整勾选）。 */}
-        <InfoHint text={t('export.hint')} label={t('common.infoHint')} />
       </div>
       {/* 公告位 = **恒定高度**槽位（.noticeSlot）：出现/消失时不能改变内容流高度，
           否则垂直居中的选择器弹窗会跳（用户实测反馈）。 */}
@@ -400,15 +396,13 @@ export function ExportView({ api, t }: ExportViewProps) {
         <Checkbox
           checked={encrypt}
           onChange={setEncrypt}
-          label={<span className={css.categoryName}>{t('export.encrypt')}</span>}
+          label={<span className={css.categoryName} title={t('export.encryptHint')}>{t('export.encrypt')}</span>}
         />
-        <InfoHint text={t('export.encryptHint')} label={t('common.infoHint')} />
         <Checkbox
           checked={includeSecrets}
           onChange={setIncludeSecrets}
-          label={<span className={css.categoryName}>{t('export.includeSecrets')}</span>}
+          label={<span className={css.categoryName} title={t('export.includeSecretsHint')}>{t('export.includeSecrets')}</span>}
         />
-        <InfoHint text={t('export.includeSecretsHint')} label={t('common.infoHint')} />
         <span className={css.statusSpacer} />
       </div>
       {encrypt && (
@@ -430,11 +424,10 @@ export function ExportView({ api, t }: ExportViewProps) {
           分组标题「文件名与备注（可选）」只是把字段名再念一遍，已删除。 */}
       <div className={css.secretFields}>
         <div className={css.field}>
-          <span className={css.fieldLabel}>
+          <span className={css.fieldLabel} title={t('export.fileNameHint')}>
             {t('export.fileName')}
-            {/* 输入规则属 MOVE 类（规则行收进字段标签旁的 ⓘ）：非法时下面的 css.formError
+            {/* 输入规则挂在字段标签的 title 上（悬停可见）：非法时下面的 css.formError
                 仍常驻重申字符规则（校验错误属 KEEP ①），规则不会因此不可见。 */}
-            <InfoHint text={t('export.fileNameHint')} label={t('common.infoHint')} />
           </span>
           <input aria-label={t('export.fileName')}
             type="text"
@@ -448,14 +441,12 @@ export function ExportView({ api, t }: ExportViewProps) {
             }}
           />
           {/* KEEP ①：校验错误仍常驻（export.fileNameInvalid 本身就重申了允许的字符集），
-              渲染与改前逐字一致；规则说明已收进字段标签旁的 ⓘ。 */}
+              渲染与改前逐字一致；规则说明挂在字段标签的 title 上。 */}
           {fileNameInvalid && <span className={css.formError}>{t('export.fileNameInvalid')}</span>}
         </div>
         <div className={css.field}>
           <span className={css.fieldLabel}>
             {t('export.note')}
-            {/* 备注说明属 MOVE 类（补充背景）：收进字段标签旁的 ⓘ，不再常驻占一行 */}
-            <InfoHint text={t('export.noteHint')} label={t('common.infoHint')} />
           </span>
           <input aria-label={t('export.note')}
             type="text"
@@ -539,7 +530,7 @@ export function ExportView({ api, t }: ExportViewProps) {
           「无内容可导出」本身就是一条需要用户看到的状态，而不是留白）。 */}
       <Card className={css.fillViewport}>
         <div className={css.groupHeader}>
-          <span className={css.groupLabel}>{t('export.compositionTitle')} <InfoHint text={t('export.compositionHint')} label={t('common.infoHint')} /></span>
+          <span className={css.groupLabel}>{t('export.compositionTitle')}</span>
           <span className={css.statusSpacer} />
           {compositionRows.length > 0 && (
             /* 有未读取分区时合计只报**下限**并显式标注（F-03）：宁可说「不少于」，也不虚报一个偏小的数 */

@@ -269,9 +269,21 @@ export interface DeviceFlowEntry {
 }
 
 /**
+ * 同一时刻允许驻留的设备码流上限。正常用户一次只开一个授权流程，这个数只在「反复重开」
+ * 或有人刷 start 端点时才会被顶到；有它才有内存上界（过期时间之外的第二重保证）。
+ */
+export const DEVICE_FLOW_LIMIT = 32;
+
+/**
  * 宿主内存设备码登记表（进程生命周期，跨请求共享 —— 与 RunRegistry 同模式）。
  * device_code 的持有者是宿主：UI 只拿 flowId（随机 id），轮询时宿主凭 flowId 取回
- * device_code 去 GitHub 换 token。过期条目惰性清理，防止无限增长。
+ * device_code 去 GitHub 换 token。
+ *
+ * audit-sync sync-P6-6（P3）：清理不能只挂在 get() 上 —— 用户开了授权页又直接关掉时，流程
+ * 从此不会有人轮询，那条含 device_code 的过期条目会永久驻留。所以**写入路径也清扫**：
+ * set() 先淘汰全部过期条目（now > expiresAt），再把总数压到 DEVICE_FLOW_LIMIT 以内
+ * （超出时淘汰最早过期的那条 = 最接近失效、最没价值的一条）。get() 的惰性清理保留，
+ * 任何时刻表的大小都不超过该上限。
  */
 export class DeviceFlowStore {
   private readonly flows = new Map<string, DeviceFlowEntry>();
@@ -287,7 +299,31 @@ export class DeviceFlowStore {
 
   /** 登记一个设备码流；flowId 由调用方生成（随机，不可猜） */
   set(flowId: string, entry: DeviceFlowEntry): void {
+    this.sweep();
     this.flows.set(flowId, entry);
+  }
+
+  /**
+   * 清扫：先删全部过期条目，再在容量满时淘汰最早过期者（保证 set 之后 size <= DEVICE_FLOW_LIMIT）。
+   * 先扫过期是关键 —— 否则上限会去淘汰仍在有效期内的流程，把用户的正常授权踢掉。
+   */
+  private sweep(): void {
+    const now = this.now();
+    for (const [flowId, entry] of this.flows) {
+      if (now > entry.expiresAt) this.flows.delete(flowId);
+    }
+    while (this.flows.size >= DEVICE_FLOW_LIMIT) {
+      let oldestId: string | undefined;
+      let oldestAt = Number.POSITIVE_INFINITY;
+      for (const [flowId, entry] of this.flows) {
+        if (entry.expiresAt < oldestAt) {
+          oldestAt = entry.expiresAt;
+          oldestId = flowId;
+        }
+      }
+      if (oldestId === undefined) return; // 理论不可达：size >= 1 时必能挑出一条
+      this.flows.delete(oldestId);
+    }
   }
 
   /** 取回设备码流；过期条目视为不存在并立即清理 */

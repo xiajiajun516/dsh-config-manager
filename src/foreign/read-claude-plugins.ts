@@ -46,6 +46,22 @@ const WALK_MAX_DEPTH = 8;
 /** 跳过原因：符号链接（与 read-claude-code 同码同义） */
 const DETAIL_SYMLINK = 'symlink-skipped';
 
+/**
+ * 走盘并**明确回报是否真的截断**（审计 P7-9）。
+ *
+ * 共享的 `walkFiles()` 只返回数组，「拿满上限」与「恰好等于上限」在返回值上无法区分 ——
+ * 调用方拿长度反推会把「正好 N 个文件」误报成触顶。这里多要一条：拿到 N+1 条才算真截断，
+ * 再把多要的那条切掉（共享内核在 `src/foreign/session-read.ts`，本文件不动它）。
+ */
+async function walkFilesChecked(
+  root: string,
+  options: { maxDepth?: number; maxFiles: number; match?: (name: string) => boolean },
+): Promise<{ files: Awaited<ReturnType<typeof walkFiles>>; truncated: boolean }> {
+  const probe = await walkFiles(root, { ...options, maxFiles: options.maxFiles + 1 });
+  const truncated = probe.length > options.maxFiles;
+  return { files: truncated ? probe.slice(0, options.maxFiles) : probe, truncated };
+}
+
 export interface ClaudePluginReadLimits {
   /** 启用的插件数上限（默认 50） */
   readonly maxPlugins?: number;
@@ -353,41 +369,46 @@ async function readPluginAt(
   }
 
   /* commands/**：递归计数（只数，不读内容） */
-  const commandFiles = await walkFiles(path.join(pluginDir, 'commands'), {
+  const commands = await walkFilesChecked(path.join(pluginDir, 'commands'), {
     maxDepth: WALK_MAX_DEPTH,
     maxFiles: options.maxPluginFiles,
   });
-  if (commandFiles.length > 0) {
-    plugin.commandCount = commandFiles.length;
+  if (commands.files.length > 0) {
+    plugin.commandCount = commands.files.length;
     plugin.components.push('commands');
   }
-  if (commandFiles.length >= options.maxPluginFiles) filesTruncated = true;
+  if (commands.truncated) filesTruncated = true;
+  // 上限是「单插件文件数」：只计数的组件也占额度（否则 N 个目录各带 199 个文件仍然全过）
+  let countedFiles = filesUsed + commands.files.length;
 
   /* agents/*.md：只取文件名（不读内容） */
-  const agentFiles = await walkFiles(path.join(pluginDir, 'agents'), {
+  const agentsWalked = await walkFilesChecked(path.join(pluginDir, 'agents'), {
     maxDepth: 0,
     maxFiles: options.maxPluginFiles,
     match: (name) => name.endsWith('.md'),
   });
-  if (agentFiles.length > 0) {
-    plugin.agents = agentFiles.map((file) => file.name).sort();
+  if (agentsWalked.files.length > 0) {
+    plugin.agents = agentsWalked.files.map((file) => file.name).sort();
     plugin.components.push('agents');
   }
-  if (agentFiles.length >= options.maxPluginFiles) filesTruncated = true;
+  if (agentsWalked.truncated) filesTruncated = true;
+  countedFiles += agentsWalked.files.length;
 
   /* hooks/ 与 hooks.json：**只数文件数**（hooks 是执行面，内容一律不读） */
-  const hookFiles = await walkFiles(path.join(pluginDir, 'hooks'), {
+  const hooksWalked = await walkFilesChecked(path.join(pluginDir, 'hooks'), {
     maxDepth: WALK_MAX_DEPTH,
     maxFiles: options.maxPluginFiles,
   });
-  let hookCount = hookFiles.length;
-  if (hookCount >= options.maxPluginFiles) filesTruncated = true;
+  let hookCount = hooksWalked.files.length;
+  if (hooksWalked.truncated) filesTruncated = true;
+  countedFiles += hooksWalked.files.length;
   const hooksJson = await statOrNull(path.join(pluginDir, 'hooks.json'));
   if (hooksJson !== null && hooksJson.isFile()) hookCount += 1;
   if (hookCount > 0) {
     plugin.hookFiles = hookCount;
     plugin.components.push('hooks');
   }
+  if (countedFiles > options.maxPluginFiles) filesTruncated = true;
 
   if (filesTruncated) {
     findings.push({

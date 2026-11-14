@@ -26,7 +26,9 @@
  *  - **环境变量覆盖即跳过**：区域声明的 env 存在且解析结果与默认位置不同 → 报码跳过，绝不猜新位置。
  *  - **不产生用户可见散文**：告警与计划项文案一律走消息目录（i18n 铁律）。
  */
-import { normalizePath } from '../utils/paths.ts';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+import { isSensitiveHomeRel, normalizePath } from '../utils/paths.ts';
 import { engineMsg } from './messages.ts';
 import { listFilesDetailed } from './link-report.ts';
 import type { RecursiveListing } from '../utils/recursive-walk.ts';
@@ -40,8 +42,8 @@ import { osHomeDirOf } from '../core/backup.ts';
 import { FileCollectionAdapter } from './file-collection.ts';
 import type { FilesSection } from '../schema/types.ts';
 import type {
-  ApplyResult, ExportOptions, ExportSection, FileSystemFacade, HostContext, ImportContext, PlanItem,
-  SectionPreview,
+  ApplyResult, ExportOptions, ExportSection, ExportUnit, FileSystemFacade, HostContext, ImportContext,
+  PlanItem, SectionPreview,
 } from '../core/types.ts';
 
 /** 区域条目（来源 + 区域），编译期与运行期唯一的区域表示 */
@@ -49,6 +51,22 @@ export type PluginDataEntry = { source: PluginDataSource; area: PluginDataArea }
 
 /** 声明来源缓存的 TTL（毫秒）：一次导出/导入/执行里会多次解析，逐次读 15+ 个 package.json 是净开销 */
 const DECLARED_TTL_MS = 5_000;
+
+/**
+ * 单次收集 / 分析调用的作用域：`listRelPaths()` 往里写区域表与告警，`unitIdOf()` 从里面读。
+ *
+ * 为什么必须是**按调用持有**的对象（审计 P2-7）：这两个钩子一个 async 一个 sync，本来靠
+ * 「实例字段 this.active / this.pendingWarnings」在中间传话 —— 同一 adapter 上并发两路
+ * （两个 export / preview / collect）时，后起的那路会把前一路的字段覆盖掉，于是前一路的
+ * 文件被归到后一路的区域、告警也串到别人头上（unitId 直接由后者决定）。
+ * 作用域用 AsyncLocalStorage 绑定到**调用链**上，`unitIdOf` 这个同步钩子因此仍能读到本次调用的那份。
+ */
+interface CollectScope {
+  /** 本轮区域表；undefined = 尚未解析（或本次调用没走到 listRelPaths） */
+  entries?: readonly PluginDataEntry[];
+  /** 本轮要并入返回值的告警（环境变量覆盖 / 凭据剔除 / 缺 home 门面） */
+  warnings: string[];
+}
 
 export interface PluginDataAdapterOptions {
   /** 内置来源（缺省 = BUILTIN_PLUGIN_DATA_SOURCES；测试注入假来源） */
@@ -82,10 +100,16 @@ export class PluginDataAdapter extends FileCollectionAdapter {
    * 白名单就变成了「谁先导入谁说了算」。
    */
   private declaredMemo: { key: string; at: number; sources: PluginDataSource[] } | undefined;
-  /** 本轮清单（listRelPaths 写入；unitIdOf 是同步纯函数，只能从这里拿区域表） */
-  private active: readonly PluginDataEntry[] | undefined;
-  /** 本轮告警（环境变量覆盖跳过等；export/preview 收尾合并进返回的 warnings） */
-  private pendingWarnings: string[] = [];
+  /** 每次收集调用一份作用域（listRelPaths 写、unitIdOf 读）：绝不放实例字段，否则并发两路互相覆盖 */
+  private readonly scope = new AsyncLocalStorage<CollectScope>();
+  /**
+   * 产物 section → 本轮区域表。
+   *
+   * `listUnits()` 在收集**结束之后**才被调用（作用域已退出），但它必须用「当初归组这批文件的那张区域表」
+   * —— 重新解析会与清单不一致（声明来源在这期间装了/卸了插件就会出现「单元 id 不在清单里」）。
+   * 键是产物对象本身，因此两路并发各挂各的，不存在覆盖。
+   */
+  private readonly unitsOf = new WeakMap<object, readonly PluginDataEntry[]>();
 
   constructor(section: PluginDataSection, options: PluginDataAdapterOptions = {}) {
     super();
@@ -188,13 +212,16 @@ export class PluginDataAdapter extends FileCollectionAdapter {
     // 本分区的根是**系统 home**（~/.dsh-wallpaper-engine、~/.mnemon …），不是 $DSH_HOME ——
     // 内容 I/O 一律走 homeFs；宿主没提供就什么都不收集，并如实报码（绝不退回 $DSH_HOME 去读错位置）。
     const homeFs = ctx.homeFs;
+    // 作用域按调用持有（审计 P2-7）：没人包住本次调用时（直接调 listRelPaths 的测试）退化成丢弃用的空壳，
+    // 绝不写回实例字段 —— 那正是并发串台的根因。
+    const scope: CollectScope = this.scope.getStore() ?? { warnings: [] };
     if (homeFs === undefined) {
-      this.active = [];
-      this.pendingWarnings = [engineMsg('adapter.pluginDataNoOsHome')];
+      scope.entries = [];
+      scope.warnings = [engineMsg('adapter.pluginDataNoOsHome')];
       return PluginDataAdapter.emptyListing();
     }
     const entries = await this.allowedEntries(ctx);
-    this.active = entries;
+    scope.entries = entries;
     const warnings: string[] = [];
     const paths: string[] = [];
     const listing = PluginDataAdapter.emptyListing();
@@ -225,8 +252,26 @@ export class PluginDataAdapter extends FileCollectionAdapter {
         paths.push(p);
       }
     }
-    listing.paths = paths;
-    this.pendingWarnings = warnings;
+    // 凭据文件永不进第三方数据分区（审计 P2-1 P0）：分区根是系统主目录，来源含插件自述声明，
+    // 声明 `.dsh` 就会把 ~/.dsh/.credentials.yaml 当配置带走 —— 收集侧先剔一次（打包侧还有同判据的兜底）。
+    const kept: string[] = [];
+    let sensitiveSkipped = 0;
+    let sensitiveSample = '';
+    for (const p of paths) {
+      if (!isSensitiveHomeRel(p)) {
+        kept.push(p);
+        continue;
+      }
+      sensitiveSkipped += 1;
+      if (sensitiveSample === '') sensitiveSample = p;
+    }
+    if (sensitiveSkipped > 0) {
+      warnings.push(engineMsg('adapter.pluginDataSensitiveSkipped', {
+        count: String(sensitiveSkipped), sample: sensitiveSample,
+      }));
+    }
+    listing.paths = kept;
+    scope.warnings = warnings;
     return listing;
   }
 
@@ -238,7 +283,9 @@ export class PluginDataAdapter extends FileCollectionAdapter {
    * \`active\` 可能是 undefined（例如直接调 listUnits），此时退回**内置来源**的最长前缀 —— 与清单口径同源。
    */
   protected override unitIdOf(relativePath: string): string {
-    const entries = this.active ?? areasForSection(this.builtin, this.id);
+    // 区域表取自**本次调用**的作用域（AsyncLocalStorage）⇒ 并发两路各读各的（审计 P2-7）；
+    // 收集结束后才调用的 listUnits 由覆写先铺好作用域，仍走这一处判定。
+    const entries = this.scope.getStore()?.entries ?? areasForSection(this.builtin, this.id);
     const hit = areaOfPath(entries, normalizePath(relativePath));
     return hit === null ? normalizePath(relativePath) : hit.area.relPath;
   }
@@ -258,18 +305,36 @@ export class PluginDataAdapter extends FileCollectionAdapter {
   }
 
   override async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<FilesSection>> {
-    this.pendingWarnings = [];
-    const out = await super.export(ctx, options);
-    return { ...out, warnings: [...out.warnings, ...this.pendingWarnings] };
+    // 每次导出各持一份作用域（审计 P2-7）：告警与区域表都属于**这一次**调用，收尾时从它合并/登记
+    const scope: CollectScope = { warnings: [] };
+    const out = await this.scope.run(scope, () => super.export(ctx, options));
+    const merged: ExportSection<FilesSection> = { ...out, warnings: [...out.warnings, ...scope.warnings] };
+    if (scope.entries !== undefined) this.unitsOf.set(merged, scope.entries);
+    return merged;
   }
 
   override async preview(ctx: HostContext, options: ExportOptions): Promise<SectionPreview<FilesSection>> {
-    this.pendingWarnings = [];
-    const out = await super.preview(ctx, options);
-    return {
-      ...out,
-      section: { ...out.section, warnings: [...out.section.warnings, ...this.pendingWarnings] },
+    const scope: CollectScope = { warnings: [] };
+    const out = await this.scope.run(scope, () => super.preview(ctx, options));
+    const section: ExportSection<FilesSection> = {
+      ...out.section,
+      warnings: [...out.section.warnings, ...scope.warnings],
     };
+    if (scope.entries !== undefined) this.unitsOf.set(section, scope.entries);
+    return { ...out, section };
+  }
+
+  /**
+   * 收集结束后按**那一次收集**的区域表归组（审计 P2-7）。
+   *
+   * listUnits 通常在 export/preview 返回之后才被调用（作用域已退出），因此 export/preview 把区域表
+   * 挂在产物对象上；这里重新铺作用域再交给基类，unitIdOf 规则只有一处实现。
+   * 拿不到登记（例如消费者自己构造的 section、来自快照反序列化）→ 交给基类，走内置来源的兜底口径。
+   */
+  override listUnits(section: ExportSection<FilesSection>): ExportUnit[] {
+    const entries = this.unitsOf.get(section);
+    if (entries === undefined) return super.listUnits(section);
+    return this.scope.run({ entries, warnings: [] }, () => super.listUnits(section));
   }
 
   /**
@@ -283,15 +348,21 @@ export class PluginDataAdapter extends FileCollectionAdapter {
     // 绝不退回 $DSH_HOME 的 ctx.fs 去比对/写入（那会落到错误位置）。
     const homeFs = ctx.target.homeFs;
     const entries = homeFs === undefined ? [] : await this.allowedEntries(ctx.target);
-    const items = await super.analyzeImport(
-      data,
-      homeFs === undefined ? ctx : { ...ctx, target: { ...ctx.target, fs: homeFs } },
+    // 用**本机**白名单表铺作用域：基类逐文件调 unitIdOf 时就有确定口径。
+    // 旧代码读的是实例上「上次导出的残留区域表」，并发或首次导入时直接错位（审计 P2-7）；
+    // 而且被放行的路径必然落在某个本机区域内，区域 id 与导入后 listUnits 的口径一致。
+    const items = await this.scope.run(
+      { entries, warnings: [] },
+      () => super.analyzeImport(
+        data,
+        homeFs === undefined ? ctx : { ...ctx, target: { ...ctx.target, fs: homeFs } },
+      ),
     );
     return items.map((item) => {
       const ref = item.target?.ref;
       if (ref === undefined) return item;
       const rel = normalizeHomeRel(ref);
-      if (rel !== null && areaOfPath(entries, rel) !== null) return item;
+      if (rel !== null && areaOfPath(entries, rel) !== null && !isSensitiveHomeRel(rel)) return item;
       return {
         id: item.id,
         ...(item.unitId !== undefined ? { unitId: item.unitId } : {}),
@@ -316,7 +387,7 @@ export class PluginDataAdapter extends FileCollectionAdapter {
     if (ref !== undefined) {
       const rel = normalizeHomeRel(ref);
       const entries = await this.allowedEntries(ctx.target);
-      if (rel === null || areaOfPath(entries, rel) === null) {
+      if (rel === null || areaOfPath(entries, rel) === null || isSensitiveHomeRel(rel)) {
         return { ok: false, message: engineMsg('adapter.pluginDataPathNotAllowed', { path: ref }) };
       }
     }

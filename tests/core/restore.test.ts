@@ -545,3 +545,47 @@ test('R-05b listSnapshots：originProfile 透传；旧快照（无该字段）�
     assert.equal(byId.get('legacy')!.entryCount, 1, '旧快照其余字段照常可读');
   });
 });
+
+/* ---------------- 审计 P3-3 / P3-4：读不到 ≠ 没有，缺字段 ≠ 崩溃 ---------------- */
+
+test('R-missing-entries 旧快照缺 entries 字段：planRestore 按空集合处理，不抛类型错误', async () => {
+  await withTmp(async (tmp) => {
+    const snapshot = makeSnapshot({ beforePlugins: [], hostFileBackups: [] });
+    // 审计 P3-3：早期版本落的盘 / 手工编辑过的 snapshot.json 可能根本没有 entries 键。
+    // 运行时形状按「空集合」兜底（与同文件 hostFileBackups ?? [] / pluginRemovals ?? [] 同口径），
+    // 旧快照诚实跳过，绝不把裸 TypeError 抛给调用方。
+    const legacy = snapshot as Partial<Snapshot>;
+    delete legacy.entries;
+    const f = await makeFixture(tmp, snapshot);
+
+    const plan = await planRestore({ snapshotDir: f.snapshotDir, homeDir: f.homeDir, profile: 'web' });
+
+    assert.equal(plan.snapshotId, 'snap-m2-1');
+    assert.deepEqual(plan.actions.filter((a) => a.kind !== 'skip'), [], '缺 entries ⇒ 没有任何条目级动作（也无从计划删除）');
+  });
+});
+
+test('R-ghost-unreadable 会话根读不出（ENOTDIR）：不得断言磁盘无文件，显式失败且保持未知', async () => {
+  await withTmp(async (tmp) => {
+    const snapshot = makeSnapshot({
+      beforePlugins: [],
+      hostFileBackups: [],
+      entries: [
+        { kind: 'file', adapter: 'sessions', ref: 'proj/s1/session.jsonl.zstd', before: { contentHash: 'h1' }, existed: true, copiedTo: 'blobs/sess-s1', snapshotId: 'snap-m2-1' },
+      ],
+    });
+    const f = await makeFixture(tmp, snapshot, { 'blobs/sess-s1': 'SESSION S1\n' });
+    await fs.mkdir(f.homeDir, { recursive: true });
+    // <homeDir>/sessions 是普通文件 ⇒ readdir 抛 ENOTDIR（EACCES 同理）
+    await fs.writeFile(path.join(f.homeDir, 'sessions'), 'not a directory\n', 'utf8');
+
+    const report = await restore({ snapshotDir: f.snapshotDir, homeDir: f.homeDir, profile: 'web' });
+
+    assert.equal(
+      report.ghostSessions, undefined,
+      '读不出 ≠ 空目录：既不能写成「没有幽灵」，也不能把每个期望会话断言成幽灵（未知就是未知）',
+    );
+    assert.ok(report.failed.some((x) => x.item === 'ghost-sweep'), '读不出的失败必须显式进报告');
+    assert.ok(!report.skipped.some((s) => s.includes('幽灵会话')), '不得把期望会话名单送进「幽灵会话…需人工清理」文案');
+  });
+});

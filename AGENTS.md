@@ -38,6 +38,7 @@
 - **一键同步差异确认**的批量按钮覆盖「全部确认项」、只排除 Error（`sync-view.isBulkDecidable`）。
 
 ### 架构与路由
+- **dsh-Go 原生插件在 `integrations/dsh-go/config-manager/`**：只做界面，数据走宿主回环 API；包名 `local-` 三处一致，改后跑插件自带测试 + `check.mjs --load`（缺口 → `docs/evidence/dsh-go-native-plugin.md`）。
 - **双面插件**：host `src/index.ts`（Cordis `name='config-manager'`，前缀 `/api/dsh-config-manager/*`）；web `src/client/`（React，settings.section），经 api 调 host。
 - **宿主路由只经 kit 的 `endpoint()` + `registerRoutes()`**（围栏与方法白名单在注册点统一包装；未经 kit 的路由注册直接抛错）。
 - 路由源 = `src/index.ts`（窗口守卫**钉住的 7 条**）+ `src/routes/*.ts` 其余 75 条（合计 82 条）；源码级守卫必须扫**全部**路由源。
@@ -85,6 +86,7 @@
 - **「本地有改动」与导出载荷必须同一份字节**：`hasLocalChanges` 比 `hashSection(export())` ⇒ 比对里剔掉的易变字段必须同时从载荷剔除，否则每轮轮询都真推一次；身份字节只有 `src/adapters/file-collection.ts` 的 `comparableContent()` 一处。
 - **会话管理五条**：远端保留接 GFS（刚 push 恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；墓碑不删本机数据。
 - **git 通道只碰同步内容**：clone 走 partial+sparse（sparse 面 = `SYNC_ROOT_DIRS`，与 `ADOPT_ROOT_ALLOW` 同源），老 git 回落全量；`--filter` 只给 promisor 副本。
+- **git 通道 `latest/` 是派生视图**：与快照同一次 commit、只写不读（`list`/`download`/合并/保留/冲突都不认）、按 `createdAt` 不回退、删快照时同提交移除、加密不写且告警；必须同进 `ADOPT_ROOT_ALLOW` 与 `syncDirs()`，存量 cone 由 `ensureSparseConeCoversLatest` 补齐（→ `docs/contracts/sync-channel-v1.md` §1.1）。
 - **git 网络命令有界**：稳态靠 `ls-remote` 短路（远端 sha 与本地跟踪引用相同**且** HEAD 已合并才跳过）；网络子命令恒带低速上限；超时 kill 整棵进程树、宽限到点强制收尾（证据 → `docs/evidence/sync-channel.md`）。
 
 ### 备份 / 恢复 / 回滚点
@@ -123,7 +125,7 @@
 - **本插件是 bundle 包**：隔离实例挂载必须进 `dsh.profile.bundles`；读路径零写入，对账只在安装成功后。
 - **档案启动子进程必须直启入口文件**（`shell:false`，Electron 用 `ELECTRON_RUN_AS_NODE=1`）：Windows「cmd 包装 + `detached`」会吞孙进程 stdio ⇒ 日志恒空、抓不到 token URL；上限 30 秒。
 - **`cordis.patch.yml` 的 `!!js` 方言读写只有 `src/utils/patch-yaml.ts` 一处**：「存在但解析不了」拒绝覆盖（ENOENT 才是空层）；pnpm 同树布局推导也只有一处，多候选对不上不猜。
-- **patch 写回必须 `forceQuotes: true`**：DSH 读端是 js-yaml 4.x，不加引号会把空串 / `True` / `007` 读成 null / 布尔 / 数字（实测 24 种 / 48 处）；它只保**值**，键名与裸 `!!js` 仍无保护 → `docs/evidence/profiles-and-instances.md`。
+- **patch 写回必须 `forceQuotes: true`**：DSH 读端是 js-yaml 4.x，不加引号会把空串 / `True` / `007` 读成 null / 布尔 / 数字（实测 24 种 / 48 处）；它只保**值**，**键名另有一道写前检查**（空键名 / 4.x 会改判的键 ⇒ 该项不写），裸 `!!js` 仍无保护 → `docs/evidence/profiles-and-instances.md`。
 - **插件数据分区收录面**：只有内置来源表 + 已安装插件自述的 `dsh.dataDirs`（包内声明绝不构成写入授权）；`cache` 与 `excludeRel` 命中永不收录；区域被环境变量覆盖即报码跳过。
 - **两个分区的根是系统主目录（`HostContext.osHomeDir`/`homeFs`），不是 `$DSH_HOME`**：I/O 一律 `fsForSection()`；缺 `homeFs` 显式报码，绝不退回 `ctx.fs`。
 - **离线 CLI 不收集 `pluginData`/`pluginAssets`**（显式 `--sections` 提示改用 GUI）；归属键只有 npm 包名，`pluginFiles` 无包名即不猜，注册表有而清单无不可勾。

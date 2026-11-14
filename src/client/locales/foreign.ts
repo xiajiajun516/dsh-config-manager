@@ -52,7 +52,7 @@ export const zh = {
   'foreign.importFailed': '导入失败：{reason}',
   'foreign.previewTitle': '将导入的内容',
   'foreign.previewSections': '包含分区：{sections}',
-  'foreign.previewDryRun': '只读预览：不会写入任何配置。',
+  'foreign.previewDryRun': '只读预览 · 零写入',
   // F-3：任何输入变化都作废上一次的产包结果（照 dsh-movein 的 resetPreview 语义），
   // 并留下可见反馈 —— 否则用户会以为结果被静默吞掉。
   'foreign.previewReset': '来源已变化：上一次的产包结果作废，请重新「开始导入」。',
@@ -147,7 +147,7 @@ export const en: Record<keyof typeof zh, string> = {
   'foreign.importFailed': 'Import failed: {reason}',
   'foreign.previewTitle': 'What will be imported',
   'foreign.previewSections': 'Sections included: {sections}',
-  'foreign.previewDryRun': 'Read-only preview: nothing is written.',
+  'foreign.previewDryRun': 'Read-only preview · zero writes',
   'foreign.previewReset': 'The source changed: the last preview was discarded — start the import again.',
   'foreign.lossy.title': 'Known lossy behaviour',
   'foreign.lossy.hint': 'These three behaviours are built into the "external config → bundle → import" pipeline: none of them blocks the import, and the compatibility score never explains them.',

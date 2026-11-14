@@ -78,7 +78,6 @@ export const zh = {
   'profiles.nameReserved': '「{name}」是 DSH 保留名（web / headless / sdk / sdk-minimal / acp / desktop），不能手动创建',
   'profiles.list.title': '全部档案',
   'profiles.list.count': '共 {count} 个',
-  'profiles.list.hint': '点击档案行查看完整详情（bundle 层 / 依赖 / patch 原文）',
   'profiles.row.summary': '{bundles} 个层 · patch {patch} 条 · 依赖 {deps}',
   'profiles.detail.info': '档案信息',
   'profiles.bundles.count': '{count} 个 bundle 层',
@@ -122,7 +121,6 @@ export const zh = {
   'profiles.deleteCurrentWarning': '这是当前运行中的档案：删除后本次运行仍可用，但重启会失败。',
   'profiles.deleteCurrentConfirm': '仍要删除当前档案',
   'profiles.duplicate': '复制',
-  'profiles.duplicateHint': '把该档案整份复制成一份新档案（清单 / patch 层 / 依赖声明 / pnpm 锁文件；可连同已装的 node_modules 一起拷）',
   'profiles.duplicateTitle': '复制档案',
   'profiles.duplicateMessage': '把档案「{name}」复制成一份新档案：',
   'profiles.duplicate.nameLabel': '副本档案名',
@@ -221,7 +219,6 @@ export const en: Record<keyof typeof zh, string> = {
   'profiles.nameReserved': '“{name}” is reserved by DSH (web / headless / sdk / sdk-minimal / acp / desktop) and cannot be created manually',
   'profiles.list.title': 'All profiles',
   'profiles.list.count': '{count} total',
-  'profiles.list.hint': 'Click a profile row for full details (bundle layers / dependencies / raw patch)',
   // 英文侧不再用 (s)/(ies) 括号式复数（2026-11-01）：档案只有 1 个时它渲染成
   // "1 layer(s) · 5 patch entry(ies)"，在一行被截断的元信息里既占宽又不专业。
   // zh 侧本来就是无复数形态，改成同样的「数字 + 名词」短形态后两侧结构一致。
@@ -268,7 +265,6 @@ export const en: Record<keyof typeof zh, string> = {
   'profiles.deleteCurrentWarning': 'This is the running profile: the current process keeps working, but the next start will fail.',
   'profiles.deleteCurrentConfirm': 'Delete the running profile anyway',
   'profiles.duplicate': 'Duplicate',
-  'profiles.duplicateHint': 'Copy this profile as a new profile (manifest / patch layer / dependency declarations / pnpm lockfile; the installed node_modules can be copied too)',
   'profiles.duplicateTitle': 'Duplicate profile',
   'profiles.duplicateMessage': 'Duplicate “{name}” as a new profile:',
   'profiles.duplicate.nameLabel': 'New profile name',

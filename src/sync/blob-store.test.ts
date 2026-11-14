@@ -82,6 +82,22 @@ test('blob-store: 缺 blob → 硬失败（绝不静默降级成空分区）', a
   await assert.rejects(() => refsToSection(refs, sink), /blob 缺失/);
 });
 
+test('blob-store: blob 内容与引用哈希不符 → 硬失败，绝不把错误字节当会话写回（审计 P6-3）', async () => {
+  const sink = new MemBlobSink();
+  const refs = await sectionToBlobRefs(filesSection([['--p--/a/session.jsonl.zstd', 'REAL-BYTES']]), sink);
+  const hash = refs.blobRefs[0]?.blobHash;
+  assert.ok(hash !== undefined);
+  // 远端被改坏（同哈希槽位放另一段字节）：长度也变了，sizeBytes 一并拦住
+  sink.blobs.set(hash, { bytes: new TextEncoder().encode('TAMPERED'), mtimeMs: Date.now() });
+  await assert.rejects(() => refsToSection(refs, sink), /校验不符/);
+
+  // 只坏在内容、长度凑巧相同：仍然靠 sha256 拦下
+  const sameLen = new TextEncoder().encode('TAMPERED-#'); // 与 'REAL-BYTES' 同为 10 字节
+  assert.equal(sameLen.byteLength, 10);
+  sink.blobs.set(hash, { bytes: sameLen, mtimeMs: Date.now() });
+  await assert.rejects(() => refsToSection(refs, sink), /校验不符/);
+});
+
 test('blob-store: referencedBlobHashes 只认引用形态', () => {
   assert.equal(referencedBlobHashes(filesSection([['a', 'B']])).size, 0, '普通 FilesSection（含 data）不算引用');
   assert.deepEqual([...referencedBlobHashes({ version: 1, blobRefs: [{ relativePath: 'a', blobHash: 'h1', sizeBytes: 1 }] })], ['h1']);

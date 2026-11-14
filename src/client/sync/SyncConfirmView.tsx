@@ -184,7 +184,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       }
     } catch (err) {
       setPhase('failed');
-      setError(err instanceof Error ? err.message : String(err));
+      setError(redact(err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -220,7 +220,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       }
     } catch (err) {
       setPhase('failed');
-      setError(err instanceof Error ? err.message : String(err));
+      setError(redact(err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -490,7 +490,7 @@ function ApplyResultCard({ result, busy, t, onRollback }: ApplyResultCardProps):
         <div>
           <span className={css.fieldLabel}>{t('syncflow.importWarnings')}</span>
           <ul className={css.warnList}>
-            {result.warnings.map((w, i) => <li key={i}>{w}</li>)}
+            {result.warnings.map((w, i) => <li key={i}>{redact(w)}</li>)}
           </ul>
         </div>
       )}

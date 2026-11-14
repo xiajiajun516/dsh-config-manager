@@ -141,7 +141,18 @@ export function parseReleasesResponse(data: unknown): FormattedRelease[] {
 }
 
 /**
+ * 单次 GitHub API 请求的上限（ms）。
+ *
+ * 审计 P8-4：此前没有任何超时 —— 连接被静默丢弃（代理、断网、NAT 超时）时 fetch 既不
+ * resolve 也不 reject，更新说明弹窗就永久停在骨架，用户既看不到错也没有可点的重试。
+ * 10 s 覆盖移动网络最差的一段交互等待，又不至于让慢但可用的链路被误判。
+ */
+const RELEASES_FETCH_TIMEOUT_MS = 10_000;
+
+/**
  * 分页获取 GitHub Releases。
+ *
+ * `timeoutMs` 覆盖**整次请求**（含读 body）：只有响应头到达、body 挂住同样会卡住弹窗。
  */
 export async function fetchReleases(
   repoUrl: string,
@@ -149,35 +160,49 @@ export async function fetchReleases(
   perPage = 5,
   fetcher: typeof fetch = globalThis.fetch,
   t: TranslateNS<'config-manager'>,
+  timeoutMs = RELEASES_FETCH_TIMEOUT_MS,
 ): Promise<FetchReleasesResult> {
   const url = buildReleasesApiUrl(repoUrl, page, perPage);
-  const res = await fetcher(url, {
-    headers: {
-      Accept: 'application/vnd.github.v3+json',
-    },
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => { controller.abort() }, timeoutMs);
+  try {
+    const res = await fetcher(url, {
+      headers: {
+        Accept: 'application/vnd.github.v3+json',
+      },
+      signal: controller.signal,
+    });
 
-  if (!res.ok) {
-    if (res.status === 403 || res.status === 429) {
-      throw new Error(t('about.releaseNotes.rateLimited'));
+    if (!res.ok) {
+      if (res.status === 403 || res.status === 429) {
+        throw new Error(t('about.releaseNotes.rateLimited'));
+      }
+      if (res.status === 404) {
+        return { releases: [], hasMore: false, page };
+      }
+      throw new Error(t('about.releaseNotes.fetchFailed', { status: String(res.status), statusText: res.statusText }));
     }
-    if (res.status === 404) {
-      return { releases: [], hasMore: false, page };
+
+    const json: unknown = await res.json();
+    const releases = parseReleasesResponse(json);
+
+    // 如果返回的有效条目数达到 perPage，则推测还有下一页
+    const hasMore = Array.isArray(json) && json.length >= perPage;
+
+    return {
+      releases,
+      hasMore,
+      page,
+    };
+  } catch (err) {
+    // 自己发起的中止 = 超时：给用户一句能照做的原因，而不是把 AbortError 原样抛上去
+    if (controller.signal.aborted) {
+      throw new Error(t('about.releaseNotes.timeout', { seconds: String(Math.round(timeoutMs / 1000)) }));
     }
-    throw new Error(t('about.releaseNotes.fetchFailed', { status: String(res.status), statusText: res.statusText }));
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-
-  const json: unknown = await res.json();
-  const releases = parseReleasesResponse(json);
-
-  // 如果返回的有效条目数达到 perPage，则推测还有下一页
-  const hasMore = Array.isArray(json) && json.length >= perPage;
-
-  return {
-    releases,
-    hasMore,
-    page,
-  };
 }
 
 /* ---------------- 轻量级 Markdown 块解析 ---------------- */

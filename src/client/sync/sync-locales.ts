@@ -22,9 +22,7 @@ export const zh = {
   'config.tokenSaved': '凭据已配置',
   'config.tokenMissing': '未配置令牌：可拉取公开仓库，无法推送',
   'config.tokenPlaceholder': 'ghp_…（可选）',
-  // 配置保存（自动保存 + 显式保存按钮）
-  'config.save': '立即保存',
-  'config.saveHint': '表单改动会自动保存：密码/token 安全写入 DSH credentials，不会写入同步文件或日志。',
+  // 配置保存（全自动保存：无手动按钮，成功后标题行闪「已保存」徽章；凭据去向在各密钥字段的 title 里）
   'config.savedTick': '已保存',
   // 通道选择器
   'channel.title': '同步通道',
@@ -32,10 +30,8 @@ export const zh = {
   'channel.webdav': 'WebDAV 服务器',
   'channel.s3': '对象存储（S3 兼容）',
   'channel.gist': 'GitHub Gist',
-  'channel.perChannelHint': '每条通道（Git / WebDAV / 对象存储 / Gist）的自动同步、同步模式、加密与远端快照各自独立配置。',
   // 通道入口卡（弹窗驱动：点按钮 → 弹窗内配置通道）
   'channel.open': '配置',
-  'channel.openHint': '远程同步通过「同步通道」进行：Git 私有仓库或 WebDAV 服务器。',
   // 断开通道配置（用户实测要求：配置过就必须能删掉，否则打不通的通道会永久占位）
   'channel.expand': '展开通道详情',
   'channel.collapse': '收起通道详情',
@@ -43,10 +39,17 @@ export const zh = {
   'channel.clearConfirmTitle': '断开同步通道配置？',
   'channel.clearConfirmMessage': '将删除「{channel}」的本机配置、已保存的凭据与自动同步开关。远端快照与本机备份不受影响；断开后可重新配置。',
   'channel.clearConfirm': '断开配置',
+  'channel.clearBusy': '还有保存请求没完成，稍后再点一次断开（最多等 5 秒）',
   'channel.clearGitSignOut': 'Git 通道的访问令牌会被一并删除：GitHub 登录状态随之失效，需要重新登录（不会自动恢复）。',
   'channel.configured': '已配置',
   'channel.notConfigured': '未配置',
   'channel.currentUrl': '当前地址',
+  // 2026-11-14 用户要求改同步页结构：页面只留已配置的通道卡，其余通道进「添加通道」卡
+  'addChannel.title': '添加通道',
+  'addChannel.git': '把配置推进你自己的 Git 仓库（GitHub 仓库可在弹窗里直接登录）',
+  'addChannel.webdav': '同步到 WebDAV 空间：坚果云、Nextcloud、ownCloud、Seafile、群晖、Box',
+  'addChannel.s3': '同步到对象存储桶：AWS S3、阿里云 OSS、腾讯云 COS、MinIO、七牛 Kodo',
+  'addChannel.gist': '用单个 GitHub Gist 存快照，不必新建仓库',
   // issue #79：Git 工作副本（origin 是否跟随仓库地址 + 显式重建入口）
   'workdir.title': '工作副本',
   'workdir.hint': '同步使用的 Git 工作副本。每次同步都会让它的 origin 跟随当前仓库地址；改地址后若仍失败，可在这里重指向或重新克隆。',
@@ -80,12 +83,10 @@ export const zh = {
   'webdav.url': '服务器地址',
   'webdav.urlHint': 'WebDAV 服务器根地址（https://…）。同步快照与索引存放于该地址的 dsh-config-manager/ 子目录下。请勿在地址中包含用户名/密码。',
   'webdav.username': '用户名',
-  'webdav.usernameHint': 'HTTP Basic 认证用户名（非敏感，可回显）。',
   'webdav.password': '密码',
   'webdav.passwordHint': '将安全写入 DSH credentials（引用名 {ref}），不会写入同步文件或日志。留空表示沿用已保存的凭据。',
   'webdav.passwordSaved': '凭据已配置',
   'webdav.passwordPlaceholder': '密码（可选）',
-  'webdav.presetHint': '选择常见 WebDAV 服务器可快速填入地址；含 <占位符> 的模板请替换为你的真实服务器/用户名。',
   // 预设服务器的显示名（英文界面零中文：中文名只住在 zh 目录，en 用品牌英文名）
   'webdav.preset.custom': 'Custom URL',
   'webdav.preset.jianguoyun': '坚果云 (Jianguoyun)',
@@ -123,7 +124,6 @@ export const zh = {
   'repoPicker.createFailed': '新建仓库失败',
   'repoPicker.nameRequired': '请填写仓库名。',
   'repoPicker.nameInvalid': '仓库名只能包含字母、数字、点、下划线、连字符（最长 100 字符，不能以点开头）。',
-  'repoPicker.privateOnly': '新建的仓库固定为私有：公开仓库会公开你的配置内容。',
   // 状态
   // 操作
   // 报告
@@ -134,18 +134,21 @@ export const zh = {
   // 名字必须写明方向（issue 121）：这条链路只下行、绝不上传 —— 叫「同步」会被读成双向。
   'syncflow.title': '从远端合并到本机',
   'syncflow.button': '从远端合并到本机',
-  // 方向说明（ⓘ，挂在动作行）：只下行 + 双向该去哪儿；常驻成行会与按钮名重复（DESIGN.md §7）
+  // 方向说明（悬停 title，挂在动作行）：只下行 + 双向该去哪儿；常驻成行会与按钮名重复（DESIGN.md §7）
   // 方案 A：有基线且三方合并全部 skip = 远端与本机一致，不必同步
   'syncflow.upToDate': '已是最新，无需同步',
   'syncflow.syncing': '正在同步…',
   // 阶段文案：一键同步先拉远端快照做只读合并预览（最慢的一步），必须有可见反馈
   'syncflow.checkingRemote': '正在检查远端变更…',
   'syncflow.syncFailed': '同步失败',
+  // 快照行（2026-11-14 恢复：用户要求把「选择历史快照」下拉与刷新按钮放回页面）
   'syncflow.snapshotOption': '（{date} · {count} 分区）',
   'syncflow.selectSnapshot': '选择历史快照',
   'syncflow.refreshSnapshots': '刷新快照列表',
   'syncflow.latestSnapshot': '最新快照',
   'syncflow.noSnapshots': '远端暂无快照',
+  // ⑥ 设备身份：只有快照确实带 deviceName 时才追加
+  'syncflow.snapshotDevice': '由 {device} 推送',
   'syncflow.confirmImport': '确认导入',
   'syncflow.cancel': '取消',
   'syncflow.adoptRemote': '采用远端',
@@ -180,20 +183,20 @@ export const zh = {
   'syncflow.pushChanged': '有改动',
   'syncflow.pushUnchanged': '无改动',
   'syncflow.pushConfirm': '确认推送',
+  // issue #140：内容没变时缺省不新建快照；勾选 = 强制新建（与 agent 的 force 同义）
+  'syncflow.pushForce': '内容未变化也新建快照（强制推送）',
   'syncflow.pushFirstBaseline': '远端暂无快照：本次将创建首个同步基线',
   'syncflow.remoteEmptyGuide': '远端还没有任何快照：这是首次同步，先点「推送到远端」把本机配置推上去（推送会创建第一个快照），之后才能拉取。',
   // 同步模式（默认快速导出 / 高级自定义导出）
   'mode.title': '同步分区',
-  'mode.hint': '同步范围 = 勾选的分区集合（默认已勾选推荐分区，可随时改）。',
   'mode.selectedCount': '已勾选 {n} / {total}',
-  'mode.sectionsHint': '默认可同步的是可移植分区；平台相关分区（MCP 服务器）与设备相关分区（插件文件、凭据状态、历史会话）只有你在这里主动勾选才参与同步。',
   'mode.deletePlugins': '跟随远端删除插件',
   'mode.deletePluginsHint': '远端快照里已经没有、本机也没改过的插件会被卸载（判断依据是共同祖先里还有它 —— 那只可能是别处删掉了）。卸载只发生在插件分区真正被应用的那一轮；失败逐项提示、其余同步照常完成。desktop 保留档案与宿主自己不会被删。',
   'mode.atLeastOne': '请至少勾选一个同步分区',
-  'mode.sectionPortable': '可移植',
+  'mode.sectionPortable': '可移植 · 默认同步',
   'mode.sectionRecommended': '推荐',
-  'mode.sectionDeviceSpecific': '设备相关',
-  'mode.sectionPlatformSpecific': '平台相关',
+  'mode.sectionDeviceSpecific': '设备相关 · 默认不同步',
+  'mode.sectionPlatformSpecific': '平台相关 · 默认不同步',
   'mode.mcpHint': 'MCP 服务器按 patch 行写回（导入时落回原层）。按包安装的 stdio 服务器（npx / uvx / pipx）配置本身可跨机；若 command / args / cwd 里是绝对路径，或目标机没装对应运行时，导入分析会给出提示 —— 配置会照常写入，但服务器在目标机可能起不来。',
   'mode.sessionsLimit': '同步最近多少个会话',
   'mode.sessionsLimitHint': '历史会话内容敏感，默认只带最近的 5 个（0 = 只勾选不带会话）；单位是一个会话目录，同一会话的全部日志一起走。',
@@ -209,20 +212,27 @@ export const zh = {
   'mode.pickerHint': '改动即时生效并保存（关闭弹窗即完成）。',
   'mode.pickerBack': '返回分区列表',
   'mode.pickerDone': '完成',
+  // 同步设置弹窗（2026-11-14 用户要求：分区 / 加密 / 解密三块收进一个弹窗，页面只留摘要行）
+  'mode.settingsTitle': '同步设置',
+  'mode.settingsOpen': '设置',
+  'mode.tabContent': '同步内容',
+  'mode.tabAutosync': '自动同步',
+  'mode.tabSecurity': '加密与密码',
+  // 摘要行徽章：push 前必须看见「这份快照加不加密码」
+  'mode.encryptOn': '加密已开',
+  'mode.encryptOff': '未加密',
   // 加密与密钥导出（手动推送；自动同步恒推普通快照、遇加密快照跳过）
-  'mode.security': '加密与密钥导出（安全选项）',
+  'mode.security': '加密与密钥导出',
   'mode.encrypt': '加密备份',
-  'mode.encryptHint': '用密码加密同步快照（AES-256-GCM）。密码保存在本机 DSH 凭据库（~/.dsh/.credentials.yaml）以便长期复用：不写入同步文件、不落日志、不写入备份（除非同时勾选「导出密钥」并加密）。自动同步无法解密加密快照，会自动跳过并在同步历史中提示。',
+  'mode.encryptHint': '用密码加密同步快照（AES-256-GCM）。密码存在本机 DSH 凭据库（~/.dsh/.credentials.yaml）长期复用：不写进同步文件、日志或备份（除非同时勾选「导出密钥」）。自动同步没有密码，遇到加密快照会跳过并在同步历史提示。',
   'mode.password': '加密密码',
   'mode.passwordConfirm': '确认密码',
   'mode.passwordMismatch': '两次输入的密码不一致',
   'mode.passwordRequired': '加密必须设置密码',
-  'mode.passwordSavedHint': '本机已保存密码：留空即沿用，输入新密码会覆盖已保存的密码。',
   'mode.passwordPlaceholder': '已保存（留空即沿用）',
   'mode.passwordClearNotice': '取消勾选会删除已保存的密码',
   'mode.includeSecrets': '导出密钥',
   'mode.includeSecretsHint': '把真实凭据值（~/.dsh/.credentials.yaml）写入加密快照，可在另一台机器上随同步一并写回本机凭据；勾选时自动选中加密，密钥绝不进入未加密快照。',
-  'mode.encryptAutosyncNotice': '加密快照仅通过手动推送/拉取使用；自动同步无密码，遇到加密快照会跳过并在历史中提示。',
   'mode.decryptPassword': '解密密码（加密快照拉取/同步用，可选）',
   'mode.decryptPasswordHint': '输入后保存在本机凭据库，下次拉取自动使用；只有拉取的快照确实加密时才会用到 —— 未加密的备份不会使用密码。',
   'mode.decryptPasswordSaved': '已保存到本机',
@@ -261,9 +271,13 @@ export const zh = {
   // issue #79：跳过原因上状态行（改造前只进 info 级日志，界面完全看不到「为什么没同步」）
   'autosync.skipReasonLabel': '跳过原因',
   'autosync.skipReasonConflictCount': '{reason}（远端另有 {n} 个分区待确认，可在同步页手动处理）',
+  // P2（2026-11-14）：待裁决分区是**持久状态**（sync-state.pendingMerge），不是某一轮的结论 ——
+  // 这句话在关掉自动同步后也要说清「有什么在等」，并给出开始时间。
+  'autosync.pendingMerge': '待裁决 {n} 个分区（自 {time}）',
   'autosync.lastMessage': '本轮消息',
   // 同步历史（含自动同步记录）
   'history.title': '同步历史',
+  'history.refresh': '刷新',
   'history.empty': '尚无同步历史',
   'history.emptyHint': '完成首次推送 / 从远端合并 / 自动同步后，这里会显示记录。',
   'history.colTime': '时间',
@@ -296,6 +310,8 @@ export const zh = {
   // 触发通道（同步历史「由哪个通道触发」）
   'history.channelGit': 'GitHub',
   'history.channelWebdav': 'WebDAV',
+  'history.channelS3': 'S3',
+  'history.channelGist': 'Gist',
   // 列表头部统计摘要（需求 4F）
   'history.stats.total': '共 {count} 条',
   'history.stats.autosync': '自动同步 {count}',
@@ -307,8 +323,6 @@ export const zh = {
   // 会被 store 的去重逻辑合并（互相顶掉），故此处为每个动作单独给出可区分文案。
   'toast.autosyncLoadFailed': '读取自动同步状态失败',
   'toast.configSaveFailed': '保存通道配置失败',
-  'toast.configSaved': '通道配置已保存',
-  'toast.configNothingToSave': '请先填写通道地址再保存',
   'toast.channelCleared': '{channel} 配置已断开',
   'toast.githubCodeCopied': '已复制一次性授权代码 {code}',
   'toast.githubCodeCopyFailed': '自动复制失败，请手动复制上面的一次性授权代码',
@@ -317,6 +331,8 @@ export const zh = {
   'toast.pushPreviewFailed': '推送预览失败',
   'toast.pushFailed': '推送失败',
   'toast.pushDone': '推送完成',
+  // issue #140：内容与远端最新快照一致 ⇒ 什么都没上传
+  'toast.pushSkipped': '内容未变化，已跳过',
   'toast.syncStartFailed': '从远端合并失败',
   'toast.autosyncUpdateFailed': '自动同步设置更新失败',
   'toast.autosyncUpdated': '自动同步设置已更新',
@@ -340,7 +356,6 @@ export const zh = {
   'syncflow.importPartialToast': '部分成功：{n} 项未生效，请查看结果明细',
   'syncflow.importPartial': '部分成功：{n} 项未生效（其余已写入，未整体回滚）',
   'syncflow.ineffectiveItems': '未生效项',
-  'history.remoteMovedAction': '在产物库查看远端快照',
   'syncflow.compat.excellent': '兼容性：优秀',
   'syncflow.compat.good': '兼容性：良好（备份来自更旧的 DSH）',
   'syncflow.compat.partial': '兼容性：部分兼容（跨平台 / 分区缺失 / 版本超前，需人工确认）',
@@ -350,7 +365,6 @@ export const zh = {
   'cloud.s3Title': '对象存储（S3 兼容）',
   'cloud.gistTitle': 'GitHub Gist',
   'cloud.provider': '兼容商',
-  'cloud.providerHint': '五家共用同一套 SigV4 签名实现；端点与寻址风格按兼容商取缺省。',
   'cloud.provider.s3': 'AWS S3',
   'cloud.provider.oss': '阿里云 OSS',
   'cloud.provider.cos': '腾讯云 COS',
@@ -470,8 +484,16 @@ export const zh = {
   'probe.snapshotCount': '远端现有快照：{count} 份',
   // 「不支持自检」= 能力边界（不是故障）：中性结论一句，绝不显示「操作失败」
   'probe.unsupported': '该通道不提供连通性自检',
-  // ---- cloud-sync 借鉴项 ⑥：快照的推送方设备（旧快照没有该字段 → 不显示设备行）----
-  'syncflow.snapshotDevice': '由 {device} 推送',
+  // ---- 2026-11-14 同步设置弹窗收成两页签（用户要求：自动同步与密码合一页）----
+  'mode.tabAutosyncSecurity': '设置',
+  'mode.pluginsGroup': '插件',
+  'mode.decryptGroup': '解密密码',
+  // 行式设置行里这行标签只放「是什么」（长括注会把 240 宽控件挤到第二行），机制挂在 mode.decryptPasswordHint 的 title 上
+  'mode.decryptPasswordShort': '解密密码',
+  // 段名与行标签的悬停说明（2026-11-14 用户要求「同步页面的标题都要有能读到的 title」）
+  'mode.securityHint': '这一段管两件事：加密备份把同步快照上密码，导出密钥把本机真实凭据一起放进加密快照。两者都需要加密开启；密码与凭据都存本机凭据库，不进同步文件、日志或备份。',
+  'mode.passwordHint': '两个框填一致才会保存；失焦即落库，之后留空表示沿用已保存的密码。取消勾选「加密备份」会删掉已存密码。',
+  'mode.pluginsGroupHint': '这一段的设置只作用于「插件」分区：远端已删、本机没改过的插件会被卸载，失败逐项提示、其余同步照常完成。',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -489,19 +511,15 @@ export const en: Record<keyof typeof zh, string> = {
   'config.tokenSaved': 'Credential configured',
   'config.tokenMissing': 'No token: public repos can be pulled, but pushing will fail',
   'config.tokenPlaceholder': 'ghp_… (optional)',
-  // Config save (auto-save + explicit save button)
-  'config.save': 'Save now',
-  'config.saveHint': 'Form changes are saved automatically: password/token goes securely into DSH credentials, never into sync files or logs.',
+  // Config save (automatic only: no manual button; the title row flashes a "Saved" badge)
   'config.savedTick': 'Saved',
   'channel.title': 'Sync Channel',
   'channel.git': 'Git private repo',
   'channel.webdav': 'WebDAV server',
   'channel.s3': 'Object storage (S3-compatible)',
   'channel.gist': 'GitHub Gist',
-  'channel.perChannelHint': 'Auto sync, sync mode, encryption and remote snapshots are configured independently for each channel (Git / WebDAV / object storage / Gist).',
   // Channel entry card (dialog-driven: click the button → configure the channel in the dialog)
   'channel.open': 'Configure',
-  'channel.openHint': 'Remote sync runs through a sync channel: a private Git repository or a WebDAV server.',
   // Disconnect channel config (user report: once configured there was no way out)
   'channel.expand': 'Expand channel details',
   'channel.collapse': 'Collapse channel details',
@@ -509,10 +527,17 @@ export const en: Record<keyof typeof zh, string> = {
   'channel.clearConfirmTitle': 'Disconnect sync channel?',
   'channel.clearConfirmMessage': 'This removes the local configuration of "{channel}", its saved credentials and its auto-sync switch. Remote snapshots and local backups are untouched; you can configure it again later.',
   'channel.clearConfirm': 'Disconnect',
+  'channel.clearBusy': 'A save is still in flight; try disconnecting again in a moment (up to 5 seconds).',
   'channel.clearGitSignOut': 'The git channel access token is deleted too: your GitHub sign-in becomes invalid and must be redone (it does not come back automatically).',
   'channel.configured': 'Configured',
   'channel.notConfigured': 'Not configured',
   'channel.currentUrl': 'Current URL',
+  // 2026-11-14 sync page structure: only configured channels get their own card; the rest live behind "Add channel"
+  'addChannel.title': 'Add channel',
+  'addChannel.git': 'Push your configuration to your own Git repository (a GitHub repository can sign in from the dialog)',
+  'addChannel.webdav': 'Sync into a WebDAV space: Jianguoyun, Nextcloud, ownCloud, Seafile, Synology, Box',
+  'addChannel.s3': 'Sync into an object-storage bucket: AWS S3, Alibaba Cloud OSS, Tencent Cloud COS, MinIO, Qiniu Kodo',
+  'addChannel.gist': 'Keep snapshots in a single GitHub Gist, so you do not have to create a repository',
   // issue #79: Git working copy (origin follows the repository address; explicit rebuild entry)
   'workdir.title': 'Working copy',
   'workdir.hint': 'The Git working copy used for sync. Every sync makes its origin follow the configured repository address; if it still fails after an address change, re-point or clone it again here.',
@@ -546,12 +571,10 @@ export const en: Record<keyof typeof zh, string> = {
   'webdav.url': 'Server URL',
   'webdav.urlHint': 'WebDAV server root URL (https://…). Sync snapshots and the index are stored under a dsh-config-manager/ subdirectory of that URL. Do not include a username/password in the URL.',
   'webdav.username': 'Username',
-  'webdav.usernameHint': 'HTTP Basic auth username (not sensitive, may be shown).',
   'webdav.password': 'Password',
   'webdav.passwordHint': 'Securely written into DSH credentials (ref {ref}); never written into sync files or logs. Leave blank to reuse the saved credential.',
   'webdav.passwordSaved': 'Credential configured',
   'webdav.passwordPlaceholder': 'Password (optional)',
-  'webdav.presetHint': 'Pick a common WebDAV server to prefill the URL; templates containing <placeholders> need to be replaced with your real server/username.',
   'webdav.preset.custom': 'Custom URL',
   'webdav.preset.jianguoyun': 'Jianguoyun (Nutstore)',
   'webdav.preset.nextcloud': 'Nextcloud',
@@ -587,7 +610,6 @@ export const en: Record<keyof typeof zh, string> = {
   'repoPicker.createFailed': 'Could not create the repository',
   'repoPicker.nameRequired': 'Enter a repository name.',
   'repoPicker.nameInvalid': 'A repository name may contain letters, digits, dots, underscores and hyphens (max 100 characters, cannot start with a dot).',
-  'repoPicker.privateOnly': 'Newly created repositories are always private: a public repository would expose your config contents.',
   'push.title': 'Push Result',
   'sections.title': 'Synced Sections',
   'warnings.title': 'Section Warnings',
@@ -603,6 +625,7 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.refreshSnapshots': 'Refresh snapshots',
   'syncflow.latestSnapshot': 'Latest snapshot',
   'syncflow.noSnapshots': 'No remote snapshots',
+  'syncflow.snapshotDevice': 'Pushed by {device}',
   'syncflow.confirmImport': 'Confirm import',
   'syncflow.cancel': 'Cancel',
   'syncflow.adoptRemote': 'Adopt remote',
@@ -637,20 +660,19 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.pushChanged': 'Changed',
   'syncflow.pushUnchanged': 'Unchanged',
   'syncflow.pushConfirm': 'Push',
+  'syncflow.pushForce': 'Create a new snapshot even when content is unchanged (force push)',
   'syncflow.pushFirstBaseline': 'No remote snapshots yet: this push creates the first sync baseline',
   'syncflow.remoteEmptyGuide': 'No remote snapshots yet: this is the first sync — click "Push to remote" to upload your local config (that push creates the first snapshot); pulling only works afterwards.',
   // Sync mode (default quick export / advanced custom export)
   'mode.title': 'Sync Sections',
-  'mode.hint': 'Sync scope = the ticked set of sections (recommended sections are ticked by default and can be changed any time).',
   'mode.selectedCount': '{n} / {total} selected',
-  'mode.sectionsHint': 'Portable sections sync by default; platform-dependent sections (MCP servers) and device-specific sections (plugin files, credentials status, sessions) only participate when you explicitly tick them here.',
   'mode.deletePlugins': 'Delete plugins to follow the remote',
   'mode.deletePluginsHint': 'Plugins that are gone from the remote snapshot and unmodified locally get uninstalled (the evidence is the common ancestor still listing them — only another device could have removed them). Removal runs only in the round where the plugins section is actually applied; failures are reported per item and the rest of the sync still completes. The reserved desktop profile and the host itself are never removed.',
   'mode.atLeastOne': 'Select at least one section to sync',
-  'mode.sectionPortable': 'Portable',
+  'mode.sectionPortable': 'Portable · synced by default',
   'mode.sectionRecommended': 'Recommended',
-  'mode.sectionDeviceSpecific': 'Device-specific',
-  'mode.sectionPlatformSpecific': 'Platform-dependent',
+  'mode.sectionDeviceSpecific': 'Device-specific · off by default',
+  'mode.sectionPlatformSpecific': 'Platform-dependent · off by default',
   'mode.mcpHint': 'MCP servers are written back as patch lines (restored to their original layer on import). Stdio servers installed from a package (npx / uvx / pipx) are portable by themselves; if command / args / cwd contain absolute paths, or the target machine lacks the runtime, the import analysis will say so — the config is still written, but the server may fail to start there.',
   'mode.sessionsLimit': 'How many recent sessions to sync',
   'mode.sessionsLimitHint': 'Session content is sensitive, so only the latest 5 are included by default (0 = select the section but carry no sessions); the unit is a session directory, so all logs of one session travel together.',
@@ -666,20 +688,27 @@ export const en: Record<keyof typeof zh, string> = {
   'mode.pickerHint': 'Changes apply and are saved immediately (closing the dialog finishes the task).',
   'mode.pickerBack': 'Back to sections',
   'mode.pickerDone': 'Done',
+  // Sync settings dialog (2026-11-14: sections / encryption / decryption moved into one dialog; the page keeps one summary row)
+  'mode.settingsTitle': 'Sync Settings',
+  'mode.settingsOpen': 'Settings',
+  'mode.tabContent': 'Content',
+  'mode.tabAutosync': 'Auto sync',
+  'mode.tabSecurity': 'Encryption & passwords',
+  // Summary badge: whether this snapshot is encrypted must be visible before pushing
+  'mode.encryptOn': 'Encrypted',
+  'mode.encryptOff': 'Not encrypted',
   // Encryption & secret export (manual push only; auto sync always pushes plain snapshots and skips encrypted ones)
-  'mode.security': 'Encryption & Secret Export (Security Options)',
+  'mode.security': 'Encryption & Secret Export',
   'mode.encrypt': 'Encrypt backup',
-  'mode.encryptHint': 'Encrypt the sync snapshot with a password (AES-256-GCM). The password is kept in the local DSH credential store (~/.dsh/.credentials.yaml) for reuse: it is never written to sync files, logs or backups (unless "Export secrets" is checked together with encryption). Auto sync cannot decrypt encrypted snapshots, so it skips them and reports it in sync history.',
+  'mode.encryptHint': 'Encrypt the sync snapshot with a password (AES-256-GCM). The password is kept in the local DSH credential store (~/.dsh/.credentials.yaml) for reuse: it is never written to sync files, logs or backups (unless "Export secrets" is checked together with encryption). Auto sync has no password, so it skips encrypted snapshots and reports them in sync history.',
   'mode.password': 'Encryption password',
   'mode.passwordConfirm': 'Confirm password',
   'mode.passwordMismatch': 'Passwords do not match',
   'mode.passwordRequired': 'Encryption requires a password',
-  'mode.passwordSavedHint': 'A password is already saved locally: leave the fields empty to reuse it, or type a new one to replace it.',
   'mode.passwordPlaceholder': 'Saved (leave empty to reuse)',
   'mode.passwordClearNotice': 'Unchecking this deletes the saved password',
   'mode.includeSecrets': 'Export secrets',
   'mode.includeSecretsHint': 'Write real credential values (~/.dsh/.credentials.yaml) into the encrypted snapshot so another machine can restore them with the sync; checking this auto-selects encryption, and secrets never enter a plaintext snapshot.',
-  'mode.encryptAutosyncNotice': 'Encrypted snapshots are only produced/consumed by manual push/pull; auto sync has no password, so it skips encrypted snapshots and reports them in history.',
   'mode.decryptPassword': 'Decryption password (for encrypted snapshot pull/sync, optional)',
   'mode.decryptPasswordHint': 'Once entered it is saved in the local credential store and reused automatically; it is only ever used when the pulled snapshot is actually encrypted — plaintext backups never use the password.',
   'mode.decryptPasswordSaved': 'Saved locally',
@@ -717,8 +746,11 @@ export const en: Record<keyof typeof zh, string> = {
   // issue #79: surface the skip reason in the status line (previously info-level log only)
   'autosync.skipReasonLabel': 'Skip reason',
   'autosync.skipReasonConflictCount': '{reason} ({n} more {n, plural, section|sections} on the remote need confirmation — handle them on the sync page)',
+  // P2: persisted pending-merge state (not one round's conclusion)
+  'autosync.pendingMerge': '{n} {n, plural, section|sections} need your decision (since {time})',
   'autosync.lastMessage': 'Last message',
   'history.title': 'Sync History',
+  'history.refresh': 'Refresh',
   'history.empty': 'No sync history yet',
   'history.emptyHint': 'Records appear here after your first push / merge from remote / auto sync.',
   'history.colTime': 'Time',
@@ -750,6 +782,8 @@ export const en: Record<keyof typeof zh, string> = {
   // Trigger channel (which channel triggered this history entry)
   'history.channelGit': 'GitHub',
   'history.channelWebdav': 'WebDAV',
+  'history.channelS3': 'S3',
+  'history.channelGist': 'Gist',
   // List header stats summary (requirement 4F)
   'history.stats.total': '{count} total',
   'history.stats.autosync': '{count} auto sync',
@@ -759,8 +793,6 @@ export const en: Record<keyof typeof zh, string> = {
   // Toast receipts (R-20: per-action wording; identical kind+text would be de-duplicated)
   'toast.autosyncLoadFailed': 'Failed to load auto-sync status',
   'toast.configSaveFailed': 'Failed to save channel config',
-  'toast.configSaved': 'Channel config saved',
-  'toast.configNothingToSave': 'Enter a channel URL before saving',
   'toast.channelCleared': '{channel} configuration disconnected',
   'toast.githubCodeCopied': 'One-time code {code} copied to clipboard',
   'toast.githubCodeCopyFailed': 'Auto-copy failed — copy the one-time code above manually',
@@ -769,6 +801,7 @@ export const en: Record<keyof typeof zh, string> = {
   'toast.pushPreviewFailed': 'Failed to build push preview',
   'toast.pushFailed': 'Push failed',
   'toast.pushDone': 'Push completed',
+  'toast.pushSkipped': 'No content changes — skipped',
   'toast.syncStartFailed': 'Merge from remote failed',
   'toast.autosyncUpdateFailed': 'Failed to update auto-sync settings',
   'toast.autosyncUpdated': 'Auto-sync settings updated',
@@ -790,7 +823,6 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.importPartialToast': 'Partly successful: {n} {n, plural, item did|items did} not take effect — check the result details',
   'syncflow.importPartial': 'Partly successful: {n} {n, plural, item did|items did} not take effect (the rest were written; nothing rolled back)',
   'syncflow.ineffectiveItems': 'Items that did not take effect',
-  'history.remoteMovedAction': 'View remote snapshots in Library',
   'syncflow.compat.excellent': 'Compatibility: excellent',
   'syncflow.compat.good': 'Compatibility: good (backup from an older DSH)',
   'syncflow.compat.partial': 'Compatibility: partial (cross-platform / missing sections / newer version — review)',
@@ -800,7 +832,6 @@ export const en: Record<keyof typeof zh, string> = {
   'cloud.s3Title': 'Object storage (S3-compatible)',
   'cloud.gistTitle': 'GitHub Gist',
   'cloud.provider': 'Vendor',
-  'cloud.providerHint': 'All five vendors share one SigV4 implementation; endpoint and addressing style follow the vendor defaults.',
   'cloud.provider.s3': 'AWS S3',
   'cloud.provider.oss': 'Alibaba Cloud OSS',
   'cloud.provider.cos': 'Tencent Cloud COS',
@@ -920,8 +951,15 @@ export const en: Record<keyof typeof zh, string> = {
   'probe.snapshotCount': 'Snapshots on the remote: {count}',
   // "Unsupported" is a capability boundary, not a failure: neutral wording, never "operation failed"
   'probe.unsupported': 'This channel does not offer a connectivity self-check',
-  // ---- cloud-sync borrowing ⑥: device that pushed each snapshot (old snapshots have no such field, so no device line is shown) ----
-  'syncflow.snapshotDevice': 'Pushed by {device}',
+  // ---- 2026-11-14 settings dialog collapsed to two tabs (auto sync + passwords merged) ----
+  'mode.tabAutosyncSecurity': 'Settings',
+  'mode.pluginsGroup': 'Plugins',
+  'mode.decryptGroup': 'Decryption password',
+  'mode.decryptPasswordShort': 'Decryption password',
+  // Hover text for section titles and row labels (2026-11-14: every title on the sync page must be readable on hover)
+  'mode.securityHint': 'This section covers two things: encrypted backups seal the snapshot with a password, and "export secrets" puts the real credential values into that encrypted snapshot. Both require encryption; the password and credentials stay in the local credential store and never enter sync files, logs or backups.',
+  'mode.passwordHint': 'Saved only when both fields match; saving happens on blur, and an empty field later means reuse what is saved. Turning encryption off deletes the saved password.',
+  'mode.pluginsGroupHint': 'These settings apply only to the "plugins" section: plugins deleted on the remote and untouched locally get uninstalled; failures are listed per item and the rest of the sync still completes.',
 };
 
 /** 字典键联合（注册处 compile-time 校验） */

@@ -74,7 +74,7 @@ export interface ArtifactRowViewProps {
    * （旧快照没有来源，绝不显示空档案名或「未标注」徽章）。`hint` 只在「与当前档案不同」时给，
    * 徽章本体只写档案名，差异语不重复表达。
    */
-  originBadge?: { label: string; hint?: string; kind: 'info' | 'warn' } | undefined
+  originBadge?: { label: string; kind: 'info' | 'warn' } | undefined
 }
 
 export function ArtifactRowView({
@@ -139,7 +139,7 @@ export function ArtifactRowView({
             ))}
             {/* 来源档案排在状态徽章之后：先读「这行现在是什么状态」，再读「它来自哪个档案」 */}
             {originBadge !== undefined && (
-              <Badge kind={originBadge.kind} title={originBadge.hint}>{originBadge.label}</Badge>
+              <Badge kind={originBadge.kind}>{originBadge.label}</Badge>
             )}
           </div>
         )}

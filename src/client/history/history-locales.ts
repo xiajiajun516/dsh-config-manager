@@ -41,14 +41,14 @@ type CommonKey =
   | 'history.retention.cleaned'
   | 'history.retention.noop'
   | 'history.retention.saveError'
-  /** ⓘ 说明按钮的可访问名（与主字典 / market / sync / recovery 同口径，见 info-hint-guard t6-4） */
+  /** 说明按钮的可访问名（2026-11-14 起 ⓘ 已下线、代码不再消费；键与四本字典口径一并保留，免得下游按键取文案时缺项） */
   | 'common.infoHint';
 
 export type HistoryKey = KindKey | ResultKey | CommonKey;
 
 export const zh = {
   'common.infoHint': '查看说明',
-  'history.subtitle': '统一记录全部破坏性/迁移操作（导入/恢复/回滚/档案/同步/备份/快照操作），只可追加、不可修改或删除，跨重启持久，可查询可导出。',
+  'history.subtitle': '只可追加，不可修改或删除，跨重启持久。',
   'history.empty': '暂无迁移记录。',
   'history.loading': '加载迁移历史…',
   'history.corruptedBanner': '检测到无法读取/可能被篡改的历史条目',
@@ -106,7 +106,7 @@ export const zh = {
 
 export const en = {
   'common.infoHint': 'Show description',
-  'history.subtitle': 'Unified append-only audit trail of all destructive/migration operations (import/restore/rollback/profile/sync/backup/snapshot), durable across restarts, queryable and exportable.',
+  'history.subtitle': 'Append-only — entries cannot be edited or deleted, and persist across restarts.',
   'history.empty': 'No migration records yet.',
   'history.loading': 'Loading migration history…',
   'history.corruptedBanner': 'Detected unreadable or possibly tampered history entries',

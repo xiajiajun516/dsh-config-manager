@@ -513,6 +513,29 @@ test('push: encrypt+password → 上传加密快照（manifest.encrypted=true，
     const state = await loadSyncState(tmp);
     assert.equal(state.lastSnapshotId, 'sync-enc');
     assert.ok(state.sections['settings'] !== undefined, '基线 hash 已记录（明文 hash，可比较）');
+    // issue #141：latest/ 只是 git 通道的明文派生视图 —— 非 git 通道不该冒这条告警
+    assert.ok(!report.warnings.some((w) => w.includes('latest/')), '非 git 通道不报 latest/ 告警: ' + JSON.stringify(report.warnings));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 加密快照 + git 通道 → 不生成 latest/ 视图且显式告警（issue #141，绝不静默）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-encrypt-git-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    // 只借 git 的通道标识：latest/ 的生成/告警由通道类型决定，与具体 git 实现无关
+    Object.defineProperty(transport, 'type', { value: 'git' });
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-enc-git', encrypt: true, password: 'pw-12345678' });
+    assert.equal(report.ok, true);
+    assert.ok(
+      report.warnings.some((w) => w.includes('latest/')),
+      '加密快照不生成 latest/ 必须显式告警（否则用户看到「push 成功但 latest/ 是旧内容」）: ' + JSON.stringify(report.warnings),
+    );
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
@@ -1397,16 +1420,24 @@ test('hasNewRemoteSnapshot: 空远端→false；从未同步且远端非空→tr
     await engine.push({ snapshotId: 'sync-001' });
     assert.equal(await engine.hasNewRemoteSnapshot(), false, '远端最新=本地祖先 → 无新生');
 
-    // 远端出现比祖先更新的快照 → 有新生
-    const base = transport.snapshots.get('sync-001')!;
-    const newer: SyncSnapshot = {
-      ...base,
-      id: 'remote-newer',
-      createdAt: '2026-08-16T13:00:00.000Z',
-    };
+    // 远端出现**内容不同**的新快照 → 有新生（issue #140：判定看分区哈希，不再只看 id）
+    const newer = remoteSettingsSnapshot('remote-newer', 'light', 7);
+    newer.createdAt = '2026-08-16T13:00:00.000Z';
     transport.snapshots.set('remote-newer', newer);
     transport.metas.push(computeSnapshotMeta(newer));
-    assert.equal(await engine.hasNewRemoteSnapshot(), true, '远端出现比祖先更新的快照 → 有新生');
+    assert.equal(await engine.hasNewRemoteSnapshot(), true, '远端内容变了 → 有新生');
+
+    // 对照：基线已经跟上 remote-newer，远端再来一份**同内容**的快照（只换 id）
+    await engine.recordBaseline('remote-newer', {}, '2026-08-16T13:30:00.000Z', {
+      remoteSnapshotId: 'remote-newer',
+      remoteSections: computeSnapshotMeta(newer).sections,
+      writeAncestor: false,
+    });
+    const twin = remoteSettingsSnapshot('remote-twin', 'light', 7);
+    twin.createdAt = '2026-08-16T14:00:00.000Z';
+    transport.snapshots.set('remote-twin', twin);
+    transport.metas.push(computeSnapshotMeta(twin));
+    assert.equal(await engine.hasNewRemoteSnapshot(), false, '同内容新 id → 没有新生');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
@@ -2786,10 +2817,13 @@ test('push: 远端最新是本机自推的快照但基线没跟上（上传后�
       report.warnings.some((w) => w.includes('sync-001')),
       '必须如实说明已收养（用户要知道基线自己动了）: ' + report.warnings.join(' | '),
     );
-    assert.equal(transport.snapshots.has('sync-002'), true, '收养后照常上传本次快照');
+    // issue #140：收养后内容与远端最新完全一致 ⇒ 不再重复上传一份同内容的快照
+    assert.equal(report.skipped, 'unchanged');
+    assert.equal(transport.snapshots.has('sync-002'), false, '内容未变不新建快照');
+    assert.equal(transport.calls.includes('upload'), false, '一次 upload 都不发');
     const after = await loadSyncState(tmp);
-    assert.equal(after.lastSnapshotId, 'sync-002', '基线推进到本次推送');
-    assert.equal(after.ancestorId, 'sync-002', '本地有该收养快照的副本 → 祖先指针跟上（三方合并不降级）');
+    assert.equal(after.lastSnapshotId, 'sync-001', '基线收养到远端已有的那一份');
+    assert.equal(after.ancestorId, 'sync-001', '本地有该收养快照的副本 → 祖先指针跟上（三方合并不降级）');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
@@ -2956,6 +2990,71 @@ test('applyMergeResolutions: skip 的裁决 → 基线不推进 + pendingMerge �
     // 冲突下一轮重新出现（基线没推进 → 远端那版仍被当作新快照）
     const again = await engine.previewMerge();
     assert.equal(again.sections.find((s) => s.id === 'settings')?.decision, 'conflict');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/**
+ * P2（2026-11-14 真机事故）：autosync 检测到下行冲突就 return，从不写 pendingMerge ——
+ * 首页那枚「待裁决」徽章背后没有任何可打开的对象，同步页也没有裁决入口。
+ * recordPendingMerge 让调度器把「哪几个分区在等」落成持久状态（远端 id 取最近一次 merge 的基准）。
+ */
+test('recordPendingMerge: 冲突分区落成待裁决（远端 id 取最近一次 merge，基线不推进）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-record-pending-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc') });
+    await engine.push({ snapshotId: 'sync-base' });
+    ctx.settings.ns.set('general', { value: { theme: 'blue' }, revision: 4, secrets: [] });
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-remote', 'red', 9));
+
+    const plan = await engine.merge();
+    assert.ok(plan.sections.some((s) => s.decision === 'conflict'), '前提：这一轮确实有冲突待裁决');
+
+    const pending = await engine.recordPendingMerge(['settings']);
+    assert.ok(pending !== null);
+    assert.deepEqual(pending!.sections, ['settings']);
+    assert.equal(pending!.remoteSnapshotId, 'sync-remote', '远端基准取最近一次 merge 的快照');
+    assert.notEqual(pending!.since, '');
+
+    const state = await loadSyncState(tmp);
+    assert.deepEqual(state.pendingMerge?.sections, ['settings']);
+    assert.equal(state.lastSnapshotId, 'sync-base', '待裁决不得推进基线（远端那版仍会被当作新快照）');
+
+    // 连续轮询：同一远端快照 → since 保留首次时间（界面上的「等多久」不被刷成刚刚）
+    const again = await engine.recordPendingMerge(['settings']);
+    assert.equal(again!.since, pending!.since);
+
+    // 本机覆盖远端成功（force）→ 待裁决清空：已经做了决定，不能继续挂着
+    await engine.push({ snapshotId: 'sync-next', force: true });
+    const cleared = await loadSyncState(tmp);
+    assert.equal(cleared.pendingMerge, undefined, '推送成功后待裁决必须清空');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('recordPendingMerge: 远端 id 未知（没经历过 merge）/ 分区为空 → 空操作，不写 sync-state', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-record-pending-null-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-remote', 'red', 9));
+
+    assert.equal(await engine.recordPendingMerge(['settings']), null, '没有 merge 基准就不猜远端 id');
+    const afterUnknown = await loadSyncState(tmp);
+    assert.equal(afterUnknown.pendingMerge, undefined);
+
+    await engine.merge();
+    assert.equal(await engine.recordPendingMerge([]), null, '空分区不是待裁决');
+    const afterEmpty = await loadSyncState(tmp);
+    assert.equal(afterEmpty.pendingMerge, undefined);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
@@ -3576,3 +3675,215 @@ test('issue #132: previewMerge 单列「将删除」清单（且预览绝不真�
     await fs.rm(tmp, { recursive: true, force: true });
   }
 });
+
+
+// ─── issue #140：内容未变不新建快照 / 拉取按内容判定 ─────────────────────────────
+// 判定层本身在 content-diff.test.ts；这里只验引擎接线：
+// ① 连续两次相同 push 第二次什么都不写；② force 覆盖；③ 拉取按分区哈希判定；
+// ④ 加密快照（sections 空）回落 id；⑤ G-44 —— 远端观测绝不从 state.sections 反推。
+
+/** 递增时钟：同一测试里多次 push 需要可排序的 createdAt（list 按它升序取最新）。 */
+function tickingNow(): () => Date {
+  let n = 0;
+  return () => new Date(`2026-08-16T12:00:${String(Math.min(n++, 59)).padStart(2, '0')}.000Z`);
+}
+
+test('issue #140 (c)：连续两次相同内容 push → 第二次不 upload、不建目录、skipped=unchanged', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-140-skip-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const local = path.join(tmp, 'ancestors');
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: local, extra: { now: tickingNow() } });
+
+    const first = await engine.push({ snapshotId: 'sync-001' });
+    assert.equal(first.ok, true);
+    assert.equal(first.skipped, undefined, '首次推送是真上传');
+    assert.equal(transport.snapshots.size, 1);
+    const dirsBefore = (await fs.readdir(local)).sort();
+    const uploadsBefore = transport.calls.filter((c) => c === 'upload').length;
+
+    // 内容一个字都没改 → 再推一次
+    const second = await engine.push({});
+    assert.equal(second.ok, true);
+    assert.equal(second.skipped, 'unchanged', '内容没变必须报「跳过」而不是「已推送」');
+    assert.equal(second.snapshotId, 'sync-001', '返回既有的远端快照 id（本轮没有新快照）');
+    assert.equal(second.adoptedSnapshotId, 'sync-001');
+    assert.equal(transport.snapshots.size, 1, '远端不多出快照');
+    assert.equal(transport.calls.filter((c) => c === 'upload').length, uploadsBefore, '一次 upload 都不许发');
+    assert.deepEqual((await fs.readdir(local)).sort(), dirsBefore, '本地祖先目录不新增');
+    // 跳过也要把基线指针收养到远端最新（否则下一轮 hasNewRemoteSnapshot 会误报新生）
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'sync-001');
+    const expectedHashes = Object.fromEntries(
+      Object.entries(state.sections).map(([sid, s]) => [sid, s!.hash]),
+    );
+    assert.deepEqual(state.lastRemoteSections, expectedHashes, '远端观测已记录（与远端快照 sections 同口径）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #140 (d)：force:true 时内容相同也新建快照（覆盖语义不受跳过判定影响）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-140-force-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, extra: { now: tickingNow() } });
+
+    await engine.push({ snapshotId: 'sync-001' });
+    const forced = await engine.push({ snapshotId: 'sync-002', force: true });
+    assert.equal(forced.ok, true);
+    assert.equal(forced.skipped, undefined, 'force 不走跳过分支');
+    assert.equal(forced.snapshotId, 'sync-002');
+    assert.equal(transport.snapshots.size, 2, '强制推送真的新建了一份');
+
+    // 不 force 再推 → 第三次回到跳过（远端最新已等于本机内容）
+    const third = await engine.push({});
+    assert.equal(third.skipped, 'unchanged');
+    assert.equal(transport.snapshots.size, 2);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #140 (a)：远端 id 变了但分区哈希相同 → 不算「远端有新生」', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-140-same-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, extra: { now: tickingNow() } });
+    await engine.push({ snapshotId: 'sync-001' });
+
+    // 另一台机器把**一模一样的内容**又推了一次（旧行为每次一个新 id）
+    const base = transport.snapshots.get('sync-001')!;
+    const twin: SyncSnapshot = { ...base, id: 'sync-twin', createdAt: '2026-08-16T13:00:00.000Z' };
+    transport.snapshots.set('sync-twin', twin);
+    transport.metas.push(computeSnapshotMeta(twin));
+
+    assert.equal(await engine.hasNewRemoteSnapshot(), false, '内容相同 → 没有新生（只看内容，不看 id）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #140 (b)：同一个 id 但分区哈希变了 → 有新生（比内容而非比指针）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-140-changed-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, extra: { now: tickingNow() } });
+    await engine.push({ snapshotId: 'sync-001' });
+    assert.equal(await engine.hasNewRemoteSnapshot(), false);
+
+    // 远端同一快照被就地改内容（如手工修复/通道覆盖写入）
+    const base = transport.snapshots.get('sync-001')!;
+    const edited: SyncSnapshot = {
+      ...base,
+      sections: {
+        settings: {
+          version: 1,
+          namespaces: { general: { value: { theme: 'light', language: 'zh-CN' }, revision: 9, secrets: [] } },
+        },
+      },
+    };
+    transport.snapshots.set('sync-001', edited);
+    transport.metas = transport.metas.map((m) => (m.id === 'sync-001' ? computeSnapshotMeta(edited) : m));
+
+    assert.equal(await engine.hasNewRemoteSnapshot(), true, 'id 没变但内容变了 → 有新生');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #140 (e)：加密快照 sections 恒空 → 拉取回落 id 比较（不新增下载/解密）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-140-enc-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, extra: { now: tickingNow() } });
+
+    await engine.push({ snapshotId: 'enc-001', encrypt: true, password: 'pw-12345678' });
+    const state = await loadSyncState(tmp);
+    assert.deepEqual(state.lastRemoteSections, undefined, '加密快照没有可比观测 → 不记录（回落 id）');
+
+    const downloads = transport.calls.filter((c) => c === 'download').length;
+    assert.equal(await engine.hasNewRemoteSnapshot(), false, 'id 相同 → 无新生（回落 id 比较）');
+    assert.equal(transport.calls.filter((c) => c === 'download').length, downloads, '判定绝不下下载/解密');
+
+    // 另一台机器推了加密快照 → sections 仍为空，只能按 id 判新生
+    const base = transport.snapshots.get('enc-001')!;
+    const other: SyncSnapshot = { ...base, id: 'enc-002', createdAt: '2026-08-16T13:00:00.000Z' };
+    transport.snapshots.set('enc-002', other);
+    transport.metas.push(computeSnapshotMeta(other));
+    assert.deepEqual(transport.metas[1]!.sections, {}, '加密快照的 sections 元信息为空');
+    assert.equal(await engine.hasNewRemoteSnapshot(), true, 'sections 空 ⇒ 回落 id：新 id 视为新生');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #140 (f) G-44：拉取只看「记录的远端观测」，绝不拿 state.sections 冒充远端', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-140-g44-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, extra: { now: tickingNow() } });
+    await engine.push({ snapshotId: 'sync-001' });
+
+    // 人为把「远端观测」改成与远端现状不同的旧值（模拟上一轮记错/远端被第三方改写）
+    const state = await loadSyncState(tmp);
+    const localHash = state.sections['settings']!.hash;
+    assert.notEqual(localHash, 'stale-remote-hash');
+    await saveSyncState(tmp, { ...state, lastRemoteSections: { settings: 'stale-remote-hash' } });
+
+    // 若实现拿 state.sections（本机）当远端 → 会判「相同、无新生」；正确实现应发现观测与远端不符 → 有新生
+    assert.equal(await engine.hasNewRemoteSnapshot(), true, '比较对象必须是远端观测，不是本机基线');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #140 (f) G-44：recordBaseline 指针变了却没给远端观测 → 删除观测，绝不由 sections 推导', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-140-g44-b-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, extra: { now: tickingNow() } });
+    await engine.push({ snapshotId: 'sync-001' });
+    const before = await loadSyncState(tmp);
+    assert.ok(before.lastRemoteSections !== undefined);
+
+    // 合并/应用路径只有本机落地数据，没有远端观测 → 指针变化时必须清空观测（回落 id 比较）
+    await engine.recordBaseline('sync-merge-1', { settings: { version: 1, namespaces: {} } as never }, '2026-08-16T14:00:00.000Z', {
+      remoteSnapshotId: 'remote-merge-1',
+    });
+    const after = await loadSyncState(tmp);
+    assert.equal(after.lastSnapshotId, 'remote-merge-1');
+    assert.deepEqual(after.lastRemoteSections, undefined, '没有远端观测就不许留旧观测，更不许拿 sections 冒充');
+
+    // 指针未变（待裁决冲突的 preserveAncestor 路径）→ 保留既有观测
+    await saveSyncState(tmp, { ...after, lastRemoteSections: { settings: localHashOf(after) } });
+    await engine.recordBaseline('sync-keep', {}, '2026-08-16T15:00:00.000Z', {
+      remoteSnapshotId: 'remote-merge-1',
+      preserveAncestor: true,
+      writeAncestor: false,
+    });
+    const kept = await loadSyncState(tmp);
+    assert.deepEqual(kept.lastRemoteSections, { settings: localHashOf(after) }, '远端指针没动 → 观测仍成立');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/** 测试辅助：取 state.sections.settings 的 hash（断言 preserveAncestor 不覆盖远端观测用）。 */
+function localHashOf(state: { sections: Record<string, { hash: string }> }): string {
+  return state.sections['settings']!.hash;
+}

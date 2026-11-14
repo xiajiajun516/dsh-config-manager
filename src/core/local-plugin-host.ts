@@ -11,9 +11,10 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 
 import { packLocalPlugins, parsePackOutput, resolveLocalPluginPath } from './local-plugin-pack.ts';
-import { quoteCmdArg } from './plugin-cli.ts';
+import { killTree, quoteCmdArg } from './plugin-cli.ts';
 import type { OversizeLocalPlugin, PackedLocalPlugin, PackExec, PackExecResult, PackLocalPluginsResult } from './local-plugin-pack.ts';
 import type { HostContext } from './types.ts';
 import { engineMsg } from './messages-core.ts';
@@ -49,18 +50,39 @@ const COMSPEC = process.env.ComSpec ?? 'cmd.exe';
  * 失败**不 reject**（把退出码交回调用方判定），只有 spawn 本身失败才 reject——
  * 这样「npm 报错」与「npm 不存在」能被分开处理（前者是插件问题，后者是环境问题）。
  */
-const defaultExec: PackExec = (file, args, opts) =>
+/** createPackExec 的注入面（测试用：假子进程 + 记录「整树终止」发生了没有） */
+export interface PackExecDeps {
+  spawn?: typeof spawn;
+  /** 终止整棵进程树（缺省 core/plugin-cli.ts 的 killTree：Windows taskkill /t /f，POSIX 杀进程组） */
+  killTree?: (child: ChildProcess) => void;
+}
+
+/**
+ * 造一个真实 `npm pack` 执行器；默认导出实例给生产用，测试可注入 spawn / killTree。
+ *
+ * 超时为什么要整棵树：调用方只 `child.kill()` 时，Windows 死掉的只是 cmd.exe 包装进程，
+ * npm/pnpm 孙进程成孤儿继续写 tarball，而 `finally` 已经 rm 掉 packDir（审计 P2-3：
+ * 孤儿随后在已删除目录里写、或写出一份没人收的产物）。killTree 与 plugin-cli 的
+ * `dsh plugin` 子进程用同一实现（Windows taskkill /T /F；POSIX 负 pid 杀进程组 ——
+ * 因此 POSIX 上必须 `detached: true` 让子进程自成进程组，否则 -pid 会打到自己的组）。
+ */
+export function createPackExec(deps: PackExecDeps = {}): PackExec {
+  const spawnImpl = deps.spawn ?? spawn;
+  const killTreeImpl = deps.killTree ?? killTree;
+  return (file, args, opts) =>
   new Promise<PackExecResult>((resolve, reject) => {
     const useShim = process.platform === 'win32';
     const [bin, argv] = useShim
       ? [COMSPEC, ['/d', '/s', '/c', `"${[file, ...args].map(quoteCmdArg).join(' ')}"`]]
       : [file, [...args]];
 
-    const child = spawn(bin, argv, {
+    const child = spawnImpl(bin, argv, {
       cwd: opts.cwd,
       windowsHide: true,
       windowsVerbatimArguments: useShim,
       shell: false, // 显式关闭：Windows 路径已由 cmd.exe 自行处理
+      // POSIX：自成进程组，超时才能用负 pid 杀掉整棵树（Windows 忽略该选项，taskkill /T 自己找树）
+      detached: process.platform !== 'win32',
     });
 
     let stdout = '';
@@ -70,7 +92,8 @@ const defaultExec: PackExec = (file, args, opts) =>
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill();
+      // 整棵树：只 kill() 包装进程会让 npm/pnpm 孙进程成孤儿（见上）
+      killTreeImpl(child);
       resolve({ stdout, stderr: engineMsg('core.localPluginHost.packTimeout', { stderr, timeoutMs }), code: 1 });
     }, timeoutMs);
     timer.unref?.();
@@ -90,6 +113,10 @@ const defaultExec: PackExec = (file, args, opts) =>
       resolve({ stdout, stderr, code });
     });
   });
+}
+
+/** 生产用的默认执行器（真实 spawn + 真实整树终止） */
+const defaultExec: PackExec = createPackExec();
 
 export interface LocalPluginPackHookOptions {
   /** $DSH_HOME 绝对路径 */

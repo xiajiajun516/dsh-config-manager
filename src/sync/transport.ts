@@ -114,10 +114,18 @@ export interface SyncProbeResult {
   createdCollections?: string[];
 }
 
-/** 写出/删除路径的**条件写**失败（HTTP 412 Precondition Failed，或 S3 兼容端点的 409）：
- *  远端在我读取之后被别人改过 —— 必须中止本次写入让用户重试，绝不静默覆盖。 */
-export function isPreconditionFailedStatus(status: number): boolean {
-  return status === 412;
+/**
+ * 写出/删除路径的**条件写**失败判定（两条通道共用的唯一实现处）：
+ *  - 412 Precondition Failed 恒算（If-Match / If-None-Match 的语义）；
+ *  - 409 只在**本次确实带了条件写头**时才算 —— S3 兼容端点用 409 表达「对象已存在 / 冲突」，
+ *    而 WebDAV 的 409（如 MKCOL 缺父目录）与无条件的 409 另有含义，绝不能吞成并发冲突。
+ *
+ * 判定通过后仍须按通道报文细分：OSS 的 409 还可能表示 FileImmutable（桶被保护），
+ * 那必须如实报错而不是谎称「别的设备改过索引」（见 s3-transport 的 conditionalFailure）。
+ */
+export function isPreconditionFailedStatus(status: number, opts: { guarded?: boolean } = {}): boolean {
+  if (status === 412) return true;
+  return status === 409 && opts.guarded === true;
 }
 
 export interface SyncTransport {

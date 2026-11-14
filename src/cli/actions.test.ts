@@ -15,11 +15,12 @@ import path from 'node:path'
 
 import {
   checkWriteGates, cleanupDisk, collectVerifyResults, diskUsageDirsOf, exportOfflineBackup, isProcessAlive,
-  planSnapshotRestore, readBackups, readDiskUsage, readLockState, readProfiles, readRescueStatus,
+  locksDirFromControlRoots, planSnapshotRestore, readBackups, readDiskUsage, readLockState, readProfiles, readRescueStatus,
   readRunningInstances, readSnapshots, recoverStaleEnvironmentLock, repairSessionLogInline, repairSessions,
   sessionRepairRowMessage, sessionVerifyNoteOf, stopProfile, unlockEncryptedBackup, type SessionLogRepairRow,
 } from './actions.ts'
 import type { SessionVerifyResult } from '../utils/session-verify.ts'
+import { EnvironmentLockManager } from '../utils/env-lock.ts'
 import { parseZip } from '../utils/zip.ts'
 import { MANIFEST_FILE } from '../schema/manifest.ts'
 
@@ -572,5 +573,77 @@ test('C1 文案：不可修复项的回执指向字节级离线出口（不再�
     assert.match(message, /dsh-config-manager web/)
     assert.equal(message.includes('请用离线命令'), false, message)
     assert.equal(/sessions repair\s+--apply/.test(message), false, message)
+  })
+})
+/* ---------------- 审计 P11-4：环境锁目录必须由控制面根派生（就地修复此前漏传 locksDir） ---------------- */
+
+test('P11-4 写门：locksDir 由控制面根派生（第一个真实带锁的候选根优先）', async () => {
+  await withTmp(async (tmp) => {
+    const first = path.join(tmp, 'a')
+    const second = path.join(tmp, 'b')
+    await fs.mkdir(path.join(second, 'locks'), { recursive: true })
+    await fs.writeFile(path.join(second, 'locks', 'environment.lock'), '{}')
+    assert.equal(locksDirFromControlRoots([first, second]), path.join(second, 'locks'), '跳过没锁的候选根，用真正持有锁的那个')
+    assert.equal(locksDirFromControlRoots([first]), path.join(first, 'locks'), '都没有锁就退回首个候选（读不到 = 无锁，判据仍归 readLockState）')
+    assert.equal(locksDirFromControlRoots([]), undefined, '空候选列表没有可派生的目录')
+  })
+})
+
+test('P11-10 写门：不传 locksDir 也不再跳过环境锁检查（派生在门内完成，5 个调用点不再各拼参数）', async () => {
+  await withTmp(async (tmp) => {
+    const dataDir = path.join(tmp, 'dsh-config-manager')
+    await fs.mkdir(dataDir, { recursive: true })
+    const locksDir = path.join(dataDir, 'locks')
+    const mgr = new EnvironmentLockManager({ locksDir, heartbeatIntervalMs: 60_000 })
+    const acquired = await mgr.acquire({ op: 'test-hold', target: 'p11-10' })
+    assert.equal(acquired.state, 'ACQUIRED')
+    try {
+      // 只有 controlRoots，没有 locksDir —— 改前这就是「静默不查锁」的形态
+      const derived = await checkWriteGates([dataDir], { needsDshStopped: false })
+      assert.equal(derived.ok, false, '锁被持有时必须拒绝，不能因少传参数放行')
+      assert.equal(derived.ok === false ? derived.code : null, 'stale-lock')
+    } finally {
+      if (acquired.token !== null) await mgr.release(acquired.token)
+      await mgr.stopHeartbeatAndDrain()
+    }
+  })
+})
+
+test('P11-4 写门：真实持有的环境锁 → 就地修复必须拒绝（改前不传 locksDir，锁在也照样改写字节）', async () => {
+  await withTmp(async (tmp) => {
+    const home = path.join(tmp, 'home')
+    const dataDir = path.join(tmp, 'dsh-config-manager')
+    await fs.mkdir(home, { recursive: true })
+    await fs.mkdir(dataDir, { recursive: true })
+    const locksDir = path.join(dataDir, 'locks')
+    // 真实持锁（不是手写 ownership 文件）：持有者是本进程，状态应为 LOCKED
+    const mgr = new EnvironmentLockManager({ locksDir, heartbeatIntervalMs: 60_000 })
+    const acquired = await mgr.acquire({ op: 'test-hold', target: 'inline-repair' })
+    assert.equal(acquired.state, 'ACQUIRED')
+    try {
+      const held = await checkWriteGates([dataDir], { needsDshStopped: true, locksDir })
+      assert.equal(held.ok, false)
+      assert.equal(held.ok === false ? held.code : null, 'stale-lock')
+
+      // 不显式传 locksDir：必须靠 controlRoots 派生出来，否则锁在也放行（P11-4 的形态）
+      const refused = await repairSessionLogInline(
+        { home, dataDir, unitIds: ['proj/session-x'], apply: true },
+        [dataDir],
+      )
+      assert.equal(refused.ok, false, '环境锁被持有仍放行 = P11-4 复现')
+      assert.match(refused.error ?? '', /环境锁/)
+      assert.equal(refused.rows.length, 0, '被门拒绝时不得逐条执行')
+
+      // 显式传同一个目录：判据相同，只换入口
+      const explicit = await repairSessionLogInline(
+        { home, dataDir, unitIds: ['proj/session-x'], apply: true, locksDir },
+        [dataDir],
+      )
+      assert.equal(explicit.ok, false)
+      assert.match(explicit.error ?? '', /环境锁/)
+    } finally {
+      if (acquired.token !== null) await mgr.release(acquired.token)
+      await mgr.stopHeartbeatAndDrain()
+    }
   })
 })

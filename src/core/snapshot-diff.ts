@@ -94,8 +94,23 @@ interface SideRead {
 
 const ABSENT: SideRead = { exists: false, bytes: 0, text: '', binary: false, oversized: false, unreadable: false };
 
+/** 该 errno 是否等于「路径真的不存在」（其余 = 存在但拿不到，绝不能当作不存在）。 */
+function isEnoent(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT';
+}
+
+/**
+ * 「存在但读不出」的唯一形态（目录 / 无权限 / 被占用 / stat 抛非 ENOENT）。
+ * 与 ABSENT（真的不存在）严格区分：判成不存在会让预览把改不了的文件显示成「新增」（审计 P2-6）。
+ */
+function unreadableAt(bytes: number): SideRead {
+  return { exists: true, bytes, text: null, binary: false, oversized: false, unreadable: true };
+}
+
 /** 只探测存在性（预算触顶时用：不读内容，只 stat）。 */
-async function probeExists(opts: { homeDir: string; target: string; msg: MsgFunc }): Promise<'exists' | 'absent' | 'escape'> {
+async function probeExists(
+  opts: { homeDir: string; target: string; msg: MsgFunc },
+): Promise<'exists' | 'absent' | 'unreadable' | 'escape'> {
   let abs: string;
   try {
     abs = homeAbs(opts.homeDir, opts.target, opts.msg);
@@ -104,29 +119,57 @@ async function probeExists(opts: { homeDir: string; target: string; msg: MsgFunc
   }
   try {
     const stat = await fs.stat(abs);
-    return stat.isFile() ? 'exists' : 'absent';
-  } catch {
-    return 'absent';
+    return stat.isFile() ? 'exists' : 'unreadable';
+  } catch (err) {
+    // ENOENT 才是「没有」；EACCES 一类说明路径在，只是拿不到状态
+    return isEnoent(err) ? 'absent' : 'unreadable';
   }
 }
 
-async function readSide(abs: string, maxBytes: number): Promise<SideRead> {
+/** readSide 依赖的最小 fs 能力（默认 = 真 fs）。 */
+export interface SideReadIo {
+  stat(abs: string): Promise<{ isFile(): boolean; size: number }>;
+  readFile(abs: string): Promise<Buffer>;
+}
+
+const REAL_SIDE_IO: SideReadIo = {
+  stat: (abs) => fs.stat(abs),
+  readFile: (abs) => fs.readFile(abs),
+};
+
+/**
+ * 读单侧内容。
+ *
+ * 三种结果必须分开：真的没有（ABSENT）/ 存在但读不出（unreadable）/ 正常读到。
+ * 原先整段包一个 try + 末尾 `catch { return ABSENT }`，把「stat 成功、readFile 抛 EACCES」
+ * 判成了不存在 —— 预览因此把只读文件显示成「新增」（审计 P2-6）。
+ *
+ * `io` 参数只为单测注入：Windows 上造不出 EACCES 夹具，而这条分支必须被真正覆盖；
+ * 生产调用方一律不传（走 REAL_SIDE_IO）。
+ */
+export async function readSide(abs: string, maxBytes: number, io: SideReadIo = REAL_SIDE_IO): Promise<SideRead> {
+  let stat: { isFile(): boolean; size: number };
   try {
-    const stat = await fs.stat(abs);
-    if (!stat.isFile()) {
-      return { exists: true, bytes: stat.size, text: null, binary: false, oversized: false, unreadable: true };
-    }
-    if (stat.size > maxBytes) {
-      return { exists: true, bytes: stat.size, text: null, binary: false, oversized: true, unreadable: false };
-    }
-    const buf = await fs.readFile(abs);
-    if (buf.subarray(0, 8192).includes(0)) {
-      return { exists: true, bytes: buf.byteLength, text: null, binary: true, oversized: false, unreadable: false };
-    }
-    return { exists: true, bytes: buf.byteLength, text: buf.toString('utf8'), binary: false, oversized: false, unreadable: false };
-  } catch {
-    return ABSENT;
+    stat = await io.stat(abs);
+  } catch (err) {
+    return isEnoent(err) ? ABSENT : unreadableAt(0);
   }
+  if (!stat.isFile()) return unreadableAt(stat.size);
+  if (stat.size > maxBytes) {
+    return { exists: true, bytes: stat.size, text: null, binary: false, oversized: true, unreadable: false };
+  }
+  let buf: Buffer;
+  try {
+    buf = await io.readFile(abs);
+  } catch (err) {
+    // stat 已证明它是普通文件：这里读失败 = 存在但读不出（EACCES/EBUSY/…）；
+    // stat 与 read 之间被删掉的 ENOENT 仍按「不存在」处理，那才是当时的真实状态
+    return isEnoent(err) ? ABSENT : unreadableAt(stat.size);
+  }
+  if (buf.subarray(0, 8192).includes(0)) {
+    return { exists: true, bytes: buf.byteLength, text: null, binary: true, oversized: false, unreadable: false };
+  }
+  return { exists: true, bytes: buf.byteLength, text: buf.toString('utf8'), binary: false, oversized: false, unreadable: false };
 }
 
 /** 变更状态判定（恢复类：before 存在 = 修改，不存在 = 新增）。 */
@@ -252,10 +295,12 @@ export async function summarizeRestoreChanges(opts: {
           entry.status = 'skip';
           entry.statSkipped = 'unreadable';
         } else {
-          entry.beforeExists = probe === 'exists';
+          // 「存在但读不出」与 readSide 同口径：算存在（否则会显示成「新增」），只把行数统计标成 unreadable
+          const unreadable = probe === 'unreadable';
+          entry.beforeExists = probe === 'exists' || unreadable;
           entry.afterExists = restoreKind;
           entry.status = statusOf(action.kind, entry.beforeExists);
-          entry.statSkipped = 'budget';
+          entry.statSkipped = unreadable ? 'unreadable' : 'budget';
         }
         skipped += 1;
         entries.push(entry);

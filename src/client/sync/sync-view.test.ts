@@ -214,11 +214,31 @@ test('sync-view: push 成功报告 → ok 头部含快照 id + 分区透传', ()
   assert.deepEqual(view?.sections, ['settings', 'plugins'])
 })
 
+test('sync-view: push 报告带预览条数 → counts 透传（D-12 名称 · 条数）', () => {
+  const report: SyncPushReport = { ok: true, snapshotId: 'sync-2', sections: ['settings', 'plugins'], warnings: [] }
+  const view = pushReportView(report, zhUiT, { settings: 12, plugins: 3 })
+  assert.deepEqual(view?.counts, { settings: 12, plugins: 3 })
+  // 没有预览（缺省第三参）→ 空对象，渲染侧只显分区名
+  assert.deepEqual(pushReportView(report, zhUiT)?.counts, {})
+})
+
 test('sync-view: push 失败报告 → error 显示引擎 message', () => {
   const report: SyncPushReport = { ok: false, snapshotId: '', sections: [], warnings: [], message: '全部导出失败' }
   const view = pushReportView(report, zhUiT)
   assert.equal(view?.kind, 'error')
   assert.equal(view?.headline, '全部导出失败')
+})
+
+test('sync-view: issue #140 内容未变 → skipped 头部说「已跳过」并给出沿用的远端快照', () => {
+  const report: SyncPushReport = {
+    ok: true, snapshotId: 'sync-1', sections: ['settings'], warnings: [],
+    skipped: 'unchanged', adoptedSnapshotId: 'sync-1',
+  }
+  const view = pushReportView(report, zhUiT)
+  assert.equal(view?.kind, 'skipped', '不是 ok（本轮什么都没写），也不是 error')
+  assert.match(view?.headline ?? '', /已跳过/)
+  assert.match(view?.headline ?? '', /sync-1/, '要说清沿用的是哪一份远端快照')
+  assert.deepEqual(view?.sections, ['settings'], '分区列表照常透传（用户要知道范围）')
 })
 
 test('sync-view: null 报告 → null（不渲染卡片）', () => {

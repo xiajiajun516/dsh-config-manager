@@ -330,6 +330,12 @@ export function synthesizeDshRows(
   };
   const closeTurn = (): void => {
     closeStep();
+    /**
+     * 回合闭合后再到的结果**不许**回填到本回合的调用上：`openCallIds` 是跨 step 共享的 FIFO，
+     * 若不在回合边界清空，下一回合缺 id 的 tool_result 会消费到上一回合已结束的 callId
+     * （结果落在 turn N+1、却引用 turn N 的调用，DSH 侧配对不上）。
+     */
+    openCallIds.length = 0;
     if (turnOpen) {
       push('turn/end', now, { turn, reason: { kind: 'completed' } });
       turnOpen = false;
@@ -344,6 +350,21 @@ export function synthesizeDshRows(
     });
     turnOpen = true;
   };
+  /** 发一条**人类** user/message（唯一形状出口：两条路径共用，避免字段漂移） */
+  const emitUserMessage = (text: string, at: number, id: string): void => {
+    push(
+      'user/message',
+      at,
+      {
+        content: [irTextBlock(text)],
+        source: { kind: 'user' },
+        role: 'user',
+        id,
+      },
+      'append',
+    );
+    stats.userMessages++;
+  };
 
   for (const message of session.messages) {
     // time 缺省（源没给可解析时间）→ 用调用方的时间兜底；安全整数校验在 IR 层已完成
@@ -354,6 +375,15 @@ export function synthesizeDshRows(
     if (message.role === 'assistant') {
       const text = irTextOfBlocks(blocks);
       const calls = blocks.filter((b): b is IrToolCallBlock => b.type === 'tool_call');
+      /**
+       * 助手记录里携带的 tool_result：本分支只消费 text/tool_call，这类结果**无处归位**
+       * （opencode 等来源把 call 与 result 写进同一条记录，由 `splitToolResults` 先拆开；
+       * 没拆到这里的不能静默消失）。计数后丢弃 —— 绝不产出悬空引用，也绝不无声丢内容。
+       */
+      const assistantResults = blocks.filter((b): b is IrToolResultBlock => b.type === 'tool_result');
+      if (assistantResults.length > 0) {
+        irBump(stats.ignored, 'assistant-tool-result', assistantResults.length);
+      }
       const source = message.passthrough?.['source'];
       const m = irStr((source as Record<string, unknown> | undefined)?.['model']);
       if (m !== undefined) model = m;
@@ -361,7 +391,8 @@ export function synthesizeDshRows(
       const providerName = hints.provider === '' ? 'foreign' : hints.provider;
       const modelName = model === '' ? 'unknown' : model;
       if (text.trim() === '' && calls.length === 0) {
-        irBump(stats.ignored, 'assistant-empty');
+        // 只有 tool_result 的助手记录已按 assistant-tool-result 计数，不再重复记 assistant-empty
+        if (assistantResults.length === 0) irBump(stats.ignored, 'assistant-empty');
         continue;
       }
       if (!turnOpen) openTurn(at);
@@ -468,7 +499,17 @@ export function synthesizeDshRows(
           callId = next === undefined ? '' : next;
         } else {
           const idx = openCallIds.indexOf(callId);
-          if (idx >= 0) openCallIds.splice(idx, 1);
+          if (idx >= 0) {
+            openCallIds.splice(idx, 1);
+          } else {
+            /**
+             * 非空 id 但不在未决表里 = 悬空引用（调用已在上一回合闭合，或源侧 id 与真正发出的
+             * callId 不同）。与「缺 id 且无未决调用」同口径：计数后丢弃，绝不发指向不存在
+             * tool/call 的结果（DSH 侧会按损坏流拒读整条会话）。
+             */
+            irBump(stats.ignored, 'orphan-tool-result');
+            continue;
+          }
         }
         if (callId === '') {
           irBump(stats.ignored, 'orphan-tool-result');
@@ -498,6 +539,16 @@ export function synthesizeDshRows(
           'append',
         );
       }
+      /**
+       * 同一条 user 记录里既有 tool_result 又有 text（Anthropic 形状里很常见：结果块后跟人类补充）：
+       * 结果先收进当前 step，文本必须**再发一条真正的 user/message** —— 否则这段用户输入
+       * 既到不了目标机、也不进 ignored，属于静默丢失。
+       */
+      const trailing = irTextOfBlocks(blocks);
+      if (trailing.trim() !== '') {
+        closeTurn();
+        emitUserMessage(trailing, at, message.id);
+      }
       messageIndex++;
       continue;
     }
@@ -509,18 +560,7 @@ export function synthesizeDshRows(
       continue;
     }
     closeTurn();
-    push(
-      'user/message',
-      at,
-      {
-        content: [irTextBlock(text)],
-        source: { kind: 'user' },
-        role: 'user',
-        id: message.id,
-      },
-      'append',
-    );
-    stats.userMessages++;
+    emitUserMessage(text, at, message.id);
     messageIndex++;
   }
   closeTurn();

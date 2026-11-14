@@ -1006,9 +1006,25 @@ export interface SnapshotVerifyResult {
  * 从磁盘重读并验证快照（F1）：id 合法 + snapshot.json 存在 + manifest 存在 + blob hashes 匹配 +
  * metadataHash 匹配 + 必要 blobs 存在 + 路径安全。不信任内存对象。
  */
+/**
+ * `candidate` 是否严格落在 `root` 目录**内部**（等于 root 自身不算）。
+ *
+ * 判据走 `path.relative` 的**路径段**语义，绝不用裸字符串前缀：`snapshots/snap1` 与
+ * `snapshots/snap10` 共享字符串前缀，字符串比较会把兄弟目录里的 blob 当成本快照内的文件，
+ * 从而放过 `../snap10/blob.bin` 这类键（审计 P2-5）。两者入参都先 resolve，Windows 的
+ * 反斜杠与 `..` 各变体在比较前已被规范化。
+ */
+function isInsideDir(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  if (rel === '' || path.isAbsolute(rel)) return false;
+  return rel !== '..' && !rel.startsWith(`..${path.sep}`);
+}
+
 export async function verifySnapshot(snapshotsDir: string, id: string): Promise<SnapshotVerifyResult> {
-  const dir = path.join(snapshotsDir, id);
-  if (!dir.startsWith(path.resolve(snapshotsDir) + path.sep)) {
+  // snapshotsRoot 与 dir 一律先 resolve：越界判定要求两侧同一坐标系（否则相对路径/分隔符各说各话）
+  const snapshotsRoot = path.resolve(snapshotsDir);
+  const dir = path.resolve(snapshotsRoot, id);
+  if (!isInsideDir(snapshotsRoot, dir)) {
     return { ok: false, reason: engineMsg('core.backup.snapshotPathEscaped') };
   }
   let raw: string;
@@ -1044,8 +1060,9 @@ export async function verifySnapshot(snapshotsDir: string, id: string): Promise<
   }
   // blob hashes 匹配 + 存在
   for (const [blobPath, expectedHash] of Object.entries(manifest.blobHashes)) {
-    const target = path.join(dir, blobPath);
-    if (!target.startsWith(dir)) return { ok: false, reason: engineMsg('core.backup.blobPathEscaped', { path: blobPath }) };
+    // 按路径段判定：`../snap10/blob.bin` 解析后落在兄弟快照目录里，必须在这里被拦住（审计 P2-5）
+    const target = path.resolve(dir, blobPath);
+    if (!isInsideDir(dir, target)) return { ok: false, reason: engineMsg('core.backup.blobPathEscaped', { path: blobPath }) };
     let data: Uint8Array;
     try {
       data = await fs.readFile(target);

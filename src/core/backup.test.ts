@@ -29,9 +29,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { createHash } from 'node:crypto';
+
 import {
   FileSnapshotStore, PRE_RESTORE_KEEP_ATTEMPTS, PRE_RESTORE_KEEP_DAYS,
-  createSnapshot, normalizeDshVersion, normalizeOriginProfile, resolveFileTarget, verifySnapshot,
+  computeMetadataHash, createSnapshot, normalizeDshVersion, normalizeOriginProfile, resolveFileTarget, verifySnapshot,
 } from './backup.ts';
 import type { PrunePlan } from './backup.ts';
 import { existsSync } from 'node:fs';
@@ -643,3 +645,61 @@ test('BK-06/③：normalizeOriginProfile 只放行真实档案名', () => {
   }
 });
 
+
+/* ---------------- P2-5：blob 越界按路径段判定（审计回归） ---------------- */
+
+/**
+ * 审计 P2-5 的复现形态：越界判定原先写成 `target.startsWith(dir)`（裸字符串前缀，且没带 path.sep）。
+ * `<dir>/snap1` 与 `<dir>/snap10` 共享字符串前缀 ⇒ 键 `../snap10/blob.bin` 解析后落在**兄弟快照目录**，
+ * 却仍被判「在本快照内」并通过校验（blob 内容与 hash 都是真的，只是位置不属于这个快照）。
+ * 修法 = `path.relative` 的路径段判定（backup.ts 的 isInsideDir）。
+ *
+ * 负例的判据：兄弟目录里的 blob **确实存在且 hash 匹配**，因此校验若通过只可能来自越界检查失效 ——
+ * 不靠匹配本地化文案（reason 文案随语言变化，不适合当判据）。
+ */
+async function seedForgedManifest(
+  dir: string, id: string, blobHashes: Record<string, string>, snapshot: Snapshot,
+): Promise<void> {
+  const snapDir = path.join(dir, id);
+  await fs.mkdir(snapDir, { recursive: true });
+  await fs.writeFile(path.join(snapDir, 'snapshot.json'), JSON.stringify(snapshot), 'utf8');
+  await fs.writeFile(path.join(snapDir, 'manifest.json'), JSON.stringify({
+    schemaVersion: 1,
+    snapshotId: id,
+    entryCount: snapshot.entries.length,
+    blobHashes,
+    metadataHash: computeMetadataHash(snapshot),
+  }), 'utf8');
+}
+
+test('P2-5: manifest.blobHashes 键指向同前缀兄弟快照目录（../snap10/…）必须判越界', async (t) => {
+  const dir = await tmpDir(t, 'p2-5');
+  const payload = Buffer.from('sibling-blob');
+  const hash = createHash('sha256').update(payload).digest('hex');
+  // 兄弟快照目录：snap1 与 snap10 共享字符串前缀 "<dir>/snap" + "1"
+  await fs.mkdir(path.join(dir, 'snap10'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'snap10', 'blob.bin'), payload);
+
+  const snapshot: Snapshot = {
+    id: 'snap1', createdAt: '2026-10-01T00:00:00.000Z', sourceZip: 'x.zip', entries: [], hostFileBackups: [],
+  };
+
+  // 对照：同一份 payload 放在本快照内 ⇒ 必须 verified（夹具本身合法，负例不是「因别的原因失败」）
+  await fs.mkdir(path.join(dir, 'snap1'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'snap1', 'blob.bin'), payload);
+  await seedForgedManifest(dir, 'snap1', { 'blob.bin': hash }, snapshot);
+  const control = await verifySnapshot(dir, 'snap1');
+  assert.equal(control.ok, true, '对照：快照目录内的 blob 必须通过校验');
+
+  const escapedKeys = [
+    '../snap10/blob.bin', // 审计原文的形态
+    './../snap10/blob.bin',
+    'blobs/../../snap10/blob.bin', // 先下钻再回退
+    '..\\snap10\\blob.bin', // Windows 反斜杠变体（在 win32 上与 '/' 等价）
+  ];
+  for (const key of escapedKeys) {
+    await seedForgedManifest(dir, 'snap1', { [key]: hash }, snapshot);
+    const result = await verifySnapshot(dir, 'snap1');
+    assert.equal(result.ok, false, `blob 键 ${JSON.stringify(key)} 指向兄弟快照目录，必须判越界`);
+  }
+});

@@ -42,6 +42,7 @@ export const zh = {
   'sync.layoutFileSectionDirMissing': '快照缺少文件分区目录 {prefix}（{section}）',
   // ---------- 内容寻址 blob 仓 ----------
   'sync.blobMissing': '内容的 blob 缺失（{hash}，{path}）：远端仓不完整，拒绝降级为空分区',
+  'sync.blobCorrupt': '内容的 blob 校验不符（{path}：期望 {hash}，实得 {actual}，{size} 字节）：远端仓已损坏，拒绝写回错误内容',
   'sync.webdav.blobHashInvalid': '内容哈希形状非法，拒绝写入 blob 仓: {hash}',
   // ---------- 按档案分作用域（sync-scope） ----------
   'sync.scopeDirCreateFailed': '无法创建档案同步目录 {dir}：{reason}',
@@ -127,6 +128,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.layoutBlobRefsNoSink': 'Section {section} of the snapshot uses content-addressed external form, but the current channel provides no blob store',
   'sync.layoutFileSectionDirMissing': 'Snapshot is missing the file section directory {prefix} ({section})',
   'sync.blobMissing': 'The blob for {path} is missing ({hash}): the remote store is incomplete, refusing to degrade to an empty section',
+  'sync.blobCorrupt': 'The blob for {path} failed its hash check (expected {hash}, got {actual}, {size} bytes): the remote store is corrupted, refusing to write back wrong content',
   'sync.webdav.blobHashInvalid': 'Malformed content hash; refusing to write to the blob store: {hash}',
   'sync.scopeDirCreateFailed': 'Cannot create the profile sync directory {dir}: {reason}',
   'sync.scopeAdoptFailed': 'Failed to adopt {file}: {reason}',

@@ -65,6 +65,29 @@ export async function readBytesSafe(p: string, maxBytes: number = DEFAULT_MAX_FI
   }
 }
 
+/**
+ * 只读文件**头部窗口**（审计 P7-7）：给「先看 header 再决定要不要整读」的场景用。
+ *
+ * 与 readBytesSafe 的区别只有一点：不超过 maxBytes 时只取前 maxBytes 字节，而不是整份读。
+ * 语义仍守四条硬边界（读不到返回 null、绝不抛、超上限不读）。调用方必须自己处理
+ * 「头部窗口不足以判定」的退化路径 —— 不要把它当成整份内容。
+ */
+export async function readBytesPrefixSafe(p: string, maxBytes: number): Promise<Uint8Array | null> {
+  const st = await statOrNull(p);
+  if (st === null || !st.isFile() || maxBytes <= 0) return null;
+  let handle: fs.FileHandle | null = null;
+  try {
+    handle = await fs.open(p, 'r');
+    const buf = new Uint8Array(Math.min(maxBytes, st.size));
+    const { bytesRead } = await handle.read(buf, 0, buf.byteLength, 0);
+    return bytesRead === buf.byteLength ? buf : buf.subarray(0, bytesRead);
+  } catch {
+    return null;
+  } finally {
+    if (handle !== null) await handle.close().catch(() => undefined);
+  }
+}
+
 export async function readTextSafe(p: string, maxBytes: number = DEFAULT_MAX_FILE_BYTES): Promise<string | null> {
   const st = await statOrNull(p);
   if (st === null || !st.isFile() || st.size > maxBytes) return null;

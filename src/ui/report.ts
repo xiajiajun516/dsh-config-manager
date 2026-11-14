@@ -56,9 +56,9 @@ export function renderExportReport(report: ExportReport, t: UiT): string {
   const lines: string[] = [t('report.backupCreated'), ''];
   lines.push(t('report.included'));
   for (const { section, counts } of report.included) {
-    const detail = Object.entries(counts)
-      .map(([k, v]) => `${v} ${k}`)
-      .join(', ');
+    // 计数文案与导出确认页同一份组装（`exportCountsText`）：此前这里直接拼适配器词汇，
+    // 中文界面出现「settings (18 namespaces, 3 files)」这种半英文行（审计 P10-3）。
+    const detail = exportCountsText(counts, t);
     lines.push(`  ✓ ${section}${detail !== '' ? ` (${detail})` : ''}`);
   }
   lines.push('');
@@ -230,8 +230,19 @@ export function renderRollbackReport(rr: RollbackReport, t: UiT): string {
 
 /* ---------------- 工具 ---------------- */
 
+/**
+ * 字节 → 人类可读体积（B / KB / MB / GiB）。
+ *
+ * 口径与 `session-inventory-view.ts` 的 `formatSessionBytes` 对齐，但后缀沿用报告既有的
+ * KB/MB 写法（报告文本曾被测试与文档引用）：
+ *   - 非有限值（NaN/Infinity）或负数 → 空串：此前 `NaN` 会渲染成「NaN MB」，把缺数据
+ *     伪装成 0 体积之外的另一条假信息（审计 P10-2）；
+ *   - ≥1 GiB 单独一档：`2048.0 MB` 让用户自己换算，且 3 位数 MB 在报告行里最容易读错。
+ */
 export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '';
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }

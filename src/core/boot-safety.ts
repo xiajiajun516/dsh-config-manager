@@ -122,6 +122,36 @@ function errorText(err: unknown): string {
 }
 
 /**
+ * 写回后的读回校验：profile package.json 的 bundles 已不含待剔除条目（且全为字符串）→ true。
+ * 为什么需要它：「writeText 没抛错」只证明字节发出去了，不证明盘面变成了我们要的形状
+ * （审计 P3-2：drop 集合用 describeEntry 生成的展示名，filter 与真实条目永不相等，写回后
+ * 非字符串条目仍在，却仍报 fixed:true/repaired）。读不到 / 解析失败 / 结构异常一律 false ——
+ * 修没修成只看盘面，宁可报 unfixed 让用户手动处理，也不假装启动风险已消除。
+ */
+async function bundlesPrunedOnDisk(
+  readText: (relPosix: string) => Promise<string | null>,
+  rel: string,
+  drop: ReadonlySet<string>,
+): Promise<boolean> {
+  let text: string | null
+  try {
+    text = await readText(rel)
+  } catch {
+    return false
+  }
+  if (text === null) return false
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return false
+  }
+  const bundles = readBundles(parsed)
+  if (!Array.isArray(bundles)) return false
+  return bundles.every((b) => typeof b === 'string' && !drop.has(b))
+}
+
+/**
  * 执行启动自洽审计。**绝不抛错**：任何单项失败转成 issue / unchecked。
  */
 export async function auditBootSafety(deps: BootSafetyDeps): Promise<BootSafetyReport> {
@@ -167,10 +197,15 @@ export async function auditBootSafety(deps: BootSafetyDeps): Promise<BootSafetyR
         try {
           // 只剔除「不可解析且非核心」的条目：其余条目（含解析不出的核心项）原样保留
           const drop = new Set(prunable.map((p) => p.name))
-          const next = (Array.isArray(bundles) ? bundles : []).filter((b) => !(typeof b === 'string' && drop.has(b))) as string[]
+          const rawBundles: unknown[] = Array.isArray(bundles) ? bundles : []
+          // 非字符串条目一律剔除，且必须按**真实类型**判定：pruned 里它的 name 是
+          // describeEntry(entry) 生成的展示名（42 → '42'），拿展示名去比数组里的真实条目
+          // 永不命中，写回后条目仍在（审计 P3-2）。非字符串不可能是合法 bundle 名。
+          const next = rawBundles.filter((b): b is string => typeof b === 'string' && !drop.has(b))
           if (!writeBundles(pkg, next)) throw new Error(engineMsg('core.bootSafety.bundlesNotArray'))
           await deps.writeText(pkgRel, JSON.stringify(pkg, null, 2) + '\n')
-          written = true
+          written = await bundlesPrunedOnDisk(deps.readText, pkgRel, drop)
+          if (!written) failReason = 'bundles-still-present'
         } catch (err) {
           failReason = errorText(err)
         }

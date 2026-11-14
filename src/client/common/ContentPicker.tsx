@@ -26,7 +26,7 @@ import {
   pickerSummary,
   pluginEntryPickState, pluginEntrySelectedCount, pluginEntryTotalCount, pluginEntryUnreadSections, pluginTree,
   pluginTreePickState, pluginTreeSelectedCount, pluginTreeTotalCount, pluginTreeUnreadSections,
-  applyPluginPendingChecks, sameSelection, sectionCountState, sectionExpandable, sectionPickState,
+  applyPluginPendingChecks, samePendingChecks, sameSelection, sectionCountState, sectionExpandable, sectionPickState,
   selectAll, selectedUnitCount, tailWeightedEllipsis, togglePluginEntry, togglePluginTree, toggleSection,
   toggleUnit, toggleUnitGroup,
   unitChecked, visibleUnits,
@@ -37,7 +37,6 @@ import type { ExportGroup } from '../../ui/types.ts'
 import { formatBytes } from '../../ui/report.ts'
 import { redact } from '../../security/redaction.ts'
 import { Badge, Button, Checkbox, Spinner } from './ui.tsx'
-import { InfoHint } from './InfoHint.tsx'
 import { Skeleton } from './Skeleton.tsx'
 import { Collapse } from './Motion.tsx'
 import { ExpandChevron } from './Icon.tsx'
@@ -194,9 +193,6 @@ export function ContentPicker({
    */
   const unreadSections = new Set([...pendingSections, ...failedSections]).size
   const label = (id: SectionId): string => sectionLabel?.(id) ?? id
-  /** 是否存在「会话 ↔ 工作区」联动对象（只在这种时候提示联动规则，平时不打扰）。 */
-  const hasLinkedPairs = nodes.some((n) => n.section === 'sessions' && n.units.length > 0)
-    && nodes.some((n) => n.section === 'workspaces' && n.units.some((u) => (u.sessionIds?.length ?? 0) > 0))
   /**
    * 勾选动作统一出口：先过一次「父对话 ↔ 子代理会话」联动，再过一次会话↔工作区联动。
    *
@@ -226,7 +222,9 @@ export function ContentPicker({
   useEffect(() => {
     if (pendingChecks.length === 0) return
     const { selection, remaining } = applyPluginPendingChecks(value, nodes, tree, pendingChecks)
-    setPendingChecks(remaining)
+    // 内容不变绝不写回：applyPluginPendingChecks 每轮返回新数组，无条件 setState 会让本 effect
+    // 依赖 [pendingChecks] 自激成无界重渲染（清单读不到时页面卡死，审计 P9-1）。
+    if (!samePendingChecks(remaining, pendingChecks)) setPendingChecks(remaining)
     if (!sameSelection(selection, value)) commit(selection)
     // tree/nodes 变化即代表清单到货；value 变化来自本次补齐本身（此时队列已空，直接返回）
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -490,7 +488,6 @@ export function ContentPicker({
                       </span>
                     )}
                     {/* 未读时不给「读取该分区」按钮：展开这一行就是读取入口（与其他分区行同一套惰性语义） */}
-                    {bucket.loaded && <InfoHint text={t('picker.bucketHint')} t={t} />}
                   </span>
                 }
               />
@@ -586,9 +583,11 @@ export function ContentPicker({
         />
         <Button size="sm" onClick={() => { commit(selectAll(nodes, true)) }}>{t('picker.selectAll')}</Button>
         <Button size="sm" onClick={() => { commit(selectAll(nodes, false)) }}>{t('picker.selectNone')}</Button>
-        {/* 会话 ↔ 工作区联动属「机制怎么工作」（MOVE 类）：只在这种配对确实存在时给出 ⓘ，
-            不再用一整行常驻说明占掉选择器首屏。 */}
-        {hasLinkedPairs && <InfoHint text={t('picker.sessionWorkspaceLinked')} t={t} />}
+        {/* 工具条常驻「已选 N / M」（稿 D-14b:114）：与分区行同一字典键、同一 .pickerCount 盒模型，
+            合计仍在页脚（分区/单元/体积）—— 这里只回答「我勾了多少」。 */}
+        <span className={css.pickerCount + ' ' + css.pickerToolbarCount}>
+          {t('picker.selectedOf', { selected: String(summary.units), total: String(summary.totalUnits) })}
+        </span>
       </div>
 
       {loading && <Skeleton count={3} label={t('picker.loading')} />}
@@ -638,8 +637,10 @@ export function ContentPicker({
               <Fragment key={node.section}>
                 {groupTitle !== undefined && (
                   <div className={css.pickerGroupTitle}>
-                    <span className={css.pickerGroupTitleName}>{t(GROUP_TITLE_KEY[groupTitle])}</span>
-                    {groupTitle === 'extensions' && <InfoHint text={t('picker.groupHint.extensions')} t={t} />}
+                    <span
+                      className={css.pickerGroupTitleName}
+                      title={groupTitle === 'extensions' ? t('picker.groupHint.extensions') : undefined}
+                    >{t(GROUP_TITLE_KEY[groupTitle])}</span>
                   </div>
                 )}
                 {node.section === firstTreeSection ? renderPluginTree() : (

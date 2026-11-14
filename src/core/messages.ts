@@ -25,6 +25,7 @@ export const zh = {
   'export.sectionFailed': '分区 {adapter} 导出失败: {reason}',
   'export.credentialsReadFailed': '读取凭据文件失败，跳过秘密导出: {reason}',
   'export.vaultRefreshed': '凭据明文未进入备份，已镜像到本机 vault（{count} 个文件，恢复时可回填）',
+  'export.pluginDataSensitiveSkipped': '打包时剔除 {count} 个凭据文件（首个：{sample}）——第三方插件数据分区永不携带凭据明文',
   'export.vaultRefreshSkipped': 'vault 镜像跳过 {rel}: {reason}',
   'export.vaultRefreshFailed': 'vault 镜像刷新失败（不影响导出）: {reason}',
   'export.sessionsLimited': '会话按数量筛选：只带最新 {count} 个（共 {total} 个；单位 = 会话目录，同一会话的日志一起走）',
@@ -307,6 +308,8 @@ export const zh = {
   'adapter.patchLineCreate': '写入 patch 行 {lineId}',
   'adapter.patchLineSame': 'patch 行 {lineId} 已一致',
   'adapter.patchLineDiff': 'patch 行 {lineId} 与目标不同',
+  'adapter.patchKeyParseFail': 'patch 行 {ref} 在 {path} 处含会让 DSH 整份文件解析失败的键名：先给该键改成合法名字，再导入',
+  'adapter.patchKeyAmbiguous': 'patch 行 {ref} 在 {path} 处的键名 {key} 会被 DSH 读成数字 / 布尔 / null：给键名加引号（\'{key}\':）后重新导入',
   'adapter.promptSame': '提示词 {name} 已一致',
   'adapter.promptDiff': '提示词 {name} 与目标不同',
   'adapter.promptDiffWithLine': '提示词 {name} 与目标不同（目标位于行 {line}）',
@@ -481,6 +484,7 @@ export const zh = {
   'sync.pruneListFailed': '远端快照裁剪失败：无法列出远端快照，{reason}',
   'sync.pruneDeleteFailed': '远端快照裁剪失败：删除快照 {id} 失败，{reason}',
   'sync.gcSkipped': '本轮已放弃回收远端孤立文件（{code}）：本轮不做回收，快照本身不受影响',
+  'sync.latestSkippedEncrypted': '加密快照不生成远端 latest/ 视图（密文无明文镜像）：latest/ 保持上一次明文快照的内容，需要明文视图请推一次非加密快照',
 
   // ---------- 配置市场（m-market：只读公开仓库目录读取 + 校验） ----------
   'market.invalidItemId': '非法市场条目 id: {id}（仅允许字母数字开头，字符限 . _ -）',
@@ -553,6 +557,7 @@ export const en: Record<keyof typeof zh, string> = {
   'export.sectionFailed': 'Section {adapter} export failed: {reason}',
   'export.credentialsReadFailed': 'Failed to read the credentials file; secrets export skipped: {reason}',
   'export.vaultRefreshed': 'Credential plaintext did not enter the backup; mirrored to the local vault ({count} file(s), available for restore backfill)',
+  'export.pluginDataSensitiveSkipped': 'Dropped {count} credential file(s) at packaging time (first: {sample}) — third-party plugin data never carries credential plaintext',
   'export.vaultRefreshSkipped': 'Vault mirror skipped {rel}: {reason}',
   'export.vaultRefreshFailed': 'Vault mirror refresh failed (export unaffected): {reason}',
   'export.sessionsLimited': 'Sessions filtered by count: only the latest {count} are included ({total} total; the unit is a session directory, so all logs of one session travel together)',
@@ -835,6 +840,8 @@ export const en: Record<keyof typeof zh, string> = {
   'adapter.patchLineCreate': 'Write patch row {lineId}',
   'adapter.patchLineSame': 'Patch row {lineId} is already identical',
   'adapter.patchLineDiff': 'Patch row {lineId} differs from the target',
+  'adapter.patchKeyParseFail': 'Patch row {ref} has a key at {path} that makes DSH fail to parse the whole file; rename that key before importing',
+  'adapter.patchKeyAmbiguous': 'Key {key} in patch row {ref} (at {path}) is read as a number / boolean / null by DSH; quote it (\'{key}\':) and import again',
   'adapter.promptSame': 'Prompt {name} is already identical',
   'adapter.promptDiff': 'Prompt {name} differs from the target',
   'adapter.promptDiffWithLine': 'Prompt {name} differs from the target (target lives at row {line})',
@@ -1005,6 +1012,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.pruneListFailed': 'Remote snapshot pruning failed: could not list remote snapshots, {reason}',
   'sync.pruneDeleteFailed': 'Remote snapshot pruning failed: deleting snapshot {id} failed, {reason}',
   'sync.gcSkipped': 'Skipped reclaiming remote orphan files this round ({code}); snapshots are unaffected',
+  'sync.latestSkippedEncrypted': 'Encrypted snapshots do not produce the remote latest/ view (ciphertext has no plaintext mirror): latest/ keeps the previous plaintext snapshot content; push a non-encrypted snapshot if you need it refreshed',
 
   // ---------- config marketplace (m-market: read-only public repo directory read + validation) ----------
   'market.invalidItemId': 'Invalid marketplace item id: {id} (must start with an alphanumeric; only . _ - allowed)',

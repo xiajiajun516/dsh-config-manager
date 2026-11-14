@@ -9,7 +9,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Button, Card } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { sessionHealthSummaryView, sessionRepairEntries, type SessionHealthResponse } from '../../ui/session-inventory-view.ts'
 import type { SessionExportProbe } from '../session-export/session-export-view.ts'
 import type { LayoutRecoveryApi } from './recovery-api.ts'
@@ -92,7 +91,8 @@ export function SessionHealthCard({ recoveryApi, t, copyT, diskApi }: SessionHea
         <strong>{t('sessions.title')}</strong>
         {/* 徽章语义：扫描只读；修复是显式动作（预览 → 确认 → 自动备份 → 可回滚） */}
         <Badge kind="info">{t('sessions.readOnly')}</Badge>
-        <InfoHint text={t('sessions.desc')} label={t('common.infoHint')} />
+        {/* 2026-11-14：原来这里还挂一颗 ⓘ 复述「扫什么 / 四档 / 能修哪两类」——
+            与体检弹窗标题行那颗同键同文，卡片只留入口不需要再讲一遍机制。 */}
         <span className={css.statusSpacer} />
       </div>
       {/* T10：结果全部搬进独立弹窗 —— 卡片只留入口与一行摘要，绝不把上千行塞进设置页。

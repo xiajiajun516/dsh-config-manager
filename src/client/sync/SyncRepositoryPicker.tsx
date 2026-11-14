@@ -21,7 +21,6 @@ import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import { redact } from '../../security/redaction.ts'
 import { Button } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { Select } from '../common/Select.tsx'
 import { toast } from '../common/toast-store.ts'
 import type { SyncApi } from './sync-api.ts'
@@ -167,8 +166,8 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, signedIn, busy, on
   return (
     <>
       <div className={css.field}>
-        <span className={css.fieldLabel}>
-          {t('repoPicker.label')} <InfoHint text={t('repoPicker.hint')} label={t('common.infoHint')} />
+        <span className={css.fieldLabel} title={t('repoPicker.hint')}>
+          {t('repoPicker.label')}
         </span>
         <div className={css.controlRow}>
           <Select
@@ -180,6 +179,20 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, signedIn, busy, on
             onOpen={() => { if (!loaded && !loading) void load() }}
             onChange={pick}
           />
+          {/* 新建私有仓库是**明确动作**，不该藏在「选择已有仓库」的下拉里（UI v2 §8.13）：
+              下拉里那一条现在只作为同一动作的别名保留，真正的入口在这颗按钮上。 */}
+          <Button
+            size="sm"
+            disabled={busy || creating}
+            aria-expanded={createOpen}
+            onClick={() => {
+              setCreateOpen((v) => !v)
+              setNameError(null)
+              setCreateError(null)
+            }}
+          >
+            {t('repoPicker.create')}
+          </Button>
           <Button size="sm" loading={loading} disabled={busy} onClick={() => { void load(true) }}>
             {t('repoPicker.refresh')}
           </Button>
@@ -192,7 +205,7 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, signedIn, busy, on
       </div>
       {createOpen && (
         <div className={css.field}>
-          <span className={css.groupLabel}>{t('repoPicker.createTitle')} <InfoHint text={t('repoPicker.privateOnly')} label={t('common.infoHint')} /></span>
+          <span className={css.groupLabel}>{t('repoPicker.createTitle')}</span>
           <label className={css.field}>
             <span className={css.fieldLabel}>{t('repoPicker.name')}</span>
             <input

@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { applyPrefixMappings, isPathInside, isSameOrChild } from './paths.ts';
+import { applyPrefixMappings, isPathInside, isSameOrChild, isSensitiveHomeRel } from './paths.ts';
 import type { PathMapping } from '../core/types.ts';
 
 /** 测试用映射（appliesTo 与语义无关，任选一个合法分区） */
@@ -95,4 +95,17 @@ test('core-E1：越界判定只有一份实现，且 `..foo` 这种合法兄弟�
   assert.equal(isPathInside('/a/B', '/a/b', { foldCase: true }), true);
   // foldCase:false 只在 POSIX 生效：win32 的 path.relative 自己就折大小写（故此处结果仍 true）
   assert.equal(isPathInside('/a/B', '/a/b', { foldCase: false }), process.platform === 'win32');
+});
+
+test('审计 P2-1：isSensitiveHomeRel 认得出凭据形状（分区出包的单一判据）', () => {
+  // 命中：vault 段 / 常见凭据文件名（大小写与分隔符不敏感）
+  for (const rel of ['.mnemon/vault/key', '.mnemon/VAULT/key', '.mnemon/credentials.yaml', '.mnemon/CREDENTIALS.json',
+    '.mnemon/credentials', '.dsh-x/secrets.yaml', '.dsh-x/auth.json', '.dsh-x/.env', '.dsh-x/.env.local', '.dsh-x/.credentials.yml']) {
+    assert.equal(isSensitiveHomeRel(rel), true, `必须判敏感：${rel}`);
+  }
+  // 不命中：普通配置/资产/包含关键词但不是凭据名的文件
+  for (const rel of ['.mnemon/runtime/MEMORY.md', '.dsh-x/config.json', '.dsh-x/uploads/wall.mp4',
+    '.dsh-x/credentials-backup.txt', '.dsh-x/my-credentials-notes.md', '.dsh-x/vaulted/config.json']) {
+    assert.equal(isSensitiveHomeRel(rel), false, `不得误判：${rel}`);
+  }
 });

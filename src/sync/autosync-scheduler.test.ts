@@ -854,6 +854,60 @@ test('双通道：git/webdav 同时 enabled → 各自独立排期；runOnce 写
   assert.deepEqual(configs.git, gitBefore, 'git 通道配置未被 webdav 运行改变');
   assert.equal(configs.webdav.lastRunStatus, 'success', 'webdav 通道写入自己的运行状态');
 });
+test('审计 P5-2：一条通道到点只重排它自己，不得连带清掉另一条通道的定时器', async () => {
+  const configs = {} as Record<SyncTransportType, AutosyncConfig>;
+  for (const ch of SYNC_CHANNELS) {
+    configs[ch] = { enabled: false, interval: '30m', startupMinIntervalMs: 300_000, consecutiveFailures: 0, realtime: false };
+  }
+  configs.git = { enabled: true, interval: '30m', startupMinIntervalMs: 300_000, consecutiveFailures: 0, realtime: false };
+  configs.webdav = { enabled: true, interval: '5m', startupMinIntervalMs: 300_000, consecutiveFailures: 0, realtime: false };
+
+  // setTimer 记录 (通道, 句柄) 的归属：调度器只把句柄交回来，我们用自增 id 反查是哪个通道的
+  const armed = new Map<string, () => void>();
+  const cleared: string[] = [];
+  let seq = 0;
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => makeMergePlan([]),
+  };
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp',
+    host: { log: nullLogger() },
+    makeSyncEngine: () => engine as SyncEngine,
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(1_000_000_000_000),
+    readConfig: async (channel: SyncTransportType) => configs[channel],
+    writeConfig: async (channel: SyncTransportType, c: AutosyncConfig) => { configs[channel] = c; },
+    readSyncConfigFn: async (channel: SyncTransportType) => channel === 'webdav'
+      ? ({ schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com/dav' } } as SyncConfig)
+      : ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } } as SyncConfig),
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: (fn) => { seq += 1; const id = `t${seq}`; armed.set(id, fn); return id as unknown as ReturnType<typeof setTimeout>; },
+    clearTimer: (timer) => { cleared.push(String(timer)); armed.delete(String(timer)); },
+  });
+  scheduler.start();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const ids = [...armed.keys()];
+  assert.equal(ids.length, 2, `两个通道各排一个定时器，实际 ${ids.join(',')}`);
+  const [first, second] = ids as [string, string];
+  cleared.length = 0;
+
+  // 只点火**一个**通道的定时器（先排的那个 = SYNC_CHANNELS 里靠前的 git）
+  const fire = armed.get(first);
+  assert.ok(fire !== undefined);
+  fire();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  // 关键判据：另一条通道的句柄既不能被清、也不能被覆盖（清掉又不重排 = 该通道从此停摆）
+  assert.ok(!cleared.includes(second), `另一条通道的句柄被清了：${JSON.stringify(cleared)}`);
+  assert.ok(armed.has(second), '另一条通道的定时器必须仍然在跑（不得被连带清掉后不重排）');
+  scheduler.stop();
+});
+
 /* ---------------- t32：通道枚举唯一来源 ---------------- */
 
 test('t32：排期覆盖 SYNC_CHANNELS 的每个通道（长度取自枚举，不硬编码 2；此前同一数组写两遍）', async () => {
@@ -1378,3 +1432,270 @@ test('runOnce: 真有改动时不带 idle（卡片必须留下，它解释刚才
   assert.ok(recent.length > 0, '有活干必然留下 run 记录');
   assert.equal(isIdleAutosyncRun(recent[0]!), false, '有改动的轮次不得被当成空转过滤掉');
 });
+
+
+/**
+ * 审计 P5-1 回归：慢通道的 interval 定时器不得被其它通道的运行重置。
+ *
+ * 修复前 scheduleIntervalTimers() 先清掉**所有**通道的定时器再统一重排：webdav 5m 每跑一轮
+ * 就把 git 30m 的定时器换成新的，30m 永远等不到（纯定时器模式下慢通道永久饥饿）。
+ * 断言口径：git 的 30m 定时器句柄必须**同一个 id 一直存活**，不被三次 webdav 触发重建。
+ */
+test('P5-1 回归：一个通道到点只重排自己，另一通道的定时器不被清除', async () => {
+  const MIN = 60_000;
+  const configs = new Map<SyncTransportType, AutosyncConfig>();
+  for (const ch of SYNC_CHANNELS) {
+    configs.set(ch, { enabled: false, interval: '30m', startupMinIntervalMs: 0, consecutiveFailures: 0, realtime: false });
+  }
+  configs.set('git', { enabled: true, interval: '30m', startupMinIntervalMs: 0, consecutiveFailures: 0, realtime: false });
+  configs.set('webdav', { enabled: true, interval: '5m', startupMinIntervalMs: 0, consecutiveFailures: 0, realtime: false });
+
+  type TimerRec = { id: number; fn: () => void; ms: number; cleared: boolean };
+  const timers: TimerRec[] = [];
+  let seq = 0;
+  let clock = 1_000_000_000_000;
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => false,
+    merge: async () => ({ planId: 'p', upserts: [], deletes: [], conflicts: [], entries: [] }),
+  };
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp/p5-1',
+    host: { log: nullLogger() },
+    makeSyncEngine: () => engine as unknown as SyncEngine,
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(clock),
+    readConfig: async (ch: SyncTransportType) => configs.get(ch) as AutosyncConfig,
+    writeConfig: async (ch: SyncTransportType, c: AutosyncConfig) => { configs.set(ch, c); },
+    readSyncConfigFn: async (ch: SyncTransportType) => (ch === 'webdav'
+      ? { schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com/dav' } }
+      : { schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } }) as SyncConfig,
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: (fn: () => void, ms: number) => {
+      seq += 1;
+      timers.push({ id: seq, fn, ms, cleared: false });
+      return seq as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimer: (t: ReturnType<typeof setTimeout>) => {
+      const rec = timers.find((x) => x.id === Number(t));
+      if (rec !== undefined) rec.cleared = true;
+    },
+    minTriggerGapMs: 0,
+  });
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 40; i += 1) await new Promise((r) => setImmediate(r));
+  };
+  scheduler.start();
+  await flush();
+  try {
+    const gitTimer = timers.find((t) => !t.cleared && t.ms === 30 * MIN);
+    assert.ok(gitTimer, 'git 的 30m interval 定时器应已排上');
+    const gitTimerId = gitTimer.id;
+
+    for (let round = 1; round <= 3; round += 1) {
+      clock += 5 * MIN;
+      const webdavTimer = timers.find((t) => !t.cleared && t.ms === 5 * MIN);
+      assert.ok(webdavTimer, '第 ' + String(round) + ' 轮应有 webdav 的 5m 定时器');
+      webdavTimer.cleared = true;
+      webdavTimer.fn();
+      await flush();
+      const stillGit = timers.find((t) => t.id === gitTimerId);
+      assert.equal(stillGit?.cleared, false, '第 ' + String(round) + ' 轮 webdav 到点后 git 的 30m 定时器不得被清除/重建');
+    }
+  } finally {
+    scheduler.stop();
+  }
+});
+
+/* ============ 2026-11-14 真机事故：待裁决无入口 + 每分钟一条历史（P0 / P1 / P2） ============ */
+
+/** 真·取锁成功的锁端口：覆盖「预检 → 取锁 → 锁内重跑检测」这条真机路径。 */
+function freeLockPort(): MutationLockPort {
+  const token: MutationLockToken = { tokenId: 'tok-1', managerId: 'mgr-1', instanceId: 'inst-1', acquiredAt: 1_000_000_000_000 };
+  return {
+    acquire: async () => ({ state: 'ACQUIRED', token, detail: 'op=autosync' }),
+    validate: (t: unknown): t is MutationLockToken => t === token,
+    release: async () => undefined,
+  };
+}
+
+/**
+ * P0 回归：锁内重跑检测必须与预检同口径（localCheck）。
+ *
+ * 现场：remote-poll 每 60s 一轮，预检已按 localCheck:false 跳过本地导出（plugins 分区的 npm pack，
+ * 实测单插件 44.7s/轮）；取锁后锁内重跑漏传该开关 → 预检省下的开销整轮还回去，而且它能证明
+ * 「每 60s 真的在跑一次全量导出」。
+ */
+test('P0 回归：reason=remote-poll + 取到锁 → 锁内重跑也不得再跑本地全量导出', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let localCalls = 0;
+  const engine = {
+    listSnapshots: async () => [],
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'skip']]),
+  };
+  const { scheduler } = makeScheduler({
+    cfg,
+    engine: engine as unknown as SyncEngine,
+    history: [],
+    mutationLock: freeLockPort(),
+    detectRemoteNew: async () => true,
+    detectLocalChange: async () => { localCalls += 1; return false; },
+  });
+
+  const result = await scheduler.runOnce('git', { reason: 'remote-poll' });
+  assert.equal(localCalls, 0, '远端轮询轮在锁内也不得导出本地分区（P0 回归：锁内重跑漏传 localCheck）');
+  assert.equal(result.status, 'success');
+});
+
+test('P0 反向控制：其它触发原因取到锁后，预检与锁内各检测一次本地改动（不能被优化成「只查一次」）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let localCalls = 0;
+  const engine = {
+    listSnapshots: async () => [],
+    push: async () => ({ ok: true, snapshotId: 'snap-x', sections: [] as never, warnings: [] }),
+  };
+  const { scheduler } = makeScheduler({
+    cfg,
+    engine: engine as unknown as SyncEngine,
+    history: [],
+    mutationLock: freeLockPort(),
+    detectRemoteNew: async () => false,
+    detectLocalChange: async () => { localCalls += 1; return true; },
+  });
+
+  const result = await scheduler.runOnce('git', { reason: 'local-change' });
+  assert.equal(result.status, 'success');
+  assert.equal(localCalls, 2, '预检一次 + 锁内重跑一次（同一口径，不因优化少查）');
+});
+
+/**
+ * P1 回归：连续轮询撞上**同一个**结论时只记一条历史。
+ *
+ * 现场：sync-history 上限 200 条，其中 196 条是间隔精确 60s 的同一句 partial|conflict ——
+ * 用户真正关心的「上次真实推进是什么时候」被自己的重复结论挤出记录。
+ * 去重只针对「没有推进、结论逐字相同」的轮次：状态仍要刷新（lastRunAt / 计数照旧），
+ * 否则会从「刷屏」变成「安静地卡住」。
+ */
+test('P1 回归：连续三轮撞同一冲突 → 历史只留一条，但 run 状态照旧刷新', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let message = '远端最新快照 sync-remote 与本地基线 sync-base 不一致：本次推送未执行';
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async () => ({ ok: false, snapshotId: '', sections: [] as never, warnings: [], conflict: true, message }),
+  };
+  const { scheduler, getEntries, getConfig } = makeScheduler({ cfg, engine, history: [] });
+
+  const first = await scheduler.runOnce('git');
+  const second = await scheduler.runOnce('git');
+  const third = await scheduler.runOnce('git');
+
+  for (const r of [first, second, third]) {
+    assert.equal(r.skipReason, 'conflict');
+    assert.equal(r.consecutiveFailures, 0, '冲突不是失败');
+  }
+  assert.equal(getEntries().length, 1, '同一结论连续三轮只记一条（真机现场是 196 条同一句）');
+  assert.equal(getEntries()[0]!.status, 'skipped');
+  assert.equal(getConfig().lastRunSkipReason, 'conflict', '状态仍然是活的：界面能说出为什么没同步');
+  assert.equal(getConfig().lastRunStatus, 'skipped');
+
+  // 结论变化 = 新事实：必须留新记录（换个远端快照就不是同一件事了）
+  message = '远端最新快照 sync-newer 与本地基线 sync-base 不一致：本次推送未执行';
+  await scheduler.runOnce('git');
+  assert.equal(getEntries().length, 2, '冲突对象变了必须再记一条');
+});
+
+test('P1 回归：成功 / 失败轮照旧逐条记录（去重只吃掉重复的同一结论）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let fail = false;
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async () => (fail
+      ? { ok: false, snapshotId: '', sections: [] as never, warnings: [], message: 'git push 失败: Connection timed out' }
+      : { ok: true, snapshotId: 'snap-ok', sections: [] as never, warnings: [] }),
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+
+  await scheduler.runOnce('git');
+  await scheduler.runOnce('git');
+  assert.equal(getEntries().length, 2, '两次成功各自是推进，必须都留痕');
+
+  fail = true;
+  await scheduler.runOnce('git');
+  await scheduler.runOnce('git');
+  assert.equal(getEntries().length, 4, '失败必须逐条可见（不合并、不吞）');
+  assert.deepEqual(getEntries().slice(2).map((e) => e.status), ['failed', 'failed']);
+});
+
+/**
+ * P2 回归：冲突分区必须落成**持久**的待裁决记录。
+ *
+ * 修复前：autosync 检测到下行冲突就 return，从不写 pendingMerge（只有人工合并写回路径会写），
+ * 于是首页只有一枚「待裁决」徽章、同步页没有可打开的裁决对象 —— 用户既看不到入口，也不知道
+ * 等的是哪几个分区。
+ */
+test('P2 回归：push 被远端推进挡下 → 冲突分区落进待裁决（recordPendingMerge）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const recorded: string[][] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => true,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['plugins', 'conflict']]),
+    push: async () => ({
+      ok: false, snapshotId: '', sections: [] as never, warnings: [], conflict: true,
+      message: '远端最新快照 sync-remote 与本地基线 sync-base 不一致：本次推送未执行',
+    }),
+    recordPendingMerge: async (sections: readonly string[]) => { recorded.push([...sections]); return null; },
+  };
+  const { scheduler } = makeScheduler({
+    cfg, engine: engine as unknown as SyncEngine, history: [],
+    detectRemoteNew: async () => true,
+    detectLocalChange: async () => true,
+  });
+
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.skipReason, 'conflict');
+  assert.deepEqual(result.conflictedSections, ['plugins']);
+  assert.deepEqual(recorded, [['plugins']], '冲突分区必须落成待裁决对象，否则首页徽章没有去处');
+});
+
+test('P2 回归：本机无改动的下行冲突（skipped）同样要落待裁决', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const recorded: string[][] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'conflict'], ['plugins', 'conflict']]),
+    recordPendingMerge: async (sections: readonly string[]) => { recorded.push([...sections]); return null; },
+  };
+  const { scheduler } = makeScheduler({
+    cfg, engine: engine as unknown as SyncEngine, history: [],
+    detectRemoteNew: async () => true,
+    detectLocalChange: async () => false,
+  });
+
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.skipReason, 'conflict');
+  assert.deepEqual(recorded, [['settings', 'plugins']]);
+});
+
+test('P2 反向控制：干净的成功轮不写待裁决（不能凭空挂一条「等你裁决」）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const recorded: string[][] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async () => ({ ok: true, snapshotId: 'snap-clean', sections: [] as never, warnings: [] }),
+    recordPendingMerge: async (sections: readonly string[]) => { recorded.push([...sections]); return null; },
+  };
+  const { scheduler } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.status, 'success');
+  assert.deepEqual(recorded, []);
+});
+
+

@@ -1,10 +1,10 @@
 /**
  * 路径映射表单（规范 §12，绑 src/ui/types.ts 的 PathMappingDraft 形状）。
  *
- * 注意：src/ui/path-mapping.ts 的 PathMappingEditor 依赖 utils/paths.ts 的
- * applyPrefixMappings（node:path）——浏览器 bundle 不可用，故此处做轻量等价实现：
- * 输入输出形状与 core 的 PathMapping 完全一致（oldPrefix/newPrefix/appliesTo），
- * 实际前缀替换由 Host 侧 core 在 createImportPlan 阶段执行，本组件只负责收集用户输入。
+ * 浏览器半不能引 node:path，所以这里只做「收集用户输入」：输入输出形状与 core 的
+ * PathMapping 完全一致（oldPrefix/newPrefix/appliesTo），实际前缀替换由 Host 侧 core 在
+ * createImportPlan 阶段执行。此前另有一份 src/ui/path-mapping.ts 的同规则实现（依赖
+ * utils/paths.ts），生产零引用，已删（审计 P10-6：同一规则只留一处）。
  */
 import { useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'

@@ -37,7 +37,6 @@ import type { RecoveryPort } from '../../ui/types.ts'
 import type { IncidentApi } from '../recovery/incident-api.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Segmented } from '../common/ui.tsx'
 import { Icon } from '../common/Icon.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
@@ -429,14 +428,13 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
           t={recoveryT}
           incidentApi={incidentApi}
           copyT={t}
-          infoHintLabel={t('common.infoHint')}
           diskApi={api}
         />
       )}
 
       {subView === 'list' && (
       <>
-      <SectionTitle title={t('profiles.title')} info={<InfoHint text={t('profiles.subtitle')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('profiles.title')} tooltip={t('profiles.subtitle')} />
 
       {/* —— 运行状态：当前运行中的 profile + 本插件启动的实例（可打开 / 可停止） —— */}
       <Card className={css.card}>
@@ -545,7 +543,7 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
 
       {/* —— 新建档案 —— */}
       <Card className={css.card}>
-        <div className={css.groupLabel}>{t('profiles.create.title')} <InfoHint text={t('profiles.create.hint')} label={t('common.infoHint')} /></div>
+        <div className={css.groupLabel} title={t('profiles.create.hint')}>{t('profiles.create.title')}</div>
         <div className={css.actionRow}>
           <input
             type="text"
@@ -583,7 +581,7 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
       {phase === 'ready' && profileList.length > 0 && (
         <>
           <div className={css.listHeaderRow}>
-            <span className={css.groupLabel}>{t('profiles.list.title')} <InfoHint text={t('profiles.list.hint')} label={t('common.infoHint')} /></span>
+            <span className={css.groupLabel}>{t('profiles.list.title')}</span>
             <span className={css.cellMeta}>
               {/* 只留计数与「需处理」：形态 / node_modules 已是每行徽章，汇总句不改变任何决定 */}
               {t('profiles.list.count', { count: summary.total })}
@@ -607,7 +605,7 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                 <div key={profile.name} className={css.profileRow} role="listitem" data-selected={profile.name === state.selectedName ? '' : undefined}>
                   <div className={css.profileRowHeader}>
                     {/* 整行「信息区」可点：行内只给计数，完整清单（bundle 层 / 逐条依赖 / patch 原文）在详情弹窗里 */}
-                    <button type="button" className={css.profileRowMain} title={t(incomplete ? 'profiles.incomplete.hint' : 'profiles.list.hint')} onClick={() => { openDetail(profile) }}>
+                    <button type="button" className={css.profileRowMain} title={incomplete ? t('profiles.incomplete.hint') : undefined} onClick={() => { openDetail(profile) }}>
                       <span className={css.profileRowTitle}>
                         <span className={`${css.mono} ${css.profileRowName}`}>{profile.name}</span>
                         <span className={css.badgeRow}>
@@ -695,16 +693,14 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                           {t('profiles.launch')}
                         </Button>
                       )}
-                      {/* 2026-11-04：复制 / 重命名 / 删除 收成图标按钮（复制与删除带危险语义）。
-                          三颗文字按钮合起来 ≈150px，全部花在「复制」「重命名」「删除」这六个字上；
-                          它们是**低频且不需要读**的动作 —— 图标 + title + aria-label 已经够认，
-                          省下的宽度还给档案名与徽章。启动/停止仍用文字按钮：那是这一行的主 CTA，
-                          图标化会让「现在能不能点、点了会发生什么」多绕一步。 */}
+                      {/* 2026-11-14（W5 / 稿 P-04）：复制与删除回到**文字按钮** —— 行里同时出现
+                          「启动 / 停止」「复制」「删除」三处动作时，图标按钮要靠悬停才认得出哪个是删除，
+                          而删除是不可恢复操作：它必须自带「危险 → 红描边 + 文字」的自解释。
+                          改名仍是铅笔图标 + aria-label：它是低频操作，四颗文字按钮在 564px 画布上
+                          会挤成一排，扫读反而变慢（复制/删除是每行都要扫的，改名不是）。 */}
                       {caps.duplicate && (
-                        <IconButton
-                          icon={<Icon name="copy" />}
-                          label={t('profiles.duplicate')}
-                          title={t('profiles.duplicateHint')}
+                        <Button
+                          size="sm"
                           disabled={state.copying}
                           onClick={() => {
                             patch({
@@ -714,7 +710,9 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                               error: null,
                             })
                           }}
-                        />
+                        >
+                          {t('profiles.duplicate')}
+                        </Button>
                       )}
                       {caps.rename && (
                         <IconButton
@@ -723,12 +721,13 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                           onClick={() => { patch({ renameTargetName: profile.name, renameValue: profile.name, error: null }) }}
                         />
                       )}
-                      <IconButton
-                        icon={<Icon name="delete" />}
-                        label={t('profiles.delete')}
-                        danger
+                      <Button
+                        size="sm"
+                        variant="danger"
                         onClick={() => { patch({ deleteTargetName: profile.name, deleteCurrentConfirmed: false, error: null }) }}
-                      />
+                      >
+                        {t('profiles.delete')}
+                      </Button>
                     </span>
                   </div>
                 </div>

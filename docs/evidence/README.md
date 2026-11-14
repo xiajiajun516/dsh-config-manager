@@ -17,6 +17,7 @@
 | `recovery-console.md` | CLI 与救急台同门 / 灾备下线 / 救援模式与 reconcileBundles / 离线救急台 token 边界 / 用户消息接管与换代适配 / 环境锁残留四层回收与「只认可证」 | 备份 / 恢复 / 回滚点、UI |
 | `packaging-and-bundle.md` | bundle 是 cjs / 自包含护栏 / issue #57–#60 四条的真机成因 / MemFs | Profile / 插件数据 / 打包、架构与路由 |
 | `plugin-data-migration.md` | 第三方插件数据目录的位置取证与收录口径 / 区域相对排除 / 声明缓存按 home 键 / 目录形态判定 / 离线 CLI 为何不收集 | Profile / 插件数据 / 打包 |
+| `dsh-go-native-plugin.md` | dsh-Go 原生插件：设置行恒跳网页版的三层证据 / 视图无密码类型 / files 边界 / 导出到手机的落点 / placement 与 pending 预算 / 4 面板信息架构取舍 / 协议缺口 G-1..G-6 | 架构与路由、UI |
 | `ui-design-system.md` | **原生设计资源取证方法**（asar 最小解析器 / 411 个 `--dsw-*` 定义集与引用集做差）/ 坑：`--dsw-alias-state-info-primary` 不存在导致 `--cm-info` 静默失效 / 刻意保留的偏离（12.5px 正文等）/ 无真机时的视觉核验方法 | UI（样式权威仍是 `DESIGN.md`） |
 
 ## 约定

@@ -23,7 +23,7 @@ import type { TranslateNS } from '../client-types.ts'
 import {
   Badge, Banner, Button, Card, FoldToggle, SectionTitle, Spinner, StatusDot,
 } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
+import { RefreshIcon } from '../common/Icon.tsx'
 import { Collapse } from '../common/Motion.tsx'
 import { DiskUsageCard } from '../environment/maintenance/DiskUsageCard.tsx'
 import { RollbackCard } from './RollbackCard.tsx'
@@ -78,12 +78,6 @@ export interface RecoveryPanelProps {
    * 两个字典的键集不通用，因此显式分开传，不做类型强转。
    */
   copyT?: TranslateNS<'config-manager'>
-  /**
-   * 磁盘体检卡的 ⓘ 可访问名（第 2 块「磁盘占用与清理」）。
-   * 与 copyT 同一条理由：DiskUsageCard 的文案走 **UiT** 字典，它的 ⓘ 可访问名却住在主字典里
-   * （`common.infoHint`），本面板手上只有 recovery 字典 —— 所以由调用方显式传。
-   */
-  infoHintLabel?: string
   /**
    * 磁盘体检端口（第 2 块）。
    * 直接传 ConfigManagerApi 而不是收窄成两个方法：DiskUsageCard 的 props 就是 `api`，
@@ -369,6 +363,12 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
         (recovery) => { patch({ status: 'ready', recovery }) },
         () => { /* 状态刷新失败静默 */ },
       )
+    }).catch((err) => {
+      // verify 被拒（423 mutation-locked、409、404、500 或 5 分钟客户端超时）时也必须复位：
+      // 末级 then 没有 onRejected 会让 running 永久 true，execute/retry/dismiss 三入口全被早退锁死（审计 P8-2）。
+      patch({ running: false })
+      runStore.stopRunWatch('recovery')
+      toast.error(redactErrorText(err))
     })
   }
 
@@ -395,6 +395,11 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
         (recovery) => { patch({ status: 'ready', recovery }) },
         () => { /* 静默 */ },
       )
+    }).catch((err) => {
+      // 同 execute：verify 被拒也要复位 running/watch（审计 P8-2）。
+      patch({ running: false })
+      runStore.stopRunWatch('recovery')
+      toast.error(redactErrorText(err))
     })
   }
 
@@ -476,6 +481,13 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
       <SectionTitle
         title={t('view.recovery')}
         subtitle={needsAttention ? t('recovery.requiredHint') : undefined}
+        action={(
+          /* 静止面板看不出「磁盘/体检/回滚」是刚才的数据还是十分钟前的：恢复页没有轮询，
+             整页只有这一处重新拉取入口（此前只能切页或刷新浏览器）。 */
+          <Button size="sm" loading={state.status === 'loading'} onClick={load}>
+            <RefreshIcon size={12} />{' '}{t('recovery.refresh')}
+          </Button>
+        )}
       />
 
       {/* 事故处置：崩溃归因（上次启动没起来）+ 救援模式（先让 DSH 起得来）。
@@ -524,7 +536,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
           必须给出**可执行**的解除入口，否则用户只能去磁盘上删 transactions/safe-mode。 */}
       {state.status === 'ready' && view?.safeModeStuck === true && (
         <Card className={css.card}>
-          <div className={css.groupLabel}>{t('recovery.safeMode.title')} <InfoHint text={t('recovery.safeMode.detail')} label={t('common.infoHint')} /></div>
+          <div className={css.groupLabel} title={t('recovery.safeMode.detail')}>{t('recovery.safeMode.title')}</div>
           <div className={css.actionRow}>
             <Button variant="danger" disabled={safeModeBusy} loading={safeModeBusy} onClick={() => { setSafeModeConfirmOpen(true) }}>
               {safeModeBusy ? t('recovery.safeMode.busy') : t('recovery.safeMode.action')}
@@ -537,7 +549,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
           不是没有（t89），那时由上面的告警条解释。2026-11-04：原 92px 虚线空框改一行状态行 ——
           它白占的高度把磁盘 / 体检 / 回滚整块推到首屏之外。 */}
       {state.status === 'ready' && view?.recoveryRequired !== true && view?.incompleteCopiesNotice !== 'unreadable' && (
-        <div className={css.statusLine} role="status"><StatusDot kind="ok" /><span>{t('recovery.empty')}</span></div>
+        <div className={css.statusLine + ' ' + css.recoveryEmptyBar} role="status"><StatusDot kind="ok" /><span>{t('recovery.empty')}</span></div>
       )}
 
       {/* issue #31：残留配置锁（非 journal 事项）——纯锁残留时 incidents 恒为空，
@@ -659,9 +671,9 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
                 <>
                   <div className={css.statRow}>
                     <span className={css.groupLabel}>{t('recovery.preview.title')}</span>
-                    {/* recovery.preview.hint 属「预览为什么只读 / 什么时候才真执行」（MOVE 类）：收进 ⓘ。
-                        危险动作的完整说明仍在确认弹窗（ConfirmDialog）里常驻。 */}
-                    <InfoHint text={t('recovery.preview.hint')} label={t('common.infoHint')} />
+                    {/* 「只读 / 零写入 / 确认后才执行」是不可逆边界，属于决策依据 ⇒ 常驻标题后缀，
+                        不藏进悬停说明（2026-11-14 用户要求：能从标题读懂的信息不进悬停）。 */}
+                    <span className={css.hint}>{t('recovery.preview.hint')}</span>
                   </div>
                   {previewView.snapshotVerdict !== null && (
                     <div className={css.kvRow}>
@@ -773,8 +785,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
       {rescue !== null && (
         <Card>
           <div className={css.statRow}>
-            <strong>{t('recovery.rescue.title')}</strong>
-            <InfoHint text={t('recovery.rescue.desc')} label={t('common.infoHint')} />
+            <strong title={t('recovery.rescue.desc')}>{t('recovery.rescue.title')}</strong>
             <Badge kind={rescue.active ? 'warn' : 'ok'}>
               {rescue.active ? t('recovery.rescue.activeBadge') : t('recovery.rescue.inactive')}
             </Badge>
@@ -796,7 +807,11 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
               />
             )}
           </div>
-          {/* 机制与安全说明收进标题行的 ⓘ（2026-10-12 用户要求说明性文案一律进 ⓘ）：
+          {/* 2026-11-14（稿 P-05）：代价与适用场景常显一句 —— 这是**危险动作**的后果说明，
+              不是机制背景；把它挂成悬停说明等于让用户在按下「进入救援模式」前先悬停才能知道
+              「它会停用依赖校验」。完整改写范围仍在标题的悬停说明与确认弹窗里。 */}
+          <div className={css.hint}>{t('recovery.rescue.short')}</div>
+          {/* 机制与安全说明挂在标题行的悬停说明（2026-10-12 用户要求说明性文案不进正文）：
               危险动作按钮仍在标题行永远可达，折叠体只收「已开启时的生效状态与提示」这类明细。 */}
           <Collapse open={rescueOpen} id={RESCUE_BODY_ID}>
           {rescue.active && (
@@ -836,7 +851,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
       {/* —— 诊断三块（缺省只展开磁盘占用；另两块缺省收起，摘要与开关留在标题行）——
            磁盘占用与清理（m-disk-usage）：三条硬边界一字不动（候选集只有可重建区 + 显式勾选的过期导出；snapshots/sync 永不在候选集；
            界面数字由渲染行现算）—— 实现全在 DiskUsageCard 与 ui/disk-usage-view.ts 里。 */}
-      <DiskUsageCard api={props.diskApi} infoHintLabel={props.infoHintLabel ?? props.t('common.infoHint')} />
+      <DiskUsageCard api={props.diskApi} />
 
       {/* T5：会话体检（只读）—— 与「我的对话去哪了」是同一件事，故与事故恢复同屏（卡内缺省收起） */}
       <SessionHealthCard recoveryApi={recoveryApi} t={t} copyT={props.copyT} diskApi={props.diskApi} />

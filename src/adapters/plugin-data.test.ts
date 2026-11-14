@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 
 import { PluginDataAdapter } from './plugin-data.ts';
 import { makeContext, makeImportContext, sha256Hex } from './test-helpers.ts';
+import type { FileSystemFacade } from '../core/types.ts';
 import type { PluginDataSource } from '../core/plugin-data-registry.ts';
 import type { FilesSection } from '../schema/types.ts';
 
@@ -39,6 +40,38 @@ async function seedHome(ctx: ReturnType<typeof makeContext>): Promise<void> {
   await ctx.fs.writeFile('.dsh-wallpaper-engine/uploads/wall.mp4', bytes('video'));
   await ctx.fs.writeFile('.mnemon/runtime/MEMORY.md', bytes('memory'));
   await ctx.fs.writeFile('.mnemon/data/body.db', bytes('db'));
+}
+
+/** 把 homeFs 的第一次 readFile 挂上闸门（造「清单已解析、内容还没读」的交错点） */
+function gatedReadFile(inner: FileSystemFacade): {
+  facade: FileSystemFacade;
+  atGate: Promise<void>;
+  release: () => void;
+} {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let reachedGate!: () => void;
+  const atGate = new Promise<void>((resolve) => { reachedGate = resolve; });
+  let armed = true;
+  const facade = new Proxy(inner, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop) as unknown;
+      if (typeof value !== 'function') return value;
+      if (prop === 'readFile') {
+        return async (rel: string): Promise<Uint8Array> => {
+          if (armed) {
+            armed = false;
+            reachedGate();
+            await gate;
+          }
+          return (value as (p: string) => Promise<Uint8Array>).call(target, rel);
+        };
+      }
+      // Proxy 转发会丢 this：其余方法一律显式 bind 回原门面
+      return (value as (...args: unknown[]) => unknown).bind(target);
+    },
+  });
+  return { facade, atGate, release };
 }
 
 test('收录口径：配置分区只带配置，资产分区只带大资产，缓存永不出现', async () => {
@@ -150,6 +183,46 @@ test('导入白名单：包外路径一律 Error，applyItem 也拒绝；包内�
   assert.equal(await dst.fs.exists('AGENTS.md'), false);
 });
 
+test('审计 P2-1（P0 回归）：凭据形状文件永不进入 pluginData/pluginAssets 出包，导入侧同样拒绝', async () => {
+  const src = ctxFor(HOME);
+  await seedHome(src);
+  // 真机形态：插件把 token / 凭据放在自己的区域里（region 在来源表内，路径不越界）
+  await src.fs.writeFile('.mnemon/credentials.yaml', bytes('token: SECRET-VALUE'));
+  await src.fs.writeFile('.mnemon/vault/oauth.json', bytes('{"access_token":"SECRET-VALUE"}'));
+  await src.fs.writeFile('.dsh-wallpaper-engine/secrets.json', bytes('{"key":"SECRET-VALUE"}'));
+  await src.fs.writeFile('.dsh-wallpaper-engine/.env.local', bytes('API_KEY=SECRET-VALUE'));
+
+  const config = new PluginDataAdapter('pluginData', { env: {} });
+  const out = await config.export(src, { includeSecrets: false });
+  const shipped = out.data.files.map((f) => f.relativePath)
+  for (const rel of ['.mnemon/credentials.yaml', '.mnemon/vault/oauth.json', '.dsh-wallpaper-engine/secrets.json', '.dsh-wallpaper-engine/.env.local']) {
+    assert.ok(!shipped.includes(rel), `凭据形状文件不得出包：${rel}`)
+  }
+  assert.deepEqual(shipped.sort(), ['.dsh-wallpaper-engine/config.json', '.mnemon/runtime/MEMORY.md'], '正常配置文件照常出包')
+  // 剔除必须可见（不是静默少带）
+  assert.ok(
+    out.warnings.some((w) => w.includes('凭据文件')),
+    `剔除凭据文件必须进 warnings，实际：${JSON.stringify(out.warnings)}`,
+  )
+
+  // 导入侧：即使包里被塞进凭据形状路径（伪造的包），也必须判 Error 且 applyItem 拒绝
+  const forged: FilesSection = {
+    version: 1,
+    files: [
+      { relativePath: '.mnemon/credentials.yaml', data: bytes('token: x'), contentHash: sha256Hex(bytes('token: x')) },
+      { relativePath: '.mnemon/vault/oauth.json', data: bytes('{}'), contentHash: sha256Hex(bytes('{}')) },
+    ],
+  }
+  const dst = ctxFor('/home/bob')
+  const sections = new Map<string, unknown>([['pluginData', forged]])
+  const items = await config.analyzeImport(forged, makeImportContext(dst, sections))
+  assert.equal(items.filter((i) => i.kind === 'Error').length, 2, '凭据形状路径必须在计划期判 Error')
+  const first = items[0]!
+  const r = await config.applyItem(first, makeImportContext(dst, sections))
+  assert.equal(r.ok, false, 'applyItem 必须拒绝（纵深防御）')
+  assert.equal(await dst.fs.exists('.mnemon/credentials.yaml'), false)
+});
+
 test('自述声明（dsh.dataDirs）：已安装插件的区域可导出、可导入；未声明的插件目录仍被拒', async () => {
   const ctx = ctxFor(HOME);
   await ctx.fs.writeFile('profiles/web/package.json', bytes(JSON.stringify({ dependencies: { 'dsh-fake': '^1.0.0' } })));
@@ -223,3 +296,56 @@ test('注入假来源：来源表可替换（测试与未来扩展都走同一�
   const out = await adapter.export(ctx, { includeSecrets: false });
   assert.deepEqual(out.data.files.map((f) => f.relativePath), ['.my-plugin/a.json']);
 });
+
+/**
+ * 审计 P2-7（并发回归）：同一 adapter 上并发两路导出，区域归属与告警必须各归各。
+ *
+ * 触发点：把 A 的 homeFs.readFile 挂上闸门 —— A 的清单先解析完（区域表与告警已就位），
+ * 卡在「读内容」处；这期间 B 完整跑完一路导出。旧实现把区域表/告警放在实例字段上，
+ * B 会覆盖 A 的那份 ⇒ A 的单元 id 退化成「区域内的裸路径」、A 的告警被 B 的空数组冲掉。
+ */
+test('审计 P2-7（并发回归）：同一 adapter 并发两路导出，区域归属与告警互不串台', async () => {
+  const declare = async (ctx: ReturnType<typeof ctxFor>, pkg: string, area: string): Promise<void> => {
+    await ctx.fs.writeFile('profiles/web/package.json', bytes(JSON.stringify({ dependencies: { [pkg]: '^1.0.0' } })));
+    await ctx.fs.writeFile(
+      `profiles/web/node_modules/${pkg}/package.json`,
+      bytes(JSON.stringify({ name: pkg, dsh: { dataDirs: [{ path: area, role: 'config' }] } })),
+    );
+  };
+
+  const ctxA = ctxFor(HOME);
+  await declare(ctxA, 'dsh-a', '.alpha-plugin');
+  await ctxA.fs.writeFile('.alpha-plugin/state.json', bytes('{"a":1}'));
+  // 凭据形状文件：A 这一路必须带「剔除凭据文件」告警（用来分辨告警有没有被 B 冲掉）
+  await ctxA.fs.writeFile('.alpha-plugin/credentials.yaml', bytes('token: SECRET-VALUE'));
+
+  const ctxB = ctxFor('/home/bob');
+  await declare(ctxB, 'dsh-b', '.beta-plugin');
+  await ctxB.fs.writeFile('.beta-plugin/state.json', bytes('{"b":2}'));
+
+  const adapter = new PluginDataAdapter('pluginData', { env: {} });
+  const gated = gatedReadFile(ctxA.homeFs!);
+  ctxA.homeFs = gated.facade;
+
+  const pendingA = adapter.export(ctxA, { includeSecrets: false });
+  await gated.atGate; // A 的清单已解析，正卡在「读内容」
+  const outB = await adapter.export(ctxB, { includeSecrets: false });
+  gated.release();
+  const outA = await pendingA;
+
+  assert.deepEqual(outA.data.files.map((f) => f.relativePath), ['.alpha-plugin/state.json']);
+  assert.deepEqual(
+    adapter.listUnits(outA).map((u) => u.id),
+    ['pluginData:.alpha-plugin'],
+    'A 的单元必须按 A 自己的区域表归组（旧实现会被 B 的区域表覆盖成裸路径）',
+  );
+  assert.ok(
+    outA.warnings.some((w) => w.includes('凭据文件')),
+    `A 的告警不得被并发的 B 冲掉，实际：${JSON.stringify(outA.warnings)}`,
+  );
+
+  assert.deepEqual(outB.data.files.map((f) => f.relativePath), ['.beta-plugin/state.json']);
+  assert.deepEqual(adapter.listUnits(outB).map((u) => u.id), ['pluginData:.beta-plugin']);
+  assert.ok(!outB.warnings.some((w) => w.includes('凭据文件')), 'B 不得继承 A 的告警');
+});
+

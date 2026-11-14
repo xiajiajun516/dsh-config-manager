@@ -105,6 +105,13 @@ export interface SyncStatusResponse {
   /** 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道） */
   autosyncByChannel?: Record<SyncTransportType, AutosyncStatusResponse>;
   /**
+   * P2（2026-11-14 真机事故）：等人裁决的冲突分区。
+   * 自动同步撞上「远端已推进 + 分区冲突」时，宿主把冲突分区落进 sync-state.pendingMerge；
+   * 有值 = 同步并没有坏，只是有人在等你确认那几个分区（首页「待裁决」行据此跳同步页）。
+   * **永不携带远端快照 id**（与 hasBaseline 同一纪律）；since = 这件事第一次挂住的时刻。
+   */
+  pendingMerge?: { sections: string[]; since: string };
+  /**
    * issue #79：git 工作副本与配置地址的关系（host 只读自检）。
    *  - `{ facts }` = 自检成功（origin 是否已跟随 repoUrl）
    *  - `{ error }` = 自检读不出来（git 不可用 / 工作副本异常）——**如实回传**，不伪装成「不存在」
@@ -258,6 +265,11 @@ export interface SyncPushPayload {
   encryptPassword?: string;
   /** 导出真实凭据值（必须同时 encrypt=true，否则 Host 拒绝：密钥绝不明文进同步通道） */
   includeSecrets?: boolean;
+  /**
+   * issue #140：强制推送 —— 内容与远端最新快照一致时**也**新建快照。
+   * 缺省 false = 内容没变就跳过（不 upload、不建目录，报告 skipped:'unchanged'）。
+   */
+  force?: boolean;
   /* ---------------- 云端点通道（s3 / gist）字段：与宿主 parseSyncBody 的扁平形状一致 ---------------- */
   /** s3：具体兼容商（s3 / oss / cos / minio / kodo） */
   provider?: string;

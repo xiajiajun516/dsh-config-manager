@@ -30,18 +30,27 @@ const CEILINGS: Record<string, number> = {
   // 4135 → 4128（2026-11-07）：环境锁装配（含失败留痕回调）下沉到 core/env-lock-lifecycle.ts 的
   // createHostMutationLock()，降回棘轮之内，不占新额度。
   'src/index.ts': 4128,
-  'src/sync/sync-engine.ts': 2213,
+  // 2213 → 2209（2026-11-14，同步缺陷 P2）：待裁决的纯状态写入下沉到 src/sync/pending-merge.ts，
+  // 引擎只留 3 行委托（recordPendingMerge / pendingMergeFor / writeMergeBaseline）。
+  'src/sync/sync-engine.ts': 2209,
   // 2166 → 2221（2026-11-04）：恢复面板「写盘进行中」瞬态切片 + begin/endRecoveryWrite
   // （不落盘，PersistedRecoveryState 显式 Omit 'write'），是 tech-debt #7 的修法本体。
   // 2221 → 2226（2026-11-09，issue 131）：git 子目录前缀 gitSubdir 进 sync 切片 ——
   // 类型声明 + 3 处映射/持久化白名单各 1 行，无新逻辑；拆解计划见 tech-debt #24。
-  'src/client/run-store.ts': 2226,
+  // 2226 → 2245（2026-11-13，审计 P8-1）：stop→start 会留下孤儿发现链（/runs 请求数按链数翻倍），
+  // 修法 = 取消时撤回挂起句柄 + 覆盖前清旧句柄（clearWatchTimer 9 行 + 论证注释 4 行），
+  // 是真缺陷的修复本体，不是新功能；拆解计划见 tech-debt #25。
+  'src/client/run-store.ts': 2245,
   'src/core/analyzer.ts': 1481,
   'src/client/sync/SyncPanel.tsx': 1590,
-  'src/cli/actions.ts': 1574,
+  // src/cli/actions.ts 不再登记：2026-11-13 审计修复把只读事实层与写入门下沉到
+  // src/cli/control-state.ts / src/cli/write-gates.ts，本文件 1610 → 1355 行，已低于 1400 阈值。
   'src/ui/rollback-view.ts': 1558,
   'src/core/rollback-ledger.ts': 1462,
-  'src/cli/index.ts': 1460,
+  // 1460 → 1478（2026-11-13，审计 P11-5）：CLI reinstall 的 --wipe-config 以前绕过「DSH 未运行」这道门
+  // （会删掉运行中实例的 profiles / sessions），修法 = 清空前过 checkWriteGates（1 处调用 + 5 行注释）；
+  // 拆解计划见 tech-debt #25（runReinstall 整体外提后移出本表）。
+  'src/cli/index.ts': 1478,
 };
 
 /** wc -l 口径：按换行计数，末行无换行不计。 */

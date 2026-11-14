@@ -553,7 +553,7 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 
 判定：轮询只需要回答「远端有没有新快照」。本地改动本来就有两条权威来源 —— realtime 文件监听（`local-change` 触发）与 30 分钟兜底 `interval` —— 每分钟再全量导出一次是纯浪费。
 
-改法：`runOnceInternal` 把触发原因带进 `detectPhase(..., { localCheck: false })`，`reason === 'remote-poll'` 时跳过 `detectLocalChange`，`localDirty` 恒 false；远端也没变就立刻 `upToDate`。**口径不变**：需要比对时比的仍是载荷字节，没有任何近似或 mtime 猜测。锁内 Phase 2 的重跑检测不带该开关（有活干时照常全量重判）。
+改法：`runOnceInternal` 把触发原因带进 `detectPhase(..., { localCheck: false })`，`reason === 'remote-poll'` 时跳过 `detectLocalChange`，`localDirty` 恒 false；远端也没变就立刻 `upToDate`。**口径不变**：需要比对时比的仍是载荷字节，没有任何近似或 mtime 猜测。锁内 Phase 2 的重跑检测**曾经**不带该开关（有活干时照常全量重判）—— 这条口径在 2026-11-14 被真机事故推翻，见本文《撞冲突后每 60 s 重跑一次全量打包》一节；现在锁内重跑与预检传同一个 `localCheck`。
 
 守卫：`src/sync/autosync-scheduler.test.ts` 三条 —— ① `remote-poll` 且远端无新 → `detectLocalChange` 调用次数 0 且结果为 `upToDate`；② `local-change` 触发仍必须比对一次（防止把优化扩成「永不检查本地」）；③ 真有改动时不打 `idle` 标记。
 
@@ -604,3 +604,19 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 **守卫（一条一个测试，已全部落地）**：A 卸载 → B 删除 / B 新装不删 / B 改版不删且报冲突 / 开关关不删且逐项 warning / 开关开 → 手动与自动都删且落 undo + 报告列明 / `bundlesOnly` 与本插件自身不删 / 祖先缺失不删 / 删除失败逐项 warning 不阻断 / `desktop` 档案被拒记 warning 不阻断 / 回滚能重装被删插件 —— 覆盖在 `src/sync/plugin-removals.test.ts`（判据 16 例）、`src/sync/sync-engine.test.ts`（引擎行为 6 例 + 单通道源码守卫）、`src/core/restore-plugin-install.test.ts`（undo 三例）、`src/sync/sync-selection.test.ts`（开关持久化）。
 
 
+
+## 待裁决无人可点 + 每 60 s 一撞：轮询被漏传的 `localCheck` 与从不落盘的冲突（2026-11-14 真机实测）
+
+现场：用户看到备份与迁移页「最近活动」12 行全是橙色的「待裁决」，一分钟一条；页面上**没有任何入口**能处理它们，自动同步也一直不收敛。
+
+- `sync-history.json` 200 条上限里 196 条是 `status:'partial' · skipReason:'conflict' · forced:true`，间隔精确 60 s（15:26:02Z → 18:37:15Z），error 原文每轮相同：「远端最新快照 `sync-f22bd1d4…` 与本地基线 `sync-442edd6e…` 不一致：本次推送未执行」。
+- `sync-state.json` **没有 `pendingMerge` 字段** —— 自动同步撞冲突时 Phase B 被跳过（`src/sync/autosync-scheduler.ts` 的 reviewSections 分支），而 `pendingMerge` 只由 `applyMergeResolutions` 写：**冲突这件事从来没落过盘**，界面自然没有可挂入口的持久对象。徽章只是渲染态（`overviewActivity()` 把 `partial` 映射成 badge `pending`，条目本身没有 action 字段）。
+- 每 60 s 一轮的原因：`remoteNew` 恒 true（远端 `sync-f22bd1d4` 永远比基线新，基线按设计不推进）+ `localDirty` 恒 true（本地 plugins 相对基线真的变了，远端 `plugins.json` 已 2.69 MB / 29 个插件 + localTarballs），于是每轮走完整合并 + 推送，被 `resolvePushBase()` 以「远端已推进」挡下 ⇒ 记一条 `partial/conflict`，永不收敛。
+- **真缺陷（P0）**：预检对轮询关掉本地导出（`localCheck: opts.reason !== 'remote-poll'`），但取锁后锁内重跑 `detectPhase` **漏传该开关** ⇒ 每 60 s 仍重算 10 个分区的导出，其中 plugins 为每个 `file:` 插件重跑 `npm pack` 再 base64 进 `localTarballs`（单个 210 MB 插件 44.7 s，一轮几十秒）。这就是「机器一直很忙」的实测来源。
+
+修法（三件，缺一件就会换个姿势坏）：
+
+1. **P0**：锁内重跑与预检传同一个 `localCheck`（`src/sync/autosync-scheduler.ts` 的 `releaseLock === null ? preflight : await this.detectPhase(..., { localCheck: opts.reason !== 'remote-poll' })`）。守卫：`autosync-scheduler.test.ts` 的「P0 回归：reason=remote-poll + 取到锁 → 锁内重跑也不得再跑本地全量导出」(`localCalls === 0`) 与反向控制（其它触发原因预检与锁内各一次 = 2）。
+2. **P1**：同一种冲突连着出现**只留一条**历史。签名 = 通道 + status + direction + skipReason + 排序后的 conflictedSections/appliedSections + error（`src/sync/autosync-repeat.ts` 的 `repeatHistorySignature()`）；`success`/`failed` 与带 `pushedSnapshotId`/`pulledSnapshotId` 的轮次**恒返回 null**（真推进必须逐条留痕，空轮逐条记录是 2026-11-09 就定下的可见性）。去重时仍刷新 `lastRunAt/lastRunStatus/lastRunSkipCount` 与 `lastRunHistoryId`（保留上一条真实 id）。守卫：连续三轮同一冲突 → `getEntries().length === 1`，换一句 error → 2；成功/失败轮照旧逐条。
+3. **P2**：冲突也落盘。`SyncEngine.recordPendingMerge()`（实现下沉到 `src/sync/pending-merge.ts`，只做纯状态写入：不构造 `SyncApplyPlan`、不碰本机配置、不动祖先副本）取 `lastMergedRemoteSnapshotId`，远端 id 未知或分区为空 → 不写（没有远端 id 的待裁决会每轮重置 `since`，界面永远说不清挂了多久）；推送成功侧 `recordBaseline` 带 `pendingMerge: null` 收口。`/sync/status` 只回 `{ sections, since }`，**绝不回 `remoteSnapshotId`**；首页「待裁决」行整行是 `<button>`，点击经 `src/client/sync/merge-request.ts` 的一次性信号跳到同步页并拉起 `runSyncSmart()`（信号不进 run-store：否则要进持久化白名单、旧存档迁移与刷新重放都会出问题）。
+4. **口径**：只做 P1 不做 P2 = 安静地卡住（历史不再刷，但用户依然无处可点）；只做 P2 不做 P1 = 入口有了，历史仍被同一句话占满。

@@ -16,7 +16,6 @@ import { useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncApi, SyncStatusResponse } from './sync-api.ts'
 import { Badge, Button, Card } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
@@ -76,7 +75,7 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
 
   return (
     <Card>
-      <span className={css.groupLabel}>{t('workdir.title')} <InfoHint text={t('workdir.hint')} label={t('common.infoHint')} /></span>
+      <span className={css.groupLabel} title={t('workdir.hint')}>{t('workdir.title')}</span>
       {stateKey !== null && badgeKind !== null && (
         <div className={css.statRow}>
           <Badge kind={badgeKind}>{t(stateKey)}</Badge>
@@ -122,10 +121,9 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
         )}
         {canAdoptWorkdir(workDir) && (
           <>
-            <Button disabled={busy || pending !== null} loading={pending === 'adopt'} onClick={() => { void reset('adopt') }}>
+            <Button disabled={busy || pending !== null} loading={pending === 'adopt'} onClick={() => { void reset('adopt') }} title={t('workdir.adoptHint')}>
               {t('workdir.adopt')}
             </Button>
-            <InfoHint text={t('workdir.adoptHint')} label={t('common.infoHint')} />
           </>
         )}
         {canRecloneWorkdir(workDir) && (

@@ -25,7 +25,7 @@
  *   ③ **先量后置**：打开后在同一帧的 layout effect 里解析容器、量触发器与菜单，写入最终坐标
  *      （下方放不下且上方更宽裕 → 向上翻转；左右越界 → 右对齐后夹紧；空间不足 → 限高内滚）；
  *      量测完成前靠 [data-ready] 不绘制，因此第一帧就在最终位置，不会「先闪一下再跳」。
- *      打开期间跟随滚动 / 缩放重新放置（与 InfoHint 同源）。
+ *      打开期间跟随滚动 / 缩放重新放置（夹紧基准与 Modal 的浮层同源）。
  *
  * 两条实现约束：
  *   ① 高亮滚动**只动菜单自身**（禁止 scrollIntoView）—— 见下方 effect 的说明；
@@ -227,7 +227,7 @@ export function Select(props: SelectProps) {
     return () => { document.removeEventListener('mousedown', onPointerDown) }
   }, [open])
 
-  // 打开期间跟随滚动 / 缩放重新放置：fixed / 绝对定位的浮层都不随内容滚动，必须自己跟（同 InfoHint）
+  // 打开期间跟随滚动 / 缩放重新放置：fixed / 绝对定位的浮层都不随内容滚动，必须自己跟
   useEffect(() => {
     if (!open) return
     const onMove = (): void => { reposition() }

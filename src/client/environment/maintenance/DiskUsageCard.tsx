@@ -25,7 +25,6 @@ import type { ConfigManagerApi } from '../../api.ts'
 import type { DiskUsageReport } from '../../../core/disk-usage.ts'
 import { Badge, Banner, Button, Card, Checkbox, IconButton } from '../../common/ui.tsx'
 import { SkeletonList } from '../../common/Skeleton.tsx'
-import { InfoHint } from '../../common/InfoHint.tsx'
 import { ConfirmDialog } from '../../common/ConfirmDialog.tsx'
 import { RefreshIcon } from '../../common/Icon.tsx'
 import { toast } from '../../common/toast-store.ts'
@@ -33,17 +32,11 @@ import css from '../../config-manager.module.css'
 
 export interface DiskUsageCardProps {
   api: ConfigManagerApi
-  /**
-   * ⓘ 说明按钮的可访问名（主字典 `common.infoHint`）。本卡全部文案走 **UiT**（`api.t`），
-   * 与主字典键域不同、取不到该键 —— 由调用方（环境页的维护视图）显式传入，
-   * 避免在英文界面下回落到源语言硬编码。
-   */
-  infoHintLabel: string
   /** 回收过期备份文件后通知外层刷新备份列表（否则产物库会短暂显示已删条目） */
   onBackupsChanged?: () => void
 }
 
-export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsageCardProps) {
+export function DiskUsageCard({ api, onBackupsChanged }: DiskUsageCardProps) {
   const t = api.t
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -141,8 +134,18 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
   return (
     <Card className={css.activityCard + ' ' + css.diskUsageCard}>
       <div className={css.groupHeader}>
-        <span className={css.groupLabel}>{t('diskUsage.title')}</span>
-        {vm !== null && <span className={css.badge}>{vm.summary.total}</span>}
+        <span
+          className={css.groupLabel}
+          title={exportRetentionDays !== null
+            ? t('diskUsage.backupRetention', {
+              count: String(report?.backupRetention.keepLast ?? 0),
+              days: String(exportRetentionDays),
+            })
+            : undefined}
+        >{t('diskUsage.title')}</span>
+        {/* 保留期说明属「机制怎么工作」（MOVE 类）：挂在标题文字的 title 上，不再常驻占一行；
+            标题旁也不再挂一颗「合计」徽章 —— 下面那行已经是合计，同一个数同一屏出现两次
+            只会让人先去比对它们。 */}
         <span className={css.statusSpacer} />
         <IconButton
           icon={<RefreshIcon size={14} />}
@@ -164,77 +167,73 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
 
       {status === 'ready' && vm !== null && (
         <>
-          {/* 路径与文件数本身就是字段值，不再加「统计位置」这类标签占位 */}
-          <div className={css.cellMeta}>
-            <span className={css.mono}>{redact(vm.summary.dataDir)}</span> · {vm.summary.files}
+          {/* 合计一行给出这张卡的两个总数（占用 + 文件数）：逐行不再重复文件数（见下方行注释）。
+              统计根路径仍要可查（它决定「这些数字量的是哪里」），但它是**恒定的上下文**，
+              不是每次体检都变的结论 ⇒ 进 title，不占一行。 */}
+          <div className={css.cellMeta} title={redact(vm.summary.dataDir)}>
+            {t('diskUsage.total', { size: vm.summary.total, files: vm.summary.files })}
           </div>
           {/* 读不到的子区如实说明：既不显示 0，也不整卡报错（硬边界：unreadable ≠ 0） */}
           {vm.summary.anyUnreadable && <div className={css.hint}>{t('diskUsage.partial')}</div>}
 
           {/*
-           * 两行式行卡（2026-11-04）：原先四列表格在 564px 画布下把「回收策略」列压到 160px，
-           * "Your data / safety net (never auto-removed)" 折成三行；表头还固定吃掉 24px。
-           * 现在第一行 = 区域名 + 右对齐占用（唯一右边缘），第二行 = 文件数 + 策略 + 过期量
-           * —— 策略拿到整行宽度，不再折行；表头由行内语义承担（占用单位在数值里，文件数自带
-           * 「个文件」）。desc 进 title：它说明「这块是哪来的」，不改变「能不能删」这个决定。
+           * 单行式分区行（2026-11-14）：这张卡渲染的是 13 个真实分区，两行式每行 44px 时
+           * 一屏只放得下 8 行，且「比大小」被拆到两行（占用在首行、策略徽章在次行）。
+           * 现在一行 = 区域名（超长省略，全名在行 title）· 过期量 · 占用 · 回收策略，
+           * 13 行一屏读完。文件数不逐行渲染（它不改变「能不能删」这个决定），
+           * 总数在合计行、逐行明细留在行 title 里。
+           * desc 进 title：它说明「这块是哪来的」，不改变「能不能删」这个决定。
            */}
           <div className={css.planScroll + ' ' + css.diskUsageScroll + ' ' + css.duList} role="list">
             {vm.rows.map((row) => (
-              <div key={row.id} className={css.duRow} role="listitem" title={row.desc}>
-                <div className={css.duRowTop}>
-                  <span className={css.duRowName}>{row.label}</span>
-                  <span className={css.duRowSize}>
-                    {row.unreadable ? t('diskUsage.unreadable') : row.size}
-                  </span>
-                </div>
-                <div className={css.duRowMeta}>
-                  <span className={css.duRowFiles}>{row.unreadable ? '—' : row.files}</span>
-                  {row.policy === 'regenerable' && <Badge kind="ok">{t('diskUsage.policy.regenerable')}</Badge>}
-                  {row.policy === 'retained' && <Badge kind="info">{t('diskUsage.policy.retained', { retention: row.retention })}</Badge>}
-                  {row.policy === 'protected' && <span>{t('diskUsage.policy.protected')}</span>}
-                  {row.expired !== null && (
-                    <span className={css.cellMetaNoteText}>{t('diskUsage.expiredHint', { size: row.expired })}</span>
-                  )}
-                </div>
+              <div
+                key={row.id}
+                className={css.duRow}
+                role="listitem"
+                title={row.unreadable ? row.desc : `${row.desc} · ${row.files}`}
+              >
+                <span className={css.duRowName} title={row.label}>{row.label}</span>
+                {row.expired !== null && (
+                  <span className={css.duRowNote}>{t('diskUsage.expiredHint', { size: row.expired })}</span>
+                )}
+                <span className={css.duRowSize}>
+                  {row.unreadable ? t('diskUsage.unreadable') : row.size}
+                </span>
+                {row.policy === 'regenerable' && <Badge kind="ok">{t('diskUsage.policy.regenerable')}</Badge>}
+                {row.policy === 'retained' && <Badge kind="info">{t('diskUsage.policy.retained', { retention: row.retention })}</Badge>}
+                {row.policy === 'protected' && <span className={css.duRowPolicy}>{t('diskUsage.policy.protected')}</span>}
               </div>
             ))}
           </div>
 
-          {/* 保留期说明属「机制怎么工作」（MOVE 类）：收进 ⓘ，不常驻占一行 */}
-          {exportRetentionDays !== null && (
-            <div className={css.actionRow} data-inline>
-              <InfoHint
-                text={t('diskUsage.backupRetention', {
-                  count: String(report?.backupRetention.keepLast ?? 0),
-                  days: String(exportRetentionDays),
-                })}
-                label={infoHintLabel}
-              />
-            </div>
-          )}
+          <div className={css.groupLabel} title={t('diskUsage.clean.hint')}>{t('diskUsage.clean.title')}</div>
 
-          <div className={css.groupLabel}>{t('diskUsage.clean.title')} <InfoHint text={t('diskUsage.clean.hint')} label={infoHintLabel} /></div>
+          {/* 清理块三行一套（2026-11-14 用户要求重排位置与间距）：清什么 / 是否连带回收过期备份 /
+              释放多少 + 动手按钮。改前每行是一条 `.actionRow[data-inline]`（margin 0）⇒ 行间零间距，
+              勾选框贴在前一行下沿；两枚体量徽章一枚紧跟文字、一枚被 spacer 顶到卡右缘 ⇒ 同一块两种摆法。
+              现在：统一行距的纵向栈，徽章一律紧跟它管辖的文案，卡右缘只留「立即清理」一颗按钮。 */}
+          <div className={css.cleanupLines}>
+            {tmpMarket !== undefined && (
+              <div className={css.cleanupScope}>
+                <span>{tmpMarket.label}</span>
+                <Badge kind={tmpMarket.bytes > 0 ? 'info' : 'ok'}>{tmpMarket.size}</Badge>
+              </div>
+            )}
 
-          {tmpMarket !== undefined && (
-            <div className={css.actionRow} data-inline>
-              <span>{tmpMarket.label} <Badge kind={tmpMarket.bytes > 0 ? 'info' : 'ok'}>{tmpMarket.size}</Badge></span>
-            </div>
-          )}
+            {expiredExports !== undefined && (
+              <div className={css.cleanupOption}>
+                <Checkbox
+                  checked={includeExpired}
+                  onChange={(next) => { setIncludeExpired(next) }}
+                  label={t('diskUsage.clean.includeExpired')}
+                />
+                {/* 勾选框已经说明了「回收什么」，这里只补可回收量；紧挨着它管辖的那句话，不顶到右缘 */}
+                <Badge kind={expiredExports.bytes > 0 ? 'warn' : 'ok'}>{expiredExports.size}</Badge>
+              </div>
+            )}
+          </div>
 
-          {expiredExports !== undefined && (
-            <div className={css.actionRow} data-inline>
-              <Checkbox
-                checked={includeExpired}
-                onChange={(next) => { setIncludeExpired(next) }}
-                label={t('diskUsage.clean.includeExpired')}
-              />
-              <span className={css.statusSpacer} />
-              {/* 勾选框已经说明了「回收什么」，这里只补可回收量 */}
-              <Badge kind={expiredExports.bytes > 0 ? 'warn' : 'ok'}>{expiredExports.size}</Badge>
-            </div>
-          )}
-
-          <div className={css.actionRow}>
+          <div className={css.cleanupAction}>
             <span className={css.cellMeta}>{t('diskUsage.clean.reclaimableLabel')}</span>
             <span className={css.mono}>{formatBytes(reclaimTargets)}</span>
             <span className={css.statusSpacer} />

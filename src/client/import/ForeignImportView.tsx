@@ -38,9 +38,9 @@ import {
 } from '../../ui/foreign-view.ts'
 import { Badge, Banner, Button, Card, SectionTitle } from '../common/ui.tsx'
 import { SkeletonList } from '../common/Skeleton.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { redact } from '../../security/redaction.ts'
+import { sectionLabeler } from '../common/section-labels.ts'
 import css from '../config-manager.module.css'
 
 export interface ForeignImportViewProps {
@@ -211,7 +211,7 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('foreign.source.title')} info={<InfoHint text={t('foreign.source.hint')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('foreign.source.title')} tooltip={t('foreign.source.hint')} />
 
       {loadError !== null && (
         <ErrorBanner
@@ -255,7 +255,7 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
           **位置**：来源列表之后、动作行（含「开始导入」）之前 —— 既保证「导入前必读」，
           又不把六个来源挤出首屏（t10 的 T10-F2 真机体验反馈）。 */}
       <Card>
-        <div className={css.groupLabel}>{t('foreign.lossy.title')} <InfoHint text={t('foreign.lossy.hint')} label={t('common.infoHint')} /></div>
+        <div className={css.groupLabel} title={t('foreign.lossy.hint')}>{t('foreign.lossy.title')}</div>
         <ul className={css.skipList}>
           {lossyRows.map((row) => (
             <li key={row.kind} className={css.skipRow}>
@@ -264,7 +264,8 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
                   {row.applicable ? t('foreign.lossy.applies') : t('foreign.lossy.notApplies')}
                 </Badge>
               )}
-              <span className={css.skipText}>
+              {/* detail 在窄画布上会被折行截断（T-03 剩余缺陷）：title 兜住完整原文，不加布局、不加 CSS。 */}
+              <span className={css.skipText} title={redact(row.detail)}>
                 <strong>{redact(row.title)}</strong>{' '}
                 {redact(row.detail)}
               </span>
@@ -303,10 +304,10 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
       {/* 产包结果（成功后才出现）：让用户在进向导前先看到「包里有什么」 */}
       {produced !== null && (
         <Card>
-          <div className={css.groupLabel}>{t('foreign.previewTitle')} <InfoHint text={t('foreign.previewDryRun')} label={t('common.infoHint')} /></div>
+          <div className={css.groupLabel}>{t('foreign.previewTitle')} <span className={css.hint}>{t('foreign.previewDryRun')}</span></div>
           <div className={css.statRow}>
             <Badge kind="ok">
-              {t('foreign.previewSections', { sections: produced.sections.join(' · ') })}
+              {t('foreign.previewSections', { sections: produced.sections.map(sectionLabeler(t)).join(' · ') })}
             </Badge>
             {produced.credentialRefs.length > 0
               ? <Badge kind="warn">{t('foreign.credentialRefs', { count: String(produced.credentialRefs.length) })}</Badge>

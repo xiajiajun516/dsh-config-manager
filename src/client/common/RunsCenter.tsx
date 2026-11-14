@@ -13,7 +13,7 @@
  *
  * 数据：一次 GET /runs?scope=recent（含 running 与刚结束的），1.5s 轮询；面板关闭即卸载即停表。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunState } from '../../core/run-registry.ts'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
@@ -22,8 +22,10 @@ import type { RecoveryLockStatus } from '../../ui/types.ts'
 import { cancelDialogModel, runCards, runSummary } from '../../ui/runs-view.ts'
 import type { CancelDecision, CancelDialogModel, RunCardModel } from '../../ui/runs-view.ts'
 import { runStateProgress } from '../run-store.ts'
+import { dialogKeyOf, isDialogStillWaiting, isStaleResponse, pickWaitingRun, pruneDismissed } from './runs-center-view.ts'
+import type { DialogKey } from './runs-center-view.ts'
 import { Badge, Banner, Button, Card, Empty } from './ui.tsx'
-import { InfoHint } from './InfoHint.tsx'
+import { Icon } from './Icon.tsx'
 import { SkeletonList } from './Skeleton.tsx'
 import { Modal } from './Modal.tsx'
 import { ProgressBar } from './ProgressBar.tsx'
@@ -75,22 +77,54 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
   /** 决策框当前针对的 run（null = 未打开）。 */
   const [dialogRun, setDialogRun] = useState<RunState | null>(null)
   const [decision, setDecision] = useState<CancelDecision>('rollback')
+  /** 每发一次 refresh 递增的请求序号（只增不减）。 */
+  const seqRef = useRef(0)
+  /**
+   * 两个通道各自「已落地的最高序号」：晚到的旧响应（序号 ≤ 已落地）整份丢弃。
+   * 为什么按通道分开记：单通道一个计数器时，同一次 refresh 的 runs 落地就把序号占掉，
+   * 紧接着自己的 lock 落地会被判成陈旧（锁状态再也写不进去）；而共用「最后一个完成的 refresh」
+   * 又会让更早发出的 runs 覆盖更新的 runs。各记一份才真正满足「旧不得覆盖新」。
+   */
+  const runsSeqRef = useRef(0)
+  const lockSeqRef = useRef(0)
+  /**
+   * 用户已关掉的决策框（按 dialogKeyOf 记）：同一个等待事件不再自动弹回来。
+   * 必须是**组件内** ref —— 模块级单例会让多实例（多个面板/页面）互相串味。
+   */
+  const dismissedRef = useRef<Set<DialogKey>>(new Set())
 
   const refresh = useCallback(async (): Promise<void> => {
+    // 序号守卫：1.5s 轮询在慢响应时必然重叠，先发的旧响应后落地会把进度条/状态改回旧值。
+    const seq = seqRef.current + 1
+    seqRef.current = seq
     try {
       const next = await api.runsRecent()
-      setRuns(next)
-      setError(null)
+      // 陈旧只丢这一份数据，**不 return**：下一段是独立的锁请求，不能被 runs 通道的时序连带跳过
+      // （runs 端点持续慢时锁状态会跟着停摆，lockError 长期停在旧值）。
+      if (!isStaleResponse(runsSeqRef.current, seq)) {
+        runsSeqRef.current = seq
+        setRuns(next)
+        setError(null)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (!isStaleResponse(runsSeqRef.current, seq)) {
+        runsSeqRef.current = seq
+        setError(err instanceof Error ? err.message : String(err))
+      }
     }
     // 锁状态单独取：它读不到不该拖垮任务列表（但也不能静默 —— 见 lockError 的渲染）
     try {
       const status = await recoveryApi.status()
-      setLock(status.lock ?? null)
-      setLockError(null)
+      if (!isStaleResponse(lockSeqRef.current, seq)) {
+        lockSeqRef.current = seq
+        setLock(status.lock ?? null)
+        setLockError(null)
+      }
     } catch (err) {
-      setLockError(err instanceof Error ? err.message : String(err))
+      if (!isStaleResponse(lockSeqRef.current, seq)) {
+        lockSeqRef.current = seq
+        setLockError(err instanceof Error ? err.message : String(err))
+      }
     }
   }, [api, recoveryApi])
 
@@ -104,11 +138,23 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
   const cards = runs === null ? [] : runCards(runs, { now: Date.now() })
   const summary = runs === null ? { running: 0, awaiting: 0, total: 0 } : runSummary(runs)
 
-  /** 待决策的 run 自动弹框：终止已到达安全点，界面必须马上要一个回答。 */
+  /**
+   * 待决策的 run 自动弹框：终止已到达安全点，界面必须马上要一个回答。
+   *
+   * 但「用户关掉过」必须算数：轮询每 1.5s 会送来一条新的 run 对象，只看 runs 就会把同一个
+   * 等待事件反复弹出来。因此按 dialogKeyOf 记忽略集合，并每轮先裁剪掉已不在等待的键
+   * （集合有界，不随历史 run 数增长）。写 ref 不触发重渲染，不存在自激循环。
+   */
   useEffect(() => {
-    if (dialogRun !== null) return
-    const waiting = (runs ?? []).find((r) => r.status === 'running' && r.pendingDecision === 'cancel')
-    if (waiting === undefined) return
+    dismissedRef.current = pruneDismissed(dismissedRef.current, runs)
+    if (dialogRun !== null) {
+      // 框里那条 run 已经不在等决定（宿主 5 分钟超时自动裁决 / 从别处提交 / 已结束）⇒ 必须关掉：
+      // 否则它在问一个已被回答的问题，而且 dialogRun !== null 会让后面所有等待都不再自动弹。
+      if (!isDialogStillWaiting(dialogRun, runs)) setDialogRun(null)
+      return
+    }
+    const waiting = pickWaitingRun(runs, dismissedRef.current)
+    if (waiting === null) return
     setDialogRun(waiting)
     setDecision(cancelDialogModel(waiting, { defaultRollbackOnError }).defaultDecision)
   }, [runs, dialogRun, defaultRollbackOnError])
@@ -144,6 +190,10 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
       const res = await api.decideRunCancel(run.runId, decision)
       if (res.accepted) toast.info(t('runs.decisionAcceptedToast'))
       else toast.warn(t('runs.decisionTooLateToast'))
+      // 先登记「已忽略」再关框：此刻 refresh 还没回来，runs 快照里那条 run 仍在等决定，
+      // effect 重跑会立刻把框重新打开，随后 refresh 落地又因 dialogRun !== null 早退 ——
+      // 框就停在一条已结案的 run 上（按钮再点只会拿到 accepted=false）。
+      dismissedRef.current.add(dialogKeyOf(run))
       setDialogRun(null)
       await refresh()
     } catch (err) { fail(err) } finally { setBusyId(null) }
@@ -164,6 +214,16 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
     } finally { setLockBusy(false) }
   }
 
+  /**
+   * 关掉决策框 = 「这一次别再自动弹」。只按 key 记住，不按对象/时间戳：
+   * 轮询送来的是新对象、新 updatedAt，按它们记等于没记（框会自己弹回来）。
+   * 用户仍可从卡片上的「立即决策」手动打开 —— 忽略只关掉**自动**弹框。
+   */
+  const dismissDialog = (): void => {
+    if (dialogRun !== null) dismissedRef.current.add(dialogKeyOf(dialogRun))
+    setDialogRun(null)
+  }
+
   const openDialog = (run: RunState): void => {
     setDialogRun(run)
     setDecision(cancelDialogModel(run, { defaultRollbackOnError }).defaultDecision)
@@ -176,12 +236,11 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
   return (
     <div className={css.runsCenter}>
       <div className={css.runsSummary}>
-        <span className={css.runsSummaryTitle}>{t('shell.runs.title')}</span>
+        <span className={css.runsSummaryTitle} title={t('runs.retentionHint')}>{t('shell.runs.title')}</span>
         {summary.running > 0 && <Badge kind="info">{t('runs.runningBadge', { count: String(summary.running) })}</Badge>}
         {summary.awaiting > 0 && <Badge kind="warn">{t('runs.awaitingBadge', { count: String(summary.awaiting) })}</Badge>}
-        {/* 保留期说明属「机制怎么工作 + 省事提示」（MOVE 类）：收进 ⓘ，不再常驻占一行。
+        {/* 保留期说明属「机制怎么工作 + 省事提示」：挂成标题的 title（悬停可读，不占一行）。
             空列表「为什么什么都没有」的常驻解释仍由下面的 <Empty>（runs.empty）承担。 */}
-        <InfoHint text={t('runs.retentionHint')} t={t} />
       </div>
       {lockError !== null && <Banner kind="warn">{t('runs.lock.readFailed', { message: redact(lockError) })}</Banner>}
       {/* 环境锁卡片：FREE 不显示（绝大多数时候是空闲，别占地方）；
@@ -196,7 +255,7 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
         const run = (runs ?? []).find((r) => r.runId === card.runId)
         if (run === undefined) return null
         return (
-          <Card key={card.runId}>
+          <Card key={card.runId} className={css.runsCardStack}>
             <div className={css.runsCardHead}>
               <span className={css.runsCardTitle}>{t(card.kindLabelKey as CmKey)}</span>
               <Badge kind={badgeKind(card.status)}>{t(card.statusLabelKey as CmKey)}</Badge>
@@ -204,13 +263,22 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
               {/* 相对时间：没有它，「正在跑」和「几小时前就结束的僵尸卡片」长得一模一样 */}
               <span className={css.runsCardTime}>{t(card.time.key as CmKey, card.time.params)}</span>
             </div>
-            <ProgressBar
-              event={runStateProgress(run)}
-              active={card.status === 'running'}
-              // 失败的任务绝不能渲染成「成功绿」（结束态的默认色是 success）
-              failed={card.status === 'failed'}
-              t={api.t}
-            />
+            {/* 进度条与右端状态标签同排：设计稿把「执行中/已完成/已失败」放到条尾，
+                颜色与填充同源（data-status 决定），不靠左端百分比自解释。 */}
+            <div className={css.runsProgressRow}>
+              <ProgressBar
+                event={runStateProgress(run)}
+                active={card.status === 'running'}
+                // 失败的任务绝不能渲染成「成功绿」（结束态的默认色是 success）
+                failed={card.status === 'failed'}
+                t={api.t}
+              />
+              <span className={css.runsProgressStatus} data-status={card.status}>
+                {t(card.status === 'running'
+                  ? 'runs.progress.running'
+                  : card.status === 'failed' ? 'runs.progress.failed' : 'runs.progress.done')}
+              </span>
+            </div>
             {card.counts !== null && (
               <div className={css.runsCounts}>
                 {t('runs.counts', {
@@ -231,10 +299,13 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
             {/* 终止请求已到、还没到安全点：把「等了多久」写出来，并在等太久时给出出路。
                 没有这一行，用户只能看到按钮点了没反应。 */}
             {card.cancelWait !== null && (
-              <div className={card.cancelWait.stuck ? css.runsWarnNote : css.hint}>
-                {card.cancelWait.minutes > 0
-                  ? t('runs.cancelWaiting', { minutes: String(card.cancelWait.minutes) })
-                  : t('runs.cancelWaitingJustNow')}
+              <div className={css.runsWarnNote}>
+                <Icon name="clock" size={12} />
+                <span>
+                  {card.cancelWait.minutes > 0
+                    ? t('runs.cancelWaiting', { minutes: String(card.cancelWait.minutes) })
+                    : t('runs.cancelWaitingJustNow')}
+                </span>
                 {card.cancelWait.stuck && (
                   <div className={css.runsWarnNoteDetail}>{t('runs.cancelStuck')}</div>
                 )}
@@ -248,7 +319,7 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
                   </Button>
                 )}
                 {card.awaitingDecision && (
-                  <Button size="sm" variant="primary" onClick={() => { openDialog(run) }}>{t('runs.decideNow')}</Button>
+                  <Button size="sm" onClick={() => { openDialog(run) }}>{t('runs.decideNow')}</Button>
                 )}
                 {card.canCancel && (
                   // 先发终止请求（引擎在**下一个计划项边界**暂停并把 run 置为待决策），
@@ -276,7 +347,7 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
           busy={busyId === dialogModel.runId}
           onChange={setDecision}
           onConfirm={() => { void submitDecision() }}
-          onCancel={() => { setDialogRun(null) }}
+          onCancel={dismissDialog}
           t={t}
         />
       )}
@@ -365,19 +436,19 @@ function LockCard(props: {
   const kind = lockKind(state)
   const attention = kind === 'attention'
   return (
-    <Card>
+    <Card className={css.runsCardStack}>
       <div className={css.runsCardHead}>
         <span className={css.runsCardTitle}>{t('runs.lock.title')}</span>
         <Badge kind={attention ? 'warn' : 'info'}>
           {attention ? t('runs.lock.needsAction') : t('runs.lock.held')}
         </Badge>
       </div>
-      <div className={css.hint}>
+      <div className={css.runsLockDesc}>
         {attention ? t('runs.lock.attentionDesc') : t('runs.lock.heldDesc')}
       </div>
       {attention && (
         <div className={css.runsCardActions}>
-          <Button size="sm" variant="primary" loading={busy} disabled={busy} onClick={onRecover}>
+          <Button size="sm" variant="danger" loading={busy} disabled={busy} onClick={onRecover}>
             {t('runs.lock.recover')}
           </Button>
         </div>

@@ -208,6 +208,9 @@ test('⑥ push：快照 manifest 带 deviceId/deviceName，与 sync-state 落盘
     assert.equal(state.deviceId, deviceId, 'manifest 的 deviceId 必须就是同步身份落盘值');
     assert.equal(state.deviceName, deviceName);
 
+    // issue 140：内容没变的推送会被跳过（不新建快照），所以这里必须真改内容，
+    // 才能验证「同一台设备连续 push 的 device 身份稳定」这件事本身。
+    ctx.settings.ns.set('general', { value: { theme: 'light', language: 'zh-CN' }, revision: 2, secrets: [] });
     await engine.push({ snapshotId: 'sync-dev-2' });
     const second = transport.snapshots.get('sync-dev-2');
     assert.ok(second !== undefined);

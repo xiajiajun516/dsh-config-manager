@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 
 import {
   GITHUB_ACCESS_TOKEN_URL, GITHUB_DEVICE_CODE_URL, GITHUB_DEVICE_FLOW_SCOPE,
-  DeviceFlowStore, GitHubAuthClient, GitHubAuthError,
+  DEVICE_FLOW_LIMIT, DeviceFlowStore, GitHubAuthClient, GitHubAuthError,
 } from './github-auth.ts';
 import type { DeviceFlowEntry } from './github-auth.ts';
 
@@ -277,4 +277,29 @@ test('github-auth: DeviceFlowStore delete 移除条目；未过期条目可正�
   assert.equal(store.size, 0);
   store.set('flow-2', entry({ expiresAt: 1000 }));
   assert.equal(store.get('flow-2')?.clientId, 'client-123');
+});
+
+test('github-auth: DeviceFlowStore 只 set 不 get 的过期条目 → 下次 set 时被清扫（不永久驻留 device_code）', () => {
+  let now = 0;
+  const store = new DeviceFlowStore(() => now);
+  store.set('flow-1', entry({ expiresAt: 100 }));
+  // 用户开了授权页直接关掉：这条流程从此没人轮询 ⇒ 只有 set 路径能清理它
+  now = 500;
+  store.set('flow-2', entry({ expiresAt: 10_000 }));
+  assert.equal(store.size, 1, '过期条目必须在写入路径被淘汰，而不是永远留在表里');
+  assert.equal(store.get('flow-1'), undefined);
+  assert.equal(store.get('flow-2')?.deviceCode, 'device-abc-123');
+});
+
+test('github-auth: DeviceFlowStore 有效条目超上限 → 淘汰最早过期者并保持 size <= DEVICE_FLOW_LIMIT', () => {
+  const store = new DeviceFlowStore(() => 0);
+  for (let i = 0; i < DEVICE_FLOW_LIMIT; i += 1) {
+    store.set('flow-' + i, entry({ expiresAt: 1000 + i }));
+  }
+  assert.equal(store.size, DEVICE_FLOW_LIMIT);
+  store.set('flow-new', entry({ expiresAt: 999_999 }));
+  assert.equal(store.size, DEVICE_FLOW_LIMIT, '上限是硬上界：反复开流程不能无限涨');
+  assert.equal(store.get('flow-0'), undefined, '先被淘汰的是最早过期的那条（最接近失效）');
+  assert.equal(store.get('flow-1')?.deviceCode, 'device-abc-123', '仍在有效期内的其他流程不受影响');
+  assert.equal(store.get('flow-new')?.deviceCode, 'device-abc-123');
 });

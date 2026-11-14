@@ -16,6 +16,8 @@ import {
   environmentFingerprint, isValidOperationId, isJournalBasename,
   VALID_OPERATION_ID_RE,
   STALE_JOURNAL_TEMP_MS,
+  JournalReferenceUnreadableError,
+  type JournalIo, type OperationJournal,
 } from './journal.ts';
 import { readSafeModeMarkerSync, safeModeMarkerPath } from './phase3-host.ts';
 import { sha256Hex } from '../utils/hashing.ts';
@@ -382,3 +384,184 @@ test('t65-O3：判据是有意保守宽判 —— 前缀与 .tmp 同时命中的
   assert.equal(await exists(noTmpSuffix), true, '缺 .tmp 后缀 → 不删');
   assert.equal(await exists(noPrefix), true, '缺 .dshcm. 前缀 → 不删');
 });
+// ---------- P3-5：读不到 ≠ 没有引用（引用集合必须能如实「不完整」） ----------
+
+/** 直接落一条 completed journal（绕过状态机，用于构造「可解析 / 损坏」两种磁盘形态）。 */
+async function writeCompletedJournal(dir: string, name: string, text: string): Promise<void> {
+  const completed = path.join(dir, 'transactions', 'completed');
+  await fs.mkdir(completed, { recursive: true });
+  await fs.writeFile(path.join(completed, name), text, 'utf8');
+}
+
+/** 自定义 io 的基线（跟随本文件既有注入风格；readdir 只把 ENOENT 当空，其余原样抛）。 */
+function probeIo(over: Partial<JournalIo> = {}): JournalIo {
+  return {
+    mkdir: async (d) => { await fs.mkdir(d, { recursive: true }); },
+    readFileText: async (p) => (await fs.readFile(p, 'utf8')).toString(),
+    writeAll: async (target, content) => { await fs.writeFile(target, content, { mode: 0o600 }); },
+    rename: async (a, b) => fs.rename(a, b),
+    readdirNames: async (d) => {
+      try { return await fs.readdir(d); } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw err;
+      }
+    },
+    readdirEntries: async (d) => {
+      try { return await fs.readdir(d, { withFileTypes: true }); } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw err;
+      }
+    },
+    lstat: async (p) => { try { return await fs.lstat(p); } catch { return null; } },
+    rm: async (p, o) => fs.rm(p, o as never),
+    exists: async (p) => { try { await fs.access(p); return true; } catch { return false; } },
+    ...over,
+  };
+}
+
+test('P3-5：completed 里有解析不了的 journal → 引用集合显式失败（旧实现当成「没有这条引用」放行删除）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const goodId = '11111111-1111-4111-8111-111111111111';
+  const badName = '22222222-2222-4222-8222-222222222222.json';
+  const good: OperationJournal = {
+    ...createJournalEntry('import-apply', { ...LOCK_CTX, operationId: goodId }, '2026-01-01T00:00:00.000Z'),
+    state: 'ROLLING_BACK',
+    snapshotId: 'snap-keep',
+  };
+  await writeCompletedJournal(dir, `${goodId}.json`, JSON.stringify(good));
+  await writeCompletedJournal(dir, badName, '{ not json');
+
+  await assert.rejects(
+    () => store.listReferencedSnapshotIds(),
+    (err: unknown) => {
+      assert.ok(err instanceof JournalReferenceUnreadableError, '必须是可识别的「引用集合不可读」错误');
+      assert.deepEqual(err.unreadable, [`completed/${badName}`], '必须指出具体哪条读不出（诊断面）');
+      return true;
+    },
+  );
+
+  const scan = await store.scanSnapshotReferences();
+  assert.equal(scan.complete, false, '有解析不了的 journal ⇒ 集合不完整');
+  assert.deepEqual([...scan.referenced], ['snap-keep'], '可解析的部分仍如实给出（供保守分支做诊断）');
+
+  // 损坏件消失后集合恢复可用：证明失败来自「读不出」，不是「永远拒绝」
+  await fs.rm(path.join(dir, 'transactions', 'completed', badName));
+  assert.deepEqual([...(await store.listReferencedSnapshotIds())], ['snap-keep']);
+});
+
+test('P3-5：journal 目录读不到（非 ENOENT）→ 不完整 + 抛错，绝不当空集合；ENOENT 才算真没有', async (t) => {
+  const dir = tmp(t);
+  const completed = path.join(dir, 'transactions', 'completed');
+  await fs.mkdir(completed, { recursive: true });
+  const denied = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+  const store = new JournalStore({
+    transactionsDir: path.join(dir, 'transactions'),
+    io: probeIo({
+      readdirNames: async (d) => {
+        if (path.resolve(d) === path.resolve(completed)) throw denied;
+        return await probeIo().readdirNames(d);
+      },
+    }),
+  });
+
+  const scan = await store.scanSnapshotReferences();
+  assert.equal(scan.complete, false, '目录读不到 = 引用集合未知，不能折叠成「没有引用」');
+  assert.deepEqual(scan.unreadable, ['completed']);
+  await assert.rejects(() => store.listReferencedSnapshotIds(), JournalReferenceUnreadableError);
+
+  // 对照：目录确实不存在 → 空集合且完整（ENOENT 与「读不到」必须不同结论）
+  const emptyDir = tmp(t);
+  const fresh = mkStore(emptyDir);
+  const freshScan = await fresh.scanSnapshotReferences();
+  assert.equal(freshScan.complete, true);
+  assert.deepEqual([...(await fresh.listReferencedSnapshotIds())], []);
+});
+
+test('P3-5：默认 io 只把「确实不存在」当空目录 —— active 是普通文件（ENOTDIR）必须抛错', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const active = path.join(dir, 'transactions', 'active');
+  await fs.mkdir(path.dirname(active), { recursive: true });
+  await fs.writeFile(active, 'not a dir', 'utf8');
+
+  await assert.rejects(
+    () => store.scanActive(),
+    (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOTDIR',
+    '路径类型错误必须抛给调用方（旧实现 catch 一切 → []，让「读不到」与「没有」不可区分）',
+  );
+
+  const scan = await store.scanSnapshotReferences();
+  assert.equal(scan.complete, false, 'active 读不到 ⇒ 引用集合不完整（上层必须 fail-closed）');
+  assert.deepEqual(scan.unreadable, ['active']);
+  await assert.rejects(() => store.listReferencedSnapshotIds(), JournalReferenceUnreadableError);
+});
+
+// ---------- P3-7：retention 按真实时间删最旧（不是 UUID 文件名字典序） ----------
+
+test('P3-7：completed 按记录内 updatedAt 删最旧，UUID 字典序不再决定删谁', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const newestName = '00000000-0000-4000-8000-000000000001.json';
+  const oldestName = 'ffffffff-ffff-4fff-8fff-ffffffffffff.json';
+  // 名字字典序：newest 在前；真实时间：oldest 在前 —— 两者刻意相反，逼出实现用的是哪个键
+  await writeCompletedJournal(dir, newestName, JSON.stringify({
+    ...createJournalEntry('import-apply', { ...LOCK_CTX, operationId: '00000000-0000-4000-8000-000000000001' }, '2026-01-01T00:00:00.000Z'),
+    state: 'NEEDS_ATTENTION',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+  }));
+  await writeCompletedJournal(dir, oldestName, JSON.stringify({
+    ...createJournalEntry('import-apply', { ...LOCK_CTX, operationId: 'ffffffff-ffff-4fff-8fff-ffffffffffff' }, '2026-01-01T00:00:00.000Z'),
+    state: 'NEEDS_ATTENTION',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  }));
+
+  const removed = await store.retention(1, 10);
+
+  assert.equal(removed.completed, 1);
+  assert.equal(await exists(path.join(dir, 'transactions', 'completed', newestName)), true, '最新的一条必须保留（旧实现按名字删掉它）');
+  assert.equal(await exists(path.join(dir, 'transactions', 'completed', oldestName)), false, '更旧的一条才是要删的');
+});
+
+test('P3-7：判不了新旧（损坏 / 读不出）的 completed journal 绝不被当「最旧」删除', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const corruptName = '00000000-0000-4000-8000-000000000000.json'; // 字典序第一，旧实现必删
+  await writeCompletedJournal(dir, corruptName, '{ broken');
+  for (const [id, updatedAt] of [
+    ['11111111-1111-4111-8111-111111111111', '2026-01-01T00:00:00.000Z'],
+    ['22222222-2222-4222-8222-222222222222', '2026-01-02T00:00:00.000Z'],
+  ] as const) {
+    await writeCompletedJournal(dir, `${id}.json`, JSON.stringify({
+      ...createJournalEntry('import-apply', { ...LOCK_CTX, operationId: id }, '2026-01-01T00:00:00.000Z'),
+      state: 'NEEDS_ATTENTION',
+      updatedAt,
+    }));
+  }
+
+  const removed = await store.retention(1, 10);
+
+  assert.equal(removed.completed, 1, '只有一条可判新旧且超限');
+  assert.equal(await exists(path.join(dir, 'transactions', 'completed', corruptName)), true, '未知年龄的 journal 不得被删（宁可暂时超限）');
+  assert.equal(await exists(path.join(dir, 'transactions', 'completed', '22222222-2222-4222-8222-222222222222.json')), true);
+  assert.equal(await exists(path.join(dir, 'transactions', 'completed', '11111111-1111-4111-8111-111111111111.json')), false);
+});
+
+test('P3-7：recovery-history 的时间键是文件名 epoch 数值，不是字典序（10 位 vs 7 位不再颠倒）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const histDir = path.join(dir, 'transactions', 'recovery-history');
+  await fs.mkdir(histDir, { recursive: true });
+  // 生产名是定宽 13 位 epochMs；这里用不同位数把「数值键 vs 字典序」的差异逼出来，防止有人改回 .sort()
+  const newer = '1000000-bbbbbb.marker.json';
+  const older = '999000-aaaaaa.marker.json';
+  await fs.writeFile(path.join(histDir, older), '{}\n', 'utf8');
+  await fs.writeFile(path.join(histDir, newer), '{}\n', 'utf8');
+
+  const removed = await store.retention(10, 1);
+
+  assert.equal(removed.history, 1);
+  assert.equal(await exists(path.join(histDir, newer)), true, 'epoch 更大的一条必须保留（旧实现按名字把它当第一删掉）');
+  assert.equal(await exists(path.join(histDir, older)), false);
+});
+

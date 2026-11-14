@@ -717,6 +717,41 @@ test('B-26 disableUserBundles 缺省关闭：只剪不可解析的（保守路�
 });
 
 /**
+ * B-27 审计 P3-1 回归：A profile 已激活救援时，用 B profile 再进必须拒绝且零改动。
+ *
+ * 备份文件名不含 profile（BACKUP_* 常量），状态文件也只有一个；B 重进会把 A 的
+ * home patch / profile patch 原件覆盖成「已置空的 stub」，退出后 A 的原件永久丢失。
+ */
+test('B-26b 另一个 profile 已激活救援 → 再进必须拒绝且零改动（审计 P3-1）', async (t) => {
+  const homeDir = await makeHome(t);
+  const backupDir = at(homeDir, DEFAULT_BACKUP_DIR_REL);
+  const p = targets(homeDir); // A = web
+  await seedOriginals(homeDir);
+  const bProfilePatch = at(homeDir, 'profiles/office/cordis.patch.yml');
+  const bPackageJson = at(homeDir, 'profiles/office/package.json');
+  await writeFileDeep(bProfilePatch, '# office profile patch\n- name: plain\n');
+  await writeFileDeep(bPackageJson, '{"name":"dsh-profile-office","private":true}\n');
+
+  await enterOk(enterOpts(homeDir, backupDir));
+  const homeAfterA = await readText(p.homePatch);
+  assert.equal(homeAfterA, '[]\n', 'A 进入后 home patch 应被置空');
+  const backupBefore = await snapshotTree(backupDir);
+  const bPatchBefore = await readText(bProfilePatch);
+
+  const fail = await enterFail({ homeDir, profile: 'office', rescueMount: RESCUE_MOUNT, backupDir });
+  assert.equal(fail.code, 'other-profile-active', '跨 profile 重进必须被拒绝');
+  assert.deepEqual(await snapshotTree(backupDir), backupBefore, '拒绝时备份目录必须逐字节不变');
+  assert.equal(await readText(p.homePatch), homeAfterA, 'A 的 home patch 状态不得被改动');
+  assert.equal(await readText(bProfilePatch), bPatchBefore, 'B 的 profile patch 不得被接管');
+
+  // A 仍可正常退出，并逐字节还原自己的三处原件
+  await exitOk({ homeDir, backupDir });
+  assert.equal(await readText(p.homePatch), ORIGINAL_HOME_PATCH);
+  assert.equal(await readText(p.profilePatch), ORIGINAL_PROFILE_PATCH);
+  assert.equal(await readText(p.packageJson), ORIGINAL_PACKAGE_JSON);
+});
+
+/**
  * B-27 收窄 bundles 必须**同时**摘掉 dependencies（真机实测的失效点）。
  *
  * 本插件 reconcileBundles 与 DSH 官方 `dsh plugin` reconcilePlugins 的共同规则是

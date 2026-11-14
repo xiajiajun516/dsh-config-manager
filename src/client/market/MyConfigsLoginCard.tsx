@@ -11,7 +11,6 @@ import { computeGithubLoginView } from '../sync/sync-view.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import type { MyGithubFlowState } from '../../ui/my-configs-view.ts'
 import { Badge, Banner, Button, Card } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import type { LoginView } from './my-configs-view.ts'
 import css from '../config-manager.module.css'
@@ -39,7 +38,7 @@ export function MyConfigsLoginCard({ loginView, github, t, uiT, onStart, onCance
 
   /** 设备码 + 授权页链接展示（waiting/polling 时） */
   const renderDeviceCode = (): ReactNode => (
-    <div className={css.statRow}>
+    <div className={css.marketLoginRow}>
       <Badge kind="info">{t('myconfigs.login.userCode', { code: githubView.userCode })}</Badge>
       <a className={css.ghostButton} href={githubView.verificationUri} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
         {t('myconfigs.login.openAuth')}
@@ -49,18 +48,16 @@ export function MyConfigsLoginCard({ loginView, github, t, uiT, onStart, onCance
 
   if (loginView.kind === 'loading') {
     return (
-      <Card>
-        <div className={css.statRow}>
-          <Skeleton count={2} label={t('myconfigs.login.checking')} />
-        </div>
+      <Card className={css.marketLoginCard}>
+        <Skeleton count={2} label={t('myconfigs.login.checking')} />
       </Card>
     )
   }
   if (loginView.kind === 'logged-out' || loginView.kind === 'token-invalid') {
     return (
-      <Card>
-        <div className={css.actionRow}>
-          <Button variant="primary" disabled={!githubView.canStart} onClick={() => { onStart() }}>
+      <Card className={css.marketLoginCard}>
+        <div className={css.marketLoginRow}>
+          <Button variant="primary" disabled={!githubView.canStart} onClick={() => { onStart() }} title={t('myconfigs.login.hint')}>
             {githubView.startLabel}
           </Button>
           {githubView.canCancel && (
@@ -69,10 +66,9 @@ export function MyConfigsLoginCard({ loginView, github, t, uiT, onStart, onCance
             </Button>
           )}
         </div>
-        <InfoHint text={t('myconfigs.login.hint')} label={t('common.infoHint')} />
         {loginView.kind === 'token-invalid' && <Banner kind="warn">{t('myconfigs.error.loadStatus')}</Banner>}
         {githubView.showCode && renderDeviceCode()}
-        <div className={css.statRow}>
+        <div className={css.marketLoginRow}>
           <Badge kind={githubView.phase === 'error' ? 'error' : 'warn'}>{githubView.statusText}</Badge>
         </div>
         {/* R-18：失败详情已由 failGithub() 走全局 Toast；此处保留状态行 Badge（持续状态展示，非回执） */}
@@ -81,14 +77,15 @@ export function MyConfigsLoginCard({ loginView, github, t, uiT, onStart, onCance
   }
   // logged-in：@login + 固定目标仓库（只读）+ 配置仓库状态
   return (
-    <Card>
-      <div className={css.actionRow}>
+    /* 视觉稿 T-05：三行徽章等距（gap 6、px16 py12），不再借用 actionRow/statRow 的行距 */
+    <Card className={css.marketLoginCard}>
+      <div className={css.marketLoginRow}>
         <Badge kind="ok">{t('myconfigs.login.loggedInAs', { login: loginView.login })}</Badge>
       </div>
-      <div className={css.statRow}>
+      <div className={css.marketLoginRow}>
         <Badge kind="info">{t('myconfigs.login.targetRepo', { repo: targetRepo })}</Badge>
       </div>
-      <div className={css.statRow}>
+      <div className={css.marketLoginRow}>
         {loginView.repoExists
           ? <Badge kind="ok">{t('myconfigs.login.repoReady', { repo: loginView.repoUrl })}</Badge>
           : <Badge kind="warn">{t('myconfigs.login.repoMissing')}</Badge>}

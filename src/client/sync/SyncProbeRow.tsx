@@ -14,7 +14,7 @@
  *
  * 两种展示形态（presentation）：
  *  - 'card'（缺省）：动作行 + **内联结果**（Banner / ErrorBanner）—— 独立入口用；
- *  - 'action'：**只渲染按钮 + ⓘ**（供并入别的动作行），结果改走 toast：主结论 + hint +
+ *  - 'action'：**只渲染按钮**（说明挂成按钮的 `title`；供并入别的动作行），结果改走 toast：主结论 + hint +
  *    自动创建的目录 + 快照数一句讲完，一条都不省。
  *
  * 文案全部走 config-manager-sync 字典；本组件不写任何样式（复用既有原语与卡片内类名）。
@@ -25,7 +25,6 @@ import type { TranslateNS } from '../client-types.ts'
 import type { SyncApi, SyncProbeResult, SyncPushPayload } from './sync-api.ts'
 import { Badge, Banner, Button, Spinner } from '../common/ui.tsx'
 import { ProbeIcon } from '../common/Icon.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { projectProbeResult } from './probe-view.ts'
 import { toast } from '../common/toast-store.ts'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
@@ -44,7 +43,7 @@ export interface SyncProbeRowProps {
   /**
    * 展示形态（缺省 'card' = 既有行为，向后兼容）：
    *  - 'card'：动作行 + 内联结果横幅；
-   *  - 'action'：只渲染按钮 + ⓘ（嵌进别的动作行），结果走 toast。
+   *  - 'action'：只渲染按钮（说明在按钮 `title` 上，嵌进别的动作行），结果走 toast。
    */
   presentation?: 'card' | 'action' | 'icon'
 }
@@ -118,21 +117,20 @@ export function SyncProbeRow({ api, t, body, remoteReady, busy, presentation = '
     </button>
   )
   const button = (
-    <Button onClick={() => { void run() }} loading={loading} disabled={busy || !remoteReady}>
+    <Button onClick={() => { void run() }} loading={loading} disabled={busy || !remoteReady} title={t('probe.hint')}>
       {t('probe.run')}
     </Button>
   )
-  const hintNode = <InfoHint text={t('probe.hint')} label={t('common.infoHint')} />
 
   return (
     <>
       {/* action 形态：直接摊进调用方自己的动作行（不再套一层 .actionRow），结果走 toast。
-          动作行里只留按钮：与同排其它按钮并排时，ⓘ 会被读成该按钮的开关（issue 121 用户要求移除）。 */}
+          动作行里只留按钮：与同排其它按钮并排时，额外的图标会被读成该按钮的开关（issue 121 用户要求移除）。 */}
       {presentation === 'icon'
         ? iconButton
         : actionMode
           ? <>{button}</>
-          : <div className={css.actionRow}>{button}{hintNode}</div>}
+          : <div className={css.actionRow}>{button}</div>}
       {!actionMode && error !== null && (
         <ErrorBanner
           error={redact(error)}

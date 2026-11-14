@@ -65,6 +65,7 @@ import type { AutosyncConfig, AutosyncInterval } from './autosync-config.ts';
 import { readSyncConfigFor, isGitConfig, isWebDavConfig, isS3Config, isGistConfig, SYNC_CHANNELS } from './sync-config.ts';
 import type { SyncConfig, SyncConfigIssue, SyncTransportType } from './sync-config.ts';
 import { readSyncHistory, appendAutosyncEntry, markAutosyncNotified } from './sync-history.ts';
+import { repeatHistorySignature } from './autosync-repeat.ts';
 import { classifyMergePlan } from './risk.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
 import type { AutosyncConflictPolicy } from './autosync-config.ts';
@@ -291,6 +292,14 @@ export class AutoSyncScheduler {
   private readonly reportedConfigIssues = new Set<string>();
   private stopped = false;
   private running = false;
+  /**
+   * P1（2026-11-14 真机事故）：上一轮真正落盘的历史签名，见 autosync-repeat.ts。
+   * 与本轮签名相同 → 这一轮不追加历史（同一结论连续播报把 200 条历史刷满、首页变成
+   * 每 1 分钟一条的噪音）；但 lastRunAt / lastRunStatus / 跳过计数仍逐轮刷新。
+   */
+  private repeatSignature: string | null = null;
+  /** 本轮历史是否被压掉 —— writeFinalConfig 据此保留上一条真记录的 lastRunHistoryId。 */
+  private historyDeduped = false;
 
   constructor(opts: AutoSyncSchedulerOptions) {
     this.syncDir = opts.syncDir;
@@ -327,6 +336,16 @@ export class AutoSyncScheduler {
     channel: SyncTransportType,
     entry: AutosyncHistoryEntry & { forced?: boolean; configIssue?: string },
   ): Promise<void> {
+    const signature = repeatHistorySignature(channel, entry);
+    if (signature !== null && signature === this.repeatSignature) {
+      // 同一状态的第 N 轮（典型：远端快照一直比基线新，60s 轮询每轮都撞同一份冲突）。
+      // 不写 sync-history、也不写首页统一历史；但这一轮仍要刷新「上次运行」，
+      // 否则界面会停在几十分钟前的 lastRunAt，用户以为自动同步停了。
+      this.historyDeduped = true;
+      return;
+    }
+    this.repeatSignature = signature;
+    this.historyDeduped = false;
     await this.appendHistoryFn({ ...entry, transport: channel });
   }
 
@@ -404,32 +423,42 @@ export class AutoSyncScheduler {
     });
   }
 
-  /** 兜底间隔定时器：每个 enabled 通道按各自 interval 排一次性定时器，触发后只重排自己。 */
+  /**
+   * 兜底间隔定时器：每个 enabled 通道按各自 interval 排一次性定时器，触发后**只重排自己**。
+   *
+   * 早期实现是「清掉全部通道再统一重排」：webdav 5m 每跑一轮就把 git 30m 的定时器清掉重排，
+   * 30m 永远等不到 → 纯定时器模式下慢通道永久饥饿（审计 P5-1，虚拟时钟 180min 实测 git 只跑 1 次）。
+   */
   private scheduleIntervalTimers(): void {
     for (const timer of this.timers.values()) this.clearTimer(timer);
     this.timers.clear();
     // 通道清单唯一来源 = SYNC_CHANNELS（此前同一数组在本文件写了两遍：漏改一处即某通道永不排期）
-    const channels = SYNC_CHANNELS;
-    for (const channel of channels) {
-      void this.readConfig(channel).then((cfg) => {
-        if (this.stopped || !cfg.enabled) return;
-        const ms = intervalToMs(cfg.interval);
-        const timer = this.setTimer(() => {
-          // 一次性定时器：触发后立即从表移除，避免 reload() 清理到已失效的句柄
-          this.timers.delete(channel);
-          if (this.stopped) return;
-          void this.runOnce(channel, { reason: 'interval' })
-            .catch((err) => {
-              this.host.log.error(`自动同步定时触发失败（${channel}）`, { error: err instanceof Error ? err.message : String(err) });
-            })
-            .then(() => {
-              // 只重排 interval 定时器（远端轮询有自己的节奏，绝不互相重置）
-              if (!this.stopped) this.scheduleIntervalTimers();
-            });
-        }, ms);
-        this.timers.set(channel, timer);
-      }).catch(() => { /* 读配置失败静默 */ });
-    }
+    for (const channel of SYNC_CHANNELS) this.scheduleChannelTimer(channel);
+  }
+
+  /** 单个通道的一次性 interval 排期（触发后只重排这一个通道）。 */
+  private scheduleChannelTimer(channel: SyncTransportType): void {
+    const existing = this.timers.get(channel);
+    if (existing !== undefined) this.clearTimer(existing);
+    this.timers.delete(channel);
+    void this.readConfig(channel).then((cfg) => {
+      if (this.stopped || !cfg.enabled) return;
+      const ms = intervalToMs(cfg.interval);
+      const timer = this.setTimer(() => {
+        // 一次性定时器：触发后立即从表移除，避免 reload() 清理到已失效的句柄
+        this.timers.delete(channel);
+        if (this.stopped) return;
+        void this.runOnce(channel, { reason: 'interval' })
+          .catch((err) => {
+            this.host.log.error(`自动同步定时触发失败（${channel}）`, { error: err instanceof Error ? err.message : String(err) });
+          })
+          .then(() => {
+            // 只重排自己的 interval 定时器（远端轮询有自己的节奏，别的通道也不得被本通道重置）
+            if (!this.stopped) this.scheduleChannelTimer(channel);
+          });
+      }, ms);
+      this.timers.set(channel, timer);
+    }).catch(() => { /* 读配置失败静默 */ });
   }
 
   /**
@@ -653,7 +682,12 @@ export class AutoSyncScheduler {
     try {
       // 锁内重跑一次检测：预检到写入之间可能被别的进程推进（远端新快照 / 本机配置改动），
       // 拿过期结论去写等于覆盖别人的成果。无锁环境（测试）直接用预检结果 —— 同一份数据，没有竞态。
-      const phase = releaseLock === null ? preflight : await this.detectPhase(channel, cfg, nowIso, historyId);
+      // P0（2026-11-14 真机事故）：锁内重跑必须与预检同口径传 localCheck。
+      // 此前这里漏传 → 60s 远端轮询在锁内又跑了一遍全量本地导出（plugins 的 npm pack，
+      // 实测单插件 44.7s/轮），预检省下的开销全被这一步还回去。
+      const phase = releaseLock === null
+        ? preflight
+        : await this.detectPhase(channel, cfg, nowIso, historyId, { localCheck: opts.reason !== 'remote-poll' });
       if (phase.kind === 'skip') return phase.result;
       const { engine, remoteNew, localDirty, firstRun } = phase;
 
@@ -796,6 +830,8 @@ export class AutoSyncScheduler {
               createdAt: nowIso, failureCountAtRun: 0,
               ...forcedMark,
             });
+            // 冲突分区落成待裁决（P2）：首页与同步页据此给出裁决入口。
+            await this.recordPendingMerge(engine, conflictedSections);
             await this.writeFinalConfig(cfg, conflictResult, nowIso, historyId, channel);
             return conflictResult;
           }
@@ -883,6 +919,7 @@ export class AutoSyncScheduler {
           direction: 'pull', status: 'skipped', skipReason: 'conflict',
           conflictedSections, createdAt: nowIso, failureCountAtRun: 0,
         });
+        await this.recordPendingMerge(engine, conflictedSections);
         await this.writeFinalConfig(cfg, conflictResult, nowIso, historyId, channel);
         return conflictResult;
       }
@@ -1044,6 +1081,25 @@ export class AutoSyncScheduler {
     return { kind: 'work', engine, remoteNew, localDirty, firstRun };
   }
 
+  /**
+   * P2（2026-11-14 真机事故）：把「本轮被冲突挡下的分区」写进 sync-state.pendingMerge。
+   *
+   * 过去自动同步只在历史里留一句「冲突」，sync-state 里没有可挂入口的持久对象 ——
+   * 首页「待裁决」徽章于是只有颜色没有去处，用户点不动、也不知道该去哪裁决。
+   * 这里由引擎按**本轮实际合并过的远端快照 id** 落 pendingMerge（同远端快照连续冲突保留首次 since），
+   * 界面据 /sync/status 的 pendingMerge 显示待裁决分区，首页那一行据此跳到同步页。
+   *
+   * 尽力而为：写待裁决失败绝不能把「远端有冲突」这一事实变成 failed（那会累加连续失败计数）。
+   */
+  private async recordPendingMerge(engine: SyncEngine, sections: SectionId[]): Promise<void> {
+    if (sections.length === 0) return;
+    try {
+      await engine.recordPendingMerge(sections);
+    } catch (err) {
+      this.host.log.warn(`自动同步待裁决分区未能落盘：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   private async writeFinalConfig(
     base: AutosyncConfig,
     result: AutosyncRunResult,
@@ -1061,7 +1117,8 @@ export class AutoSyncScheduler {
       lastRunAt: nowIso,
       lastRunStatus: result.status,
       consecutiveFailures: result.consecutiveFailures,
-      lastRunHistoryId: historyId,
+      // 历史被压掉的轮次没有新记录 id —— 保留上一条真记录的 id，绝不指向不存在的条目。
+      lastRunHistoryId: this.historyDeduped ? (base.lastRunHistoryId ?? historyId) : historyId,
       lastRunMessage: result.error ?? '',
       lastRunSkipReason: skipReason,
       lastRunSkipCount: skipCount,

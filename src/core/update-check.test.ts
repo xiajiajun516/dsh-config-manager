@@ -147,3 +147,43 @@ test('UpdateChecker：失败不写缓存（下次仍会重试），且失败结�
   assert.equal(good.ok, true, '失败不进缓存 → 下一次恢复后可以直接成功');
   assert.equal(good.ok === true ? good.info.latest : null, '2.0.0');
 });
+
+/* ---------------- 审计 P11-6：体积上限必须按字节，且不把大响应读进内存 ---------------- */
+
+test('P11-6 回归：上限按**字节**判定 —— CJK 120KB 响应不得因 text.length 只有 40K 被放行', async () => {
+  // 一个 CJK 字符占 3 个 UTF-8 字节：旧实现用 text.length（UTF-16 代码单元）判上限 ⇒ 120KB 的中文
+  // 响应只数到 40K，上限形同虚设。这里同时钉住两个事实：字节超限、代码单元不超限。
+  const cjk = JSON.stringify({ version: '9.9.9', description: '中'.repeat(40_000) });
+  assert.ok(cjk.length <= UPDATE_CHECK_MAX_BYTES, '前提：代码单元没超限（旧口径会放行）');
+  assert.ok(new TextEncoder().encode(cjk).byteLength > UPDATE_CHECK_MAX_BYTES, '前提：字节数超限');
+  const r = await probeLatestVersion({ fetchImpl: stubFetch(cjk).impl });
+  assert.deepEqual(r, { ok: false, error: 'registry response too large' });
+});
+
+test('P11-6：Content-Length 声明超限时直接拒绝（一个字节都不读）', async () => {
+  // 不用真 Response：undici 的 Response 构造期就会 pull 一次流（实测），用它证不了「没读」。
+  // 这里用 getter 记账：只要实现碰了 body / arrayBuffer 就会抛错并计数。
+  let bodyReads = 0;
+  const impl = (async () => ({
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-length': String(UPDATE_CHECK_MAX_BYTES + 1) }),
+    get body(): ReadableStream<Uint8Array> | null {
+      bodyReads += 1;
+      throw new Error('body must not be read');
+    },
+    arrayBuffer: async () => {
+      bodyReads += 1;
+      throw new Error('body must not be read');
+    },
+  })) as unknown as typeof fetch;
+  const r = await probeLatestVersion({ fetchImpl: impl });
+  assert.deepEqual(r, { ok: false, error: 'registry response too large' });
+  assert.equal(bodyReads, 0, '有 Content-Length 就先拒，不把大响应读进内存');
+});
+
+test('P11-6：小体量 CJK 响应照常解析（字节口径不误伤）', async () => {
+  const body = JSON.stringify({ version: '9.9.9', description: '中文说明'.repeat(100) });
+  const r = await probeLatestVersion({ fetchImpl: stubFetch(body).impl });
+  assert.deepEqual(r, { ok: true, version: '9.9.9' });
+});

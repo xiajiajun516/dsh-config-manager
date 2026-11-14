@@ -8,7 +8,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fssync from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { resolveStartupSafeMode, classifyStartup, FAIL_CLOSED_STARTUP } from './startup-barrier.ts';
+import { JournalStore, createJournalEntry } from './journal.ts';
+import type { ReconcileEnv, ReconcileProbeHooks } from './reconcile.ts';
 
 test('issue #87：NORMAL + 无活锁者 + 陈旧 blocked 标记 → 解除（内存标志与 durable 标记一起复位）', () => {
   assert.deepEqual(
@@ -67,3 +72,62 @@ test('issue #87：classifyStartup 仍是分类唯一来源（形状自检，防�
   });
   assert.equal(typeof classifier.classify, 'function');
 });
+
+// ---------- P3-8：LOCKED_LIVE 的判据是「持锁 + live 且未 terminal 的 journal」 ----------
+
+function tmpDir(t: test.TestContext): string {
+  const dir = fssync.mkdtempSync(path.join(os.tmpdir(), 'sb-'));
+  t.after(() => fssync.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+const probeHooks: ReconcileProbeHooks = {
+  verifyStepFingerprint: async () => 'before-match',
+  probeExternal: async () => 'not-installed',
+  snapshotExists: async () => true,
+};
+// 保守 env：真实进程探测恒 false（LOCKED 下由 inspectStartup 强制按 live 处理）
+const probeEnv: ReconcileEnv = { environmentFingerprint: 'fp', isLiveOwner: async () => false };
+
+function journalStore(dir: string): JournalStore {
+  return new JournalStore({ transactionsDir: path.join(dir, 'transactions') });
+}
+
+test('审计 P3-8：另一实例持锁 + 存在真正在跑的 journal（live 且未 terminal）→ LOCKED_LIVE（旧实现给 NORMAL）', async (t) => {
+  const dir = tmpDir(t);
+  const store = journalStore(dir);
+  const operationId = '00000000-0000-4000-8000-0000000000a1';
+  await store.create(createJournalEntry(
+    'import-apply',
+    { operationId, ownerInstanceId: 'other-instance', lockId: 'lock-1', packageVersion: '0.1.80', environmentFingerprint: 'fp' },
+    '2026-01-01T00:00:00.000Z',
+  ));
+  // 进行中（非 terminal）：另一个存活实例正在 apply
+  await store.update(operationId, (cur) => ({ ...cur, state: 'APPLYING' }));
+
+  const { state } = await classifyStartup({
+    store, hooks: probeHooks, env: probeEnv, lockState: 'LOCKED',
+  }).classify();
+
+  assert.equal(state.kind, 'LOCKED_LIVE', `持锁 + 真正在跑必须分类为 LOCKED_LIVE；实际 ${state.kind}`);
+  assert.equal(state.kind === 'LOCKED_LIVE' ? state.operationId : undefined, operationId, '必须指出是哪条 live op');
+});
+
+test('审计 P3-8 对照：持锁但 active 里只有已 terminal 的 journal → NORMAL（不误报 LOCKED_LIVE）', async (t) => {
+  const dir = tmpDir(t);
+  const store = journalStore(dir);
+  const operationId = '00000000-0000-4000-8000-0000000000a2';
+  await store.create(createJournalEntry(
+    'import-apply',
+    { operationId, ownerInstanceId: 'other-instance', lockId: 'lock-1', packageVersion: '0.1.80', environmentFingerprint: 'fp' },
+    '2026-01-01T00:00:00.000Z',
+  ));
+  await store.update(operationId, (cur) => ({ ...cur, state: 'COMMITTED' }));
+
+  const { state } = await classifyStartup({
+    store, hooks: probeHooks, env: probeEnv, lockState: 'LOCKED',
+  }).classify();
+
+  assert.equal(state.kind, 'NORMAL', '没有未收敛的 live op ⇒ 不存在「正在跑的操作」可报');
+});
+

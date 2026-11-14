@@ -63,6 +63,7 @@
 | D-13 | 合并预览与裁决 | `sync/MergeModal.tsx` + `MergePreviewView.tsx` | 「拉取并合并」冲突时 | P-03 | todo |
 | D-14 | 同步分区 / 会话选择 | `sync/SyncSectionPickerDialog.tsx`（两种变体） | 通道卡「同步内容」 | P-03 | todo |
 | D-15 | 工作副本重新克隆确认 | `sync/WorkDirCard.tsx:137` | 工作副本卡「重新克隆」 | P-03 | todo |
+| D-39 | 同步设置弹窗（同步内容 / 设置） | `sync/SyncSettingsDialog.tsx` | 通道卡「同步内容」 | P-03 | done |
 
 ### 3.4 环境·档案（P-04）
 | id | 标题 | 源码 | 打开入口 | 父 | status |

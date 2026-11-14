@@ -145,6 +145,29 @@ test('dsh t4 扫描：按首帧版本过滤代次（v4 只计数、不进 skip�
   }
 });
 
+test('dsh t4b 同一 id 出现在两个会话目录：保留第一个但必须报 session-id-conflict', async (t) => {
+  if (!zstdAvailable()) {
+    t.skip('本宿主 Node 无 zstd');
+    return;
+  }
+  const root = await tmpRoot('dsh-dup');
+  try {
+    for (const projectKey of ['--p-a--', '--p-b--']) {
+      const dir = path.join('.dsh', 'sessions', projectKey, 'dup-id');
+      await fs.mkdir(path.join(root, dir), { recursive: true });
+      await fs.writeFile(path.join(root, dir, 'session.v3.jsonl.zstd'), logBytes(headerOf('dup-id', '/p/' + projectKey, 3), [{ seq: 0 }]));
+    }
+    const read = await readDshLogs({ homeDir: root, env: {}, platform: HOST, generation: 'v3' });
+    assert.equal(read.files.length, 1, '同 id 只保留第一个（绝不后写覆盖先写）');
+    const conflict = (read.readFindings ?? []).find((s) => s.code === 'session-id-conflict');
+    assert.ok(conflict !== undefined, '丢弃必须留码：' + JSON.stringify(read.readFindings));
+    assert.equal(conflict.origin, 'dup-id');
+    assert.equal(read.extraCounts?.['dsh.logs.scanned'], 2);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('dsh t5 直通判定顺序：版本未知 → id 非法 → 版本不等 → cwd 缺失 → 通过', () => {
   const good: DshSessionLogFile = { id: 'sess-a', cwd: '/home/u/proj', version: 3, name: 'session.v3.jsonl.zstd', data: new Uint8Array([1]) };
   assert.equal(transcodeDshLog(good, undefined).skip?.code, 'session-format-version-unknown');

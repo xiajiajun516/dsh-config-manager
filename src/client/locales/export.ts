@@ -7,7 +7,6 @@
  */
 export const zh = {
   // —— 导出 ——
-  'export.hint': '默认导出推荐分区（可迁移、不含设备专属数据）。',
   'export.encrypt': '加密备份',
   'export.encryptHint': '用密码加密整个备份文件（AES-256-GCM）。密码仅用于本次加密，不会写入备份或任何配置文件；导入时必须输入该密码才能解锁。',
   'export.password': '备份加密密码',
@@ -25,9 +24,7 @@ export const zh = {
   'export.fileNameInvalid': '文件名不合法：仅允许字母数字、空格、- _ .，不能包含路径分隔符。',
   'export.note': '备注',
   'export.notePlaceholder': '例如：迁移前的完整备份 / 2026-08 存档',
-  'export.noteHint': '备注保存在本机备份列表中（随配置备份迁移），便于区分多个导出产物。',
   'export.compositionTitle': '本次将导出',
-  'export.compositionHint': '按当前勾选估算（只读预览，零写入）',
   'export.compositionPartial': '将导出 {sections} 个分区 · 已读取 {units} 个条目 · 约 {size}（含未读取分区，实际不少于该值）',
   'export.compositionEmpty': '没有勾选任何可导出的内容',
   // —— 内容选择器（Phase 1 条目级导出选择）——
@@ -50,7 +47,6 @@ export const zh = {
   'picker.loadingItems': '正在读取条目…',
   'picker.loadingSection': '读取中…',
   'picker.empty': '没有匹配的分区或条目',
-  'picker.sessionWorkspaceLinked': '会话与工作区联动勾选：勾上会话会自动勾上它所属的工作区；取消工作区会取消它的会话',
   'picker.unitsUnavailable': '部分分区的条目清单读取失败，这些分区将整体导出。',
   'picker.sectionLoadFailed': '读取失败 · 将整体导出',
   'picker.deviceSpecific': '设备相关',
@@ -66,8 +62,7 @@ export const zh = {
   'picker.pluginAreaAbsent': '无内容',
   'picker.bucketPlugins': '插件分区的其他条目（补丁行 / pnpm-workspace.yaml）',
   'picker.bucketLooseFiles': '未归属到插件的配置（~/.dsh 根）',
-  'picker.bucketHint': '这些条目没有可证明的插件归属，不猜；展开可逐条勾选。',
-  'picker.groupHint.extensions': '只列出能证明的归属（内置来源表 + 插件自述 dsh.dataDirs）；没有包名信息的配置留在「未归属」。',
+  'picker.groupHint.extensions': '只列出能证明归属的条目：某个插件不在这里，不代表本机没有它的配置。',
   // 导出目录的分组标题（与 ui/types.ts 的 EXPORT_GROUPS 一一对应，顺序由它决定）
   'group.general': '通用',
   'group.ai': 'AI',
@@ -89,6 +84,8 @@ export const zh = {
   // 「下载」是另一条路：同样先拉取落地，但不进向导，而是交给浏览器下载到「下载」目录。
   'library.downloadTitle': '下载远端快照',
   'library.downloading': '正在拉取并下载…',
+  // 拉取/下载进行中的标题徽章（W7 D-04；zh 逐字照稿 .stitch-refactor/out/D-04.html:203）
+  'library.pullBadge': '同步中',
 
   'import.consult.unavailable': '暂时无法生成咨询报告（不影响继续导入）。',
   'import.picker.title': '选择要导入的内容',
@@ -96,7 +93,6 @@ export const zh = {
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
-  'export.hint': 'Exports the recommended sections by default (portable, no device-specific data).',
   'export.encrypt': 'Encrypt backup',
   'export.encryptHint': 'Encrypt the entire backup file with a password (AES-256-GCM). The password is used once and never written into the backup or any config file; it is required to unlock the backup on import.',
   'export.password': 'Backup encryption password',
@@ -114,9 +110,7 @@ export const en: Record<keyof typeof zh, string> = {
   'export.fileNameInvalid': 'Invalid file name: letters, digits, spaces, - _ . only, no path separators.',
   'export.note': 'Note',
   'export.notePlaceholder': 'e.g. Full backup before migration / 2026-08 archive',
-  'export.noteHint': 'The note is shown in the local backup list (and travels with the config backup) so you can tell exports apart.',
   'export.compositionTitle': 'This export',
-  'export.compositionHint': 'Estimated from the current selection (read-only, zero writes)',
   'export.compositionPartial': '{sections} {sections, plural, section|sections} · {units} {units, plural, item|items} read · ~{size} (includes sections not read yet; the real total is no less)',
   'export.compositionEmpty': 'Nothing selected to export',
   // —— Content picker (Phase 1: per-item export selection) ——
@@ -139,7 +133,6 @@ export const en: Record<keyof typeof zh, string> = {
   'picker.loadingItems': 'Reading items…',
   'picker.loadingSection': 'Loading…',
   'picker.empty': 'No matching sections or items',
-  'picker.sessionWorkspaceLinked': 'Session and workspace selection are linked: checking a session also checks the workspace that owns it; unchecking a workspace unchecks its sessions',
   'picker.unitsUnavailable': 'Item lists failed to load for some sections; those will be exported as a whole.',
   'picker.sectionLoadFailed': 'Load failed · exported as a whole',
   'picker.deviceSpecific': 'Device-specific',
@@ -155,8 +148,7 @@ export const en: Record<keyof typeof zh, string> = {
   'picker.pluginAreaAbsent': 'No content',
   'picker.bucketPlugins': 'Other entries of the plugins section (patch lines / pnpm-workspace.yaml)',
   'picker.bucketLooseFiles': 'Config not attributable to a plugin (~/.dsh root)',
-  'picker.bucketHint': 'These entries have no provable plugin ownership — we never guess; expand to tick them one by one.',
-  'picker.groupHint.extensions': 'Only provable ownership is listed (built-in source table + plugins that declare dsh.dataDirs); config without a package name stays under "unowned".',
+  'picker.groupHint.extensions': 'Only entries with provable ownership are listed: a plugin missing here may still have config on this machine.',
   // Export catalog group titles (mirror of ui/types.ts EXPORT_GROUPS; it decides the order)
   'group.general': 'General',
   'group.ai': 'AI',
@@ -177,6 +169,7 @@ export const en: Record<keyof typeof zh, string> = {
   'library.pulling': 'Pulling and importing…',
   'library.downloadTitle': 'Download remote snapshot',
   'library.downloading': 'Pulling and downloading…',
+  'library.pullBadge': 'Syncing',
 
   'import.consult.unavailable': 'The consultation report is unavailable right now (importing can still continue).',
   'import.picker.title': 'Choose what to import',

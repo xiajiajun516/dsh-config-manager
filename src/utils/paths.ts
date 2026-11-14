@@ -89,6 +89,10 @@ const RESERVED_INTERNAL_PREFIXES: readonly string[] = [
   'dsh-config-manager/environment-fingerprint.token',
   // Phase 6：迁移历史审计目录（统一历史引擎；防 F23 投毒链——不可信导入不得映射到该目录）。
   'dsh-config-manager/migration-history/',
+  // Phase 6+（审计 P12-5）：敏感文件镜像目录（<dataDir>/vault）存的是 .credentials.yaml 等明文镜像，
+  // 与上面几项同属「不可信归档不得映射进来」的 control-plane 区；isSensitiveHomeRel 已在**收集/打包**
+  // 侧按 vault 段拦这种文件，这里补上**导入目标**侧的同一判据，免得 crafted 归档把条目写进镜像目录。
+  'dsh-config-manager/vault/',
   // 注意：不得整段保留 dsh-config-manager/sync/ —— self 分区合法持有 sync/*.json 白名单配置
   //（sync-config / sync-selection / ui-prefs / backup-schedule），会误伤。
   'dsh-config-manager/sync/snapshots/',
@@ -128,6 +132,37 @@ export function isReservedInternalRel(relPath: string): boolean {
   }
   return false;
 }
+
+/**
+ * 凭据文件（home 相对路径）判定 —— **全仓唯一出口**（审计 P2-1 P0 修复，2026-11-13）。
+ *
+ * 为什么必须有：pluginData / pluginAssets 的分区根是**系统主目录**，来源既可能是内置表，
+ * 也可能是插件自己在 package.json 里声明的 `dsh.dataDirs`。声明方只要写 `.dsh`，就会把
+ * `~/.dsh/.credentials.yaml` 当普通配置收进**明文 ZIP** —— 而 manifest 仍报「不含密钥」
+ * （真机实测：包内出现 plugin-data/.dsh/.credentials.yaml，containsSecrets=false）。
+ * 字段级脱敏只处理结构化值，管不到「整文件即秘密」的形态，所以按**文件名形态**判一次，
+ * 收集侧（adapter）与打包侧（exporter）共用同一判据 —— 两处都在，缺一即回归。
+ *
+ * 只认名字、不做内容嗅探：收集期读全部字节既慢又读不完大资产。
+ */
+export function isSensitiveHomeRel(relPath: string): boolean {
+  const norm = normalizePathCollapsed(relPath).toLowerCase();
+  if (norm === '') return false;
+  const segments = norm.split('/');
+  // vault 目录本身即凭据明文镜像（<dataDir>/vault），任何形态都不得进归档
+  if (segments.includes('vault')) return true;
+  const base = segments[segments.length - 1] ?? '';
+  return SENSITIVE_HOME_BASENAMES.some((re) => re.test(base));
+}
+
+/** 凭据文件名形态（小写比较；与 DEFAULT_SENSITIVE_RELS 的「整文件即秘密」同口径） */
+const SENSITIVE_HOME_BASENAMES: readonly RegExp[] = [
+  /^\.?credentials(\..*)?$/,      // .credentials.yaml / credentials.json / .credentials
+  /^credentials\.(ya?ml|json)$/,
+  /^secrets\.(ya?ml|json)$/,
+  /^auth\.json$/,
+  /^\.env(\..*)?$/,
+];
 
 /**
  * Windows 语义路径（盘符 "C:/"、"C:\\"；UNC 以两个斜杠或两个反斜杠开头）。

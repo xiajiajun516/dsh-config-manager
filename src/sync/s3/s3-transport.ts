@@ -36,7 +36,7 @@ import {
 import type { BlobRefsSection, BlobSink } from '../blob-store.ts';
 import {
   classifyHttpStatus, classifyNetworkErrorText, computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS,
-  isEncryptedSections, sectionsEqual, SyncTransportError, withSyncRetry,
+  isEncryptedSections, isPreconditionFailedStatus, sectionsEqual, SyncTransportError, withSyncRetry,
 } from '../transport.ts';
 import type {
   SyncProbeResult, SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
@@ -83,15 +83,6 @@ function conditionalHeaders(
   if (etag !== undefined) return guarded ? {} : { 'if-match': etag };
   if (!indexMissing) return {};
   return guarded ? { 'x-oss-forbid-overwrite': 'true' } : { 'if-none-match': '*' };
-}
-
-/**
- * 条件写失败判定：412 恒是；409 仅在**确实带了条件写头**时才算
- * （无条件的 409 另有含义，不吞；条件写头的存在由调用方显式告知）。
- */
-function isConcurrentWrite(status: number, guarded: boolean): boolean {
-  if (status === 412) return true;
-  return status === 409 && guarded;
 }
 
 /** 请求选项：headers / body / 覆盖默认超时（ms；0 = 不超时） */
@@ -372,27 +363,43 @@ export class S3Transport implements SyncTransport {
     // audit-sync sync-N1（P0）：与 WebDAV 同型 —— 写路径**不接受 404 = 空集合**。索引真缺失时
     // 「远端一条快照都没有」是缺信息而非事实，沿用空索引会覆盖 index.json 并用空引用集回收 blob。
     const { entries: idx, missing: indexMissing, etag: idxEtag } = await this.readIndexDetailed(secret);
-    const del = await this.send('DELETE', snapshotKey(this.target.prefix, id), { secret });
+    const key = snapshotKey(this.target.prefix, id);
+    if (indexMissing) {
+      // audit-sync sync-N1（P0）：索引真缺失（404）= 缺信息而非「集合为空」→ **不写回索引、不触发 GC**，
+      // 其余快照与其引用的 blob 原样保留（与 WebDAV 同型）。目标快照文件按用户意图删除（404 视为成功）。
+      const del = await this.send('DELETE', key, { secret });
+      if (!del.res.ok && del.res.status !== 404) {
+        throw new S3TransportError(await this.failText('DELETE', del.url, del.res, secret), classifyHttpStatus(del.res.status));
+      }
+      return;
+    }
+    const remaining = idx.filter((m) => m.id !== id);
+    const entryPresent = remaining.length !== idx.length;
+    // audit-sync sync-P6-1（P3）：与 WebDAV 同型 —— **先写索引、后删对象**。
+    // 反序（旧实现先 DELETE 对象）的伤害：索引 PUT 408/412/409 冲突时本次删除已抛错中止，但对象没了
+    // ⇒ 索引留下指向不存在对象的条目；list() 不校验存在性，别的设备 pull 到该 id 即 notfound 硬失败。
+    // 调整顺序后的**最坏情况**：索引摘除成功而对象 DELETE 失败 ⇒ 远端留一个索引里不存在、list() 看不到、
+    // pull 不会命中的孤儿对象（只占空间）；重跑 delete 会把对象补删（404 视为成功）。
+    if (entryPresent) {
+      const condHeaders = conditionalHeaders(idxEtag, false, this.target.conditionalWrite);
+      await this.reassertIndexEtag(idxEtag, secret);
+      const putIdx = await this.send('PUT', indexKey(this.target.prefix), {
+        body: JSON.stringify(remaining),
+        secret,
+        headers: condHeaders,
+      });
+      const idxFailure = await this.conditionalFailure('PUT', putIdx.url, putIdx.res, Object.keys(condHeaders).length > 0, secret);
+      if (idxFailure !== undefined) throw idxFailure;
+      if (!putIdx.res.ok) {
+        throw new S3TransportError(await this.failText('PUT', putIdx.url, putIdx.res, secret), classifyHttpStatus(putIdx.res.status));
+      }
+    }
+    // 索引已摘除（或本来就无该 id）后才动对象：404 = 不存在，视为成功
+    const del = await this.send('DELETE', key, { secret });
     if (!del.res.ok && del.res.status !== 404) {
       throw new S3TransportError(await this.failText('DELETE', del.url, del.res, secret), classifyHttpStatus(del.res.status));
     }
-    // audit-sync sync-N1（P0）：索引真缺失（404）= 缺信息而非「集合为空」→ **不写回索引、不触发 GC**，
-    // 其余快照与其引用的 blob 原样保留（与 WebDAV 同型）。目标快照文件已按用户意图删除。
-    if (indexMissing) return;
-    const remaining = idx.filter((m) => m.id !== id);
-    if (remaining.length === idx.length && del.res.status === 404) return; // 对象与索引都没有 → 静默成功
-    const condHeaders = conditionalHeaders(idxEtag, false, this.target.conditionalWrite);
-    await this.reassertIndexEtag(idxEtag, secret);
-    const putIdx = await this.send('PUT', indexKey(this.target.prefix), {
-      body: JSON.stringify(remaining),
-      secret,
-      headers: condHeaders,
-    });
-    const idxFailure = await this.conditionalFailure('PUT', putIdx.url, putIdx.res, Object.keys(condHeaders).length > 0, secret);
-    if (idxFailure !== undefined) throw idxFailure;
-    if (!putIdx.res.ok) {
-      throw new S3TransportError(await this.failText('PUT', putIdx.url, putIdx.res, secret), classifyHttpStatus(putIdx.res.status));
-    }
+    if (!entryPresent && !del.res.ok) return; // 索引无该 id 且对象本就不存在 → 静默成功，无 GC 可做
     await this.gcBlobStore(secret, remaining).catch(() => undefined);
   }
 
@@ -435,7 +442,7 @@ export class S3Transport implements SyncTransport {
   }
 
   /**
-   * 条件写失败分类（issue #109 第二层复核）：`isConcurrentWrite` 只看「状态码像不像」，
+   * 条件写失败分类（issue #109 第二层复核）：`isPreconditionFailedStatus` 只看「状态码像不像」，
    * 这里再问报文一句确认「对象确实已存在」。OSS 的 **409 不止 FileAlreadyExists** ——
    * FileImmutable（Bucket 数据处于保护状态，删改都会被拒）同为 409，一律按并发写报
    * 「别的设备改过索引」就是假话。报文读不出时仍按并发写处理（宁可让用户重跑一次，
@@ -448,7 +455,8 @@ export class S3Transport implements SyncTransport {
     guarded: boolean,
     secret: string,
   ): Promise<S3TransportError | undefined> {
-    if (!isConcurrentWrite(res.status, guarded)) return undefined;
+    // 判定与 WebDAV 通道共用 transport.ts 的唯一实现（412 恒算；409 仅在真的带了条件头时算）
+    if (!isPreconditionFailedStatus(res.status, { guarded })) return undefined;
     if (res.status !== 409) return this.concurrentWrite(url, res.status);
     // 只有 forbid-overwrite 方言的 409 有两种含义（FileAlreadyExists / FileImmutable）；
     // etag 方言的 409 由各家自定语义，报文不可当作判据 —— 沿用「带条件头的 409 = 并发写」。
@@ -671,7 +679,6 @@ export class S3Transport implements SyncTransport {
 
   /* ---------------- P1-4：内容寻址 blob 仓 ---------------- */
 
-  /** 读取 blob 索引（哈希 → 写入时间 ms）；缺失/损坏 → 空（GC 只会「少删」，不会误删） */
   /**
    * 远端是否已存在历史内容（t66）。判据 = **blob 仓索引对象存在**：它是本通道唯一的、
    * 无需列举整个桶就能读到的「这里以前写过」证据（本实现未用 ListObjects）。
@@ -700,21 +707,48 @@ export class S3Transport implements SyncTransport {
     }
   }
 
+  /** 读取 blob 索引（哈希 → 写入时间 ms）；只读失败即抛，绝不回落成空索引，见 readBlobIndexDetailed。 */
   private async readBlobIndex(secret: string): Promise<Record<string, number>> {
+    return (await this.readBlobIndexDetailed(secret)).index;
+  }
+
+  /**
+   * audit-sync sync-P6-4（P3）：与 WebDAV 同型 —— 「读失败」与「确实没有索引」必须分开。
+   *
+   * 旧实现把非 404 与坏 JSON 一律当成空索引，紧接着 appendBlobIndex 读→合并→整体 PUT 覆盖，
+   * 一次 5xx 抖动就把远端已登记条目全丢掉（GC 从此看不见这些 blob，等于远端漏账）。三态语义：
+   *  - 404 → missing = true：桶里确实没有 blob 索引，按空处理是安全的（不会被覆盖成假集合）；
+   *  - 其它非 2xx（5xx / 403 / …）→ 抛错（可重试）：读不出来就**不许**整体覆盖；
+   *  - 200 但坏 JSON / 非对象 → 抛 protocol（不可重试）：索引损坏是远端状态问题，覆盖写会抹掉残存记录。
+   *
+   * 最坏情况（可重试失败）：本可跳过的 blob 被重传一遍，或本次 blob 漏登记（只占空间，不误删）。
+   */
+  private async readBlobIndexDetailed(secret: string): Promise<{ index: Record<string, number>; missing: boolean }> {
     const sent = await this.send('GET', blobIndexKey(this.target.prefix), { secret });
-    if (sent.res.status === 404) return {};
-    if (!sent.res.ok) return {};
-    try {
-      const parsed = parseJsonSafe(await sent.res.text());
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-      const out: Record<string, number> = {};
-      for (const [hash, at] of Object.entries(parsed as Record<string, unknown>)) {
-        if (BLOB_HASH_RE.test(hash) && typeof at === 'number' && Number.isFinite(at)) out[hash] = at;
-      }
-      return out;
-    } catch {
-      return {};
+    if (sent.res.status === 404) return { index: {}, missing: true };
+    if (!sent.res.ok) {
+      throw new S3TransportError(await this.failText('GET', sent.url, sent.res, secret), classifyHttpStatus(sent.res.status));
     }
+    let parsed: unknown;
+    try {
+      parsed = parseJsonSafe(await sent.res.text());
+    } catch (err) {
+      throw new S3TransportError(
+        this.o.msg('sync.s3.indexInvalid', { url: sent.url, err: this.mask(String((err as Error)?.message ?? ''), secret) }),
+        { kind: 'protocol', retryable: false },
+      );
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new S3TransportError(
+        this.o.msg('sync.s3.indexInvalid', { url: sent.url, err: 'not an object' }),
+        { kind: 'protocol', retryable: false },
+      );
+    }
+    const out: Record<string, number> = {};
+    for (const [hash, at] of Object.entries(parsed as Record<string, unknown>)) {
+      if (BLOB_HASH_RE.test(hash) && typeof at === 'number' && Number.isFinite(at)) out[hash] = at;
+    }
+    return { index: out, missing: false };
   }
 
   private async writeBlobIndex(secret: string, index: Record<string, number>): Promise<void> {

@@ -322,7 +322,7 @@ export interface RescueState {
 
 export type RescueEnterResult =
   | { ok: true; state: RescueState }
-  | { ok: false; code: 'already-active' | 'backup-failed' | 'package-json-invalid' | 'write-failed'; message: string };
+  | { ok: false; code: 'already-active' | 'other-profile-active' | 'backup-failed' | 'package-json-invalid' | 'write-failed'; message: string };
 
 export type RescueExitResult =
   | { ok: true; restored: string[] }
@@ -542,7 +542,18 @@ export async function enterRescueMode(opts: RescueEnterOptions): Promise<RescueE
       message: `rescue mode is already active for ${rel.profilePatch} (enteredAt=${current.enteredAt}); nothing was modified`,
     };
   }
-  // 指纹不匹配（换机器/重建 home/profile 变化）或状态损坏 → 视为失效残留，允许覆盖重进
+  // 指纹不匹配但状态仍是 active 且属于**另一个 profile**：home patch 是共享文件且已被置空，
+  // 备份文件名不含 profile（见 BACKUP_* 常量）——再进会覆盖它的备份与状态，退出后另一个
+  // profile 的 home patch / profile patch 原件永久丢失（审计 P3-1）。此处 fail-closed 拒绝，
+  // 让调用方先为原 profile 退出救援模式。
+  if (current !== null && current.active === true && current.profile !== profile) {
+    return {
+      ok: false,
+      code: 'other-profile-active',
+      message: `rescue mode is already active for profile ${current.profile} (enteredAt=${current.enteredAt}): exit that profile first, entering ${profile} would overwrite its backups`,
+    };
+  }
+  // 同 profile 的失效残留（换机器/重建 home 导致指纹变化）或状态损坏 → 允许覆盖重进
 
   // —— 2. 读原件（读失败 → backup-failed；备份先于任何目标写入） ——
   let origProfilePatch: Uint8Array | null;

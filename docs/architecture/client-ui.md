@@ -95,7 +95,6 @@
 | ReportView | `src/client/common/ReportView.tsx:233` | 导出/导入报告体，正文全部 redact |
 | Modal | `src/client/common/Modal.tsx:83` | Radix Dialog；根容器 `:42`（Portal 到 body 才拿得到 token） |
 | Icon | `src/client/common/Icon.tsx:103` | lucide 深导入；形变仅 `ExpandChevron` `:177` 与 `CopyStateIcon` `:213` |
-| InfoHint | `src/client/common/InfoHint.tsx:80` | ⓘ 解释气泡；气泡 Portal 到同一 `#dsh-config-manager-root`（弹窗内不受 transform 包含块影响）；有守卫 `info-hint-guard.test.ts` |
 | Skeleton | `src/client/common/Skeleton.tsx:64`（另有 `SkeletonList` `:87`/`SkeletonTable` `:114`/`SkeletonRows` `:143`） | 加载骨架，替代 spinner 撑布局 |
 | ConfirmDialog | `src/client/common/ConfirmDialog.tsx:54` | 二次确认；危险操作走 `kind` 而非 primary |
 | toast | `src/client/common/toast-store.ts:174`（store `:164`，宿主 `ToastViewport.tsx`） | 轻提示；不进 run-store，不进 sessionStorage |

@@ -31,6 +31,71 @@ import { ConfigManagerApiError } from '../common/http.ts'
 // 直接报 "missed the module table"，整个插件不加载（仓库既有铁律 + 本轮实测）。
 import { ENCRYPTED_CONTAINER_CODE } from '../../utils/shared-constants.ts'
 
+/**
+ * 迁移前咨询失败 → 界面文案（纯函数，node 可测）。
+ *
+ * 两种「没有报告」必须分开（审计 P9-7）：
+ *  - 404 = 宿主没有 `/consult` 路由（老宿主/老插件）→ null，界面继续按「宿主不支持」渲染
+ *    info 横幅，不制造错误；
+ *  - 其它失败（5xx / 超时 / 断网 / 响应解析失败）→ 返回可读消息，交给 ErrorBanner。
+ *    此前 catch 只 setConsultReport(null)，用户看到的是「没有结论」而不是「咨询失败」。
+ */
+export function consultFailureError(err: unknown): string | null {
+  if (err instanceof ConfigManagerApiError && err.status === 404) return null
+  return err instanceof Error ? err.message : String(err)
+}
+
+/** 解锁加密容器的端口（注入以便 node 直接测事务语义，不依赖 React / store）。 */
+export interface ArchiveUnlockFlow<Ref> {
+  /** 解密容器 → 明文 ZIP + 被解出的凭据覆盖清单 refs */
+  unlock: () => Promise<{ refs: readonly Ref[] }>
+  /** 解锁成功后的中间态写回（archiveUnlocked / decryptPassword / decryptRefs） */
+  commitUnlocked: (refs: readonly Ref[]) => void
+  /** 解锁成功后的下一步（selectZip → analyze → 兼容性） */
+  analyze: () => Promise<unknown>
+  /** 回滚已提交的解锁态（只会在「已提交」之后被调用） */
+  rollbackUnlocked: () => void
+  /** 向导已被用户重置：在途结果整体丢弃，不写任何状态 */
+  cancelled: () => boolean
+}
+
+export type ArchiveUnlockOutcome =
+  | { status: 'ok' }
+  | { status: 'cancelled' }
+  | { status: 'failed'; message: string; unlocked: boolean }
+
+/**
+ * 「解锁 → 继续分析」事务（审计 P9-8）。
+ *
+ * 根因：解锁成功后先写 archiveUnlocked=true，再调 selectZip；后者抛错时 catch 只写 error，
+ * 于是 archiveUnlocked=true 而 phase 仍停在 decrypt-archive —— 界面判定「已解锁」，
+ * 用户却停在解锁页，重输密码也不会重新解锁（wizard 里解锁已经成功过一次）。
+ * 这里把「已提交 → 后续失败必须回滚」写成事务，回滚内容由调用方给出（store 与 wizard 两份状态）。
+ */
+export async function unlockArchiveThenAnalyze<Ref>(
+  flow: ArchiveUnlockFlow<Ref>,
+): Promise<ArchiveUnlockOutcome> {
+  let unlocked = false
+  try {
+    const { refs } = await flow.unlock()
+    if (flow.cancelled()) return { status: 'cancelled' }
+    flow.commitUnlocked(refs)
+    unlocked = true
+    await flow.analyze()
+    if (flow.cancelled()) return { status: 'cancelled' }
+    return { status: 'ok' }
+  } catch (err) {
+    // 用户已重置向导：resetWizard 已清空两份状态，再回滚只会覆盖新一轮导入
+    if (flow.cancelled()) return { status: 'cancelled' }
+    if (unlocked) flow.rollbackUnlocked()
+    return {
+      status: 'failed',
+      message: err instanceof Error ? err.message : String(err),
+      unlocked,
+    }
+  }
+}
+
 export function useImportWizardController(api: ConfigManagerApi, t: TranslateNS<'config-manager'>) {
 
   // m2：状态统一来自模块级 store；控制器实例由 store 缓存复用（不重建）
@@ -302,14 +367,24 @@ export function useImportWizardController(api: ConfigManagerApi, t: TranslateNS<
   }, [api])
 
   /** Phase 7 迁移前咨询：预览步对当前 ZIP 生成咨询报告（只读，零写入）。
-   *  zipPath 变化 / 进入 preview 步时重新获取；失败静默（咨询是建议性，不阻断导入）。 */
+   *  zipPath 变化 / 进入 preview 步时重新获取。失败**不再静默**（审计 P9-7）：
+   *  「宿主不支持」= 404，仍按 info 横幅说明；其它失败写 import.error 走 ErrorBanner，
+   *  用户看到的是「咨询失败」而不是「没有结论」。咨询本身是建议性的，不阻断导入。 */
   useEffect(() => {
     if (step !== 'preview' || imp.zipPath === null) return
     let cancelled = false
     setConsultLoading(true)
     api.consult({ type: 'export-zip', id: imp.zipPath })
       .then((report) => { if (!cancelled) setConsultReport(report) })
-      .catch(() => { if (!cancelled) setConsultReport(null) })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setConsultReport(null)
+        const message = consultFailureError(err)
+        if (message !== null) {
+          runStore.patch({ import: { error: message } })
+          runStore.syncWizard()
+        }
+      })
       .finally(() => { if (!cancelled) setConsultLoading(false) })
     return () => { cancelled = true }
   }, [step, imp.zipPath, api])
@@ -401,36 +476,55 @@ export function useImportWizardController(api: ConfigManagerApi, t: TranslateNS<
     // 竞态守卫：解锁/继续分析期间用户可能点「重新选择」（resetWizard 递增 pickGeneration），
     // 此时丢弃在途结果，防止晚到的 selectZip 把已重置的向导推进到 compatibility。
     const generation = pickGeneration.current
+    const encryptedPath = imp.zipPath
     setUnlocking(true)
     setArchiveUnlockError(null)
     try {
-      const { refs } = await wizard.unlockArchive(imp.zipPath, archivePassword)
-      if (generation !== pickGeneration.current) return
-      // 容器密码即内部凭据解密密码：交给向导（execute 时解密 secrets.enc 用）
-      wizard.setDecryptPassword(archivePassword)
-      // refs 为解锁时顺带解出的凭据覆盖清单（非值）：secrets 阶段据此剔除已恢复项
-      runStore.patch({
-        import: {
-          archiveUnlocked: true,
-          decryptPassword: archivePassword,
-          decryptRefs: refs,
+      const outcome = await unlockArchiveThenAnalyze({
+        unlock: () => wizard.unlockArchive(encryptedPath, archivePassword),
+        commitUnlocked: (refs) => {
+          // 容器密码即内部凭据解密密码：交给向导（execute 时解密 secrets.enc 用）
+          wizard.setDecryptPassword(archivePassword)
+          // refs 为解锁时顺带解出的凭据覆盖清单（非值）：secrets 阶段据此剔除已恢复项
+          runStore.patch({
+            import: {
+              archiveUnlocked: true,
+              decryptPassword: archivePassword,
+              decryptRefs: [...refs],
+            },
+          })
+          runStore.syncWizard()
         },
+        analyze: () => wizard.selectZip(encryptedPath),
+        rollbackUnlocked: () => {
+          // 两份状态必须同时回到「未解锁」：wizard 内部标志决定后续请求的真实行为，
+          // store 决定界面判定；只回滚一边 = 两边继续互相矛盾（审计 P9-8）。
+          wizard.setDecryptPassword('')
+          wizard.setArchiveEncrypted(true, encryptedPath)
+          runStore.patch({
+            import: {
+              archiveUnlocked: false,
+              decryptPassword: '',
+              decryptRefs: [],
+              phase: 'decrypt-archive',
+            },
+          })
+          runStore.syncWizard()
+        },
+        cancelled: () => generation !== pickGeneration.current,
       })
-      runStore.syncWizard()
-      // 解锁成功：继续「选 ZIP → 分析 → 兼容性」流程（selectZip 内部步进到 compatibility）
-      const analysis = await wizard.selectZip(imp.zipPath!)
-      void analysis
-      if (generation !== pickGeneration.current) return
+      if (outcome.status === 'cancelled') return
+      if (outcome.status === 'failed') {
+        setArchiveUnlockError(outcome.message)
+        runStore.patch({ import: { error: outcome.message } })
+        runStore.syncWizard()
+        return
+      }
       runStore.syncWizard()
       // 解锁后 phase 不再停留在 decrypt-archive，否则 preview 页会被解锁页劫持。
       // 用最新 store 快照计算下一阶段：decrypt-archive 已解锁（archiveUnlocked=true）
       // 不再适用，nextFlowPhase 取第一项——conflicts、path-mapping、secrets 或 confirm。
       runStore.patch({ import: { phase: 'preview' } })
-    } catch (err) {
-      if (generation !== pickGeneration.current) return
-      setArchiveUnlockError(err instanceof Error ? err.message : String(err))
-      runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
-      runStore.syncWizard()
     } finally {
       setUnlocking(false)
     }

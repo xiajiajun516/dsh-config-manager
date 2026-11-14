@@ -42,7 +42,7 @@ import { parseJsonSafe } from '../utils/json.ts';
 import { isPathInside } from '../utils/paths.ts';
 import { atomicCopyFile, atomicWriteFile } from '../utils/atomic-write.ts';
 import type { SectionId } from '../schema/types.ts';
-import type { HostContext, Snapshot, SnapshotStatus } from './types.ts';
+import type { HostContext, Snapshot, SnapshotEntry, SnapshotStatus } from './types.ts';
 
 /* ---------------------------------------------------------------- 类型 */
 
@@ -222,6 +222,19 @@ async function loadSnapshot(snapshotDir: string, msg: MsgFunc): Promise<Snapshot
     throw new Error(msg('restore.snapshotInvalid', { dir: snapshotDir }));
   }
   return parsed as Snapshot;
+}
+
+/**
+ * `snapshot.entries` 兜底（审计 P3-3）：旧 / 截断 / 手改的 snapshot.json 可能整段缺 entries
+ * （或写成非数组），直接 `for…of` 会抛裸 TypeError（`snapshot.entries is not iterable`）。
+ *
+ * 为什么按空集合而不是拒绝：快照可信度已在计划期按 verdict 过门（CORRUPT/INVALID 拒绝、
+ * LEGACY 放行），字段缺失属旧快照常态；同文件 `hostFileBackups ?? []` / `pluginRemovals ?? []`
+ * / `expectedSessionRefs(entries ?? [])` 都是这个口径 —— 旧快照诚实跳过，绝不把「字段缺失」
+ * 升级成类型错误。
+ */
+function snapshotEntries(snapshot: Snapshot): SnapshotEntry[] {
+  return Array.isArray(snapshot.entries) ? snapshot.entries : [];
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -766,7 +779,7 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
   let patchLineCount = 0;
   let workspaceCount = 0;
   let credentialAbsentCount = 0;
-  for (const entry of snapshot.entries) {
+  for (const entry of snapshotEntries(snapshot)) {
     switch (entry.kind) {
       case 'file': {
         const rel = toRelPath(homeDir, resolveFileAbs(homeDir, entry.adapter, entry.ref));
@@ -1128,15 +1141,22 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
 /* ------------------------------------------------------------ 幽灵会话（F5） */
 
 /**
- * 磁盘 sessions 目录实际相对路径清单（相对 <homeDir>/sessions；目录缺失视为空）。
+ * 磁盘 sessions 目录实际相对路径清单（相对 <homeDir>/sessions；**只有 ENOENT** 视为空）。
  * 用 node fs 递归列举（离线引擎不依赖 HostContext），分隔符由 sessionKeyOf 归一。
+ *
+ * 「读不到」≠「没有」（AGENTS.md 文件类分区条；同 listSnapshots 的 EACCES/ENOTDIR 处理）：
+ * EACCES / EPERM / ENOTDIR（sessions 被普通文件占住）若也降级成空集合，幽灵判定会把快照里
+ * **每一个**期望会话都报成「备份有记录、磁盘无文件，需人工清理」（审计 P3-4）。
+ * 故只在 ENOENT（确实没有会话分区）时返回空；其余错误原样上抛，由调用方记入 failed
+ * —— 报告成「未知」，绝不断言磁盘上没有这些会话。
  */
 async function listSessionEntries(homeDir: string): Promise<string[]> {
   const base = path.join(homeDir, 'sessions');
   try {
     return await fs.readdir(base, { recursive: true });
-  } catch {
-    return []; // 目录不存在（无会话分区）→ 空
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
   }
 }
 
@@ -1149,7 +1169,7 @@ async function listSessionEntries(homeDir: string): Promise<string[]> {
  */
 async function sweepRestoredSessions(snapshotDir: string, homeDir: string, msg: MsgFunc): Promise<string[]> {
   const snapshot = await loadSnapshot(snapshotDir, msg);
-  const expected = expectedSessionRefs(snapshot.entries ?? []);
+  const expected = expectedSessionRefs(snapshotEntries(snapshot));
   if (expected.length === 0) return [];
   return sweepGhostSessions(expected, await listSessionEntries(homeDir));
 }

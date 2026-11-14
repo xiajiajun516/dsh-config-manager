@@ -2,7 +2,7 @@
  * cross-F3（t50）客户端守卫：中断的档案复制残留必须以**独立形态**呈现，且只给删除。
  *
  * 本仓库 React 侧无组件测试框架，沿用 `src/client/common/*.test.ts` 的**源码守卫**模式
- * （与 report-dismiss.test.ts / info-hint-guard.test.ts 同风格）：
+ * （与 report-dismiss.test.ts / section-title-action.test.ts 同风格）：
  *  1. 行内形态徽章必须走 `profileShapeLabelKey(profile)`（残留行 = 「未完成的副本」，不是 generic）；
  *  2. 动作行里启动/停止、复制、改名三处必须由 `profileRowCapabilities` 的判据把守，**删除不得被把守**（它是残留行的唯一动作）；
  *  3. 残留行必须给出 dir（经 `redact()`）、来源与开始时间；
@@ -56,13 +56,12 @@ test('cross-F3 UI：动作行三处把守 + 删除不被把守', () => {
   assert.match(block, /caps\.duplicate &&/, '复制按钮必须由 caps.duplicate 把守')
   assert.match(block, /caps\.rename &&/, '改名按钮必须由 caps.rename 把守')
   // 删除是残留行的唯一动作：它必须出现在改名把守闭合之后，本身不带任何 caps 条件。
-  // 2026-11-04：删除从文字按钮收成图标按钮（<IconButton danger>，行密度改造），控件形态变了、
-  // 判据不变 —— 仍是「紧跟最后一个把守闭合 + 自身不带 caps 条件」。
-  // rename 把守闭合之后紧跟着的必须是无条件的删除控件（危险语义）。
-  // 不按 lastIndexOf 取尾巴：`label={t('profiles.delete')}` 自身就以 `)}` 结尾。
-  assert.match(block, /caps\.rename &&[\s\S]*?\n\s*\)\}\s*<IconButton[\s\S]*?label=\{t\('profiles\.delete'\)\}[\s\S]*?\bdanger\b/,
+  // 2026-11-04：删除收成图标按钮（行密度改造）；2026-11-14（W5 / 稿 P-04）：又回到文字按钮 ——
+  // 图标按钮与「复制」外形一致，而删除不可恢复，必须自带文字 + 红色描边（variant="danger"）。
+  // 判据不变：仍是「紧跟最后一个把守闭合 + 自身不带 caps 条件」。
+  assert.match(block, /caps\.rename &&[\s\S]*?\n\s*\)\}\s*<Button[\s\S]*?variant="danger"[\s\S]*?\{t\('profiles\.delete'\)\}/,
     '删除控件必须紧跟最后一个把守闭合、自身不带条件（残留行也要能点删除），且是危险语义')
-  const deleteStart = block.lastIndexOf('<IconButton', block.indexOf("profiles.delete'"))
+  const deleteStart = block.lastIndexOf('<Button', block.indexOf("profiles.delete'"))
   assert.ok(deleteStart > 0 && !/caps\./.test(block.slice(deleteStart)), '删除控件内部不得再夹 caps 条件')
 })
 
@@ -72,7 +71,8 @@ test('cross-F3 UI：残留行展示来源 / 开始时间 / 目录（目录经 re
   assert.match(panelSrc, /t\('profiles\.incomplete\.from', \{ name: copyFacts\.copiedFrom \}\)/, '必须显示来源档案')
   assert.match(panelSrc, /t\('profiles\.incomplete\.startedAt', \{ time: copyStartedText \}\)/, '必须显示开始时间')
   assert.match(panelSrc, /t\('profiles\.incomplete\.dir', \{ path: redact\(copyFacts\.dir\) \}\)/, '目录必须脱敏后展示')
-  assert.match(panelSrc, /t\(incomplete \? 'profiles\.incomplete\.hint' : 'profiles\.list\.hint'\)/, '残留行要给一段解释（tooltip）')
+  // 2026-11-14：`profiles.list.hint`（「点行看详情」）判为可删的省事提示，行 tooltip 只在残留行给解释
+  assert.match(panelSrc, /title=\{incomplete \? t\('profiles\.incomplete\.hint'\) : undefined\}/, '残留行要给一段解释（tooltip）')
 })
 
 test('cross-F3 UI：删除确认对残留行给专属文案', () => {

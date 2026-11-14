@@ -57,9 +57,7 @@ import type {
 } from '../../ui/rollback-view.ts'
 import { redact } from '../../security/redaction.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Spinner } from '../common/ui.tsx'
-import { SkeletonList } from '../common/Skeleton.tsx'
 import { Icon } from '../common/Icon.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -423,16 +421,16 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   return (
     <>
       <Card>
-        {/* 卡头：标题 + ⓘ 说明（2026-10-12 用户要求说明性文案进 ⓘ：原来的常驻副标题正是被它替代的那一行）。
+        {/* 卡头：标题 + 悬停说明（说明性文案挂在标题的 title 上，不再另起一行副标题）。
             2026-10-12 同一轮用户要求：本卡**退出折叠** —— 摘要与入口常驻可见，台账整块搬进弹窗。 */}
-        <SectionTitle title={t('rollback.title')} info={<InfoHint text={t('rollback.desc')} label={t('common.infoHint')} />} />
+        <SectionTitle title={t('rollback.title')} tooltip={t('rollback.desc')} />
 
         {!hasApi && <Banner kind="warn">{t('rollback.apiMissing')}</Banner>}
 
         {/* issue #88：总开关。它**必须常驻可见** —— 关掉之后，用户还得有地方能把它打开。
             关闭语义 = 不订阅会话事件、不写台账、聊天入口收起（文案逐条对应代码，不含糊）。 */}
         {hasPrefsApi && (
-          <div className={css.actionRowTop}>
+          <div className={css.actionRowTop} title={t('rollback.switch.hint')}>
             <Checkbox
               // 三态：`null`（还没读到）显示为未勾选且**禁用** —— 绝不替磁盘猜一个值
               checked={prefsEnabled === true}
@@ -440,7 +438,6 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
               onChange={togglePrefs}
               label={t('rollback.switch.label')}
             />
-            <InfoHint text={t('rollback.switch.hint')} label={t('common.infoHint')} />
             {/* 三态不再各占一行解释：提示做成开关**旁边**的状态徽章，分歧态再给一次点击就生效的动作。
                 「还没读到」= info 徽章（开关此时同时禁用）；「磁盘开着但本进程没生效」= warn 徽章 + 立即生效。 */}
             {hasPrefsApi && prefsEnabled === null && <Badge kind="info">{t('rollback.switch.reading')}</Badge>}
@@ -465,7 +462,18 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
           </>
         )}
 
-        {status === 'loading' && <SkeletonList count={3} label={t('recovery.loading')} />}
+        {/* 加载态 = 就绪态的**同一行几何**（摘要文字 + 行尾两颗按钮）。
+            2026-11-14 用户反馈：旧骨架是三张 SkeletonList 卡（≈210px），就绪态只有一行工具栏
+            （≈26px）⇒ 卡片从 210 缩到 ~100，环境页整页往上跳。容器复用 .rollbackToolbar，
+            只有占位条尺寸是骨架自己的。 */}
+        {status === 'loading' && (
+          <div className={css.rollbackToolbar} role="status" aria-busy="true" aria-label={t('recovery.loading')}>
+            <span className={css.skeletonBar + ' ' + css.rollbackSkeletonSummary} />
+            <span className={css.statusSpacer} />
+            <span className={css.skeletonBar + ' ' + css.rollbackSkeletonButton} />
+            <span className={css.skeletonBar + ' ' + css.rollbackSkeletonButton} />
+          </div>
+        )}
         {status === 'error' && (
           <div className={css.actionRow}>
             <Banner kind="error">{error !== null ? error : t('rollback.apiMissing')}</Banner>
@@ -539,23 +547,56 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             closeLabel={t('common.close')}
             trailing={(
               <span className={css.shHeaderTrailing}>
-                {/* 留存/淘汰口径属机制说明 → 收进 ⓘ（DESIGN.md §7「说明性文案分层」）：屏上只留数字摘要，
+                {/* 留存/淘汰口径属机制说明 → 挂在刷新按钮的 title 上（DESIGN.md §7「说明性文案分层」）：屏上只留数字摘要，
                     20/50/救援点上限这些细节一个字不改，仍在同一条字典键里。 */}
-                <InfoHint
-                  text={t('rollback.retention.hint', {
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy || refreshing}
+                  loading={refreshing}
+                  onClick={() => { load({ keep: true }) }}
+                  title={t('rollback.retention.hint', {
                     perSession: ROLLBACK_MAX_POINTS_PER_SESSION,
                     total: ROLLBACK_MAX_POINTS_TOTAL,
                     guardsPerSession: ROLLBACK_MAX_POINTS_GUARDS_PER_SESSION,
                     guards: ROLLBACK_MAX_POINTS_GUARDS_TOTAL,
                   })}
-                  label={t('common.infoHint')}
-                />
-                <Button size="sm" variant="ghost" disabled={busy || refreshing} loading={refreshing} onClick={() => { load({ keep: true }) }}>{t('rollback.refresh')}</Button>
+                >
+                  {t('rollback.refresh')}
+                </Button>
               </span>
             )}
           />
           <Modal.Body scroll>
-            {status === 'loading' && <SkeletonList count={3} label={t('recovery.loading')} />}
+            {/* 加载态照抄台账几何（工具栏 + 锁高 340px 的左右分栏），数据到货时弹窗高度不变。 */}
+            {status === 'loading' && (
+              <div role="status" aria-busy="true" aria-label={t('recovery.loading')}>
+                <div className={css.rollbackToolbar}>
+                  <span className={css.skeletonBar + ' ' + css.rollbackSkeletonSummary} />
+                  <span className={css.statusSpacer} />
+                  <span className={css.skeletonBar + ' ' + css.rollbackSkeletonButton} />
+                </div>
+                <div className={css.rollbackLedger} aria-hidden="true">
+                  <div className={css.rollbackSessions}>
+                    {[0, 1, 2].map((i) => (
+                      <span key={i} className={css.skeletonBar + ' ' + css.rollbackSkeletonSession} />
+                    ))}
+                  </div>
+                  <div className={css.rollbackLedgerMain}>
+                    <div className={css.rollbackGroup}>
+                      <div className={css.rollbackGroupHead}>
+                        <span className={css.skeletonBar + ' ' + css.historySkeletonSections} />
+                      </div>
+                      <div className={css.rollbackPointsScroll}>
+                        {[0, 1, 2].map((i) => (
+                          <span key={i} className={css.skeletonBar + ' ' + css.rollbackSkeletonPoint} />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             {status === 'error' && (
               <div className={css.actionRow}>
                 <Banner kind="error">{error !== null ? error : t('rollback.apiMissing')}</Banner>
@@ -689,12 +730,13 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
       )}
 
       {/* 预览 / 回退（同一弹窗：先只读预览 + 三选一范围，执行后就地显示逐段结果） */}
+      {/* 「只读 / 零写入」常驻标题右侧（原 ⓘ 的位置）：这是「点了也不会改动磁盘」的唯一提示 */}
       <Modal open={target !== null} onClose={closePreview} title={t('rollback.preview')} wide busy={busy}>
         <Modal.Header
           title={t('rollback.preview.title')}
           onClose={closePreview}
           closeLabel={t('common.close')}
-          trailing={<InfoHint text={t('rollback.preview.hint')} label={t('common.infoHint')} />}
+          trailing={<span className={css.hint}>{t('rollback.preview.hint')}</span>}
         />
         <Modal.Body scroll>
         {previewLoading && <Spinner label={t('rollback.preview.loading')} />}
@@ -744,7 +786,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                     </span>
                   </span>
                 </div>
-                <div className={css.planScroll}>
+                <div className={`${css.planScroll} ${css.planScrollPadded}`}>
                   <RollbackFileChanges
                     files={previewFiles}
                     removals={previewRemovals}

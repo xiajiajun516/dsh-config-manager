@@ -116,15 +116,18 @@ export function CommandPalette({ open, onClose, commands, ctx, onRun, t }: Comma
       open={open}
       onClose={onClose}
       title={t('palette.label')}
-      wide
-      cardStyle={{ maxHeight: 460 }}
+      // D-30（2026-11-14）：顶部锚定 + 420 宽的单列浮层。原来借用 wide（720px 居中）——
+      // 命令面板只有「一条输入 + 一列结果」，撑到 720 会读成一个空表单。
+      placement="top"
+      cardStyle={{ width: 'min(420px, calc(100vw - 48px))', maxHeight: 460 }}
       onOpenAutoFocus={(e) => {
         // 显式把初始焦点给输入框（Radix 默认落在第一个可聚焦元素上，这里指定更稳）
         e.preventDefault()
         inputRef.current?.focus()
       }}
     >
-      <Modal.Body>
+      {/* Body 走纵向 flex：输入条定高、列表独占剩余空间内滚、提示行吸底（D-30 三段布局）。 */}
+      <Modal.Body style={{ display: 'flex', flexDirection: 'column' }}>
         <input
           ref={inputRef}
           className={css.paletteInput}

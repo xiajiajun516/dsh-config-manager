@@ -197,6 +197,8 @@ export interface BadgeProps {
   children: ReactNode
   /** 悬停提示（可选） */
   title?: string
+  /** 屏幕私有修饰类（可选）：只叠加形态（描边/方角），不替换四态语义色 */
+  className?: string
 }
 
 /**
@@ -207,13 +209,14 @@ export interface BadgeProps {
  * 拿不到原生包（老宿主）时回落本仓库的 `.badge[data-kind]` —— 两条路径的语义由**同一张表**给出。
  * 原生 Tag 没有 title 入参：需要悬停提示时套一层 inline-flex 的 wrapper，不改变布局。
  */
-export function Badge({ kind = 'info', children, title }: BadgeProps) {
+export function Badge({ kind = 'info', children, title, className }: BadgeProps) {
   const DshTag = hostTag()
   if (DshTag !== null) {
-    const tag = <DshTag tone={badgeTone(kind)}>{children}</DshTag>
+    // className 透传给宿主 Tag（见 host-primitives 的 DshTagProps）：屏私有修饰类在两分支都生效
+    const tag = <DshTag tone={badgeTone(kind)} className={className}>{children}</DshTag>
     return title === undefined ? tag : <span className={css.badgeHost} title={title}>{tag}</span>
   }
-  return <span className={css.badge} data-kind={kind} title={title}>{children}</span>
+  return <span className={className === undefined ? css.badge : `${css.badge} ${className}`} data-kind={kind} title={title}>{children}</span>
 }
 
 /* ---------------- Chip ---------------- */
@@ -222,6 +225,8 @@ export interface ChipProps {
   children: ReactNode
   /** 悬停提示（可选） */
   title?: string
+  /** 屏幕私有修饰类（可选）：只叠加形态，不改中性色 */
+  className?: string
 }
 
 /**
@@ -235,8 +240,8 @@ export interface ChipProps {
  * 盒模型由 `.chip` 与 `.badge` 逐字对齐保证（同高 19px / 同药丸圆角 / 同 11px 字号），
  * 差别只在色调 —— 同屏混排时它们读起来是「同一套小片子的两种用法」。
  */
-export function Chip({ children, title }: ChipProps) {
-  return <span className={css.chip} title={title}>{children}</span>
+export function Chip({ children, title, className }: ChipProps) {
+  return <span className={className === undefined ? css.chip : `${css.chip} ${className}`} title={title}>{children}</span>
 }
 
 /* ---------------- Banner ---------------- */
@@ -322,33 +327,33 @@ export function Spinner({ label }: SpinnerProps) {
 export interface FieldProps {
   label: string
   /**
-   * 常驻说明：只留给**动态/元数据**文案（校验失败重申、当前值、计数）。纯说明性文案走 `info`。
+   * 常驻说明：只留给**动态/元数据**文案（校验失败重申、当前值、计数）。纯说明性文案走 `tooltip`。
    */
   hint?: string
-  /** 说明性文案的 ⓘ（调用点传 `<InfoHint text={t('原键')} label={t('common.infoHint')} />`），贴在字段标签右侧 */
-  info?: ReactNode
+  /**
+   * 说明性文案的**悬停承载**（2026-11-14 用户要求「把所有页面的 ⓘ 都换成悬停能读到的 title」）：
+   * 传原 ⓘ 的那句话，组件把它挂成标签的 `title`，界面不再有图标。
+   */
+  tooltip?: string
   children: ReactNode
 }
 
 /**
- * 表单字段（标签 + 控件 + 说明 / ⓘ）。
+ * 表单字段（标签 + 控件 + 常驻说明）。
  *
- * **带 ⓘ 时外壳不是 `<label>`**（2026-11-04 用户反馈：悬停选择框会连带点亮 ⓘ）。
- * 为什么：`<label>` 会把「指针在标签区域」、「点击」两件事都转发给它的控件 ——
- * ⓘ 是个按钮，塞进 label 后它的悬停/点击与控件成了一件事（在这之前连「点 ⓘ 会顺手
- * 切掉设置」都得靠调用点自己躲）。控件自己的无障碍名不靠这层标签：本仓库的控件一律
- * 由调用点给 `aria-label` / `ariaLabel`（Select 的必填 prop、input 的 aria-label）。
- * 不带 ⓘ 时仍是 `<label>`（点标签文字聚焦控件是免费的可用性），行为一字未改。
+ * 外壳恒为 `<label>`（点标签文字即聚焦控件）。历史上带 ⓘ 时外壳被迫降级成 `<div>`，
+ * 因为 `<label>` 会把「指针在标签区域 / 点击」转发给控件，而 ⓘ 是个按钮；2026-11-14
+ * 起 ⓘ 全部换成标签上的 `title`，那条转发又变回想要的行为，于是外壳统一回 `<label>`。
+ * 控件自己的无障碍名不靠这层标签：本仓库的控件一律由调用点给 `aria-label` / `ariaLabel`。
  */
-export function Field({ label, hint, info, children }: FieldProps) {
-  const body = (
-    <>
-      <span className={css.fieldLabel}>{label}{info !== undefined ? <> {info}</> : null}</span>
+export function Field({ label, hint, tooltip, children }: FieldProps) {
+  return (
+    <label className={css.field}>
+      <span className={css.fieldLabel} title={tooltip}>{label}</span>
       {children}
       {hint !== undefined && <span className={css.hint}>{hint}</span>}
-    </>
+    </label>
   )
-  return info === undefined ? <label className={css.field}>{body}</label> : <div className={css.field}>{body}</div>
 }
 
 /* ---------------- SectionTitle ---------------- */
@@ -357,24 +362,35 @@ export interface SectionTitleProps {
   title: string
   /**
    * 常驻副标题：只留给**动态/元数据**文案（当前项名、计数、状态说明、必须看到的下一步指引）。
-   * 纯说明性文案（机制 / 边界 / 背景 / 输入规则）一律走 `info`。
+   * 纯说明性文案（机制 / 边界 / 背景 / 输入规则）一律走 `tooltip`。
    */
   subtitle?: string
   /**
-   * 说明性文案的 ⓘ（调用点传 `<InfoHint text={t('原键')} label={t('common.infoHint')} />`）。
-   * 渲在标题**同一行**右侧（DESIGN.md §7「摆放」形态①）；与它互斥的旧写法是把同一句话
-   * 常驻成 `subtitle` —— 那就把页面又撑长了一行。
+   * 说明性文案的**悬停承载**（2026-11-14 用户要求「把所有页面的 ⓘ 都换成悬停能读到的 title」）：
+   * 挂成标题的 `title` —— 鼠标停在这行标题上就能读到机制/边界/背景那几句话，界面不再有图标。
    */
-  info?: ReactNode
+  tooltip?: string
+  /**
+   * 标题行右端的动作控件（刷新 / 体检这类「只作用于本区块」的按钮）。
+   * 2026-11-14：此前调用点只能把按钮塞进 `info` 槽并自己补 `statusSpacer`（见 SyncLogList），
+   * 槽位语义被借用；现在显式给一个 action 槽，内部自带推右的 spacer。
+   * 不传即旧行为（DOM 与之前逐字一致）。
+   */
+  action?: ReactNode
 }
 
-/** 区块标题（页面内二级标题 + 可选副标题 / ⓘ 说明） */
-export function SectionTitle({ title, subtitle, info }: SectionTitleProps) {
+/** 区块标题（页面内二级标题 + 可选副标题 / 悬停说明 / 右侧动作） */
+export function SectionTitle({ title, subtitle, tooltip, action }: SectionTitleProps) {
   return (
     <div className={css.sectionTitleBlock}>
       <div className={css.sectionTitleRow}>
-        <h3 className={css.sectionTitle}>{title}</h3>
-        {info}
+        <h3 className={css.sectionTitle} title={tooltip}>{title}</h3>
+        {action !== undefined && (
+          <>
+            <span className={css.statusSpacer} />
+            {action}
+          </>
+        )}
       </div>
       {subtitle !== undefined && <p className={css.sectionSubtitle}>{subtitle}</p>}
     </div>
@@ -412,6 +428,53 @@ export function Checkbox({ checked, onChange, label, disabled }: CheckboxProps) 
         onChange={(event: ChangeEvent<HTMLInputElement>) => { onChange(event.target.checked) }}
       />
       <span>{label}</span>
+    </label>
+  )
+}
+
+/* ---------------- Switch（弹性开关） ---------------- */
+
+export interface SwitchProps {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  /** 无障碍名：可见标题在外部时不重复渲染，读屏用它播报 */
+  label: string
+  disabled?: boolean
+  /** 与外部 <label htmlFor> 配对的 id（点标题也能拨动） */
+  id?: string
+}
+
+/**
+ * 弹性开关（拨动时圆点先拉长成胶囊、前缘到位后后缘追上，收尾轻微回弹）。
+ *
+ * 与 Checkbox 的分工（判据见 DESIGN.md §6）：**设置型 / 模式型的单一布尔、拨动即生效**用它；
+ * 列表多选、执行前选项、危险确认仍用 Checkbox —— 那些勾选是「这次要做的事」，不是「这台机器的状态」。
+ *
+ * 为什么仍是 <input type=checkbox>：原生控件自带 checked / disabled / 键盘空格切换以及
+ * <label htmlFor> 联动，`role="switch"` 只把读屏播报换成「开关 开/关」。视觉件（轨道 + 圆点）
+ * 放在同级 span 里，输入框本身 opacity:0 —— 于是它还能接键盘焦点与原生切换逻辑。
+ */
+export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) {
+  // 动画由 CSS transition 驱动（不上 keyframes）：浏览器在 click 当帧就翻好了 input.checked，
+  // 而 React 的提交晚一帧，keyframes 只会从 0% 重播 ⇒ 圆点先瞬移到终点再倒回来（横跳）。
+  // transition 没有起点重播，晚一帧、中途反向都从当前位置插值；挂载首帧也不会播动画。
+  return (
+    <label className={disabled === true ? `${css.switchRoot} ${css.switchRootDisabled}` : css.switchRoot}>
+      <input
+        id={id}
+        className={css.switchInput}
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        disabled={disabled}
+        aria-label={label}
+        onChange={(event: ChangeEvent<HTMLInputElement>) => {
+          onChange(event.target.checked)
+        }}
+      />
+      <span className={css.switchTrack} aria-hidden="true">
+        <span className={css.switchKnob} />
+      </span>
     </label>
   )
 }

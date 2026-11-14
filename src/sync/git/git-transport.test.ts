@@ -718,6 +718,153 @@ test('集成：同内容重复 upload → 第二次不产生新 commit（git 天
   assert.equal(listed.length, 1, '远端仍只有 1 条快照（同 id 覆盖语义）');
 });
 
+/** 递归读目录树（相对路径 → 文本内容）：用于断言 latest/ 与快照目录逐文件一致 */
+async function readTree(root: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const walk = async (dir: string, prefix: string): Promise<void> => {
+    for (const name of (await fs.readdir(dir)).sort()) {
+      const full = path.join(dir, name);
+      const rel = prefix === '' ? name : prefix + '/' + name;
+      const stat = await fs.stat(full);
+      if (stat.isDirectory()) await walk(full, rel);
+      else out.set(rel, await fs.readFile(full, 'utf8'));
+    }
+  };
+  await walk(root, '');
+  return out;
+}
+
+test('issue #141：明文 upload 在同一次 commit 内派生 latest/，与 snapshots/<id>/ 逐文件一致且 list 不计入', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+  await transport.upload(sampleSnapshot());
+
+  const snapTree = await readTree(path.join(workDir, 'snapshots', 'snap-001'));
+  const latestTree = await readTree(path.join(workDir, 'latest'));
+  assert.deepEqual([...latestTree.keys()].sort(), [...snapTree.keys()].sort(), 'latest/ 与快照目录的文件清单必须一致');
+  for (const [rel, content] of snapTree) {
+    assert.equal(latestTree.get(rel), content, 'latest/' + rel + ' 与快照内容不一致');
+  }
+  // manifest 保留真实快照 id（反向识别用），不是 'latest'
+  const manifest = JSON.parse(await fs.readFile(path.join(workDir, 'latest', 'manifest.json'), 'utf8')) as { id: string };
+  assert.equal(manifest.id, 'snap-001');
+
+  // 只写不读：list 仍只有 1 条（顶层多一个目录天然被忽略）
+  assert.deepEqual((await transport.list()).map((m) => m.id), ['snap-001']);
+
+  // 同一次 push：latest/ 与 snapshots/ 必须落在同一个提交里
+  const log = await runRealGit(['log', '--format=%s', '--all'], bare);
+  assert.equal(log.stdout.trim().split('\n').filter(Boolean).length, 1, 'latest/ 绝不允许单独占一个 commit');
+  const tree = await runRealGit(['ls-tree', '-r', '--name-only', 'HEAD'], bare);
+  assert.ok(tree.stdout.includes('latest/manifest.json'), '远端缺 latest/manifest.json: ' + tree.stdout);
+  assert.ok(tree.stdout.includes('snapshots/snap-001/manifest.json'));
+});
+
+test('issue #141：latest/ 建成后紧接着再 push 同一内容 → 视图不重建、不产生新 commit', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+  await transport.upload(sampleSnapshot());
+  const before = await readTree(path.join(workDir, 'latest'));
+
+  await transport.upload(sampleSnapshot());
+  const log = await runRealGit(['log', '--format=%s', '--all'], bare);
+  assert.equal(log.stdout.trim().split('\n').filter(Boolean).length, 1, '内容无变化 → 不得产生新 commit');
+  assert.deepEqual(await readTree(path.join(workDir, 'latest')), before, 'latest/ 应保持指向既有快照');
+});
+
+test('issue #141：加密快照不写 latest/（没有明文镜像，也不造密文副本）', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+  await transport.upload(await encryptedSnapshot());
+
+  const hasLatest = await fs.stat(path.join(workDir, 'latest')).then(() => true).catch(() => false);
+  assert.equal(hasLatest, false, '加密快照不得生成 latest/ 明文视图');
+  const tree = await runRealGit(['ls-tree', '-r', '--name-only', 'HEAD'], bare);
+  assert.ok(!tree.stdout.includes('latest/'), '远端不得出现 latest/: ' + tree.stdout);
+});
+
+test('issue #141：latest/ 永远指向最新那份 —— 后推一份更旧的快照不回退视图', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+  await transport.upload(sampleSnapshot({ id: 'snap-new', createdAt: '2026-08-16T14:00:00.000Z' }));
+  await transport.upload(sampleSnapshot({ id: 'snap-old', createdAt: '2026-08-16T12:00:00.000Z' }));
+
+  const manifest = JSON.parse(await fs.readFile(path.join(workDir, 'latest', 'manifest.json'), 'utf8')) as { id: string };
+  assert.equal(manifest.id, 'snap-new', 'out-of-order 上传不得把 latest/ 回退成更旧的快照');
+  // 两份都还在（保留策略不受影响），latest/ 只镜像最新那份
+  assert.deepEqual((await transport.list()).map((m) => m.id).sort(), ['snap-new', 'snap-old']);
+});
+
+test('issue #141：用户手工删掉远端 latest/ 后 list/download 不报错，下一次 push 重建视图', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+  await transport.upload(sampleSnapshot());
+
+  // 另开一个工作副本模拟「有人在远端删了 latest/ 并推送」
+  const otherRoot = await makeTempDir(t);
+  const other = path.join(otherRoot, 'clone');
+  const cloned = await runRealGit(['clone', bare, other], otherRoot);
+  assert.equal(cloned.code, 0, 'clone 失败: ' + cloned.stderr);
+  await runRealGit(['config', 'user.name', 'other'], other);
+  await runRealGit(['config', 'user.email', 'other@local'], other);
+  const removed = await runRealGit(['rm', '-r', '-q', 'latest'], other);
+  assert.equal(removed.code, 0, 'git rm 失败: ' + removed.stderr);
+  await runRealGit(['commit', '-m', 'drop latest'], other);
+  const pushed = await runRealGit(['push', 'origin', 'HEAD'], other);
+  assert.equal(pushed.code, 0, 'push 失败: ' + pushed.stderr);
+
+  // 允许远端没有 latest/：读路径完全不受影响
+  assert.deepEqual((await transport.list()).map((m) => m.id), ['snap-001']);
+  assert.deepEqual(await transport.download('snap-001'), sampleSnapshot());
+
+  // 派生视图可重建：再推同样的内容会把 latest/ 补回来（且这确实是一次真实提交）
+  await transport.upload(sampleSnapshot());
+  const tree = await runRealGit(['ls-tree', '-r', '--name-only', 'HEAD'], bare);
+  assert.ok(tree.stdout.includes('latest/manifest.json'), 'latest/ 应可重建: ' + tree.stdout);
+});
+
+test('issue #141：存量工作副本的 sparse cone 不含 latest/ 时，首次 push 自动补齐 cone 后仍能推上去', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  await runRealGit(['init'], workDir);
+  await runRealGit(['config', 'user.name', 'test'], workDir);
+  await runRealGit(['config', 'user.email', 'test@local'], workDir);
+  await runRealGit(['config', 'core.sparseCheckout', 'true'], workDir);
+  await fs.mkdir(path.join(workDir, '.git', 'info'), { recursive: true });
+  // 旧版本建的 cone：只有三个快照面
+  await fs.writeFile(
+    path.join(workDir, '.git', 'info', 'sparse-checkout'),
+    '/snapshots/\n/snapshots-encrypted/\n/blobs/\n',
+  );
+
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+  await transport.upload(sampleSnapshot());
+
+  const cone = await fs.readFile(path.join(workDir, '.git', 'info', 'sparse-checkout'), 'utf8');
+  assert.ok(cone.includes('/latest/'), 'cone 必须补齐 latest/，否则 git add 会拒收: ' + cone);
+  const tree = await runRealGit(['ls-tree', '-r', '--name-only', 'HEAD'], bare);
+  assert.ok(tree.stdout.includes('latest/manifest.json'), 'cone 补齐后 latest/ 应推上去: ' + tree.stdout);
+});
+
+test('issue #141：删除被 latest/ 镜像的那份快照 → 视图随同一提交移除，不留悬空视图', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+  await transport.upload(sampleSnapshot());
+  await transport.delete('snap-001');
+
+  const hasLatest = await fs.stat(path.join(workDir, 'latest')).then(() => true).catch(() => false);
+  assert.equal(hasLatest, false, '被删快照的视图不得残留在工作副本');
+  const tree = await runRealGit(['ls-tree', '-r', '--name-only', 'HEAD'], bare);
+  assert.ok(!tree.stdout.includes('latest/'), '远端不得留下指向已删快照的 latest/: ' + tree.stdout);
+  assert.deepEqual(await transport.list(), []);
+});
+
 test('集成：token 不泄漏到快照文件内容与 commit message（真实 git 全链路）', async (t) => {
   const bare = await makeBareRepo(t);
   const workDir = await makeTempDir(t);
@@ -1118,7 +1265,7 @@ test('issue #122：网络子命令一律带低速上限，本地子命令不带'
   for (const c of local) assert.ok(!c.args.join(' ').includes('lowSpeedLimit'), '本地命令不该带 http 配置: ' + c.args.join(' '));
 });
 
-test('issue #122：首次 clone 走 partial clone + sparse-checkout，只 materialize 三个同步目录', async (t) => {
+test('issue #122：首次 clone 走 partial clone + sparse-checkout，只 materialize 四个同步目录（含 latest 派生视图）', async (t) => {
   const dir = await makeTempDir(t); // 空目录 → 走 clone
   const calls: CallRecord[] = [];
   const transport = new GitTransport(makeOptions({ workDir: dir, exec: mockExec(calls) }));
@@ -1132,7 +1279,7 @@ test('issue #122：首次 clone 走 partial clone + sparse-checkout，只 materi
   assert.ok(sparse !== undefined, '必须设置 sparse-checkout');
   assert.equal(
     stripProtocolGuards(sparse.args.join(' ')),
-    'sparse-checkout set --cone snapshots snapshots-encrypted blobs',
+    'sparse-checkout set --cone snapshots snapshots-encrypted blobs latest',
     'sparse 面必须与同步目录同源: ' + sparse.args.join(' '),
   );
   assert.equal(calls.filter((c) => c.args.includes('checkout')).length, 1, 'sparse 之后必须 checkout 一次');
@@ -1956,10 +2103,10 @@ test('issue #131 集成：子目录前缀 —— 上传/列表/下载/删除都�
   assert.equal(root.code, 0, 'ls-tree 失败: ' + root.stderr);
   assert.deepEqual(root.stdout.split('\n').filter(Boolean), [subdir], '仓库根必须只有子目录前缀');
 
-  // 前缀下的同步目录（无外置 blob 时只建 snapshots）
+  // 前缀下的同步目录（无外置 blob 时建 snapshots + 派生视图 latest；issue #141）
   const inner = await runRealGit(['-c', 'core.quotePath=false', 'ls-tree', '--name-only', 'HEAD:' + subdir], bare);
   assert.equal(inner.code, 0, 'ls-tree 子目录失败: ' + inner.stderr);
-  assert.deepEqual(inner.stdout.split('\n').filter(Boolean), ['snapshots'], '子目录下必须是同步目录');
+  assert.deepEqual(inner.stdout.split('\n').filter(Boolean), ['latest', 'snapshots'], '子目录下必须是同步目录');
 
   // 工作副本同样落在前缀下
   assert.ok(await fs.stat(path.join(workDir, subdir, 'snapshots', 'snap-001', 'manifest.json')));

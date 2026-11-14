@@ -259,7 +259,15 @@ export interface MigrationIo {
 
 const defaultIo: MigrationIo = {
   async mkdir(d, o) { await fs.mkdir(d, o); },
-  async readdirNames(d) { try { return await fs.readdir(d); } catch { return []; } },
+  // 只有「目录不存在」才算空：权限/路径类型错误必须抛给调用方（审计 P3-6）。
+  // 旧实现 catch 一切 → 读不出的目录被当作空目录，历史面板显示「共 0 条」、
+  // 自动清理也算 0 条直接跳过，用户完全看不出是读取失败。
+  async readdirNames(d) {
+    try { return await fs.readdir(d); } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+  },
   async readFileText(p) { return (await fs.readFile(p, 'utf8')).toString(); },
   async writeAll(t, c) { await atomicWriteFile(t, c, { mode: 0o600, symlink: 'reject' }); },
   async rm(p, o) { await fs.rm(p, o); },
@@ -473,7 +481,7 @@ export class MigrationStore {
    * 调用方据此区分「共 N 条，本页只含最近 M 条」。
    */
   async read(opts: { limit?: number } = {}): Promise<ReadMigrationResult> {
-    const names = await this.io.readdirNames(this.dir).catch(() => []);
+    const names = await this.io.readdirNames(this.dir);
     const entries: StoredMigrationHistoryEntry[] = [];
     const corrupted: string[] = [];
     const sorted = names.filter(isHistoryBasename).sort();
@@ -498,7 +506,7 @@ export class MigrationStore {
 
   /** 目录内合法历史文件总数（只 readdir，不读文件内容；供「自动清理」行展示）。 */
   async count(): Promise<number> {
-    const names = await this.io.readdirNames(this.dir).catch(() => []);
+    const names = await this.io.readdirNames(this.dir);
     return names.filter(isHistoryBasename).length;
   }
 
@@ -507,7 +515,7 @@ export class MigrationStore {
    * 返回本次删除的文件名。
    */
   async retention(limit = DEFAULT_MIGRATION_RETENTION): Promise<string[]> {
-    const names = (await this.io.readdirNames(this.dir).catch(() => [])).filter(isHistoryBasename).sort();
+    const names = (await this.io.readdirNames(this.dir)).filter(isHistoryBasename).sort();
     const removed: string[] = [];
     // 0（或负数）= 不限制：调用方显式关闭自动清理时按「保留全部」处理，绝不当作「删光」。
     if (!Number.isFinite(limit) || limit <= 0) return removed;

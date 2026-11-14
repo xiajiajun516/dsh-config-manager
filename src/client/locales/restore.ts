@@ -8,7 +8,6 @@
 export const zh = {
   // —— 快照恢复 ——
   'home.schedule.title': '定时备份',
-  'snapshots.selectHint': '选择快照以预览恢复计划（只读预览，不会改动任何设置）：',
   'snapshots.status': '状态',
   'snapshots.delete': '删除',
   'snapshots.deleted': '已删除快照',
@@ -71,7 +70,6 @@ export const zh = {
 
 export const en: Record<keyof typeof zh, string> = {
   'home.schedule.title': 'Schedule',
-  'snapshots.selectHint': 'Select a snapshot to preview its restore plan (read-only preview, changes nothing):',
   'snapshots.status': 'Status',
   'snapshots.delete': 'Delete',
   'snapshots.deleted': 'Snapshot deleted',

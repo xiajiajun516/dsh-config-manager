@@ -14,8 +14,7 @@ import { redact } from '../../security/redaction.ts'
 import { HistoryApi, type HistoryExportFormat, type HistoryListResult, type HistoryRetentionState } from './history-api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Empty } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
-import { SkeletonTable } from '../common/Skeleton.tsx'
+import { Icon } from '../common/Icon.tsx'
 import { Select } from '../common/Select.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -156,10 +155,63 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
     }
   }
 
+  // 加载态：**整页骨架照抄真实页的壳**（徽章行 → 清理卡 → 过滤卡 → 列表卡）。
+  // 容器类全部复用真实类，只有文字与控件换成占位条 ⇒ 数据到货时位置与高度都不跳。
+  // 2026-11-14 用户反馈：旧骨架是一张 3 列表格（SkeletonTable），真实页却是「徽章行 +
+  // 两张单行控件卡 + 分组两行式行卡」，两套几何 ⇒ 数据一到整页重排、高矮差一多半。
   if (state.status === 'loading') {
     return (
       <div className={css.viewBody}>
-        <SkeletonTable label={t('history.loading')} />
+        <div className={css.statRow} role="status" aria-busy="true" aria-label={t('history.loading')}>
+          <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+          <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+          <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+          <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+        </div>
+        {/* 自动清理卡：标签 + 上限下拉 + 当前条数徽章 + 行尾「立即清理」 */}
+        <Card className={css.historyTightCard}>
+          <div className={css.historyControlRow}>
+            <span className={css.skeletonBar + ' ' + css.historySkeletonLabel} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonControl} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+            <span className={css.statusSpacer} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonButton} />
+          </div>
+        </Card>
+        {/* 过滤 + 导出卡：三个维度下拉 + 搜索框；第二行两颗按钮 */}
+        <Card className={css.historyTightCard}>
+          <div className={css.historyControlRow}>
+            <span className={css.skeletonBar + ' ' + css.historySkeletonControl} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonControl} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonControl} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonSearch} />
+          </div>
+          <div className={css.historyControlRowEnd}>
+            <span className={css.skeletonBar + ' ' + css.historySkeletonButton} />
+            <span className={css.skeletonBar + ' ' + css.historySkeletonButton} />
+          </div>
+        </Card>
+        {/* 列表卡：组头（类型 + 条数徽章）+ 两行式行卡 */}
+        <Card>
+          <div className={css.historyGroup}>
+            <div className={css.statRow}>
+              <span className={css.skeletonBar + ' ' + css.historySkeletonBadge} />
+              <span className={css.skeletonBar + ' ' + css.historySkeletonBadgeSm} />
+            </div>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <div key={i} className={css.historyRow}>
+                <div className={css.historyRowMain}>
+                  <div className={css.historyMeta}>
+                    <span className={css.skeletonBar + ' ' + css.historySkeletonTime} />
+                    <span className={css.skeletonBar + ' ' + css.historySkeletonBadgeSm} />
+                    <span className={css.skeletonBar + ' ' + css.historySkeletonSections} />
+                  </div>
+                  <span className={css.skeletonBar + ' ' + css.historySkeletonSummary} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     )
   }
@@ -202,22 +254,21 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
 
   return (
     <div className={css.viewBody}>
-      {/* 统计徽章行（页名在 TaskShell 头部已给一次；这里只放数据与语义 ⓘ） */}
-      <div className={css.statRow}>
+      {/* 统计徽章行（页名在 TaskShell 头部已给一次；这里只放数据） */}
+      <div className={css.statRow} title={t('history.subtitle')}>
         <Badge kind="info">{t('history.stats.total')}: {summary.total}</Badge>
         <Badge kind="ok">{t('history.stats.success')}: {summary.success}</Badge>
         <Badge kind="error">{t('history.stats.failed')}: {summary.failed}</Badge>
         <Badge kind="warn">{t('history.stats.skipped')}: {summary.skipped}</Badge>
-        <InfoHint text={t('history.subtitle')} label={t('common.infoHint')} />
       </div>
 
       {/* 损坏条目：结论句 + 计数徽章同一行（计数属于「状态」，用徽章而不是第二句灰字）。 */}
       {corrupted.length > 0 && (
         <Banner kind="warn">
-          <div className={css.statRow}>
-            <span>{t('history.corruptedBanner')}</span>
-            <Badge kind="warn">{t('history.corruptedCount', { count: String(corrupted.length) })}</Badge>
-          </div>
+          <Icon name="warn" size={14} />
+          <span>{t('history.corruptedBanner')}</span>
+          <span className={css.statusSpacer} />
+          <Badge kind="warn">{t('history.corruptedCount', { count: String(corrupted.length) })}</Badge>
         </Banner>
       )}
 
@@ -225,10 +276,10 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
           分隔成独立卡。磁盘现状用徽章（状态），不写成第二句灰字；超限徽章转 warn —— 停在超限说明
           清理还没跑到（节流 60s 或本轮刚写过），不是「已收敛」。 */}
       {retention !== null && (
-        <Card>
-          <div className={css.actionRow}>
-            <span className={css.fieldLabel}>
-              {t('history.retention.label')} <InfoHint text={t('history.retention.hint')} label={t('common.infoHint')} />
+        <Card className={css.historyTightCard}>
+          <div className={css.historyControlRow}>
+            <span className={css.fieldLabel} title={t('history.retention.hint')}>
+              {t('history.retention.label')}
             </span>
             <Select
               value={String(retention.maxEntries)}
@@ -238,6 +289,7 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
             <Badge kind={retention.maxEntries > 0 && retention.total > retention.maxEntries ? 'warn' : 'info'}>
               {t('history.retention.current', { count: String(retention.total) })}
             </Badge>
+            <span className={css.statusSpacer} />
             <Button
               onClick={() => void applyRetention(retention.maxEntries)}
               loading={state.retentionBusy}
@@ -250,8 +302,10 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
       )}
 
       {/* 过滤 + 导出：控件各自带维度标签（「操作类型: 全部」…），不再另起一行区块标题。 */}
-      <Card>
-        <div className={css.actionRow}>
+      <Card className={css.historyTightCard}>
+        {/* 两行结构：第一行是「筛什么」（三个维度下拉 + 搜索），第二行是「拿到之后做什么」
+            （刷新 / 导出）。挤成一行的直接后果是 564px 里 7 个控件换行成两行半，读不出分组。 */}
+        <div className={css.historyControlRow}>
           <Select
             value={state.filter.kind ?? ''}
             onChange={(next) => setFilter({ kind: next === '' ? undefined : next as never })}
@@ -279,13 +333,19 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
               { value: '200', label: t('history.filter.recent.200') },
             ]}
           />
-          <input
-            className={css.input}
-            type="search"
-            placeholder={t('history.search.placeholder')}
-            value={state.filter.query}
-            onChange={(e) => setFilter({ query: e.target.value })}
-          />
+          <label className={css.historySearch}>
+            <Icon name="inspect" size={12} />
+            <input
+              className={css.historySearchInput}
+              type="search"
+              aria-label={t('history.search.placeholder')}
+              placeholder={t('history.search.placeholder')}
+              value={state.filter.query}
+              onChange={(e) => setFilter({ query: e.target.value })}
+            />
+          </label>
+        </div>
+        <div className={css.historyControlRowEnd}>
           <Button
             onClick={() => void load(true)}
             loading={state.refreshing}
@@ -329,11 +389,11 @@ function HistoryList({ groups, t }: { groups: ReturnType<typeof groupByKind>; t:
             <Badge kind="info">{t(g.kindLabelKey)}</Badge>
             <Badge kind="info">{g.count}</Badge>
           </div>
-          <div className={css.historyScroll}>
-            {g.entries.map((e) => (
-              <HistoryRow key={e.at + e.kind} entry={e} t={t} />
-            ))}
-          </div>
+          {/* 行直接留在卡片里：每组分一个 380px 描边滚动盒，会让 564px 的面板出现
+              「框里还有框、滚动条两套」；长列表的滚动交给面板正文，卡片只负责分隔。 */}
+          {g.entries.map((e) => (
+            <HistoryRow key={e.at + e.kind} entry={e} t={t} />
+          ))}
         </div>
       ))}
     </Card>

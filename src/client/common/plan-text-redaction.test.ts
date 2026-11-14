@@ -170,10 +170,12 @@ const RENDER_POINTS: RenderPoint[] = [
   {
     id: 'snapshot-inspect-description',
     // UI v2：该视图搬到 library/ 供产物库与备份页共用（同一次提交里改登记表，绝不漏）
+    // W7（D-05 #1）：条目拆成「圆点 + 等宽 adapter + 描述」三段，前导 {' '} 随之消失 ——
+    // 锚点改成描述那一段自己的容差位（安全边界不变：仍是同一个 redact 包住宿主文本）。
     file: 'src/client/library/BackupInspectView.tsx',
-    redacted: R("{' '}{item.adapter}: {redact(item.description)}"),
-    bare: R("{' '}{item.adapter}: {item.description}"),
-    why: '备份差异查看的计划项描述',
+    redacted: R('<span className={css.inspectDesc}>{redact(item.description)}</span>'),
+    bare: R('<span className={css.inspectDesc}>{item.description}</span>'),
+    why: '备份差异查看的计划项描述（D-05 三段条目的描述段）',
   },
   /* ---------------- 同步差异确认 ---------------- */
   {
@@ -317,6 +319,63 @@ const RENDER_POINTS: RenderPoint[] = [
     redacted: /const redactErrorText = \(err: unknown\): string => redact\(err instanceof Error \? err\.message : String\(err\)\)/,
     bare: /const redactErrorText = \(err: unknown\): string => err instanceof Error \? err\.message : String\(err\)/,
     why: '运行中心错误文本（2 处，同文件其它 3 处已脱敏）',
+  },
+  /* ---------------- 审计 P9-2（error state → 自绘 Banner / 列表）登记 ---------------- */
+  {
+    id: 'lib-restore-plan-error-state',
+    file: 'src/client/library/LibraryActions.tsx',
+    redacted: R('planFingerprint: undefined, error: redactErrorText(err)'),
+    bare: R('planFingerprint: undefined, error: err instanceof Error ? err.message : String(err)'),
+    why: '恢复计划失败原因存进 plan.error 后由 <Banner kind="error">{plan.error}</Banner> 直接渲染（宿主 message 可能含路径/token/env 片段）',
+  },
+  {
+    id: 'lib-inspect-backup-error-state',
+    file: 'src/client/library/LibraryActions.tsx',
+    redacted: R('error: redactErrorText(err), result: null'),
+    bare: R('error: err instanceof Error ? err.message : String(err), result: null'),
+    why: '「查看与对比」失败原因存进 inspect.error 后由 Banner 直接渲染',
+  },
+  {
+    id: 'export-inventory-error-state',
+    file: 'src/client/export/ExportView.tsx',
+    redacted: R('setInvError(redactErrorText(err))'),
+    bare: R('setInvError(err instanceof Error ? err.message : String(err))'),
+    why: '分区清单读取失败文本（宿主异常 / 网络中断原文）由 Banner 直接渲染',
+  },
+  {
+    id: 'path-picker-browse-error-state',
+    file: 'src/client/import/PathPickerDialog.tsx',
+    redacted: R('detail: redact(error instanceof Error ? error.message : String(error))'),
+    bare: R('detail: error instanceof Error ? error.message : String(error)'),
+    why: '目录列举失败文本（含请求的绝对路径）由 Banner 直接渲染',
+  },
+  {
+    id: 'sync-confirm-apply-error-state',
+    file: 'src/client/sync/SyncConfirmView.tsx',
+    redacted: R("    } catch (err) {\n      setPhase('failed');\n      setError(redact(err instanceof Error ? err.message : String(err)));\n    }\n  };\n\n  const runCancel"),
+    bare: R("    } catch (err) {\n      setPhase('failed');\n      setError(err instanceof Error ? err.message : String(err));\n    }\n  };\n\n  const runCancel"),
+    why: '一致性应用失败原因（api.applyItems 抛出的宿主文本）由 Banner 直接渲染',
+  },
+  {
+    id: 'sync-confirm-rollback-error-state',
+    file: 'src/client/sync/SyncConfirmView.tsx',
+    redacted: R("    } catch (err) {\n      setPhase('failed');\n      setError(redact(err instanceof Error ? err.message : String(err)));\n    }\n  };\n\n  const busy"),
+    bare: R("    } catch (err) {\n      setPhase('failed');\n      setError(err instanceof Error ? err.message : String(err));\n    }\n  };\n\n  const busy"),
+    why: '回滚失败原因（api.rollback 抛出的宿主文本）由 Banner 直接渲染',
+  },
+  {
+    id: 'sync-confirm-result-warnings',
+    file: 'src/client/sync/SyncConfirmView.tsx',
+    redacted: R('result.warnings.map((w, i) => <li key={i}>{redact(w)}</li>)'),
+    bare: R('result.warnings.map((w, i) => <li key={i}>{w}</li>)'),
+    why: '应用结果 warnings（宿主按分区拼装，可能回显本地配置值/路径）逐条渲染',
+  },
+  {
+    id: 'sync-panel-push-warnings',
+    file: 'src/client/sync/SyncPanel.tsx',
+    redacted: R('pushView.warnings.map((w, i) => <li key={i}>{redact(w)}</li>)'),
+    bare: R('pushView.warnings.map((w, i) => <li key={i}>{w}</li>)'),
+    why: '推送结果 warnings 逐条渲染（同一类宿主文本）',
   },
   /* ---------------- 「工作区 + 会话回滚」卡（t12：新组件登记） ---------------- */
   {
@@ -499,4 +558,130 @@ test('安全守卫（按渲染点）：NAKED_TOAST_CALL 的两处边界（t56：
   assert.equal(naked("toast.error(t('k'))"), false, '合法：纯字典文案')
   // R3：可选链已纳入扫描
   assert.ok(naked('toast?.error(String(problem))'), 'R3：toast?.error 已纳入')
+})
+
+/* ============================================================================
+ * 反向守卫（P9-9）：**未登记的 Banner 裸渲染必须红灯**。
+ *
+ * 上面的「按渲染点」守卫是白名单式的：RENDER_POINTS 里没登记的新渲染点天然全绿
+ * （审计实测：给任意组件加一处裸 Banner 也能过）。这里补反方向判据 —— 主动扫描
+ * src/client 下全部 「<Banner kind="error">」 / 「<Banner kind="warn">」 渲染点，
+ * 命中「裸宿主错误文本」形态而**未登记**即失败。
+ *
+ * 扫描面（「明确形态」，故意窄，理由如下）：
+ *  - 只看 「<Banner kind="error|warn">{EXPR}</Banner>」 且 EXPR 内不含花括号
+ *    （对象字面量 / 箭头函数体 / 嵌套 JSX 在纯字符串层判断不可靠，一律不扫）；
+ *    [^{}] 允许换行，所以跨行的简单表达式仍被扫到。
+ *  - 命中形态：EXPR 直接取 .message / .detail，或 String(...) 强转 —— 这是宿主文本
+ *    进入 JSX 的明确裸形态（本仓最常见的泄漏写法）。
+ *  - 表达式内已脱敏即放行：出现 redact( / redactErrorText(（直接包住），或 t(
+ *    （整段是字典文案，不含宿主值）。
+ *  - 纯 state 字段形态（{state.error} 这类）**不扫**：它们在写入侧脱敏（对应登记点
+ *    在 RENDER_POINTS 里），渲染处无法从字符串判断；强行扫描只能逼出全量白名单噪音，
+ *    与 P9-9「只扫明确形态、不许把白名单全塞进去」的边界冲突。宁可窄而真。
+ *  - <ErrorBanner error={...}> 不扫：组件自身就是脱敏边界（下方单测钉住内部仍在 redact）。
+ *
+ * 豁免机制：BANNER_EXEMPTIONS 逐条给「文件 + 表达式 + 理由 + 前提正则」；
+ * 每条必须恰好命中 1 次，且前提正则在源码里仍命中 —— 脱敏被挪走即红灯（不留死条目）。
+ * 阈值：扫描面 >= 40 个渲染点（当前扫描到 62 个），扫描器被改坏 / 遍历失效会立刻红。
+ */
+const BANNER_ERROR_RENDER = /<Banner kind="(?:error|warn)">\{([^{}]+)\}<\/Banner>/g
+const RAW_ERROR_EXPR = /\.message\b|\.detail\b|String\s*\(/
+const REDACTING_EXPR = /\bredact(?:ErrorText)?\s*\(|\bt\s*\(/
+
+interface BannerExemption {
+  file: string
+  expr: string
+  /** 豁免前提：该文件里仍存在的脱敏写入（挪走即失效） */
+  premise: RegExp
+  why: string
+}
+
+const BANNER_EXEMPTIONS: readonly BannerExemption[] = [
+  {
+    file: 'src/client/import/PathPickerDialog.tsx',
+    expr: 'state.detail',
+    premise: /detail: redact\(error instanceof Error \? error\.message : String\(error\)\)/,
+    why: '目录浏览失败原因在写 state 时已 redact（登记点 path-picker-browse-error-state），渲染处拿到的是脱敏后的字符串',
+  },
+]
+
+/** 递归列出 src/client 下的非测试 .tsx（相对仓库根、正斜杠） */
+function listClientTsx(dir: string, out: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name)
+    if (entry.isDirectory()) listClientTsx(abs, out)
+    else if (entry.name.endsWith('.tsx') && !entry.name.endsWith('.test.tsx')) {
+      out.push(path.relative(ROOT, abs).split(path.sep).join('/'))
+    }
+  }
+  return out
+}
+
+/** 扫描到的全部 Banner error/warn 渲染点（表达式已 trim，便于登记比对） */
+function scanBannerRenders(): { file: string; expr: string }[] {
+  const hits: { file: string; expr: string }[] = []
+  for (const file of listClientTsx(path.join(ROOT, 'src/client'))) {
+    for (const m of read(file).matchAll(BANNER_ERROR_RENDER)) hits.push({ file, expr: (m[1] ?? '').trim() })
+  }
+  return hits
+}
+
+/** 裸宿主错误文本 = 命中裸形态，且表达式内没有直接脱敏 */
+function isNakedErrorExpr(expr: string): boolean {
+  return RAW_ERROR_EXPR.test(expr) && !REDACTING_EXPR.test(expr)
+}
+
+test('反向守卫（P9-9）：src/client 的 Banner 错误渲染点不得出现未登记的裸宿主文本', () => {
+  const hits = scanBannerRenders()
+  assert.ok(
+    hits.length >= 40,
+    '扫描面异常：应识别 >= 40 个 <Banner kind="error|warn"> 渲染点（实际 ' + hits.length + '）',
+  )
+  const unregistered = hits
+    .filter((h) => isNakedErrorExpr(h.expr))
+    .filter((h) => !BANNER_EXEMPTIONS.some((e) => e.file === h.file && e.expr === h.expr))
+    .map((h) => h.file + ' -> {' + h.expr + '}')
+  assert.deepEqual(
+    unregistered,
+    [],
+    'Banner 直接渲染宿主错误原文：包 redact()/redactErrorText()，或按表达式登记 BANNER_EXEMPTIONS（含前提正则）',
+  )
+})
+
+test('反向守卫（P9-9）：豁免项不得是死条目（恰好命中 1 次，且脱敏前提仍成立）', () => {
+  const hits = scanBannerRenders()
+  for (const e of BANNER_EXEMPTIONS) {
+    const n = hits.filter((h) => h.file === e.file && h.expr === e.expr).length
+    assert.equal(n, 1, '[' + e.file + ' {' + e.expr + '}] 豁免应恰好命中 1 次（实际 ' + n + '）—— 渲染点被删/被改就删掉本豁免')
+    assert.match(
+      read(e.file),
+      e.premise,
+      '[' + e.file + '] 豁免前提已失效：该处的脱敏写入不见了 —— ' + e.why,
+    )
+  }
+})
+
+test('反向守卫（P9-9）：判别式对裸形态必须命中（注入自检，防守卫写成死代码）', () => {
+  const detect = (snippet: string): string[] =>
+    [...snippet.matchAll(BANNER_ERROR_RENDER)].map((m) => (m[1] ?? '').trim()).filter(isNakedErrorExpr)
+  assert.deepEqual(detect('<Banner kind="error">{err.message}</Banner>'), ['err.message'], 'err.message 必须判裸')
+  assert.deepEqual(detect('<Banner kind="warn">{String(cause)}</Banner>'), ['String(cause)'], 'String(cause) 必须判裸')
+  assert.deepEqual(detect('<Banner kind="error">{state.detail}</Banner>'), ['state.detail'], '.detail 必须判裸')
+  // 跨行简单表达式同样在扫描面内
+  assert.deepEqual(detect('<Banner kind="error">{\n  err.message\n}</Banner>'), ['err.message'], '跨行表达式仍须命中')
+  // 已脱敏 / 字典文案放行
+  assert.deepEqual(detect('<Banner kind="error">{redact(err.message)}</Banner>'), [], 'redact 包住合法')
+  assert.deepEqual(detect("<Banner kind=\"error\">{t('syncflow.importFailed')}</Banner>"), [], '纯字典文案合法')
+  // 三元等无花括号形态也在扫描面内（比预期更宽，是好事）
+  assert.deepEqual(detect('<Banner kind="error">{cond ? err.message : null}</Banner>'), ['cond ? err.message : null'], '三元形态仍须命中')
+  // 边界如实锁定：含花括号的表达式不在扫描面（对象字面量 / 箭头函数体，纯字符串层判不准）
+  assert.deepEqual(detect('<Banner kind="error">{({ m: err.message }).m}</Banner>'), [], '含花括号形态不扫')
+})
+
+test('反向守卫（P9-9）：ErrorBanner 自身仍是脱敏边界', () => {
+  const src = read('src/client/common/ErrorBanner.tsx')
+  assert.match(src, /const reason = redact\(actionable\.reason\)/, 'ErrorBanner 必须继续 redact 原因文本')
+  assert.match(src, /\{redact\(actionable\.title\)\}/, 'ErrorBanner 必须继续 redact 标题')
+  assert.match(src, /redact\(line\)/, 'ErrorList 必须继续 redact 每一行')
 })

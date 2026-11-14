@@ -60,14 +60,24 @@ import {
 import type { SessionBookkeepingResult } from './session-tombstones.ts';
 import { DEFAULT_RETENTION_POLICY, selectPruneCandidatesByPolicy } from './retention-policy.ts';
 import type { RetentionPolicy } from './retention-policy.ts';
-import { hashSection, loadSyncState, resolveDeviceIdentity, saveSyncState } from './sync-state.ts';
+import { hashSection, loadSyncState, resolveDeviceIdentity } from './sync-state.ts';
+import {
+  pendingMergeFor as buildPendingMerge,
+  recordPendingMerge as persistPendingMerge,
+  writeMergeBaseline as persistMergeBaseline,
+} from './pending-merge.ts';
 import type { PendingMerge, SyncState } from './sync-state.ts';
+// 写基线（祖先副本 + sync-state）的实现整体下沉，引擎只做环境透传（体量棘轮 + G-44 口径集中）
+import { recordBaseline as recordBaselineAt } from './baseline-record.ts';
+import type { RecordBaselineOptions } from './baseline-record.ts';
+// issue #140：内容判定（拉取/推送共用同一处实现，绝不各自比 id）
+import { diffSnapshotContent, hashSections } from './content-diff.ts';
 import type { EncryptedCredentials, SyncProbeResult, SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
 import { isEncryptedSections, PROBE_UNSUPPORTED_CODE, SyncTransportError } from './transport.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import { engineMsg } from './messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
-import { DEFAULT_ANCESTOR_KEEP, pruneAncestors, tryLoadAncestor, writeAncestor, writeEncryptedAncestor } from './ancestor.ts';
+import { tryLoadAncestor } from './ancestor.ts';
 import type { MergePlan, MergeSectionResult } from './merge.ts';
 import { merge as mergeSections } from './merge.ts';
 import { prepareApplyBundle } from './apply-bundle.ts';
@@ -266,6 +276,16 @@ export interface SyncPushReport {
    * deviceId」，别的设备推进过就仍然按冲突返回，绝不越过。
    */
   adoptedBase?: string;
+  /**
+   * issue #140：本次推送**没有产生新快照**（远端最新快照的分区内容与本次导出逐字相同）。
+   *
+   * 语义：`ok:true` + 本字段 = 「什么都没做，也不算失败」——未 upload、未建目录、未裁剪；
+   * 只是把基线指针**收养**到远端最新快照（`adoptedSnapshotId`），让下一轮判定有正确起点。
+   * GUI / 报告必须显式区分它（「内容未变化，已跳过」），不能显示成「已推送 xx」。
+   */
+  skipped?: 'unchanged';
+  /** issue #140：`skipped='unchanged'` 时被收养的远端快照 id（= 本次报告里的 snapshotId） */
+  adoptedSnapshotId?: string;
 }
 
 /** 差异报告中的单个变更项（PlanItem 摘要，不含敏感细节） */
@@ -914,6 +934,39 @@ export class SyncEngine {
       warnings.push(this.msg('sync.sessionTombstonesInherited', { count: String(bookkeeping.inherited) }));
     }
 
+    // issue #140：内容没变就**不新建快照**（不 upload、不建目录、不裁剪），只收养远端最新指针。
+    // 判据只有一处实现（content-diff.ts）：远端最新快照实际携带的分区哈希 vs 本次导出。
+    // - force:true = 用户明确要求「就算一样也新建」（覆盖语义），跳过本判定；
+    // - 加密快照的 sections 恒空（transport.ts）⇒ 判定 unknown ⇒ 维持既有行为，不新增下载/解密；
+    // - 本轮新发现会话删除墓碑时不跳过：墓碑只随新快照的 manifest 传播，跳过等于丢掉删除。
+    if (!encrypted && opts.force !== true && bookkeeping.deletedNow.length === 0) {
+      const latest = remoteIndex.metas[remoteIndex.metas.length - 1];
+      const diff = diffSnapshotContent(latest, undefined, hashSections(plainSections));
+      if (diff.reason === 'same-content' && latest !== undefined) {
+        await this.recordBaseline(latest.id, plainSections, this.now().toISOString(), {
+          remoteSnapshotId: latest.id,
+          // P2：本轮内容已被远端收下（收养 = 远端最新就是本机内容）⇒ 冲突已有结论，清掉待裁决。
+          pendingMerge: null,
+          // G-44：远端观测必须是**远端快照自己**的 sections，绝不由 state.sections 反推
+          remoteSections: latest.sections,
+          ...(bookkeeping.tracked
+            ? { sessionUnits: bookkeeping.sessionUnits, deletedSessions: bookkeeping.tombstones }
+            : {}),
+        });
+        return {
+          ok: true,
+          snapshotId: latest.id,
+          sections: Object.keys(plainSections) as SectionId[],
+          warnings,
+          skipped: 'unchanged',
+          adoptedSnapshotId: latest.id,
+          // 0.4.1 的基线收养是独立事实：本轮可能刚收养了「本机上次被打断的推送」，
+          // 紧接着又判定内容一致 —— 两件事都要如实回报（否则面板看不到基线自己动过）。
+          ...(adopted !== undefined ? { adoptedBase: adopted } : {}),
+        };
+      }
+    }
+
     // ⑥ 设备身份（cloud-sync 借鉴项 ⑥）：首次生成后持久化在 sync-state.json（已有则纯读），
     // 随 manifest 上行 → 别的设备在历史列表里能看到「这份快照是哪台机器推的」。
     const device = await resolveDeviceIdentity(this.stateDir, os.hostname(), this.fsx, this.msg);
@@ -952,6 +1005,8 @@ export class SyncEngine {
     }
     // ② 上传远端（传输通道负责散文件落盘 + 提交推送）
     await this.transport.upload(snapshot);
+    // issue #141：git 的 latest/ 视图只由明文快照生成（密文无明文镜像）；显式告警，否则用户看到「push 成功但 latest/ 是旧内容」无从解释。
+    if (encrypted && this.transport.type === 'git') warnings.push(this.msg('sync.latestSkippedEncrypted'));
     // ②·1 裁剪远端快照：保留最新 MAX_REMOTE_SNAPSHOTS 个（含刚 push 的）。
     //      删除失败只告警（进 warnings），不上抛 —— 不阻断 push 主流程。
     //      放在 upload 之后（保证新快照已推送成功）与 recordBaseline 之前（先管好远端再记基线）。
@@ -967,6 +1022,11 @@ export class SyncEngine {
       ...(bookkeeping.tracked
         ? { sessionUnits: bookkeeping.sessionUnits, deletedSessions: bookkeeping.tombstones }
         : {}),
+      // issue #140：远端刚收下的就是这份明文 hash ⇒ 记录远端观测（下一次推送/拉取的内容判定起点）。
+      // 加密快照的 sections 恒空 ⇒ 不写（指针一变就清空该字段，判定因此回落 id 比较）。
+      ...(encrypted ? {} : { remoteSections: hashSections(plainSections) }),
+      // P2：本机配置已经推成远端最新 ⇒ 之前的待裁决已被这次推送消解，不再挂着误导用户。
+      pendingMerge: null,
     });
 
     return {
@@ -1336,7 +1396,10 @@ export class SyncEngine {
    * 远端是否出现比本地共同祖先更新的快照（§3.2「检测到远端新快照」）。
    * - 远端为空 → false（无物可拉）；
    * - 远端指针未知（lastSnapshotId=''：从未同步 / 远端 id 未知）且远端非空 → true（首次可拉）；
-   * - 否则比较远端最新快照 id 与 lastSnapshotId。
+   * - 否则比较**内容**（issue #140）：远端最新快照实际携带的分区哈希 vs 上次记录的远端观测。
+   *   只比 id 时，任何一次新推送（哪怕分区逐字相同）都会判成「有新生」，白跑 download + 合并。
+   * - 两边任一观测缺失（加密快照 sections 恒空 / 旧 state 没记过观测）⇒ 回落 id 比较，
+   *   绝不把「读不到」猜成「没变」（判据与回落规则只在 content-diff.ts）。
    * 只读远端列表（transport.list），不做下载/合并。
    *
    * 前提：lastSnapshotId 必须是**远端**快照 id（P0-7）。旧实现把本地生成的快照 id 也写进去，
@@ -1349,10 +1412,13 @@ export class SyncEngine {
   async hasNewRemoteSnapshot(listed?: readonly SyncSnapshotMeta[]): Promise<boolean> {
     const metas = listed ?? await this.transport.list();
     if (metas.length === 0) return false;
-    const latestId = metas[metas.length - 1]!.id; // list 按 createdAt 升序 → 最新在末
+    const latest = metas[metas.length - 1]!; // list 按 createdAt 升序 → 最新在末
     const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
     if (state.lastSnapshotId === '') return true;
-    return latestId !== state.lastSnapshotId;
+    const diff = diffSnapshotContent(latest, state.lastRemoteSections);
+    // unknown（加密快照 / 旧 state 没有远端观测）⇒ 只能比 id：这是「读不到」的唯一退路。
+    if (diff.reason === 'unknown') return latest.id !== state.lastSnapshotId;
+    return diff.changed;
   }
 
   /**
@@ -1694,32 +1760,20 @@ export class SyncEngine {
     };
   }
 
-  /** 组装 pendingMerge 记录：同一远端快照上的连续待裁决**保留首次时间**（界面据此讲「挂了多久」）。 */
-  private pendingMergeFor(state: SyncState, remoteSnapshotId: string, sections: SectionId[]): PendingMerge {
-    const since = state.pendingMerge !== undefined && state.pendingMerge.remoteSnapshotId === remoteSnapshotId
-      ? state.pendingMerge.since
-      : this.now().toISOString();
-    return { remoteSnapshotId, sections, since };
+  /** P2（2026-11-14 真机事故）：自动同步撞冲突时把分区落成待裁决；实现与为什么见 pending-merge.ts。 */
+  async recordPendingMerge(sections: readonly SectionId[]): Promise<PendingMerge | null> {
+    const deps = { stateDir: this.stateDir, fsx: this.fsx, msg: this.msg };
+    return persistPendingMerge(deps, this.lastMergedRemoteSnapshotId, sections, this.now().toISOString());
   }
 
-  /**
-   * 基线纪律的**纯状态**写入（不写祖先副本、不碰远端）：仅在本机没有任何配置写入时使用。
-   *
-   * - pending 提供 → 写 pendingMerge；undefined → 清除该字段（「全部裁决完」）；
-   * - advanceRemoteId 提供 → 把远端指针推进到该快照 id（缺省 = 保持不变）。
-   *
-   * 为什么不走 recordBaseline：那条路径会重建祖先副本并只带本次应用的分区 —— 在「没有应用任何分区」
-   * 或「仍有未裁决冲突」时都会把共同基线改坏（下一轮所有分区都退化成「无祖先 → 冲突」）。
-   */
+  /** 组装 pendingMerge 记录（同一远端快照上连续冲突保留首次时间）；见 pending-merge.ts。 */
+  private pendingMergeFor(state: SyncState, remoteSnapshotId: string, sections: SectionId[]): PendingMerge {
+    return buildPendingMerge(state, remoteSnapshotId, sections, this.now().toISOString());
+  }
+
+  /** 基线纪律的纯状态写入（不碰祖先副本、不推远端）；为什么不用 recordBaseline 见 pending-merge.ts。 */
   private async writeMergeBaseline(opts: { pending?: PendingMerge; advanceRemoteId?: string }): Promise<void> {
-    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
-    if (opts.pending === undefined) delete state.pendingMerge;
-    else state.pendingMerge = opts.pending;
-    if (opts.advanceRemoteId !== undefined) {
-      state.lastSnapshotId = opts.advanceRemoteId;
-      state.lastSyncAt = this.now().toISOString();
-    }
-    await saveSyncState(this.stateDir, state, this.fsx);
+    await persistMergeBaseline({ stateDir: this.stateDir, fsx: this.fsx, msg: this.msg }, opts, this.now().toISOString());
   }
 
   /**
@@ -1753,89 +1807,31 @@ export class SyncEngine {
    * 记录祖先基线：写本地祖先副本 + 更新 sync-state（每分区 hash/updatedAt、lastSyncAt、transport、
    * 远端指针 lastSnapshotId、本地祖先目录名 ancestorId）+ 裁剪到 keep。
    *
-   * **两个 id 语义严格分开（P0-7），不要再混用同一个字段**：
-   * - `snapshotId`：本次基线的**本地**快照对象 id，同时是本地祖先副本的目录名（写入 `ancestorId`）；
-   * - `opts.remoteSnapshotId`：该基线在**远端**对应的快照 id（写入 `lastSnapshotId`）。缺省 = snapshotId
-   *   （push 路径两者天然相同）；合并/应用路径**必须显式传**，否则 lastSnapshotId 会退化成「一个远端
-   *   并不存在的本地 id」→ hasNewRemoteSnapshot() 恒判「远端有新生」，每轮白跑 list + download + merge。
-   *   传入 `''` 表示「远端 id 未知」——宁可留空，也不要把本地 id 冒充成远端 id。
-   * - `opts.writeAncestor === false`：不落本地祖先副本，`ancestorId` 一并置 '' ——
-   *   绝不把一个本地并不存在的目录名写进状态（旧实现正是这样让下一轮 merge 直接抛错）。
-   * - `opts.ancestorPassword`（issue #107）：祖先副本落**密文**（manifest.encrypted + 单密文载荷）；
-   *   加密快照 push 必须传，否则下轮三方合并缺共同祖先、整分区冲突。
-   * - `opts.preserveAncestor === true`（合并仍有未裁决冲突）：祖先副本与 ancestorId **保持不动** ——
-   *   共同基线必须仍是「本机与远端都认可的上一版」；拿只带本次应用分区的副本去覆盖它，会让
-   *   下一轮所有分区都退化成「无祖先 → 冲突」。
-   * - `opts.pendingMerge`（基线纪律）：提供即写入；`null` = 清除该字段；缺省 = 不动（既有行为不变）。
+   * 实现整体在 `baseline-record.ts`：P0-7 的两个 id 语义、G-44 的「远端观测 vs 本机观测」口径
+   * 都写在那份文件头里，改这里之前先读它。引擎只把本机环境（快照目录、通道身份、时钟、文案）交出去。
    */
   async recordBaseline(
     snapshotId: string,
-    // 基线**恒为明文**（加密快照的基线 hash 也用明文算，供 hasLocalChanges 比较）；
-    // 需要落盘副本时由 opts.ancestorPassword 决定写明文还是密文目录。
     sections: Partial<Record<SectionId, SectionData>>,
     nowIso?: string,
-    opts: {
-      writeAncestor?: boolean;
-      /** 提供即把祖先副本写成**密文**（密码仅本次内存使用；issue #107） */
-      ancestorPassword?: string;
-      remoteSnapshotId?: string;
-      /** 保留当前祖先副本与 ancestorId（缺省 false = 既有行为逐字不变） */
-      preserveAncestor?: boolean;
-      /** 待裁决冲突记录：null = 清除；缺省 = 不动该字段 */
-      pendingMerge?: PendingMerge | null;
-      /** P1-5：本轮**实际带走**的会话单元（提供即覆盖；缺省 = 保留原记录） */
-      sessionUnits?: string[];
-      /** P1-5：本轮累积的删除墓碑（提供即覆盖；缺省 = 保留原记录） */
-      deletedSessions?: string[];
-    } = {},
+    opts: RecordBaselineOptions = {},
   ): Promise<void> {
-    const ts = nowIso ?? this.now().toISOString();
-    const preserveAncestor = opts.preserveAncestor === true;
-    const writesAncestorCopy = !preserveAncestor && this.localSnapshotsDir !== undefined && opts.writeAncestor !== false;
-    // 1) 写本地祖先副本（如有 localSnapshotsDir）。
-    //    ancestorPassword 提供 → 落**密文**祖先副本（issue #107：加密通道也能做三方合并）；
-    //    否则落明文散文件布局（既有行为逐字不变）。
-    if (writesAncestorCopy) {
-      const ancestorPassword = opts.ancestorPassword;
-      const encryptedAncestor = ancestorPassword !== undefined && ancestorPassword !== '';
-      const manifest: SyncSnapshot['manifest'] = {
-        schemaVersion: CURRENT_SCHEMA_VERSION,
+    await recordBaselineAt({
+      snapshotId,
+      sections,
+      ...(nowIso === undefined ? {} : { nowIso }),
+      opts,
+      env: {
+        fsx: this.fsx,
+        stateDir: this.stateDir,
+        ...(this.localSnapshotsDir === undefined ? {} : { localSnapshotsDir: this.localSnapshotsDir }),
         dshVersion: this.ctx.dshVersion,
         platform: this.ctx.platform as Platform,
-        sectionIds: Object.keys(sections) as SectionId[],
-        containsSecrets: false,
-        // 记录触发通道（git/webdav），供同步历史展示「由哪个通道触发」
-        transport: this.transport.type,
-        ...(encryptedAncestor ? { encrypted: true } : {}),
-      };
-      if (encryptedAncestor) {
-        const encryptedSections = await encryptSectionsPayload(sections, ancestorPassword);
-        await writeEncryptedAncestor(this.localSnapshotsDir, { id: snapshotId, createdAt: ts, manifest, sections: encryptedSections }, this.fsx);
-      } else {
-        await writeAncestor(this.localSnapshotsDir, { id: snapshotId, createdAt: ts, manifest, sections }, this.fsx);
-      }
-    }
-    // 2) 更新 sync-state：远端指针 + 本地祖先目录名 + 每分区 hash/updatedAt + lastSyncAt + transport
-    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
-    state.lastSnapshotId = opts.remoteSnapshotId ?? snapshotId;
-    // preserveAncestor：祖先目录名一并保持不动（既不是 snapshotId，也不是 ''）
-    if (!preserveAncestor) state.ancestorId = writesAncestorCopy ? snapshotId : '';
-    state.lastSyncAt = ts;
-    state.transport = { type: this.transport.type, ref: this.transportRef };
-    // 基线纪律：null = 清除（全部裁决完）；undefined = 不动该字段（既有调用方零感知）
-    if (opts.pendingMerge === null) delete state.pendingMerge;
-    else if (opts.pendingMerge !== undefined) state.pendingMerge = opts.pendingMerge;
-    // P1-5：只在调用方明确提供时覆盖（否则保留既有记录，绝不因某条路径不跟踪而清空）
-    if (opts.sessionUnits !== undefined) state.sessionUnits = [...opts.sessionUnits];
-    if (opts.deletedSessions !== undefined) state.deletedSessions = [...opts.deletedSessions];
-    for (const [sid, data] of Object.entries(sections)) {
-      state.sections[sid as SectionId] = { hash: hashSection(data as SectionData), updatedAt: ts };
-    }
-    await saveSyncState(this.stateDir, state, this.fsx);
-    // 3) 裁剪祖先副本（最近 N 个）；preserveAncestor 时本轮没有新副本，不参与裁剪
-    if (!preserveAncestor && this.localSnapshotsDir !== undefined) {
-      await pruneAncestors(this.localSnapshotsDir, DEFAULT_ANCESTOR_KEEP, this.fsx);
-    }
+        transport: { type: this.transport.type, ref: this.transportRef },
+        now: () => this.now(),
+        msg: this.msg,
+      },
+    });
   }
 
   /**

@@ -2011,15 +2011,35 @@ export class RunStore {
     this.patch({ recovery: { write: null } })
   }
 
-  /** 停止某 kind 的「发现进行中 run」轮询（视图请求结束后调用；/progress 轮询自行结束）。 */
+  /**
+   * 停止某 kind 的「发现进行中 run」轮询（视图请求结束后调用；/progress 轮询自行结束）。
+   *
+   * 审计 P8-1：只看集合是不够的 —— 取消时那条挂起的 tick 还活着，只删标记会在 500ms 后
+   * 醒来并**看似被取消**；但若这期间同一 kind 又被 watchRunning 起来（面板被 423 拒绝后
+   * 用户重试是真实路径），集合已被重新 add，孤儿链因此复活并与新链并发，/runs 请求数按
+   * 链数线性翻倍（repro：.tmp/audit-2026-11-13/repro/P8-1-watch-duplicate.mjs 单链 19 次、
+   * 三条链 57 次）。所以取消必须同时撤回句柄。
+   */
   stopRunWatch(kind: RunKind): void {
     this.watchActive.delete(kind)
+    this.clearWatchTimer(kind)
   }
 
   /** 调度下一轮发现；每 kind 只保留一个挂起定时器。 */
   private scheduleWatch(kind: RunKind, tick: () => void, intervalMs: number): void {
+    // 覆盖句柄前先清旧的：否则被覆盖的那个句柄再也不在 timers 里，clearAllTimers 也够不到它
+    this.clearWatchTimer(kind)
     const timer = setTimeout(tick, intervalMs)
     this.timers.set(`watch:${kind}`, timer)
+  }
+
+  /** 撤回某 kind 的挂起发现定时器（不存在即 no-op）。 */
+  private clearWatchTimer(kind: RunKind): void {
+    const key = `watch:${kind}`
+    const pending = this.timers.get(key)
+    if (pending === undefined) return
+    clearTimeout(pending)
+    this.timers.delete(key)
   }
 
   private pollRun(runId: string, kind: RunKind, intervalMs?: number): void {

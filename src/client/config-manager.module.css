@@ -269,9 +269,11 @@ body {
   border: none;
   border-radius: var(--cm-r-3);
   background: var(--cm-hover);
-  /* 不横向滚动：放不下的项由 ui/nav-model.ts 移进「更多 ▾」，不会藏在视口外。
-     overflow: hidden 只是防极端情况（量测失败）撑破宿主布局，正常路径下从不触发。 */
-  overflow: hidden;
+  /* **不得裁剪（不写 overflow: hidden）**：「更多 ▾」的弹层是它的后代（留在原地的 absolute，
+     见 common/MoreMenu.tsx 契约①）—— 分隔条一裁剪，菜单就只剩分隔条下沿那一条，
+     用户看到的是「点开『更多』什么都不显示」（2026-11-14 真机反馈，小视口下必现）。
+     溢出兜底改由 .section 的 overflow: hidden 承担（画布右边界仍然兜得住宿主布局）；
+     放不下的页签本来由 ui/nav-model.ts 移进「更多 ▾」，正常路径下这里不会溢出。 */
 }
 
 /* v1 的 [data-overflow] 三条渐隐遮罩已随 nav-overflow.ts 一起删除 ——
@@ -922,7 +924,9 @@ body {
 
 /* 弹层：留白 4px 的紧凑面板（与触发器同宽起步，标签长时最宽 260px）。
    两种挂载（**都是 absolute**，差别只在「谁提供定位上下文」）：
-     · 留在原地（相对 .selectRoot）—— 导航条的 MoreMenu 用（贴顶展开，没有下方裁剪风险）；
+     · 留在原地（相对 .selectRoot）—— 导航条的 MoreMenu 用；
+       前提是**祖先链不得裁剪**：.navStrip / .shellNav 都不写 overflow（详见 .navStrip 的注释，
+       2026-11-14 因 .navStrip 的 overflow: hidden 把「更多」弹层切没了）；
      · portal 进弹层容器（相对容器绝对定位）—— Select 用（见 .selectMenuPortal）：
        弹窗内进弹窗卡片、否则进插件根容器；坐标由组件按「触发器 − 容器」的差值写入内联样式，
        容器自带 overflow 的场合（插件画布 .section）靠 placement 夹紧保证不越界 ⇒ 不裁剪也不飘。
@@ -968,8 +972,7 @@ body {
 .selectMenuPortal {
   /* 兜底：即使将来被挂到弹窗内容子树之外，也把指针事件拿回来（①）。 */
   pointer-events: auto;
-  /* 量测完成前不绘制（与 .infoHintBubble 的 [data-ready] 同一条纪律）：
-     保证任何情况下都不会把「还没定位」的那一帧画出来。 */
+  /* 量测完成前不绘制：保证任何情况下都不会把「还没定位」的那一帧画出来。 */
   visibility: hidden;
 }
 
@@ -1153,6 +1156,14 @@ body {
   overflow: hidden;
 }
 
+/* 空态卡吃满剩余高度（2026-11-14 用户要求）：.libraryListState 已经「吃掉剩余高度」，
+   但子项 .empty 只有内容高（≈76px）居中 —— 余下的几百像素全空着，整页读成「这里坏了」。
+   只在本页把空态拉满，**不改共享 .empty 本体**（它被 30+ 处当紧凑条用）。 */
+.libraryEmptyFill > .empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .artifactRow {
   border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 60%, transparent);
 }
@@ -1304,28 +1315,36 @@ body {
 
 /* —— 命令面板（⌘K，UI v2 §5.3）——
    它挂在 Modal（Radix Dialog）里，所以遮罩/focus trap/Esc 都是现成的；这里只管内容排版。 */
+/* D-30（2026-11-14 设计稿）：浮层顶部的**无框**输入条 —— 只留一条底边分隔线。
+   原先是一个完整描边输入框（h32 + 1px 边框 + 圆角 + 输入底色），放进 420 宽的顶部浮层后
+   读起来像「小浮层里又嵌了一个搜索框」；设计稿要的是「浮层本身就是一条搜索栏」。 */
 .paletteInput {
   width: 100%;
   box-sizing: border-box;
-  height: 32px;
+  height: 44px;
   padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: var(--cm-r-2);
-  background: var(--dsw-specific-input-major);
+  border: 0;
+  border-bottom: 1px solid var(--cm-line-1);
+  border-radius: 0;
+  background: transparent;
   font: inherit;
   font-size: var(--cm-fs-title);
   color: var(--dsw-alias-label-primary);
 }
 
+/* 无框输入条画不了整圈焦点环（四周没有框可描）：只把底边点亮。 */
 .paletteInput:focus-visible {
   outline: none;
-  border-color: var(--cm-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--cm-accent) 18%, transparent);
+  border-bottom-color: var(--cm-accent);
 }
 
-/* 限高内滚：与 planScroll / reportScroll / pickerList 同一条长列表纪律 */
+/* 限高内滚：与 planScroll / reportScroll / pickerList 同一条长列表纪律。
+   D-30：列表是浮层 Body（flex column）里唯一可伸缩的一段 —— 撑满输入条与底部提示之间，
+   浮层高度由内容决定时它按 280px 上限收口；上下各留 8px，提示行吸底后不会贴住最后一行。 */
 .paletteList {
-  margin-top: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 8px 0;
   max-height: 280px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1390,8 +1409,11 @@ body {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* D-30：提示行吸底 —— Body 是 flex column，列表撑满后余下的空间被 margin-top:auto 吃掉，
+   结果再少提示也压在浮层底部（设计稿的「输入 44 / 列表 280 / 提示 32」三段比例）。 */
 .paletteHint {
-  margin-top: 8px;
+  flex: 0 0 auto;
+  margin-top: auto;
   padding-top: 6px;
   border-top: 1px solid var(--dsw-alias-border-l1);
   font-size: var(--cm-fs-meta);
@@ -1495,45 +1517,132 @@ body {
   }
 }
 
-/* 「左标题 · 右开关」行（2026-11-01）。设置类开关的标题就是这一行的名字，
-   开关是这一行的值 —— 控件跟在标题后面读起来是「启用 ☑」，用户得先读半句再找方框，
-   而 564px 画布里每行右侧本来就空着。开关统一贴右：勾选框仍在标签内（点标题也能切），
-   但 InfoHint 不放进 label，否则点 ⓘ 会顺手改掉设置。 */
-.toggleRow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--cm-fs-base);
-  color: var(--dsw-alias-label-primary);
-}
-
 .toggleLabel {
   cursor: pointer;
 }
 
-.toggleInput {
-  width: 16px;
-  height: 16px;
-  margin: 0;
+/* —— 弹性开关（2026-11-14 用户要求）——
+   拨动时圆点从一端滑到另一端，弹簧缓动收尾（cubic-bezier 过冲约 0.4px），行进中不做变形。
+
+   为什么是 transition 不是 keyframes：浏览器在 click 那一刻就把 input.checked 翻好了，
+   React 的提交要晚一帧 —— keyframes 只能从 0% 重播，于是「先瞬移到终点、再倒回起点重跑」，
+   就是用户实测到的「圆点左右横跳」；而且 52% 那帧把位移钉在 8px、只放大 scaleX，
+   约 100ms 位移不前进，观感就是「中途停顿」。transition 没有起点重播，晚一帧同样从当前
+   位置插值，中途反向也只是从当前位置改道。实测对照见 .tmp/switch-probe.html：同一份 CSS 下
+   keyframes 版首帧 16 → 0.9 → 1.9 … 且 8px 处停 6 帧；transition 版 0 → 1.4 → … 单调到 16。
+
+   几何：轨道 32×18（1px 边框 + 2px 内缩，内宽 30），圆点 12×12，行程 16px；
+   轨道 overflow: hidden 把弹簧过冲裁在胶囊内（撞边挤压，不是出界）。 */
+.switchRoot {
+  position: relative;
+  display: inline-flex;
   flex: none;
-  accent-color: var(--cm-brand);
+  align-items: center;
   cursor: pointer;
 }
 
-.toggleInput:focus-visible {
+.switchRootDisabled {
+  cursor: default;
+}
+
+/* 输入框只负责命中、键盘焦点与原生切换，视觉全交给同级轨道。
+
+   选择器为什么带 .section .switchRoot 前缀：全局 .section input[type='checkbox']
+   的特异度是 (0,2,1)，会把勾选框画成 16px 方块并 position: relative，直接压过单类
+   选择器 (0,1,0) —— 后果是输入框退回文档流、把 label 撑宽 16px，禁用态还会露出
+   半个半透明勾选框。这里用 (0,3,0) / (0,4,0) 把它逐项复位成「铺满 label 的透明
+   命中层」，勾形 ::after 也跟着 input 一起不可见。 */
+.section .switchRoot .switchInput {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  opacity: 0;
+  cursor: pointer;
+  transition: none;
+}
+
+.section .switchRoot .switchInput:checked,
+.section .switchRoot .switchInput:disabled {
+  border: 0;
+  background: none;
+}
+
+.section .switchRoot .switchInput:disabled {
+  opacity: 0;
+  cursor: default;
+}
+
+/* 焦点环只画在轨道上，输入框本身不留 UA 框 */
+.section .switchRoot .switchInput:focus-visible {
+  outline: none;
+}
+
+.switchTrack {
+  box-sizing: border-box;
+  position: relative;
+  display: block;
+  width: 32px;
+  height: 18px;
+  flex: none;
+  /* 弹簧过冲被胶囊裁掉：圆点撞到端点时被压出一点扁边，而不是露到轨道外 */
+  overflow: hidden;
+  border: 1px solid var(--cm-line-2);
+  border-radius: 999px;
+  background-color: var(--cm-input-bg);
+  transition: background-color var(--cm-motion-fast) ease, border-color var(--cm-motion-fast) ease;
+}
+
+.switchRoot:hover .switchTrack {
+  border-color: var(--cm-brand);
+}
+
+/* 焦点环画在轨道上：输入框是透明覆盖层，画在它身上看不见 */
+.switchInput:focus-visible + .switchTrack {
   outline: var(--cm-focus-width) solid var(--cm-focus-color);
   outline-offset: 2px;
 }
 
-/* 小节标题行：标题在左、该节的开关贴右（与 .toggleRow 同一口径）。 */
-.subBlockHead {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.switchInput:checked + .switchTrack {
+  border-color: var(--cm-brand);
+  background-color: var(--cm-brand);
 }
 
-.subBlockHead > .groupLabel {
-  margin-bottom: 0;
+.switchRootDisabled .switchTrack {
+  opacity: 0.5;
+}
+
+.switchKnob {
+  box-sizing: border-box;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background-color: var(--cm-line-2);
+  transform: translateX(0);
+  /* 只动 transform（布局属性逐帧改会重排整块卡片）；弹簧曲线负责「落到位还带一点弹」 */
+  transition:
+    transform 240ms cubic-bezier(0.34, 1.28, 0.6, 1),
+    background-color 140ms ease;
+}
+
+.switchInput:checked + .switchTrack .switchKnob {
+  transform: translateX(16px);
+  background-color: var(--cm-text-on-accent);
+}
+
+/* 减弱动效：开关只留瞬时切换（状态信息不丢，滑动与回弹都是装饰）。 */
+@media (prefers-reduced-motion: reduce) {
+  .switchTrack,
+  .switchKnob {
+    transition: none;
+  }
 }
 
 /* —— 徽章 —— */
@@ -1951,112 +2060,9 @@ body {
   color: var(--cm-error);
 }
 
-/* —— ⓘ 说明原语（common/InfoHint.tsx，2026-10）——
-   分层规则见 DESIGN.md §7「说明性文案分层」：常驻可见的只有校验错误/失败原因、
-   安全与不可逆告警、状态与等待文本、禁用原因 title、空态解释、SectionTitle 副标题；
-   机制 / 边界 / 示例 / 省事提示一律收进这里。
-   气泡**经 createPortal 渲进插件根容器**（= 宿主画布，MODAL_ROOT_ID；
-   **绝不用 document.body** —— 会被宿主 overlay z-index:1000 盖住并连带 body pointer-events 失效），
-   因此不会被 Modal 卡片的常驻 transform 包含块（.dialogContentCenter 的 translate(-50%,-50%)）
-   与 .dialogBody 的 overflow 裁剪；气泡自身仍是 position: fixed（坐标 = 视口坐标，插件根容器无 transform），
-   但夹紧基准是**插件根容器的可见矩形 ∩ 窗口**（不是浏览器视口）：下方空间不足且上方更宽裕时向上翻转。
-   刻意不用原生 title：不可换行、不可定制、无法做边界处理。 */
-.infoHint {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: middle;
-}
-
-.infoHintBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  border-radius: var(--cm-r-1);
-  background: none;
-  font: inherit;
-  line-height: 1.25;
-  color: var(--dsw-alias-label-tertiary);
-  cursor: pointer;
-  flex: none;
-}
-
-/* hover 必须给出可见 affordance（否则 ⓘ 看起来只是装饰文字） */
-.infoHintBtn:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
-/* 键盘聚焦的焦点环 —— **只在气泡真的打开时**给（2026-10-04 用户反馈：一进弹窗 ⓘ 自己就亮起
-   蓝框，看起来像「图标被选中了」）。为什么要这个条件：Radix 弹窗挂载会把初始焦点派给容器内第一个
-   可聚焦元素（常常正是标题行的 ⓘ），而 Chrome 对这种**程序化**聚焦同样命中 :focus-visible；
-   那条路径下气泡不会打开（见 InfoHint.tsx 的 onFocus）—— 于是焦点环与 data-open 同进同出：
-   键盘用户 Tab 到 ⓘ 时气泡必然同时打开，焦点环照常可见，可访问性不受影响。 */
-.infoHintBtn[data-open]:focus-visible {
-  outline: var(--cm-focus-width) solid var(--cm-focus-color);
-  outline-offset: 1px;
-}
-
-/* 气泡打开期间按钮保持「激活」观感（悬停 / 聚焦 / 固定三通道统一） */
-.infoHintBtn[data-open] {
-  color: var(--dsw-alias-label-primary);
-}
-
-/* 点击固定后的锁定态（与 .iconBtn[data-active] 同一视觉语言） */
-.infoHintBtn[data-pinned] {
-  background: color-mix(in srgb, var(--cm-accent) 14%, transparent);
-  color: var(--cm-accent);
-}
-
-.infoHintBubble {
-  position: fixed;
-  /* 高于 Dialog 内容层（.dialogMask 100 / .dialogContentCenter 101），低于通知层（120） */
-  z-index: var(--cm-z-pop);
-  box-sizing: border-box;
-  max-width: min(260px, calc(100vw - 24px));
-  /* 高度的结构性上限：保证气泡在宿主 564×720 画布内**永远**放得下（480 + 上下 8px 边距 < 720；
-     宿主窗口更小时按 100vh 收缩）。分层规则里的说明文案是 1–3 行短文本，远达不到这个上限，
-     因此不会出现静默截断；它只是把「不出界」变成结构性性质而不是概率性质。 */
-  max-height: min(480px, calc(100vh - 16px));
-  overflow-y: auto;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--cm-r-2);
-  background: var(--cm-tooltip-bg);
-  box-shadow: var(--cm-shadow-1);
-  color: var(--cm-tooltip-fg);
-  font-size: var(--cm-fs-table);
-  line-height: 1.5;
-  /* 多行换行：长文本折行、显式换行符保留，绝不省略号截断 */
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  /* 不拦截指针：鼠标移出按钮即触发 mouseleave，气泡不会「粘住」 */
-  pointer-events: none;
-  /* 量测完成前不绘制（避免首帧落在未定位处） */
-  visibility: hidden;
-}
-
-.infoHintBubble[data-ready] {
-  visibility: visible;
-  animation: infoHintIn var(--cm-motion-fast) var(--cm-motion-ease-out);
-  transform-origin: center top;
-}
-
-.infoHintBubble[data-ready][data-side='top'] {
-  transform-origin: center bottom;
-}
-
-@keyframes infoHintIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-/* 控件 + ⓘ 同一行（弹窗表单：下拉/输入框旁的说明）。
-   ⓘ 一律贴**相关控件**右边，不单独成行；控件按自身收缩宽度（默认 flex: 0 1 auto，长内容可缩），
-   间隙与其它区块行统一 10px。首个使用点：通道配置弹窗的 WebDAV 预设下拉。 */
+/* 控件成一行（弹窗表单：下拉/输入框旁的行容器）。
+   控件按自身收缩宽度（默认 flex: 0 1 auto，长内容可缩），间隙与其它区块行统一 10px。
+   首个使用点：通道配置弹窗的 WebDAV 预设下拉。 */
 .controlRow {
   display: flex;
   align-items: center;
@@ -2108,6 +2114,18 @@ body {
   gap: 6px;
   font-size: var(--cm-fs-meta);
   color: var(--dsw-alias-label-tertiary);
+}
+
+/* 恢复页的空态行（P-05）：一句话结论落在**有边框的一行**里，而不是裸文字 ——
+   它下面紧跟磁盘/体检/回滚三张卡，裸文字会被读成「第一张卡的标题」，看不出这是一条状态。
+   只做描边 + 内边距（不做 .empty 那种虚线大空框：那会把三张诊断卡推到首屏之外）。
+   私有类，不覆写共享的 .statusLine 本体（它还被会话体检与回滚卡复用）。 */
+.recoveryEmptyBar {
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--cm-r-3);
+  background: var(--dsw-alias-bg-layer-2);
 }
 
 .empty {
@@ -2585,13 +2603,19 @@ body {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 装在受框限高容器里的回滚清单（RollbackCard）：行自己只留「语义色条」那一档左内边距、
+   右侧不留（那是给**无框**清单定的规矩），直接贴框时会变成勾选框贴左边框、±行数贴右边框
+   （2026-11-14 用户截图：文字与边框紧贴）。受框的那种由容器补左右内边距。 */
+.planScrollPadded {
+  padding: var(--cm-sp-2) var(--cm-sp-4);
+}
+
 /* —— 限高滚动容器（大报告/列表通用） —— */
 .planScroll,
 .mergeScroll,
 .reportScroll,
 .confirmScroll,
 .diffScroll,
-.historyScroll,
 .consultScroll {
   overflow: auto;
   max-height: 380px;
@@ -2736,6 +2760,13 @@ body {
   color: var(--dsw-alias-label-secondary);
 }
 
+/* 确认弹窗正文：调用点用 \n\n 分段（如 P-04「删除当前档案」的后果说明分两段）。
+   裸 div 下换行被折叠成空格，两段并成一句读起来像同一条件的补充说明；pre-line 只保留
+   显式换行，不把调用方无意带进来的连续空格变成缩进。 */
+.confirmMessage {
+  white-space: pre-line;
+}
+
 .dialogBodyScroll {
   overflow-y: auto;
   max-height: 460px;
@@ -2746,6 +2777,42 @@ body {
 .dialogWide {
   width: min(720px, calc(100vw - 48px), 96%);
   max-height: min(620px, calc(100vh - 64px), 92%);
+}
+
+/* 顶部锚定变体（<Modal placement="top">，2026-11-14 D-30 命令面板）：
+   与默认的居中定位互斥 —— Modal 按 placement 二选一装配类名，所以这里**自带**整套定位与
+   入场动画，不依赖 .dialogContentCenter 的属性（两者叠挂会争同一批属性）。
+   顶距 80px：浮层贴画布上部、下方仍露出压暗的页面，读起来是「从顶部落下的一层面板」，
+   而不是又一个居中弹窗。max-height 按顶距留出下沿余量，矮窗口也不会顶出视口。 */
+.dialogTop {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  /* 高度上限仍然叠沿用卡片自己的 600 档，只在顶距吃掉的空间上收口（112 = 顶 80 + 下沿 32）。 */
+  max-height: min(600px, calc(100vh - 112px));
+  z-index: var(--cm-z-modal);
+  animation: dialogIn var(--cm-motion-base) var(--cm-motion-ease-out);
+}
+
+/* 关闭退场必须自带一条：居中变体的 dialogOut 收尾把 transform 拉回 translate(-50%,-50%)，
+   顶部变体直接套用会在关闭的那一帧瞬移到屏幕中央。 */
+.dialogTop[data-state='closed'] {
+  animation: dialogOutTop var(--cm-motion-fast) var(--cm-motion-ease-out);
+}
+
+@keyframes dialogOutTop {
+  to {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialogTop,
+  .dialogTop[data-state='closed'] {
+    animation: none;
+  }
 }
 
 /* 弹窗底部按钮区：右对齐，顶部分隔线，与正文区分 */
@@ -2909,6 +2976,11 @@ body {
   gap: 10px;
 }
 
+/* .card 自带 margin-bottom:10px，与上面的 gap 会叠成 20px；间距只由 gap 决定（设计稿 10px）。 */
+.runsCenter > * {
+  margin: 0;
+}
+
 .runsSummary {
   display: flex;
   align-items: center;
@@ -2918,8 +2990,8 @@ body {
 
 .runsSummaryTitle {
   font-size: var(--cm-fs-table);
-  font-weight: 700;
-  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
 }
 
 .runsCardHead {
@@ -2936,20 +3008,32 @@ body {
   color: var(--dsw-alias-label-primary);
 }
 
-/* 终止请求「等不到安全点」的提示：普通等待用 .hint（灰），超阈值升级为警示色 + 出路文案 */
+/* 终止请求「等不到安全点」的提示：一行警示色文字（时钟图标 + 文案），
+   超阈值时第二行给「出路」文案。不再做成带框告警块 —— 它是卡片内的状态说明，
+   不是需要独立落位的系统消息。 */
 .runsWarnNote {
-  margin: 8px 0 0;
-  padding: 6px 8px;
-  border: 1px solid color-mix(in srgb, var(--cm-warn) 45%, transparent);
-  border-radius: var(--cm-r-2);
-  background: color-mix(in srgb, var(--cm-warn) 10%, transparent);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
   font-size: var(--cm-fs-meta);
-  color: var(--dsw-alias-label-secondary);
+  line-height: 1.5;
+  color: var(--cm-warn);
 }
 
 .runsWarnNoteDetail {
-  margin: 4px 0 0;
+  width: 100%;
+  margin: 0;
   color: var(--dsw-alias-label-tertiary);
+}
+
+/* 环境锁卡片的说明行：11px/1.5 次级色（.hint 是三级色，这里是「你需要知道原因」，
+   不是可有可无的脚注）。 */
+.runsLockDesc {
+  font-size: var(--cm-fs-meta);
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
 }
 
 .runsCardTime {
@@ -2960,36 +3044,97 @@ body {
 }
 
 .runsCounts {
-  margin: 8px 0 0;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--cm-fs-meta);
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--dsw-alias-label-secondary);
 }
 
 .runsLogTail {
-  margin: 8px 0 0;
-  max-height: 108px;
+  margin: 0;
+  max-height: 60px;
   overflow-y: auto;
-  padding: 6px 8px;
-  border: 1px solid var(--dsw-alias-border-l1);
+  padding: 8px;
   border-radius: var(--cm-r-2);
-  background: var(--dsw-alias-bg-base);
+  /* 中性凹陷面（设计稿 #EBEEF2）：不用 bg-base（那是页面底色，深色主题下与卡片同层），
+     用描边色混出比卡片暗一档的灰，两套主题都成立。 */
+  background: color-mix(in srgb, var(--dsw-alias-border-l1) 55%, transparent);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--cm-fs-meta);
   line-height: 1.5;
   color: var(--dsw-alias-label-secondary);
 }
 
+/* 一行一条日志：不折行（折了就看不出「最后一行是哪条」），超出用省略号；
+   最后一行是**当前正在做的那步**，用主色加粗强调。 */
 .runsLogLine {
-  white-space: pre-wrap;
-  word-break: break-all;
+  overflow: hidden;
+  white-space: pre;
+  text-overflow: ellipsis;
+}
+
+.runsLogLine:last-child {
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
 }
 
 .runsCardActions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
-  margin: 10px 0 0;
+  margin: 0;
+}
+
+/* 卡片内部纵向节奏统一 8px（设计稿卡内 gap 8）：子项既有 margin 全部清零，
+   避免 8/10px 混叠。定义在运行块末尾 —— 与 .runsCardHead/.runsCounts/
+   .runsLogTail/.progressBlock 同为单类选择器，靠顺序取胜。 */
+.runsCardStack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.runsCardStack > * {
+  margin: 0;
+}
+
+/* 进度条与右端状态标签同排：条撑满剩余宽度，标签固定右侧并与条底对齐
+   （设计稿把「执行中/已完成/已失败」放在条尾）。 */
+.runsProgressRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.runsProgressRow > * {
+  margin: 0;
+  min-width: 0;
+}
+
+.runsProgressRow > *:first-child {
+  flex: 1 1 auto;
+}
+
+.runsProgressStatus {
+  flex: none;
+  font-size: var(--cm-fs-meta);
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.runsProgressStatus[data-status='running'] {
+  color: var(--cm-accent);
+}
+
+.runsProgressStatus[data-status='done'] {
+  color: var(--cm-ok);
+}
+
+.runsProgressStatus[data-status='failed'] {
+  color: var(--cm-error);
 }
 
 .runsOption {
@@ -3349,6 +3494,15 @@ body {
   min-height: 0;
 }
 
+/* 首页最近活动卡：**恒吃满剩余高度**（2026-11-14 用户反馈「骨架只铺到页面一半，数据到货后
+   卡片长高、整页往下推」）—— 骨架 / 空态 / 已加载三种状态同一个盒子，列表在内部滚动，
+   卡片边界不动，页面因此不发生位移。
+   为什么单开一个类而不是给 .activityCard 加 grow：那张类卡同时被 .diskUsageCard 复用
+   （环境页磁盘占用卡是**固定高度**，语义相反），grow 会溢出它的高度契约。 */
+.activityCardFill {
+  flex: 1 1 auto;
+}
+
 /* —— 磁盘占用卡（固定高度；内部滚动） ——
  *
  * 需求（用户实测）：磁盘占用卡必须**高度固定**，且与下方的备份文件卡之间有间距。
@@ -3397,18 +3551,18 @@ body {
   min-height: 0;
 }
 
-/* —— 磁盘明细：两行式行卡（2026-11-04，替换原四列表格）——
+/* —— 磁盘明细：单行式分区行（2026-11-14，替换 11-04 的两行式）——
  *
- * 为什么换：564px 画布下四列把「回收策略」压到 160px，"Your data / safety net
- * (never auto-removed)" 折成三行；表头再固定吃掉 24px。而这张卡的唯一决定是
- * 「哪几块能删、删了多大」—— 靠的是**比大小**，不是三列对齐。
+ * 为什么再改：这张卡现在渲染的是**13 个真实分区**（不是稿里的 6 组合并行），两行式在
+ * 564px 画布下每行 44px ⇒ 一屏只放得下 8 行左右，且「比大小」被拆到两行（占用在首行、
+ * 策略徽章在次行），扫读顺序变成 Z 字。单行式把同一个决定压缩进一行：
  *
- * 行内层级：
- *   ① 首行 = 区域名（左）+ 占用（右，整卡唯一的右边缘 ⇒ 量级一眼可比）；
- *   ② meta 行 = 文件数 + 回收策略徽章 + 过期量 —— 策略拿到整行宽度，不再折行。
- * 表头由行内语义承担：占用自带单位（4.8 KB），文件数自带「个文件」。
- * 区域名**允许换行**而不是省略号：它是「这是哪块数据」的唯一线索，
- * 长名字截成「Sync config & work…」等于没写；行高增长交给滚动区吸收。 */
+ *   区域名（省略号，全名进 title）· 过期量 · 占用 · 回收策略徽章
+ *
+ * 文件数不再逐行渲染：它不改变「能不能删」的决定，逐行重复 13 次只是噪声；
+ * 总数与占用合计一起放在卡头下面那行（"合计 X · N 个文件"），逐行全量仍在 title 里。
+ * 行高 28px（padding 6px + 13px 行盒子）≈ 两行式的 2/3，13 行不必滚也能读完；
+ * 固定卡高（--cm-disk-card-h）不变，明细区照旧是唯一的滚动区。 */
 .duList {
   display: flex;
   flex-direction: column;
@@ -3416,9 +3570,9 @@ body {
 
 .duRow {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 
@@ -3426,17 +3580,22 @@ body {
   border-bottom: none;
 }
 
-.duRowTop {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-
 .duRowName {
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--cm-fs-table);
   color: var(--dsw-alias-label-primary);
+}
+
+/* 过期量（"其中 4.8 KB 已到回收条件"）：只在存在时出现，紧贴占用左侧 */
+.duRowNote {
+  flex: none;
+  font-size: var(--cm-fs-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
 }
 
 .duRowSize {
@@ -3446,24 +3605,64 @@ body {
   color: var(--dsw-alias-label-primary);
 }
 
-.duRowMeta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+/* 无徽章的策略（"用户数据 / 安全网"）用纯文本，避免 13 行里 13 个同形徽章 */
+.duRowPolicy {
+  flex: none;
   font-size: var(--cm-fs-meta);
   color: var(--dsw-alias-label-tertiary);
-}
-
-.duRowFiles {
-  flex: none;
-  font-variant-numeric: tabular-nums;
 }
 
 /* 卡内小节之间留出间隔（2026-11-01）：表格滚动区下方紧贴的「Legacy data」分组标签
    原本与最后一行数据只差 2px，读起来像表格的又一行数据。 */
 .diskUsageCard .groupLabel {
   margin-top: 10px;
+}
+
+/* —— 清理块（2026-11-14 用户要求重排「文字与按钮的位置和间距」）——
+ *
+ * 改前：三行各自是一条 `.actionRow[data-inline]`（`margin: 0`）⇒ 行间零垂直间距，
+ * 勾选框贴着上一行标题的下沿，读起来像两句话挤成一段；体量徽章一个紧跟文字（3.0 MB）、
+ * 一个被 `.statusSpacer` 顶到卡右缘（0 B），同一块里两种摆法；下面那行还有个按钮也贴着右缘 ⇒ 右缘两个东西错开高度，成锯齿。
+ *
+ * 改后：三行收进一个纵向栈（统一 6px 行距），徽章一律紧跟它管辖的那句文案，
+ * 卡右缘只留「立即清理」这一颗按钮（右缘一条竖线）。
+ * 只多花 14px 高：这张卡是固定高度（--cm-disk-card-h），多出来的高度由明细表让出（它是唯一可压缩子项）。 */
+.cleanupLines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-3);
+  margin: 0 0 var(--cm-sp-4);
+}
+
+/* 清理范围行：正文主色 —— 它说明「这次会清掉什么」，比下面的勾选项更要紧；
+   此前它吃 .actionRow 的继承色（次级灰），而勾选项文案是主色 ⇒ 主次颠倒。 */
+.cleanupScope {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cm-sp-3);
+  font-size: var(--cm-fs-base);
+  font-weight: 500;
+  color: var(--cm-text-1);
+}
+
+/* 勾选项行：勾选框 · 文案 · 该勾选项自己的体量徽章，四者同一行、同一档字号。 */
+.cleanupOption {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cm-sp-3);
+  font-size: var(--cm-fs-base);
+  color: var(--cm-text-1);
+}
+
+/* 「可立即释放 N」左、按钮右：与上方两行隔 8px（由 .cleanupLines 的下外边距给），
+   自身不再带 .actionRow 的 10px 下边距 —— 那是卡内最后一块。 */
+.cleanupAction {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-3);
+  margin: 0;
 }
 
 .activityHeader {
@@ -3482,11 +3681,11 @@ body {
 }
 
 .activityRows {
-  /* v3 曾让卡片吃掉首页剩余高度（.fillCard）并让列表伸展。2026-11-01 改为限高内滚：
-     撑满那一刻，8 行记录下方会空出约 150px 纯背景，读起来是「还在加载」，而不是
-     「这里本来就这么高」（app-screens §4.2 / §10：空得零散像没做完）。
-     现在卡片高度随内容，行数超过上限时本容器内滚 —— 长列表纪律与 .planScroll 一致。 */
-  max-height: 460px;
+  /* 与 .activityCard 成对：卡片吃掉剩余高度后，由本容器**填满卡片并自己内滚**
+     （2026-11-14 用户要求「骨架与真实态都铺满整页、加载完成不位移」：
+     原 460px 限高会让卡片比可用空间矮，页底空出一大片，数据到货时又长高）。
+     scrollbar-gutter 保留：滚动条出现/消失时行宽不跳。 */
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   /* 2026-11-01 视觉 pass：去掉列表自带的 1px 外框与 bg-base 深底。
@@ -3533,6 +3732,24 @@ body {
 
 .activityRow:last-child {
   border-bottom: none;
+}
+
+/* P2（2026-11-14）：待裁决行可点（去同步页裁决）。用 button 承载 —— 键盘与读屏都要能用，
+   外观与静态行逐字对齐：背景/字体/颜色照旧，只补 hover 的浅底提示「这行是入口」。 */
+.activityRowAction {
+  width: 100%;
+  text-align: left;
+  /* button 自带 UA 边框/背景/字体：全部归零后逐字对齐静态行（border-bottom 与 .activityRow 同值）。 */
+  border: 0;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.activityRowAction:hover {
+  background: color-mix(in srgb, var(--cm-accent) 8%, transparent);
 }
 
 .activityTime {
@@ -3668,10 +3885,16 @@ body {
   margin-left: auto;
 }
 
-.syncSubBlock {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 0.5px solid var(--dsw-alias-border-l2);
+/* D-01 事实网格的**外框**（2026-11-14 设计稿「带框卡格」）：
+   .factGrid 被 4 个文件共用（备份位置 / 同步通道 / 同步总开关 / 工作目录），给它加描边会连带
+   改掉那三张卡 —— 所以框只挂在 home 定时备份卡这一处，作为私有类与 .factGrid 并联使用
+   （同一个元素两个类，不为一个边框新增包裹层）。
+   前两格不再各自跨两列：外框定了边界之后，两格平分整行才是设计稿的比例。 */
+.factBox {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--cm-line-1);
+  border-radius: var(--cm-r-3);
 }
 
 .factGrid {
@@ -3705,6 +3928,42 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* D-01 保留策略的**三张数字卡**（2026-11-14 设计稿）：原先三个 label.field 是裸表单列并排，
+   读起来像一整行没对齐的输入框。现在每项自成一张带框卡格 —— 标题跨两列，「数字 + 单位」压在
+   卡右下。仍是 home 私有类：共享 .field / .fieldLabel / .input / .hint 的本体一个字没改。 */
+.retentionCard {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--cm-line-1);
+  border-radius: var(--cm-r-3);
+}
+
+.retentionCardLabel {
+  grid-column: 1 / -1;
+  font-size: var(--cm-fs-meta);
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 卡内数字框收窄贴右：88px 会把「个月 / 年」这类单位挤出卡格。 */
+.retentionCard > .input {
+  width: 64px;
+  justify-self: end;
+  text-align: right;
+}
+
+.retentionCard > .hint {
+  grid-column: 2;
+  align-self: center;
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* 上次同步：从事实格移进徽章行行尾（2026-11-01）。删掉「可同步分区」那格之后，
@@ -3983,6 +4242,26 @@ body {
   justify-content: flex-start;
   gap: 10px;
   min-height: 280px;
+}
+
+/* 选择 ZIP 的投放容器（W3 R-1）：与 .empty 同一套虚线观感 / token，但语义是「主按钮的
+   落点」而非空态，focus 态由容器内的主按钮自己表达，因此不复用 .empty 本体（它还有 4 处引用）。 */
+.dropZone {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 16px;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: var(--cm-r-3);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.dropZoneIcon {
+  color: var(--dsw-alias-label-tertiary);
 }
 
 /* ------------------------------------------------------------------
@@ -4319,6 +4598,22 @@ body {
   margin-bottom: 10px;
 }
 
+/* 批量决策同一行（设计稿 T-02c ④：两枚 ghost 左对齐、间距 8）。W3 曾改纵排，
+   用户 2026-11-14 明确要求回到同一行：两条整批决策是并列的同一档动作，横排读起来是一组。
+   禁止换行——第二条被折到下一行左侧会被读成同组的次级项；子项不收缩，宁可整行右溢。 */
+.conflictBulk {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.conflictBulk > * {
+  flex: none;
+}
+
 .conflictItem {
   border: 1px solid color-mix(in srgb, var(--cm-warn) 35%, transparent);
   border-radius: var(--cm-r-3);
@@ -4514,12 +4809,15 @@ body {
   min-width: 0;
 }
 
-/* 路径选择弹窗：当前目录条 + 一层条目列表（长列表由 Modal.Body scroll 限高内滚） */
+/* 路径选择弹窗：当前目录条 + 一层条目列表（长列表由 Modal.Body scroll 限高内滚）。
+   当前目录条按「路径输入框」的观感收口（R-15 降级形态：分段面包屑缺数据 D-2，
+   这里只把单串路径做成有边框的圆角块，不做前端切分 —— UNC / 盘符 / 根目录都无法可靠推断）。 */
 .pickerPath {
   box-sizing: border-box;
   width: 100%;
-  padding: 4px 8px;
-  border-radius: var(--cm-r-2);
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--cm-r-3);
   background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -4572,9 +4870,8 @@ body {
   flex-direction: column;
 }
 
-/* 快照选择行（同步页）：下拉 + 「刷新快照列表」按钮强制同一行 ——
-   nowrap + 下拉列可收缩（minWidth:0）+ 按钮列 flex:none。
-   窄画布下宁可下拉变窄，也不让按钮换到下一行。 */
+/* 选择历史快照行（2026-11-14 恢复：用户要求把下拉与刷新按钮放回页面）。
+   该行 = 可伸缩的字段 + 右对齐工具组（刷新 / 只读自检）+ 空态徽章。 */
 .snapshotPickerRow {
   display: flex;
   align-items: flex-end;
@@ -4597,6 +4894,8 @@ body {
   margin-bottom: 0;
 }
 
+/* 行尾工具组：刷新与只读自检都是低频诊断动作、都只服务这一行，收成两枚 28px 图标按钮
+   （与下拉同高、同组右对齐）。flex:none 保证下拉先被压缩，图标不被挤小。 */
 .pickerAction {
   flex: none;
   display: inline-flex;
@@ -4966,14 +5265,18 @@ body {
   flex-direction: column;
 }
 
+/* 行是卡片里的「表行」：30px 定高 + 左右 10px + 半透明细分隔线，最后一行贴卡片圆角（由卡片 overflow 裁）。
+   可展开行（button）与静态行（div）必须同一定义，否则同一组里两种行会错位。 */
 .restorePlanRow,
 .restorePlanRowStatic {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 4px 6px;
-  border-radius: var(--cm-r-2);
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 50%, transparent);
 }
 
 .restorePlanRow {
@@ -5027,14 +5330,35 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* 分组头（标题 + 计数徽章 + 行数合计）：必须严格一行。
+/* 分组卡片：每组一张描边卡（30px 组头 + 行表）。私有类 —— .inspectGroup 仍由
+   备份差异查看与恢复报告共用，那边不加卡片化。 */
+.restorePlanCard {
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--cm-r-3);
+  overflow: hidden;
+  /* 行多时卡片自己内滚（限高由外层 Body 决定）；槽位固定，滚动条出现时不挤动行内容 */
+  scrollbar-gutter: stable;
+}
+
+/* 分组头（标题 + 计数 + 行数合计）：必须严格一行、30px 定高、铺满卡片顶边。
    .groupLabel 自身是 display:block + margin-bottom:8px 的卡内小节头，直接塞进
    .statRow 会被下外边距顶得与徽章/行数不在同一视觉行 —— 这里显式复位。 */
 .restorePlanGroupHead {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 4px;
+  height: 30px;
+  padding: 0 10px;
+  margin: 0;
+  background: var(--dsw-alias-bg-layer-2);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* 摘要徽章：4px 方角 + 同色 15% 细描边（稿 D-02:124-137）。
+   描边用 currentColor 派生 —— 颜色仍由 .badge[data-kind] 的四态色决定，这里只改形状。 */
+.restorePlanStatBadge {
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
 }
 
 .restorePlanGroupHead .groupLabel {
@@ -5345,14 +5669,19 @@ body {
   margin-bottom: 12px;
 }
 
+/* 最后一组不再留底距：卡片 padding 已经给了 12px，再叠加会看起来「列表被截断」。 */
+.historyGroup:last-child {
+  margin-bottom: 0;
+}
+
 .historyRow {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  /* 左右内边距：行位于 .historyScroll（带边框的滚动容器）内，此前 padding 只有纵向
-     → 时间/摘要文字紧贴容器左边框（实测仅 1px，即边框本身）。 */
-  padding: 6px 8px;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+  /* 行直接在卡片里（没有内嵌描边滚动盒），所以只留纵向内距 —— 横向内距由卡片 padding 给，
+     再加一层会把时间列推得离卡片边缘两倍远。 */
+  padding: 8px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
   font-size: var(--cm-fs-table);
 }
 
@@ -5377,7 +5706,7 @@ body {
 .historySummary {
   display: block;
   overflow-wrap: anywhere;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-primary);
 }
 
 .historyTime {
@@ -5391,6 +5720,133 @@ body {
 .historySections {
   font-size: var(--cm-fs-meta);
   color: var(--dsw-alias-label-tertiary);
+}
+
+/* —— 迁移历史加载骨架（2026-11-14）——
+ * 骨架**复用真实页的容器类**（.statRow / .historyTightCard / .historyControlRow /
+ * .historyGroup / .historyRow / .historyMeta），这里只定义占位条的宽高。
+ * 为什么这么做：旧骨架是独立的 SkeletonTable（3 列 5 行的表格盒），而真实页是
+ * 「徽章行 + 两张单行控件卡 + 分组两行式行卡」—— 两套几何 ⇒ 数据到货时整页重排
+ * （用户反馈「占位动画大小不对、加载后页面形变」）。容器类共用后几何不可能再漂移。 */
+.historySkeletonBadge {
+  flex: none;
+  width: 64px;
+  height: 18px;
+  border-radius: var(--cm-r-2);
+}
+
+.historySkeletonBadgeSm {
+  flex: none;
+  width: 28px;
+  height: 18px;
+  border-radius: var(--cm-r-2);
+}
+
+.historySkeletonLabel {
+  flex: none;
+  width: 96px;
+  height: 11px;
+}
+
+/* 下拉 / 输入框的占位：与 .historySearch 同高（28px）、同圆角，读起来是「一个控件位」 */
+.historySkeletonControl {
+  flex: none;
+  width: 104px;
+  height: 28px;
+  border-radius: var(--cm-r-2);
+}
+
+/* 搜索框位：不吃满整行（真实搜索框 flex:1，但加载态没有「地址/关键词语义」可表达） */
+.historySkeletonSearch {
+  flex: 1 1 120px;
+  min-width: 120px;
+  height: 28px;
+  border-radius: var(--cm-r-2);
+}
+
+/* 按钮位：与 sm 文字按钮同高（26px） */
+.historySkeletonButton {
+  flex: none;
+  width: 68px;
+  height: 26px;
+  border-radius: var(--cm-r-2);
+}
+
+.historySkeletonTime {
+  flex: none;
+  width: 58px;
+  height: 11px;
+}
+
+.historySkeletonSections {
+  flex: none;
+  width: 88px;
+  height: 11px;
+}
+
+.historySkeletonSummary {
+  display: block;
+  width: 78%;
+  height: 11px;
+}
+
+/* 历史页的控件行：第一行「筛什么」（三个维度下拉 + 搜索框），第二行「拿到之后做什么」。
+   不用 .actionRow 的理由是它 margin 0 0 10px，两行时会多出一段不均匀的空隙。 */
+.historyControlRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.historyControlRowEnd {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 8px 0 0;
+}
+
+/* 策略卡 / 过滤卡：单行控件的卡，纵向内距比通用 .card 收一档（设计稿 10px）。 */
+.historyTightCard {
+  padding: 10px 12px;
+}
+
+/* 搜索框：图标在框内、输入框无边框（一套 28px 高的描边盒，而不是「图标 + 裸输入框」两个控件） */
+.historySearch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 120px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--cm-r-2);
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.historySearch:focus-within {
+  border-color: var(--cm-accent);
+}
+
+.historySearchInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: var(--cm-fs-table);
+  color: var(--dsw-alias-label-primary);
+}
+
+.historySearchInput::placeholder {
+  color: var(--dsw-alias-label-dimmed);
 }
 
 .profileRow {
@@ -5850,10 +6306,6 @@ button.profileRowMain:hover {
     animation: none;
   }
   .restorePlan {
-    animation: none;
-  }
-  /* ⓘ 气泡入场同为装饰性动效：关掉后瞬时出现，说明文本与交互全部不变 */
-  .infoHintBubble {
     animation: none;
   }
   /* 折叠容器：关掉高度过渡（瞬时展开/收起，功能不变）与 visibility 的延迟
@@ -6334,7 +6786,8 @@ button.profileRowMain:hover {
    版式对齐 Cursor「Confirm Undo」（用户 2026-10-12 第 2/6/7 条），**2026-10-12 第二轮加列对齐**。
    为什么改成 grid（旧版是 flex，用户截图反馈「太丑」）：flex 下每行各自独立排版 ——
    文件名长短不一 ⇒ 统计列跟着左右乱跳、数字位数不一样 ⇒ 纵向扫读不成一列；文件名只画基名 ⇒
-   `.git/index` / `.git/HEAD` 读不出「在哪」。现在三列固定：图标 | 路径（目录弱化+基名） | 统计（右对齐）。
+   `.git/index` / `.git/HEAD` 读不出「在哪」。现在三列固定：图标 | 路径（目录弱化+基名） | 统计（右对齐）；
+   给了「逐行勾选」的调用点（设置页回滚卡）在前面再加一格勾选框 ⇒ 四列，见 .rollbackFileRowSelectable。
    **平铺清单**（2026-10-12 用户要求「移除列表的边框」→ 2026-10-13「移除列表的黑色背景色」）：
    容器**没有底色、没有圆角、没有描边**，行与行之间也**不画分隔线** —— 清单感只由「左侧 2px 语义色条」承担，
    列表因此与上方标题行**共用同一条左缘**（不再套一层比对话框更暗的块）。
@@ -6374,6 +6827,37 @@ button.profileRowMain:hover {
 .rollbackFileRow[data-kind='create']::before { background: var(--cm-ok); }
 .rollbackFileRow[data-kind='delete']::before { background: var(--cm-error); }
 .rollbackFileRow:not([data-kind])::before { display: none; }
+
+/* 勾选列版式（2026-11-14 用户要求「每行文件 icon 的位置要一样」）：
+   给了判断回调时行内多出「勾选」这一格，三列版式放不下 ⇒ 第四项被自动摆进**隐式第二行第一列**，
+   ① ±行数掉到勾选框下面，② 第一列被「行数未统计」撑宽 ⇒ 图标整列右移。
+   现在改成四列：第一格钉死 16px（勾选框本身 16×16，见 .section input[type='checkbox']），
+   改动行放勾选框、删除行放同宽空占位（删除集不可勾，见 RollbackFileChanges），
+   图标因此每一行都落在同一条竖线上。**顺序要紧**：这条必须排在三列的 .rollbackFileRow 之后
+   （同特异性，靠后者取胜）。 */
+.rollbackFileRowSelectable {
+  grid-template-columns: 16px auto minmax(0, 1fr) auto;
+}
+
+/* 勾选框在 16px 轨道里必须去掉 UA 外边距（Chromium 默认 3px 3px 3px 4px，会让它溢出轨道、压到图标）。 */
+.rollbackFileRowSelectable > input[type='checkbox'] {
+  margin: 0;
+}
+
+/* 删除行的勾选格占位：宽度与勾选框同源（16px），只占位、不可交互。 */
+.rollbackFileToggleSlot {
+  width: 16px;
+  height: 16px;
+}
+
+/* 路径格 = 主标签 + 归属提示，合成**一格**：两者原先是并列的 grid 子项，多出来的那一项
+   会把统计列挤到隐式第二行（同上，用户截图的那个错位）。 */
+.rollbackFilePathCell {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-2);
+  min-width: 0;
+}
 
 /* 文件类型图标（第 7 条）：固定边框盒，颜色与画法全由组件决定（DSH 自带 FileTypeIcon 自带配色）。 */
 .rollbackFileIcon {
@@ -6537,6 +7021,11 @@ button.profileRowMain:hover {
   flex-direction: column;
   gap: 4px;
   margin-bottom: 10px;
+  /* D-24（2026-11-14 设计稿）：告警与指引是「读一眼再决定」的同一类文本，收进一个浅灰提示块。
+     原先裸文本直接压在清单上方，两行 11px 灰字与下面的行卡同色同距，读起来像清单的一部分。 */
+  padding: 8px 10px;
+  border-radius: var(--cm-r-2);
+  background: color-mix(in srgb, var(--cm-text-1) 4%, transparent);
 }
 
 .rollbackToolbar {
@@ -6750,6 +7239,38 @@ button.profileRowMain:hover {
   min-height: 0;
   overflow: auto;
   padding: 8px;
+}
+
+/* —— 回滚点加载骨架（2026-11-14）——
+ * 骨架复用真实容器（.rollbackToolbar / .rollbackLedger / .rollbackSessions /
+ * .rollbackLedgerMain / .rollbackGroup），只有占位条尺寸在此定义。
+ * 旧骨架是三张 SkeletonList 卡（≈210px），真实卡只有一行工具栏（≈26px）+ 一行说明 ⇒
+ * 卡片从 210 缩到 ~100，环境页整页往上跳（用户反馈「卡片大小与占位动画不符」）。 */
+.rollbackSkeletonSummary {
+  flex: none;
+  width: 42%;
+  max-width: 220px;
+  height: 11px;
+}
+
+.rollbackSkeletonButton {
+  flex: none;
+  width: 72px;
+  height: 26px;
+  border-radius: var(--cm-r-2);
+}
+
+/* 台账弹窗内的左侧会话条目 / 右侧回滚点行 */
+.rollbackSkeletonSession {
+  width: 100%;
+  height: 42px;
+  border-radius: var(--cm-r-2);
+}
+
+.rollbackSkeletonPoint {
+  width: 100%;
+  height: 30px;
+  border-radius: var(--cm-r-2);
 }
 
 /* 用户自由文本（已脱敏）：单行省略，全文进 title */
@@ -7315,4 +7836,718 @@ button.profileRowMain:hover {
   color: var(--cm-text-2);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   T-04「配置市场」/ T-05「市场·我的配置」—— 视觉稿（.stitch-refactor）落地
+   ---------------------------------------------------------------------------
+   全部是本波两屏的自有类；共享原语（.primaryButton / .card / .badge /
+   .selectTrigger / .conflictHead）不覆写全局值，需要收紧盒模型的都挂在自己的类上。
+   ═══════════════════════════════════════════════════════════════════════════ */
 
+/* 两屏内容体：稿里页签→标题、标题→仓库行都是 8（.viewBody 缺省 10） */
+.marketView {
+  gap: var(--cm-sp-4);
+}
+
+/* 「我的配置」内容体：与外层页签保持 10px（稿：space-y-10），内部间距沿用 .viewBody 的 10 */
+.myconfigsView {
+  margin-top: var(--cm-sp-1);
+}
+
+/* 浏览列表模式整屏定高：筛选卡 flex-1 之后条目在卡内滚动，整页不随条目数变长。
+   height: 100% + 每环 min-height: 0 与 .diffPaneFill 同一条口径（否则 flex 项的自动最小
+   尺寸 = 内容，会把卡顶出画布）。 */
+.marketFill {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* —— 页签：稿里是两个独立描边胶囊，不是「灰底容器里的一条」 —— */
+.marketView .modeTabs {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-2);
+  height: 30px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+.marketView .modeTab {
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 var(--cm-sp-5);
+  border: 1px solid transparent;
+  border-radius: var(--cm-r-2);
+  background: none;
+  font-size: var(--cm-fs-base);
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+  box-shadow: none;
+}
+
+.marketView .modeTab:hover {
+  background: var(--cm-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.marketView .modeTab[data-active] {
+  border-color: var(--dsw-alias-border-l3);
+  background: var(--cm-hover);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+  box-shadow: none;
+}
+
+/* 仓库行左侧标签：稿里是 12px 常规字重的次级色，不是 .groupLabel 的 11px/700 小标题 */
+.marketRepoRow .groupLabel {
+  margin-bottom: 0;
+  font-size: var(--cm-fs-table);
+  font-weight: 400;
+  letter-spacing: normal;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* —— 筛选卡：吃满剩余高度（稿：flex-1、p12 但底边 0，列表被卡沿裁切） —— */
+.marketListCard {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--cm-sp-1);
+  padding: var(--cm-sp-6) var(--cm-sp-6) 0;
+  /* 不能 overflow:hidden：卡里的 Select 弹层是该节点的绝对定位子元素，裁掉就点不到；
+     条目仍由 .marketItemList 自己内滚。 */
+  overflow: visible;
+}
+
+/* 只在真的有条目时吃满剩余高度（空态/加载/错误态让卡贴合内容，不留一张空巨卡） */
+.marketListCardFill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 搜索框：描边在框上、input 无边框（稿：28px / r8 / 12px 放大镜） */
+.marketSearchBox {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-3);
+  height: var(--cm-h-md);
+  padding: 0 var(--cm-sp-4);
+  /* 盒模型与 .input/.selectTrigger 同一套（0.5px / border-l4 / input-major 底） */
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--cm-r-2);
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.marketSearchBox:hover {
+  border-color: color-mix(in srgb, var(--cm-accent) 40%, var(--dsw-alias-border-l2));
+}
+
+.marketSearchBox:focus-within {
+  border-color: var(--cm-accent);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.marketSearchInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  outline: none;
+  font-family: inherit;
+  font-size: var(--cm-fs-table);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 计数行：稿里是窄行；上间距由 .marketFilterGrid 的 margin-bottom 给，这里只留下方 6px
+   （原 mb8 让列表离计数太远） */
+.marketFilterMeta {
+  margin-bottom: 0;
+  padding: 0 0 var(--cm-sp-3);
+}
+
+/* —— 条目列表：卡内滚动 + 行间 1px 分隔（稿：divide-y、行 pt8 pb8） —— */
+.marketItemList {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+  overflow-y: auto;
+}
+
+.marketItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--cm-sp-4);
+  padding: var(--cm-sp-4) 0;
+}
+
+.marketItem + .marketItem {
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.marketItemMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: var(--cm-sp-4);
+}
+
+/* 名称行：12.5/600（.conflictHead 是 12；覆写在自有类上，不动共享规则） */
+.marketItemHead {
+  margin-bottom: var(--cm-sp-1);
+  font-size: var(--cm-fs-base);
+}
+
+/* 作者 · 描述：12px、单行省略（稿：mt2 / truncate） */
+.marketItemDesc {
+  display: block;
+  margin-top: var(--cm-sp-1);
+  font-size: var(--cm-fs-table);
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marketItemMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cm-sp-1);
+  margin-top: var(--cm-sp-2);
+}
+
+/* —— T-05 登录卡：三行徽章等距（稿：gap6 / px16 py12） —— */
+.marketLoginCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-3);
+  padding: var(--cm-sp-6) var(--cm-sp-8);
+}
+
+.marketLoginCard > * {
+  margin: 0;
+}
+
+.marketLoginRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cm-sp-2);
+  min-width: 0;
+}
+
+/* —— T-05 上传卡：单动作卡（稿：h50、px16 py10、按钮垂直居中） —— */
+.marketUploadCard {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  min-height: 50px;
+  padding: var(--cm-sp-5) var(--cm-sp-8);
+}
+
+/* —— T-05 已上传卡：列表头 + 贴在卡内的行（稿：p0 0 12、head h34 带下边框） —— */
+.marketMyListCard {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 var(--cm-sp-6);
+  overflow: hidden;
+}
+
+.marketMyListHead {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-4);
+  height: 34px;
+  margin: 0;
+  padding: 0 var(--cm-sp-6);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.marketMyListHead .groupLabel {
+  margin-bottom: 0;
+  font-size: var(--cm-fs-table);
+  font-weight: 600;
+  letter-spacing: normal;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.marketMyItemList {
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.marketMyItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-2);
+  padding: var(--cm-sp-3) var(--cm-sp-6);
+}
+
+.marketMyItem + .marketMyItem {
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.marketMyItemTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cm-sp-4);
+  min-width: 0;
+}
+
+.marketMyItemTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-3);
+  min-width: 0;
+  font-size: var(--cm-fs-base);
+}
+
+.marketMyItemActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--cm-sp-2);
+  min-width: 0;
+}
+
+.marketMyItemMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cm-sp-2);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   W7「产物库 P-02」六弹窗 + D-14b —— 视觉稿落地（.stitch-refactor/out/D-0*.html）
+   ---------------------------------------------------------------------------
+   全部是**屏私有**修饰类：共享原语（.hint / .groupLabel / .actionRow / .statRow /
+   .reportList / .reportScroll / .ghostButton / .inspectGroup / .card / .dialogCard /
+   .dialogWide / .badge / .chip / .diffTable）本体一处未改，需要不同形态时叠加在下面。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* —— D-03 迁移前咨询 —— */
+
+/* 建议依据：每条一行、行首一枚 3px 圆点（稿 D-03:123-141）。
+   圆点用伪元素而不是字符「•」：字符会参与基线对齐，行首缩进随字号漂移。 */
+.reasonLine::before {
+  content: '';
+  flex: none;
+  align-self: center;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+/* 「将应用」自成一栏：与下方维度明细之间用底边分隔（稿 D-03:144） */
+.consultWillApply {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* 维度行：左名右分（稿 D-03:161-200） */
+.consultDimensionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.consultDimensionName {
+  min-width: 0;
+  font-size: var(--cm-fs-table);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 维度明细不再用共享的限高滚框（.consultScroll 的描边/圆角/底色/380px 限高属别的屏），
+   这里只保留滚动能力本身 —— 与 .reportView .reportScroll 同一条思路。 */
+.consultDimensionScroll {
+  max-height: none;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+/* —— D-04 拉取 / 下载 —— */
+
+/* 文件名 + 右侧等宽小字（稿 D-04:229 一带） */
+.pullMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 选择器工具条末尾的「已选 N / M」：靠右（稿 D-14b:107 右侧 gap 12） */
+.pickerToolbarCount {
+  margin-left: auto;
+}
+
+.pullStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--cm-fs-table);
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 标题右侧「同步中」徽章（稿 D-04:203）：4px 方角 + 同色 20% 描边，底色仍由 .badge[data-kind=info] 给 */
+.pullBadge {
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+}
+
+.pullName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 不定态进度条：复用 .progressTrack / .progressIndeterminate（与一键同步活动条同一实现），
+   只把轨道压到稿上的 4px / 药丸圆角。不定态是**状态**而非装饰：reduced-motion 下保留
+   （见 §15 与 .progressIndeterminate 注释），不做减弱分支。 */
+.pullTrack {
+  display: block;
+  height: 4px;
+  margin-top: 10px;
+  border-radius: var(--cm-r-pill);
+}
+
+.pullBar {
+  border-radius: var(--cm-r-pill);
+}
+
+/* —— D-05 备份内容查看 —— */
+
+/* 条目 = 圆点 + 等宽彩色 adapter + 描述（稿 D-05:170-181） */
+.inspectItem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 22px;
+}
+
+.inspectDot {
+  flex: none;
+  align-self: center;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.inspectAdapter {
+  flex: none;
+  color: var(--cm-accent);
+}
+
+.inspectDesc {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 条目区不再套共享限高滚框（.reportScroll 的描边/圆角/底色/380px 限高），只留滚动 */
+.inspectItemsScroll {
+  max-height: none;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+/* 子分组之间 14px（稿 D-05:164；共享 .inspectGroup 仍是 10px） */
+.inspectSubGroup {
+  margin-bottom: 14px;
+}
+
+/* 徽章：同色 15% 细描边（稿 D-05:142-159）。形状之外一律不动 —— 四态色仍由 .badge/dsh Tag 给。 */
+.inspectBadge {
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+}
+
+/* —— D-06 恢复报告 —— */
+
+/* 条目行：圆点 + 正文（稿 D-06:123-126） */
+.reportItem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  line-height: 1.5;
+}
+
+.reportItem::before {
+  content: '';
+  flex: none;
+  align-self: center;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+/* 失败项的路径段（等宽 + 主文字色），原因段沿用列表的字色 */
+.reportItemPath {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 组标题：正文档字号 + 600（裸 <strong> 在 11px 小节头里太小） */
+.reportGroupTitle {
+  font-size: var(--cm-fs-base);
+  font-weight: 600;
+}
+
+/* —— D-07 删除确认里的「当前基线」注意盒（稿 D-07:214-219） —— */
+.confirmNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--cm-warn) 35%, transparent);
+  border-radius: var(--cm-r-2);
+  background: color-mix(in srgb, var(--cm-warn) 12%, transparent);
+  font-size: var(--cm-fs-meta);
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.confirmNoteIcon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--cm-warn);
+}
+
+/* —— W2 同步屏（P-03）：未配置通道卡收成单行矮态 ——
+   .cardTitleRow 是 baseline + 8px 下边距；矮态行是卡内唯一内容，按钮与徽章要居中对齐、
+   且不能把卡再撑高 8px。覆写落在自有类上，不动共享规则（四张已配置卡仍走 .cardTitleRow）。 */
+.channelCompactRow {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-4);
+  margin-bottom: 0;
+}
+
+/* —— 2026-11-14「添加通道」入口卡（同步页只留已配置的通道卡，其余通道收进这里） ——
+   整宽按钮而不是 .card：它是动作入口，不是信息面板；虚线边框沿用 .empty 的「这里还空着」
+   语义，hover 才点亮强调色。 */
+.addChannelCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: var(--cm-r-3);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.addChannelCard:hover {
+  border-color: var(--cm-accent);
+  color: var(--cm-accent);
+}
+.addChannelCard:focus-visible {
+  outline: 2px solid var(--cm-accent);
+  outline-offset: 2px;
+}
+.addChannelLabel {
+  font-size: var(--cm-fs-base);
+  font-weight: 600;
+}
+/* 未配置通道名单：放不下就省略，绝不换行（换行会把虚线框撑成两块） */
+.addChannelHint {
+  margin-left: auto;
+  min-width: 0;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.channelPickList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 选通道弹窗里的行：整行可点，通道名在上一行、用途在下一行 */
+.channelPickRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--cm-r-3);
+  background: var(--dsw-alias-bg-layer-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.channelPickRow:hover {
+  border-color: var(--cm-accent);
+  background: var(--dsw-alias-bg-layer-1);
+}
+.channelPickRow:focus-visible {
+  outline: 2px solid var(--cm-accent);
+  outline-offset: 2px;
+}
+.channelPickLabel {
+  font-size: var(--cm-fs-base);
+  font-weight: 600;
+}
+.channelPickDesc {
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+
+
+
+/* ── 同步设置弹窗（2026-11-14 用户要求：同步分区 / 自动同步与密码收进一个弹窗）
+   两个页签的理由：12 个分区勾选已占满 720 画布首屏，策略设置若竖排在同一页会被挤出滚动区。
+   页签做成分段控件（整宽等分 + 选中换底色），不引入第二套视觉体系。
+   D-39（2026-11-14 Stitch 稿）：条高 44（内距 4 + 项高 34）、项 13px，选中项白底 + 1px 边 ——
+   白底必须落在灰条上，否则选中态只剩字重差异，远看分不出当前页。 */
+.settingsTabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--cm-r-3);
+  background: var(--dsw-alias-bg-layer-2);
+  margin: 0 0 14px;
+}
+.settingsTab,
+.settingsTabOn {
+  flex: 1 1 0;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: var(--cm-r-2);
+  background: transparent;
+  color: var(--cm-text-2);
+  font-size: var(--cm-fs-title);
+  cursor: pointer;
+  transition: background-color var(--cm-motion-fast) ease, color var(--cm-motion-fast) ease;
+}
+.settingsTab:hover {
+  color: var(--cm-text-1);
+}
+.settingsTabOn {
+  background: var(--dsw-alias-bg-layer-1);
+  border-color: var(--cm-line-2);
+  color: var(--cm-text-1);
+  font-weight: 500;
+}
+.settingsTab:focus-visible,
+.settingsTabOn:focus-visible {
+  outline: 2px solid var(--cm-accent);
+  outline-offset: -2px;
+}
+
+/* ── 行式设置页（D-39）：几段各自成 .settingsGroup，段头是 11px 小标题（右侧可挂开关或状态），
+   段内每行是「左标签（+ⓘ） / 右控件」；行高 34、行间 0.5px 细线、最后一行无线。
+   为什么是行式而不是卡内竖排：这一页有 8 个以上设置，竖排 .field（label 上、控件下）会占掉
+   480px 以上，而且每行控件宽度不一；行式把右边界对齐成一条竖线，扫读成本低一半。 */
+.settingsPage {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settingsGroup {
+  display: flex;
+  flex-direction: column;
+}
+.settingsGroupHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+  margin-bottom: 2px;
+}
+.settingsGroupTitle {
+  font-size: var(--cm-fs-meta);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--cm-text-2);
+}
+.settingsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  border-bottom: 0.5px solid var(--cm-line-2);
+}
+.settingsRow:last-child {
+  border-bottom: 0;
+}
+.settingsRowMain {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.settingsRowLabel {
+  font-size: var(--cm-fs-base);
+  line-height: 1.25;
+  color: var(--cm-text-1);
+}
+.settingsRowControl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+/* 行式页里的输入控件统一 240 宽：右边界对齐才有「一列」的观感（D-39 的 240×30）。
+   .input 自带 height 28，不带 .field ⇒ 不会被 .field > .input 的 100% 覆盖。 */
+.settingsSelect,
+.settingsInput {
+  width: 240px;
+}
+.settingsNote {
+  padding: 4px 0;
+}
+.settingsGroupFoot {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+}

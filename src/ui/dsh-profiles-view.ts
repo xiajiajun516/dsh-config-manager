@@ -176,12 +176,18 @@ export function suggestCopyName(name: string, existingNames: readonly string[], 
 }
 
 /**
- * 复制告警码 → i18n key。目前只有 `depsNotInstalled` 一类（副本没带 node_modules 却声明了依赖），
- * 返回类型写成字面量联合：新增告警码时这里会编译报错，逼着补文案而不是静默吞掉。
+ * 复制告警码 → i18n key。目前只有 `depsNotInstalled` 一类（副本没带 node_modules 却声明了依赖）。
+ *
+ * 为什么是 `Record<告警码, 文案键>` 而不是 if + 兜底：原先 if 与兜底 return 同一字面量，
+ * 任何新告警码都会被静默显示成「缺 node_modules」的文案，注释里承诺的「新增码编译报错」
+ * 并不存在（审计 P10-4）。Record 的键即告警码全集 —— 码增删而映射不跟上就是编译错误。
  */
-export function copyWarningKey(warning: DshProfileCopyWarning): 'profiles.duplicate.warn.depsNotInstalled' {
-  if (warning === 'depsNotInstalled') return 'profiles.duplicate.warn.depsNotInstalled'
-  return 'profiles.duplicate.warn.depsNotInstalled'
+const COPY_WARNING_KEY: Record<DshProfileCopyWarning, 'profiles.duplicate.warn.depsNotInstalled'> = {
+  depsNotInstalled: 'profiles.duplicate.warn.depsNotInstalled',
+}
+
+export function copyWarningKey(warning: DshProfileCopyWarning): (typeof COPY_WARNING_KEY)[DshProfileCopyWarning] {
+  return COPY_WARNING_KEY[warning]
 }
 
 /** 终端启动命令（非 web 形态没有浏览器界面，只能在终端用它拉起）。 */

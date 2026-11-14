@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>DSH 设置 — 备份与迁移 D-39 同步设置·自动同步与密码弹窗</title>
+<style>
+    /* Reset & Base Fonts */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    body {
+      background-color: #E9EBEF;
+      color: #0F1115;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    /* 插件整体画布 564x720 处于宿主环境中，但本需求要求宽屏弹窗 wide 达 691px，因此按统一 1440x900 / 800x800 外框或标准 720 高度内呈现 */
+    .app-viewport {
+      width: 760px;
+      height: 720px;
+      position: relative;
+      background-color: #E9EBEF;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* 压暗的三段式外壳（背景） */
+    .bg-shell {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 564px;
+      height: 720px;
+      background-color: #E9EBEF;
+      display: flex;
+      flex-direction: column;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* 顶部导航条 44px */
+    .bg-topbar {
+      height: 44px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 0.5px solid #0000001A;
+    }
+    .bg-nav-links {
+      display: flex;
+      gap: 16px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #61666B;
+    }
+    .bg-nav-item {
+      position: relative;
+      padding: 12px 0;
+      line-height: 20px;
+    }
+    .bg-nav-item.active {
+      color: #0F1115;
+    }
+    .bg-nav-item.active::after {
+      content: "";
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background-color: #0F1115;
+    }
+    .bg-top-icons {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #61666B;
+    }
+
+    /* 底层内容模拟（被压暗） */
+    .bg-content {
+      flex: 1;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .bg-card {
+      border: 1px solid #0000001A;
+      border-radius: 12px;
+      padding: 14px;
+      background-color: rgba(255, 255, 255, 0.4);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .bg-text-line {
+      height: 12px;
+      background-color: #0000001A;
+      border-radius: 4px;
+    }
+
+    /* 底部内缩状态栏 28px */
+    .bg-statusbar {
+      height: 28px;
+      margin: 0 8px 8px 8px;
+      background-color: rgba(255, 255, 255, 0.6);
+      border: 1px solid #0000001A;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      font-size: 11px;
+      color: #61666B;
+    }
+    .bg-status-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background-color: #22C55E;
+    }
+
+    /* 遮罩层 */
+    .modal-overlay {
+      position: absolute;
+      inset: 0;
+      background-color: #0000003D;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* D-39 Wide 弹窗容器 宽 691px 高约 620px */
+    .modal-window {
+      width: 691px;
+      height: 620px;
+      background-color: #FFFFFF;
+      border-radius: 16px;
+      border: 1px solid #0000001A;
+      box-shadow: none;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+      z-index: 20;
+    }
+
+    /* 1. 标题行 40px */
+    .modal-header {
+      height: 40px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 0.5px solid #0000001A;
+      flex-shrink: 0;
+    }
+    .modal-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: #0F1115;
+    }
+    .modal-close-btn {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #61666B;
+      cursor: pointer;
+      border: none;
+      background: none;
+    }
+
+    /* 2. 页签条 44px（等分两个页签） */
+    .modal-tabs {
+      height: 44px;
+      display: flex;
+      background-color: #F5F5F5;
+      padding: 4px;
+      border-bottom: 0.5px solid #0000001A;
+      flex-shrink: 0;
+    }
+    .modal-tab-item {
+      flex: 1;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: all 0.15s ease;
+    }
+    .modal-tab-item.inactive {
+      color: #61666B;
+      font-weight: 400;
+      background: transparent;
+      border: none;
+    }
+    .modal-tab-item.active {
+      color: #0F1115;
+      font-weight: 500;
+      background-color: #FFFFFF;
+      border: 1px solid #979DA6;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+
+    /* 3. 正文区 470px（padding 10px 16px 0） */
+    .modal-body {
+      height: 470px;
+      padding: 8px 16px 0 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow: hidden; /* 一屏装下不出现滚动条 */
+      flex-shrink: 0;
+    }
+
+    /* 分组样式 */
+    .setting-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .group-header {
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 2px;
+    }
+    .group-title {
+      font-size: 11px;
+      font-weight: 500;
+      color: #61666B;
+      letter-spacing: 0.04em;
+    }
+
+    /* 设置行 高 34px */
+    .setting-row {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 0.5px solid #0000001A;
+    }
+    .setting-row:last-child {
+      border-bottom: none;
+    }
+    .setting-left {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .setting-label {
+      font-size: 12.5px;
+      font-weight: 400;
+      color: #0F1115;
+      line-height: 1.25;
+    }
+    .info-icon {
+      color: #81858C;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .setting-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* 控件：弹性开关 (32x18 胶囊，圆点 14px) */
+    .switch-toggle {
+      width: 32px;
+      height: 18px;
+      border-radius: 999px;
+      position: relative;
+      cursor: pointer;
+      display: inline-block;
+      flex-shrink: 0;
+      transition: background-color 0.15s ease;
+    }
+    .switch-toggle.on {
+      background-color: #4176E6;
+    }
+    .switch-toggle.off {
+      background-color: #D1D5DB;
+    }
+    .switch-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      background-color: #FFFFFF;
+      position: absolute;
+      top: 2px;
+      transition: left 0.15s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+    }
+    .switch-toggle.on .switch-thumb {
+      left: 16px;
+    }
+    .switch-toggle.off .switch-thumb {
+      left: 2px;
+    }
+
+    /* 控件：下拉框 (宽 240px，高 30px，白底 1px #0000001A，圆角 8px) */
+    .custom-select {
+      width: 240px;
+      height: 30px;
+      background-color: #FFFFFF;
+      border: 1px solid #0000001A;
+      border-radius: 8px;
+      padding: 0 8px 0 10px;
+      font-size: 12px;
+      color: #0F1115;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+    }
+    .select-arrow {
+      color: #81858C;
+    }
+
+    /* 控件：密码输入框 (宽 240px，高 30px) */
+    .password-input-wrap {
+      width: 240px;
+      height: 30px;
+      background-color: #FFFFFF;
+      border: 1px solid #0000001A;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      justify-content: space-between;
+    }
+    .password-input-wrap input {
+      border: none;
+      outline: none;
+      background: transparent;
+      font-size: 12px;
+      color: #0F1115;
+      width: 190px;
+    }
+    .password-input-wrap input::placeholder {
+      color: #81858C;
+    }
+
+    /* 徽章 Badge & Pill */
+    .badge-pill {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      line-height: 1.5;
+    }
+    .badge-blue {
+      background-color: rgba(65, 118, 230, 0.1);
+      color: #4176E6;
+    }
+    .badge-gray {
+      background-color: #EBEEF2;
+      color: #61666B;
+    }
+
+    .badge-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-top: 4px;
+    }
+
+    /* Danger 按钮（红描边） */
+    .btn-danger-ghost {
+      height: 26px;
+      padding: 0 10px;
+      background: transparent;
+      border: 1px solid rgba(236, 19, 19, 0.45);
+      border-radius: 6px;
+      color: #EC1313;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    /* 4. 底栏 52px */
+    .modal-footer {
+      height: 52px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      border-top: 0.5px solid #0000001A;
+      flex-shrink: 0;
+    }
+    .btn-primary {
+      height: 32px;
+      padding: 0 16px;
+      background-color: #0F1115;
+      color: #FFFFFF;
+      font-size: 13px;
+      font-weight: 500;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+<div class="app-viewport">
+<!-- 底层压暗外壳 (564x720 风格) -->
+<div class="bg-shell">
+<div class="bg-topbar">
+<div class="bg-nav-links">
+<div class="bg-nav-item">首页</div>
+<div class="bg-nav-item">产物库</div>
+<div class="bg-nav-item active">同步</div>
+<div class="bg-nav-item">环境</div>
+</div>
+<div class="bg-top-icons">
+<!-- ⌘K -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24" width="14"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"></path></svg>
+<!-- activity -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24" width="14"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+<!-- history -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+<!-- about -->
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</div>
+</div>
+<div class="bg-content">
+<div class="bg-card">
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<div style="font-size:12px; font-weight:500; color:#61666B;">Git 私有仓库</div>
+<div style="font-size:11px; color:#22C55E;">已连接</div>
+</div>
+<div style="font-size:11px; color:#61666B; font-family:monospace;">https://github.com/xiajiajun516/dsh-config.git</div>
+</div>
+<div class="bg-card">
+<div style="font-size:12px; font-weight:500; color:#61666B;">WebDAV</div>
+<div class="bg-text-line" style="width: 40%;"></div>
+</div>
+<div class="bg-card">
+<div style="font-size:12px; font-weight:500; color:#61666B;">S3 对象存储</div>
+<div class="bg-text-line" style="width: 30%;"></div>
+</div>
+</div>
+<div class="bg-statusbar">
+<div class="bg-status-left">
+<div class="status-dot"></div>
+<span>就绪</span>
+</div>
+<div>v0.8.0 · DSH 2.4</div>
+</div>
+</div>
+<!-- 模态遮罩与弹窗 -->
+<div class="modal-overlay">
+<div class="modal-window" style="height: auto; max-height: 560px;">
+<!-- 1. 标题行 40px -->
+<div class="modal-header">
+<div class="modal-title">同步设置</div>
+<button aria-label="关闭" class="modal-close-btn">
+<svg fill="none" height="14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewbox="0 0 24 24" width="14"><line x1="18" x2="6" y1="6" y2="18"></line><line x1="6" x2="18" y1="6" y2="18"></line></svg>
+</button>
+</div>
+<!-- 2. 页签条 44px (两页签等分) -->
+<div class="modal-tabs">
+<div class="modal-tab-item inactive">同步内容</div>
+<div class="modal-tab-item active">自动同步与密码</div>
+</div>
+<!-- 3. 正文区 470px (4段) -->
+<div class="modal-body" style="height: auto; padding-bottom: 12px;">
+<!-- 段 1：自动同步 -->
+<div class="setting-group">
+<div class="group-header">
+<span class="group-title">自动同步</span>
+<div class="switch-toggle on"><div class="switch-thumb"></div></div>
+</div>
+<!-- 兜底轮询间隔 -->
+<div class="setting-row">
+<div class="setting-left">
+<span class="setting-label">兜底轮询间隔</span>
+<span class="info-icon">
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</span>
+</div>
+<div class="setting-right">
+<div class="custom-select">
+<span>30 分钟</span>
+<span class="select-arrow">
+<svg fill="none" height="12" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="12"><polyline points="6 9 12 15 18 9"></polyline></svg>
+</span>
+</div>
+</div>
+</div>
+<!-- 本地改动即时同步 -->
+<div class="setting-row">
+<div class="setting-left">
+<span class="setting-label">本地改动即时同步</span>
+<span class="info-icon">
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</span>
+</div>
+<div class="setting-right">
+<div class="switch-toggle on"><div class="switch-thumb"></div></div>
+</div>
+</div>
+<!-- 自动应用范围 -->
+<div class="setting-row">
+<div class="setting-left">
+<span class="setting-label">自动应用范围</span>
+<span class="info-icon">
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</span>
+</div>
+<div class="setting-right">
+<div class="custom-select">
+<span>含 plugins 与 mcp（推荐）</span>
+<span class="select-arrow">
+<svg fill="none" height="12" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="12"><polyline points="6 9 12 15 18 9"></polyline></svg>
+</span>
+</div>
+</div>
+</div>
+<!-- 双侧都改时 -->
+<div class="setting-row">
+<div class="setting-left">
+<span class="setting-label">双侧都改时</span>
+<span class="info-icon">
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</span>
+</div>
+<div class="setting-right">
+<div class="custom-select">
+<span>保留本机并推上去</span>
+<span class="select-arrow">
+<svg fill="none" height="12" stroke="currentColor" stroke-width="2" viewbox="0 0 24 24" width="12"><polyline points="6 9 12 15 18 9"></polyline></svg>
+</span>
+</div>
+</div>
+</div>
+<!-- 状态徽章 -->
+<div class="badge-row">
+<span class="badge-pill badge-blue">部分成功 · 上次运行 2026-11-14 17:44</span>
+<span class="badge-pill badge-blue">下次约 30 分钟后</span>
+</div>
+</div>
+<!-- 段 2：加密与密钥导出 -->
+<div class="setting-group">
+<div class="group-header">
+<span class="group-title">加密与密钥导出</span>
+<div style="display:flex; align-items:center; gap:6px;">
+<span style="font-size:11px; color:#61666B;">加密备份</span>
+<div class="switch-toggle on"><div class="switch-thumb"></div></div>
+</div>
+</div>
+<!-- 加密密码 -->
+<div class="setting-row">
+<div class="setting-left">
+<span class="setting-label">加密密码</span>
+<span class="info-icon">
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</span>
+</div>
+<div class="setting-right">
+<div class="password-input-wrap">
+<input placeholder="已保存（留空即沿用）" readonly="" type="password"/>
+<span style="color:#81858C; display:flex;">
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+</span>
+</div>
+</div>
+</div>
+<!-- 确认密码 -->
+<div class="setting-row">
+<div class="setting-left">
+<span class="setting-label">确认密码</span>
+</div>
+<div class="setting-right">
+<div class="password-input-wrap">
+<input placeholder="已保存（留空即沿用）" readonly="" type="password"/>
+</div>
+</div>
+</div>
+<!-- 导出密钥 -->
+<div class="setting-row">
+<div class="setting-left">
+<span class="setting-label">导出密钥</span>
+<span class="info-icon">
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</span>
+</div>
+<div class="setting-right">
+<div class="switch-toggle off"><div class="switch-thumb"></div></div>
+</div>
+</div>
+</div>
+<!-- 段 3：解密密码 -->
+<div class="setting-group">
+<div class="group-header">
+<span class="group-title">解密密码</span>
+<span class="badge-pill badge-gray">已保存到本机</span>
+</div>
+<!-- 解密密码（加密快照拉取/同步用，可选） -->
+<div class="setting-row">
+<div class="setting-left">
+<span class="setting-label">解密密码（加密快照拉取/同步用，可选）</span>
+<span class="info-icon">
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</span>
+</div>
+<div class="setting-right">
+<div class="password-input-wrap">
+<input placeholder="已保存（留空即沿用）" readonly="" type="password"/>
+</div>
+</div>
+</div>
+<!-- 删除已保存的密码 -->
+<div style="display:flex; justify-content:flex-end; padding-top:4px;">
+<button class="btn-danger-ghost">删除已保存的密码</button>
+</div>
+</div>
+<!-- 段 4：插件 -->
+<div class="setting-group">
+<div class="group-header">
+<span class="group-title">插件</span>
+</div>
+<!-- 跟随远端删除插件 -->
+<div class="setting-row">
+<div class="setting-left">
+<span class="setting-label">跟随远端删除插件</span>
+<span class="info-icon">
+<svg fill="none" height="14" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" width="14"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
+</span>
+</div>
+<div class="setting-right">
+<div class="switch-toggle off"><div class="switch-thumb"></div></div>
+</div>
+</div>
+</div>
+</div>
+<!-- 4. 底栏 52px -->
+<div class="modal-footer">
+<button class="btn-primary">完成</button>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

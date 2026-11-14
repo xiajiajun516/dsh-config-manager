@@ -50,8 +50,9 @@ export function MyConfigsList({
   onRefresh, onChangeDeleteConfirm, onOpenUpdate, onOpenInstall,
 }: MyConfigsListProps) {
   return (
-    <Card>
-      <div className={css.headRow}>
+    /* 视觉稿 T-05：卡片自带一条列表头（h34、下边框），行贴在卡内（p0 0 12），不再用 Card 的 12px 内边距 */
+    <Card className={css.marketMyListCard}>
+      <div className={css.marketMyListHead}>
         <span className={css.groupLabel}>{t('myconfigs.list.title')}</span>
         {/* 撑开剩余空间：Badge 与刷新按钮成组贴右，刷新按钮为该行最右元素 */}
         <span className={css.statusSpacer} />
@@ -72,45 +73,46 @@ export function MyConfigsList({
       {myItemsError !== null && <Banner kind="error">{redact(myItemsError)}</Banner>}
       {listLoading && myItems === null && <SkeletonList label={t('myconfigs.list.loading')} />}
       {!listLoading && myItems !== null && myItems.length === 0 && <Empty>{t('myconfigs.list.empty')}</Empty>}
+      {/* 视觉稿 T-05：每行「名称+版本 / 动作」一行，徽章行在下方；行间 1px 分隔，列表限高内滚 */}
       {!listLoading && itemViews.length > 0 && (
-        <div className={css.snapshotList}>
+        <div className={css.marketMyItemList}>
           {itemViews.map(({ entry, view, badge }) => (
-            <div key={view.id} className={css.statRow} style={{ paddingTop: 4 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className={css.conflictHead}>
+            <div key={view.id} className={css.marketMyItem}>
+              <div className={css.marketMyItemTop}>
+                <div className={css.marketMyItemTitle}>
                   <span className={css.conflictId}>{view.name}</span>
                   {view.version !== '' && <Badge kind="info">{view.version}</Badge>}
                 </div>
-                <div className={css.statRow}>
-                  <Badge kind={badge.kind}>{badge.text}</Badge>
-                  {view.stars !== undefined && (
-                    <Badge kind="info" title={t('list.starsHint')}>{t('list.stars', { count: String(view.stars) })}</Badge>
+                <div className={css.marketMyItemActions}>
+                  <Button onClick={() => { onOpenUpdate(entry) }}>{t('myconfigs.item.update')}</Button>
+                  <Button
+                    disabled={install !== null && install.detail === null}
+                    onClick={() => { onOpenInstall(entry) }}
+                  >
+                    {t('myconfigs.item.install')}
+                  </Button>
+                  {entry.repoUrl !== '' && <Button href={entry.repoUrl}>{t('myconfigs.list.openRepo')}</Button>}
+                  {badge.kind === 'warn' && badge.prUrl !== undefined && badge.prUrl !== '' && (
+                    <Button href={badge.prUrl}>{t('myconfigs.item.openPr')}</Button>
                   )}
-                  {view.author !== '' && <Badge kind="info">{view.author}</Badge>}
-                  {view.updatedAt !== '' && <Badge kind="info">{view.updatedAt}</Badge>}
-                  {view.categories.map((c) => <Badge key={c} kind="info">{c}</Badge>)}
+                  {/* 删除：danger 按钮 → 弹窗二次确认（ConfirmDialog；不可恢复，已收录自动提交下架 PR） */}
+                  <Button
+                    variant="danger"
+                    disabled={deletingId !== null}
+                    onClick={() => { onChangeDeleteConfirm(view.id) }}
+                  >
+                    {t('myconfigs.delete.run')}
+                  </Button>
                 </div>
               </div>
-              <div className={css.rowActions}>
-                <Button onClick={() => { onOpenUpdate(entry) }}>{t('myconfigs.item.update')}</Button>
-                <Button
-                  disabled={install !== null && install.detail === null}
-                  onClick={() => { onOpenInstall(entry) }}
-                >
-                  {t('myconfigs.item.install')}
-                </Button>
-                {entry.repoUrl !== '' && <Button href={entry.repoUrl}>{t('myconfigs.list.openRepo')}</Button>}
-                {badge.kind === 'warn' && badge.prUrl !== undefined && badge.prUrl !== '' && (
-                  <Button href={badge.prUrl}>{t('myconfigs.item.openPr')}</Button>
+              <div className={css.marketMyItemMeta}>
+                <Badge kind={badge.kind}>{badge.text}</Badge>
+                {view.stars !== undefined && (
+                  <Badge kind="info">{t('list.stars', { count: String(view.stars) })}</Badge>
                 )}
-                {/* 删除：danger 按钮 → 弹窗二次确认（ConfirmDialog；不可恢复，已收录自动提交下架 PR） */}
-                <Button
-                  variant="danger"
-                  disabled={deletingId !== null}
-                  onClick={() => { onChangeDeleteConfirm(view.id) }}
-                >
-                  {t('myconfigs.delete.run')}
-                </Button>
+                {view.author !== '' && <Badge kind="info">{view.author}</Badge>}
+                {view.updatedAt !== '' && <Badge kind="info">{view.updatedAt}</Badge>}
+                {view.categories.map((c) => <Badge key={c} kind="info">{c}</Badge>)}
               </div>
             </div>
           ))}

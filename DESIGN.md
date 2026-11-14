@@ -115,7 +115,7 @@ v3 删掉了页面级那张绑定「隐式当前通道」的分区卡（它此�
 | 幽灵选中态（页签 / 分段 / 下拉选中） | `--cm-ghost-active-fill` / `--cm-ghost-active-border` | `--dsw-alias-button-ghost-active-fill/border`（= 原生 Pill 的 active） |
 | 弹层/菜单表面 + 背板模糊 | `--cm-menu-surface` / `--cm-menu-backdrop` | `--dsw-menu-surface-fill` / `--dsw-menu-backdrop-filter` |
 | 菜单图标色 | `--cm-menu-icon` | `--dsw-alias-menu-icon` |
-| Tooltip 气泡（ⓘ）底 / 前景 | `--cm-tooltip-bg` / `--cm-tooltip-fg` | `--dsw-alias-tooltip-bg` / `--dsw-static-neutral-bluish-00` |
+| Tooltip 气泡底 / 前景（ⓘ 已下线，无消费方） | `--cm-tooltip-bg` / `--cm-tooltip-fg` | `--dsw-alias-tooltip-bg` / `--dsw-static-neutral-bluish-00` |
 | 通知（Toast）底 / 前景 | `--cm-toast-bg` / `--cm-toast-fg` | `--dsw-alias-toast-bg` / `--dsw-alias-toast-label`（原生 toast 两个主题下都是深色） |
 | 深色 toast 上的警示文字 | `--cm-warn-label` | `--dsw-alias-state-warn-label` |
 | 弹窗遮罩 / 背板模糊 | `--cm-mask` / `--cm-mask-blur` | `--dsw-alias-bg-mask-1` / `--dsw-mask-blur` |
@@ -315,7 +315,7 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
 | 菜单 / 下拉弹层 | `--cm-menu-surface` + `--cm-menu-backdrop`；`radius-lg`；`border: 0`（边缘由 elevation-prominent 提供）；行 `radius-md`、hover `--cm-hover`、disabled `.4`、分隔线 `0.5px border-l2` |
 | 弹窗 | 遮罩 `--cm-mask` + `--cm-mask-blur`；卡片 `bg-layer-2` + `--cm-shadow-2` + `radius-lg`（原生模态是 `radius-panel` 28px —— 那是**顶层**模态的档，本插件的弹窗嵌在设置面板里，取 MenuSurface 的 16px）；标题 500 字重；底部 `0.5px border-l2` 分隔线 |
 | 通知（Toast） | 原生 toast 表面：`--cm-toast-bg` / `--cm-toast-fg`（**两个主题下都是深色**）、`radius-lg`、`--cm-shadow-2`、`padding: 12px 16px`、14px 字、仅用图标表达状态色（不再给整条加状态描边）、warn 文字用 `--cm-warn-label` |
-| Tooltip（ⓘ 气泡） | 原生 Tooltip 表面：`--cm-tooltip-bg` / `--cm-tooltip-fg`（深色气泡、两主题一致）、`radius-sm`、`--cm-shadow-1`；12px 字与 8/10 内边距**刻意保留**（这里装的是多行机制说明，不是一行短提示） |
+| Tooltip 表面（自绘气泡时代遗留） | `--cm-tooltip-bg` / `--cm-tooltip-fg`（深色、两主题一致）、`radius-sm`、`--cm-shadow-1`；2026-11-14 起说明文字改挂原生 `title`，**这两个 token 与那条规则已无消费方**，保留仅为不误删历史定义 —— 新代码别用 |
 | 数据表 | 行分隔线 `0.5px border-l2`（含全站 9 处行分隔线），表头 11px `label-tertiary` |
 | 骨架 | `--cm-skeleton`（原生 skeleton 底色） |
 
@@ -342,23 +342,14 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
 - `Banner`（四态；操作按钮一律**内嵌右侧**）
 - `Segmented`（页内子视图切换；受控）
 - `Card` / `Field` / `SectionTitle` / `Empty` / `Checkbox` / `Stepper`
-- `InfoHint`（`common/InfoHint.tsx`，ⓘ 说明原语，2026-10）：**说明性文案的唯一承载体**。
-  触发元素是 `<button type="button">`（复用既有 `InfoIcon`）；悬停 / 键盘聚焦 / 点击固定三通道打开，
-  再次点击取消固定，**固定态下按下任意位置（触发按钮自身除外）同样取消固定并关闭**（`mousedown` 捕获阶段、
-  不 `stopPropagation`，守卫 `t10`），Esc 关闭（捕获阶段 + `stopPropagation`，不连带关掉外层 Modal/侧滑面板），
-  鼠标移出且未固定时关闭。**键盘聚焦通道只认「用户在弹窗内把焦点移过来」**：Radix 弹窗挂载会把初始焦点
-  派给容器内第一个可聚焦元素（标题行的 ⓘ 常常正是它），该次聚焦的 `relatedTarget` 在弹窗之外 → 不打开，
-  焦点环也只在气泡打开时才画（`.infoHintBtn[data-open]:focus-visible`）—— 程序化初始焦点于是既不弹气泡
-  也不亮蓝框（2026-10-04 用户反馈「一进弹窗就自动选中 ⓘ」，守卫 `t11`）。
-  说明文本走 `aria-describedby`（多实例 id 由 `useId` 保证唯一），
-  可访问名取各自命名空间的字典键 `common.infoHint`；**不依赖原生 title**。
-  气泡**必须经 `createPortal` 渲进插件根容器**（`resolveModalRoot()` = `MODAL_ROOT_ID`，与 Modal 共用同一份
-  实现，**绝不 `document.body`**）—— 否则会被 `.dialogContentCenter` 的常驻 `transform` 变成 fixed 包含块
-  并遭 `.dialogBody` 的 `overflow-y:auto` 裁剪；定位仍走 `getBoundingClientRect()` 量测，
-  但夹紧基准是**宿主画布 ∪ 锚点**（画布 = 插件根容器可见矩形 ∩ 窗口；并进锚点只为让气泡贴得住自己的 ⓘ ——
-  弹窗卡片是 fixed、相对窗口居中，会伸出画布左缘，见 §7），下方空间不足且上方更宽裕 → 向上翻转，
-  多行折行（`white-space: pre-wrap` + `max-width`），因此 564×720 画布内不出界、**不被任何父级
-  overflow 裁剪**。哪些文案该进它、哪些必须常驻，见 §7「说明性文案分层」。
+- `InfoHint`（`common/InfoHint.tsx`）**已整体下线（2026-11-14，用户要求）** —— 用户原话「把所有页面的 ! icon
+  都替换成悬停能读到的 title」。71 处渲染点全部改挂**原生 `title`**：`Field` 的 `tooltip`、`SectionTitle` 的
+  `tooltip`，以及逐处 `title={t('…Hint')}`；`common/InfoHint.tsx`、`.infoHint` / `.infoHintBtn` / `.infoHintBubble`
+  一组 CSS、守卫 `common/info-hint-guard.test.ts`（含 `MOVE_PINS` 台账）与 `common/InfoHint` 的 Portal 依赖一并删除。
+  现行判据（替代原「三通道 + 摆放」全部纪律）：**说明文字只有两个承载体 —— 原生 `title`（悬停可读、界面零图标）
+  与常驻正文（用户当下必须看到才能做决定的那句）**；分界线仍是§7 那句「删掉这句用户还能不能做出同样的
+  决定」。为什么不是自绘气泡：Portal 进插件根、宿主画布∪锚点夹紧、悬停/聚焦/点击固定四通道、Esc 不连带关
+  外层弹窗、初始焦点不得抢 —— 这一整套只服务一个灰点图标，读起来还要用户先发现它。
 - `Select`（`common/Select.tsx`，2026-09 替换**全部**原生 `<select>`，15 处）：自绘下拉。
   为什么必须自绘：`appearance: none` 只改触发器，**展开后的弹层仍是系统控件**（深色主题下是亮底
   系统菜单），且吃不到 `--dsw-*` token（§3 硬约束）。触发器复刻 `.input` 盒模型，弹层走
@@ -707,7 +698,7 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
 - **回滚点时间线**（环境 → 维护与诊断 → 「工作区 + 会话回滚」卡上的「查看回滚点」，2026-10-11 重排、2026-10-12 台账整块搬进弹窗；用户反馈「UI 太丑」+「要能一眼看到有回滚点的对话」）：
   卡内 = `.rollbackToolbar`（`.rollbackSummary` 数字摘要「共 N 个回滚点 · M 个会话」+ 主操作「查看回滚点」）；
   **卡不再折叠**（摘要与入口常驻可见）。台账本体在 `Modal`（`rollback.dialog.title` = 「回滚点台账」，`{open && …}` 条件挂载）里：
-  弹窗标题行（`Modal.Header` 的 `trailing` = `.shHeaderTrailing` 内的留存口径 ⓘ + 刷新）→ `.rollbackToolbar`（同一份数字摘要）
+  弹窗标题行（`Modal.Header` 的 `trailing` = 留存口径文字 + 刷新；原 ⓘ 已于 2026-11-14 下线）→ `.rollbackToolbar`（同一份数字摘要）
   → **左右分栏**（2026-10-12 用户要求「左边是侧边栏、右边是列表」）：`.rollbackLedger`（**高度锁死 340px** —— 切换对话不得让弹窗高度变化，
   否则居中重排 = 整页抖动，用户同日第二条反馈）= `.rollbackSessions`（左栏：**拥有回滚点的对话**，
   `.rollbackSessionItem` 两行式 = `.rollbackSessionId` **优先显示对话标题**（拿不到才回落等宽会话 id）+ `.rollbackSessionMeta` 计数/最新时间；
@@ -739,7 +730,15 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   ① 文件行 = 文件类型图标 · **目录（弱化 `.rollbackFileDir`）+ 基名（主色）** · **右对齐**的 ±行数 或「删除」：
      行是 `display: grid` 三列（`auto minmax(0,1fr) auto`），统计列 `justify-self: end` ⇒
      数字位数不同也不跳、纵向扫读成一列（第二轮修的就是「文件名长短不一把统计列挤得左右乱跳」）；
-     完整路径仍进 `title`（信息不丢）；
+     完整路径仍进 `title`（信息不丢）。
+     **给了逐行勾选（设置页回滚卡）时前插 16px 勾选列 ⇒ 四列**（`.rollbackFileRowSelectable`）：
+     子项比列多一格时 grid 会把统计挤进**隐式第二行第一列**、第一列又被「行数未统计」撑宽 ⇒
+     图标整列右移、±行数掉到勾选框下面（2026-11-14 用户截图）。现在改动行放勾选框、**删除行放同宽空占位**
+     （`.rollbackFileToggleSlot`，删除集不可勾）⇒ 每行图标落在同一条竖线上；
+     路径与归属提示合成一格 `.rollbackFilePathCell`（并列会把统计再挤下一行）；
+    行**不带右内边距**、左内边距只留语义色条那一档（无框清单要与上方标题行共用同一条左缘），
+    所以装进**有框**的限高容器（`.planScroll`）时由容器补左右内边距（`.planScrollPadded`，4px / 8px）——
+    否则勾选框贴左边框、±行数贴右边框，读成「表格被裁掉了」（2026-11-14 用户第二张截图）；
   ② **整文件删除写「删除」**（`.rollbackDeleted` / `rollback.preview.file.deleted`），**不写 `+0 −N`** ——
      那是「把文件清空」的意思；数据源 = `preview.workspace.removals`（引擎 `planCreatedRemovals` 的产物，
      与**执行阶段同一个函数** ⇒ 预览列出的 = 实际删的；`leftovers` 含永不删除的拒删项，**不得**拿它当删除清单）；
@@ -765,7 +764,7 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   执行者：`src/client/chat/rollback-entry-view.test.ts`（源级：恰好一颗选择框 / 统计块类 / 删除键 / 图标 / 打开成功关弹窗 /
   第二轮版式六条）+ `src/ui/rollback-view.test.ts`（`splitRollbackPath`、`rollbackPreviewScope` 的逐条口径）。
 - **会话体检弹窗**（环境 → 维护与诊断 → 会话体检，2026-10-12 重排，同一条用户反馈「UI 太丑」）：
-  弹窗标题行（`Modal.Header` 的 `trailing` = `.shHeaderTrailing` 内的说明 ⓘ + 主操作「开始体检 / 重新体检」）
+  弹窗标题行（`Modal.Header` 的 `trailing` = 说明文字 + 主操作「开始体检 / 重新体检」）
   → `.shSummary`（`.shMetrics` 数字 tiles：会话总数 / 需要处理 / 会话格式 → `.shSeverities` 严重级 chips
   → `.shNotes` 数据口径：未深度校验 / 被隐藏的正常会话 / 超上限 / 读不出条目）
   → `.shSectionHead`（`.shSectionTitle` 13px 区块标题 + 计数 `Badge` + 右对齐主操作）
@@ -776,7 +775,7 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   `nextRequestFails`/`invisible` = `--cm-warn`）；② **长句只进 `title`**，屏上只放短标签键
   （`sessions.severityShort.*` / `sessions.issues.more` / `sessions.hidden.healthyShort`…），完整句仍在原键里；
   ③ 摘要 chips 与行徽章走**同一个短标签出口**（`sessionSeverityShortKey` 纯函数）—— 两处各判一次必然术语漂移；
-  ④ 机制散文（布局归位的 3 段、应用内可修的完整说明、操作指引）进 ⓘ 或只在**真有动作可执行时**常驻，
+  ④ 机制散文（布局归位的 3 段、应用内可修的完整说明、操作指引）挂 `title`，或只在**真有动作可执行时**常驻，
   安全口径（运行时写入门 / 隔离目录不删会话 / 禁用原因）**一个字都不删**，只换承载位置。
   执行者：`src/client/recovery/session-dialog-mount.test.ts` 的 T15/T16。
 - **Stepper**：紧凑圆点 17px + 连接线，只读指示器。
@@ -797,6 +796,10 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     因为标签文案随语言变化，按字数估算必然失准。
     **度量不可信（未量到 / avail≤0）→ 一律全部可见**：宁可横向溢出这种视觉瑕疵，
     也绝不因为量不出来就藏页签 —— 那是功能丢失，不是外观问题。
+    **分隔条不得裁剪**：`.navStrip` 不写 `overflow`（`.shellNav` 同样不写）—— 「更多 ▾」的弹层是它的
+    后代（absolute 留在原地，不 portal），祖先一裁剪菜单就只剩下沿一条，表现为「点开什么都不显示」
+    （2026-11-14 真机反馈，小视口下必现）。画布边界由 `.section` 的 `overflow: hidden` 兜住，
+    量测失败时的横向溢出也仍被它裁在插件画布内，宿主布局不会破。守卫：`nav-menu-clip-guard.test.ts`。
     `.navMore` 与 `.navTab` **共用同一批 CSS 规则**（分组选择器）：同处一个分段条，
     必须长得一模一样，分成两套写必然会漂移；且根节点必须 `flex: none`
     （`.selectRoot` 缺省可收缩，空间一紧就被压扁，`navLayout` 的算账就白算了）。
@@ -932,9 +935,9 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     （`runs.lock.recoverRefused` / `recoverFailed`），**不得**报成功。回收动作 `userConfirmed=true`
     只由用户点击表达。
   - **每张卡片带相对时间**（`.runsCardTime`，右贴）：没有它，「正在跑」与「几小时前就结束的僵尸卡片」
-    在界面上完全一样。保留期说明（`runs.retentionHint`）属 MOVE 类（机制怎么工作 + 省事提示），
-    收进列表头部摘要行的 `InfoHint`（ⓘ）；空列表「为什么什么都没有」的**常驻**解释由
-    `<Empty>`（`runs.empty`）承担，不得一并移入 ⓘ。
+    在界面上完全一样。保留期说明（`runs.retentionHint`）属可悬停类（机制怎么工作 + 省事提示），
+    挂成列表头部摘要行的 `title`（`runsSummaryTitle`）；空列表「为什么什么都没有」的**常驻**解释由
+    `<Empty>`（`runs.empty`）承担，不得一并塞进 `title`。
 
 ### 远程合并弹窗（2026-10-21 重设计，替代页内联的旧裁决视图）
 结构层次（**四层，表面与间距逐层收窄，不靠颜色堆叠**）：概览指标 → 分区卡 → 冲突片 → 结果卡。
@@ -942,7 +945,7 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   + `.mergeTileValue`（fs-title/600/tabular-nums）+ `.mergeTileLabel`（fs-meta）。
   **语义走 `data-tone` 而不是四个类名**（与 Badge/Banner 同一套四态词表）；着色只用
   `color-mix(in srgb, var(--cm-<tone>) 8%, transparent)` 底 + 40% 边框 —— 数字先被读到，颜色只做分级。
-  概览是**决策依据**（可自动应用 / 待裁决 / 冲突 / 无变化），因此常驻在正文最上方，不折叠、不进 ⓘ。
+  概览是**决策依据**（可自动应用 / 待裁决 / 冲突 / 无变化），因此常驻在正文最上方，不折叠、不收进 `title`。
 - **分区卡**：`.mergeSection` = 0.5px `--cm-line-1` 外框 + `--cm-r-3` + `--cm-surface-1`，
   相邻卡之间用 `.mergeSection + .mergeSection { margin-top: 8px }` **而不是分隔线**（卡片化后分隔线
   会与卡边框叠成双层）。卡头 `.mergeSectionHead`：名称 + 裁决 Badge + `.statusSpacer` + 冲突/自动并入计数。
@@ -1182,15 +1185,15 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     让「为什么是 review / block」可直接核对，而不是只有一个分数 —— 用户实测抱怨过
     「健康评分 89 / 建议：阻止执行」这种自相矛盾的展示（根因：结论曾由分数阈值决定，
     现在只由证据决定，见 `src/core/migration-consult.ts` 的 `HARD_BLOCKER_CODES`）。
-- **导出页（Export）**：工具栏（末尾是 `export.hint` 的 ⓘ）→ **安全选项**（`.groupLabel` = `export.security`）→
+- **导出页（Export）**：工具栏（只放「选择要导出的内容」与导出按钮，无图标）→ **安全选项**（`.groupLabel` = `export.security`）→
   **命名行**（`.groupLabel` = `export.naming`）→ 进度/报告 → **「本次将导出」构成卡**
   （最后一个数据块，`Card.fillViewport` + `.compositionViewport` 内滚；合计口径与选择器 footer
   同源 = 同一个 `pickerSummary`，构成行只列真正会导出的分区）。
-  - **模式提示不再常驻**（2026-10 ⓘ 迁移，见 §7）：`export.hint`（默认导出推荐分区 + 去哪儿调整勾选）
-    已从页面正文收进工具栏 ⓘ（`ExportView.tsx` 工具栏末尾），首屏不再有那一行提示。
+  - **模式提示已删除**（2026-10 收进提示层 → 2026-11-14 连提示层一起删）：`export.hint`（默认导出推荐分区 + 去哪儿
+    调整勾选）只是复述下面「本次将导出」构成卡已逐分区列出的内容，见 §7 t13。
   - **分组标题（UI-11）**：两组输入区（安全选项 / 文件名与备注）外观相同，必须各有分组标题，
-    否则读不出边界；文件名与备注的规则说明（UI-12 的 `export.fileNameHint` / `export.noteHint`）
-    已收进字段标签旁的 ⓘ —— **常驻的只有非法时的 `.formError`**（`export.fileNameInvalid`，KEEP ①，
+    否则读不出边界；文件名的规则说明（UI-12 的 `export.fileNameHint`）挂字段标签的 `title`，备注说明
+    （`export.noteHint`，只讲备注存在哪）已于 2026-11-14 删除 —— **常驻的只有非法时的 `.formError`**（`export.fileNameInvalid`，KEEP ①，
     它本身重申了允许的字符集）。UI-12 的「先说明规则后报错」随之改写为「出错时由错误文案重申规则」。
   - **并排字段间距（UI-21）**：`.secretFields` 双列栅格内的 `.field` 归零下边距
     （`.secretFields .field { margin-bottom: 0 }`），分组说明行用 `.groupHintRow`（10px）
@@ -1309,7 +1312,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   新实例就绪 → `Banner kind="ok"` + 「打开新实例」+ 复制带 token 的 URL；未就绪 → `Banner kind="warn"`
   + 逐条告警 + 日志路径（`.kvRow` + `.mono`），绝不谎报成功；
   ②**新建卡**（name `.input` + 模板 `.select` + primary 按钮，非空即内联 `.formError` 校验）；
-  ③**列表**（`.listHeaderRow` = 标题 + `profiles.list.hint` 的 ⓘ + 统计 + 刷新 —— 2026-10 ⓘ 迁移后
+  ③**列表**（`.listHeaderRow` = 标题（`title` = `profiles.list.hint`）+ 统计 + 刷新 —— 2026-10 迁移后
   **不再下接一行 `.hint`**；同一键仍保留在行内可点信息区的 `title=`（KEEP ⑥ 防截断全量提示）；
   行 = `.profileRow` 内 `.profileRowHeader`：左为**整块可点信息区** `button.profileRowMain`（两行：
   `.profileRowTitle` = 档案名 `.profileRowName` + `.badgeRow` 徽章组（当前运行 / `:端口 运行中` / 形态 / 损坏），
@@ -1388,13 +1391,44 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   - 响应式：`.grid` 用 `auto-fit/minmax(280px)` 收窄即换行；表格允许横向滚动，不做移动端专属布局
     （救急台的使用场景是本机浏览器）。
 
+### 2026-11 照稿重构新增类（`.stitch-refactor` 设计稿落地）
+
+本轮按 54 份设计稿逐屏重构，新类**一律私有**（单屏前缀 + 单处引用），共享原语（`.card`/`.actionRow`/`.statRow`/`.statusSpacer`/`.iconBtn`/`.reportList`）本体零改动；跨屏需要的新形态先在本节登记再复用。
+
+| 屏 | 类 | 意图 |
+| --- | --- | --- |
+| 活动（RunsCenter） | `.runsCenter` `.runsCardStack` `.runsProgressRow` `.runsProgressStatus` `.runsLockDesc` `.runsLogLine` | 卡片内元素零外边距；进度条与状态字同排；锁卡说明降级；日志尾部单行省略、末行主色 |
+| 迁移历史 | `.historyTightCard` `.historyControlRow` `.historyControlRowEnd` `.historySearch` `.historySearchInput` `.historyGroup` | 策略/过滤两卡压成两行；搜索框外壳化（描边在框上，focus-within 整框变色），不再内嵌滚动盒 |
+| 同步 | `.channelCompactRow` `.confirmMessage` `.addChannelCard` `.addChannelLabel` `.addChannelHint` `.channelPickList` `.channelPickRow` `.channelPickLabel` `.channelPickDesc` | 未配置通道单行矮态（覆盖 `.cardTitleRow` 的 baseline+8px）；2026-11-14 起页面只渲染已配置的通道卡，其余收进末尾的虚线「添加通道」卡（`AddChannelCard`：整宽 button + 选通道弹窗，行内两段文字），`.channelCompactRow` 只作为未配置通道的兜底形态保留 |
+| 同步·设置弹窗（D-39，2026-11-14 二次收口） | `.settingsTabs` `.settingsTab` `.settingsTabOn` `.settingsPage` `.settingsGroup` `.settingsGroupHead` `.settingsGroupTitle` `.settingsRow` `.settingsRowMain` `.settingsRowLabel` `.settingsRowControl` `.settingsSelect` `.settingsInput` `.settingsNote` `.settingsGroupFoot` | 两页签「同步内容 / 设置」（2026-11-14 第三轮：页签「自动同步与密码」改名「设置」，两页的 ⓘ **全部移除** —— 界面只留设置本身；2026-11-14 第六轮起全站 ⓘ 下线，本弹窗的说明文字改挂各标签的 `title`；第七轮补齐：四个段名与设置页每一行标签都带 `title`，说明回到悬停可读）：页签条 44 高（padding 4 + 项高 34）、项 13px、选中项白底 + 1px 描边（白底必须落在灰条上，否则选中态只剩字重差异，远看分不出当前页）。策略页按 D-39 行式重排成四段（自动同步 / 加密与密钥导出 / 解密密码 / 插件·跟随远端删除）：段头是 11px/500/0.04em 小标题，**右角不挂控件**（2026-11-14 第五轮：`.settingsGroupAction` 已删，「加密备份」原是贴在段头右侧，用户要求它单独一行 ⇒ 段名与控件名不共行；自动同步的总开关仍在段头，因为它就是段名的开关，没有第二行可放）；段内每行「左标签 / 右控件」高 34、行间 0.5px 细线、最后一行无线；行内控件宽度统一 240（`.input` 自带高 28，行里不带 `.field` ⇒ 不会被 `.field > .input` 的 100% 覆盖）。原 `.dialogSection`/`.dialogSectionDivide`/`.syncSubBlock`/`.subBlockHead`/`.toggleRow` 已随结构删除；`.snapshotPickerRow` 快照行按用户要求仍留在通道卡内 |
+| 导入 | `.dropZone` `.dropZoneIcon` `.conflictBulk` | 选文件拖放区（虚线 `line-2` + `r-3`）；冲突项批量操作纵向成组 |
+| 市场 | `.marketView` `.marketListCard(Fill)` `.marketItem(List/Head/Main/Desc/Meta)` `.marketSearchBox` `.marketSearchInput` `.marketFilterMeta` `.marketRepoRow` `.marketLoginCard` `.marketLoginRow` `.marketUploadCard` `.marketMyListCard` `.marketMyListHead` `.marketMyItem*` `.myconfigsView` | 页签为作用域内独立胶囊（不动共享 `.modeTabs`）；筛选卡定高吃满剩余高度；条目「名称/说明/元信息」三段；我的配置限高内滚 |
+| 产物库·快照弹窗（D-02/D-05/D-06/D-07） | `.restorePlanCard` `.restorePlanStatBadge` `.inspectItem` `.inspectDot` `.inspectAdapter` `.inspectDesc` `.inspectItemsScroll` `.inspectSubGroup` `.inspectBadge` `.reportItem` `.reportItemPath` `.reportGroupTitle` `.confirmNote` `.confirmNoteIcon` | 分组卡片化（组头 30px 铺顶边、行 30px 表行 + 细分隔线）；摘要徽章 4px 方角细描边；条目「圆点 + 等宽 accent adapter + 描述」三段；「路径 + 原因」两段报告行；删除确认的基线注意句独立成 warn tint 盒 |
+| 产物库·拉取下载（D-04） | `.pullMeta` `.pullStatus` `.pullBadge` `.pullName` `.pullTrack` `.pullBar` | 状态与文件名同排（文件名等宽省略）；标题行「同步中」徽章；复用 `.progressIndeterminate` 做不定态进度（宿主无分区级进度，禁编百分比） |
+| 迁移咨询（D-03） | `.consultWillApply` `.consultDimensionRow` `.consultDimensionName` `.consultDimensionScroll` `.reasonLine::before` | 维度名纯文本 + 分数按档位分色（`consultScoreBadgeKind`）；建议依据行首 3px 圆点；维度区去共享滚框形态只留滚动 |
+| 内容选择器（D-14b） | `.pickerToolbarCount` | 工具条末尾常驻「已选 N / M」（`picker.selectedOf` + `pickerSummary.totalUnits`），合计仍在页脚 |
+| 原语·弹性开关（2026-11-14） | `.switchRoot` `.switchRootDisabled` `.switchInput` `.switchTrack` `.switchKnob` | `common/ui.tsx` 的 `Switch`：32×18 轨道 + 12px 圆点，拨动时圆点用 CSS `transition` 弹簧滑到另一端（240ms、`cubic-bezier(.34,1.28,.6,1)` 过冲约 0.4px，轨道 `overflow: hidden` 把过冲裁在胶囊内 —— 撞边挤压，不是露到轨道外）；**只动 `transform`，且不上 keyframes** ——（a）`left`/`width` 是布局属性，逐帧改会重排掉帧；（b）浏览器在 click 当帧就翻好 `input.checked`，而 React 的提交晚一帧，keyframes 只能从 0% 重播 ⇒ 圆点先瞬移到终点再倒回来（左右横跳），且中段位移钉死只放大 `scaleX` 会读出「中途停顿」（实测 `.tmp/switch-probe.html`：keyframes 版首帧 16 → 0.9 → 1.9…、8px 处停 6 帧；transition 版 0 → 1.4 → … 单调到 16）；仍是原生 `<input type=checkbox role=switch>` + `opacity:0` 覆盖层，键盘/`label htmlFor`/`disabled` 语义全部由浏览器给；挂载首帧不播动画（transition 不从初始样式计算触发），`prefers-reduced-motion` 下退化为瞬时切换 |
+| 环境 | `.duRowNote` `.duRowPolicy` `.cleanupLines` `.cleanupScope` `.cleanupOption` `.cleanupAction` | 磁盘占用每分区一行（名称·过期量·占用·策略），文件数并入 `title`；清理块三行一套（清什么 / 连带回收过期备份 / 释放多少 + 按钮）：统一 6px 行距、体量徽章**紧跟它管辖的那句文案**、卡右缘只留一颗按钮。改前三行各自是 `.actionRow[data-inline]`（`margin:0`）⇒ 零行距、勾选框贴上一行下沿，且两枚徽章一枚靠文字一枚被 spacer 顶到右缘，读成两种摆法 |
+| 恢复 | `.recoveryEmptyBar` `.factBox` | 空态条；事实格带框（与 `.factGrid` 同类名并联，不新增包裹层） |
+| 备份 | `.retentionCard` `.retentionCardLabel` | 保留策略三张数字卡（输入右对齐、单位提示贴格尾） |
+| 命令面板 | `.paletteInput` `.paletteList` `.paletteHint` | 顶部浮层：输入条 44 高只留底边线、列表吃满剩余高度、提示行吸底 |
+| Modal | `.dialogTop`（+`dialogOutTop`） | `placement="top"` 的定位与退场；缺省仍居中，退出动画必须跟随定位类（否则关闭帧瞬移到屏幕中央） |
+
+纪律（本轮踩到过的，逐条都是返工换来的）：
+- `.marketListCard` 必须 `overflow: visible`，否则卡内 Select 弹层被裁；定高靠外层 `.marketListCardFill`。
+- `.factBox` 与 `.factGrid` 并联而非新包裹层；`.rollbackWarnings` 复用现成私有类，不新建 `.previewHintBox`。
+- 共享滚动容器（`.reportScroll`/`.consultScroll`）要「只留滚动」时，叠一枚屏私有类把描边/圆角/底色/限高逐项复位，不改共享规则本体；`.badge`/`.chip` 新增可选 `className` 只透传形态修饰类（方角、细描边），四态语义色仍由 `kind` 决定。
+- `.paletteInput` 的底边线落在 `.dialogBody` 16px 内距内：贴卡边需负 margin，会被 `css-scale-guard` 的间距白名单拦（只放行 `-4px` 一次），按「不破守卫」保留内缩。
+- **开关还是勾选框看「它是什么」**：设置型 / 模式型的单一布尔、拨动即生效（自动同步、本地改动即时同步、定时备份启用、加密备份、导出密钥）用 `Switch`；列表多选（分区、文件、逐条采纳）、执行前选项、危险确认仍用 `Checkbox` —— 前者的勾是「这台机器的状态」，后者的勾是「这次要做的事」。弹性动画是装饰，减弱动效时只留瞬时切换，状态信息不受影响。
+- **标签与控件分成两列时，label 必须 `htmlFor` 指到控件 id**（2026-11-14 行式设置行）：勾选框时代标签与控件共处一个 `<label>`，点文字就能切；重排成「左标签 / 右控件」后这层包裹没了，缺 `htmlFor` 会让「点文字」变成死区 —— 行式页里每个开关/输入都要 `useId()` 配一次绑定。
+
 ---
 
 ## 7. 文案与安全呈现
 
 - **文案克制（2026-10-12 用户要求；2026-10-21 扩到整页）**：**页面** / 预览 / 弹窗 / 卡片只留**用户要判断或操作**的信息。
-  机制、范围、内部判据的解释（「留点时记录了 N 个目录」这类）**不铺陈** —— 要解释就进
-  `InfoHint`(ⓘ) 或文档；同一屏不重复同一件事。判据：**删掉这句后用户还能不能做出同样的决定**
+  机制、范围、内部判据的解释（「留点时记录了 N 个目录」这类）**不铺陈** —— 要解释就挂 `title` 或文档；
+  同一屏不重复同一件事。判据：**删掉这句后用户还能不能做出同样的决定**
   —— 能，就删。
 - **删掉文案后先改结构，别把说明加回来（2026-10-27 全仓文案审计落地顺序）**：判定「删了这句用户
   做不出同样决定」之后，按此顺序补**结构**：①**同一事实只留一处**（页脚 `shell.version` 删掉 ——
@@ -1403,11 +1437,25 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   不再是「先读取某个分区」的句子；读取中用 `读取中`）；③可点段已能到达的目的地不再给同名按钮
   （首页工具栏与状态条、侧栏三处都进「远程同步」时删工具栏那颗）；④**后果写进动作名/徽章**
   （`rollback.switch.diverged` 由长句改「开关旁徽章 + 一次点击生效」）；⑤同一屏禁止「按钮名 + 复述
-  按钮名的说明」与「标题 + 复述标题的副标题」。禁用原因 `title`、防截断 `title`、`InfoHint`(i) 的机制
-  说明**不在**本条的删除范围内（那是替代载体，不是重复文案）。
+  按钮名的说明」与「标题 + 复述标题的副标题」。禁用原因 `title`、防截断 `title`、说明性 `title` 里的
+  机制说明**不在**本条的删除范围内（那是替代载体，不是重复文案）。
 - **页面保持简洁（2026-10-21 用户要求）**：新增页面 / 区块先做减法 —— 功能背景介绍、说明段落、
   重复的区块标签、装饰性副标题**一律不加**；能在既有区块承载的内容不新开区块；每个新增元素
   必须能回答「它改变了用户哪个决定或操作」，答不上来就不加。
+- **`title` 只放「用户从名字读不出来」的东西（2026-11-14 用户要求；原 ⓘ 台账 83 → 67，现随组件整体下线）**：
+  判定顺序 ①删：把控件名/按钮名换成一句话（「点了会填地址」「点行看详情」「预填文件名可改」）、
+  动作回执（点了自然会看到结果）、事实已在本屏可见（勾选态/徽章/占位符已经说了）。②留：不可逆或破坏性
+  后果（卸载本机插件、覆盖已存密码）、凭据去向（只进 DSH 凭据槽、不进同步文件与日志）、静默后台行为
+  （自动删除旧备份、错过的时间点不补跑、置顶快照豁免清理）、输入规则（桶名 3-63 位、别把 token 拼进 URL）、
+  无法从界面推断的边界（「公开仓库会公开配置内容」「自动同步遇到加密快照会跳过」）。**同一事实只挂一处**：
+  会话体检的机制说明只在弹窗标题行，入口卡片不再复述同一段。
+- **表单自动保存时不要「立即保存」按钮（2026-11-14）**：保存本来就自动（防抖 + 卸载补发），按钮既不能改变
+  结果也不产生新信息 —— 用户退出弹窗再进，值还在，这就是回执；成功只留 2.4 s 的「已保存」徽章，失败照常弹 toast。
+- **不可逆边界改写成标题后缀，默认参与状态写进徽章（2026-11-14 第二轮；提示层台账 67 → 61）**：
+  「只读预览 · 零写入 · 确认后才执行」这类**一句话边界**贴在面板标题右侧（`.hint` 与标题同行），
+  恢复 / 回退 / 会话整理计划 / 外部导入预览四处不再藏进提示层 —— 它决定「现在点下去会不会改盘」，
+  属于决策依据而不是补充信息。同理，同步分区选择器把「默认同步 / 默认不同步」直接写进
+  `mode.sectionPortable / PlatformSpecific / DeviceSpecific` 徽章，弹窗级那颗说明图标随之下线。
 - 全部用户可见文案走 i18n 字典（zh 源 / en 镜像；`ConfigManagerKey` 编译校验）。
   - **两套字典各管一段**：React 壳（`src/client/`）走 `t()`（`config-manager` namespace，
     `ConfigManagerKey`）；`src/ui/*` 与 `src/client/common/*` 的渲染器走 `UiT`
@@ -1501,157 +1549,50 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 - **升级风险**：宿主改用户消息渲染器 / 槽位契约 → 复刻老旧或错位。软失败：声明形态不是 `keyed` 就**跳过注册**（只丢这一个入口），回合号取不到就**如实禁用按钮**（每个禁用原因有自己的字典键）。
   风险与差距登记 = `docs/known-issues/known-gaps.md` G-39。
 
-### 说明性文案分层（InfoHint，2026-10）
+### 说明文字：悬停 title vs 常驻正文（2026-11-14 起）
 
-判定规则**已冻结**，逐字适用，**不得自行扩大或缩小**。承载体是 `common/InfoHint.tsx`；
-落地形态统一为 **v2**：`<InfoHint text={t('原键')} label={t('common.infoHint')} />`
-—— **可访问名取各自命名空间的 `common.infoHint`**（主字典 + market / sync / recovery 各有一份同口径副本，
-history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'config-manager'>` 与其它命名空间的 `t`
-类型不兼容），也**不用可能 undefined 的 `copyT`**（组件内置的源语言回落只作兜底，调用点必须显式给可访问名）。
+**承载体只有两个**（原 `common/InfoHint.tsx`（ⓘ 自绘气泡）已于 2026-11-14 整体下线，71 处渲染点全部改挂
+原生 `title`；组件、`.infoHint*` CSS、`common/info-hint-guard.test.ts` 与 `MOVE_PINS` 台账一并删除）：
 
-**MOVE → ⓘ**（改为 `<InfoHint text={t('原键')} label={t('common.infoHint')} />`，并删掉原来那一行可见说明）：
-- 纯说明性文案：机制怎么工作 / 为什么这样设计 / 补充背景 / 边界与限制 / 示例 / 省事提示；
-- 输入规则类文案（如「仅允许字母数字、空格、- _ .」）—— 因为校验失败时错误文案本身会重申规则。
+1. **悬停 `title`** —— 用户从名字读不出来的补充信息：机制怎么工作 / 边界与限制 / 输入规则 / 省事提示 /
+   凭据去向 / 静默后台行为。落地形态：`Field.tooltip`（渲在字段标签那个 `<span title>` 上）、
+   `SectionTitle.tooltip`（渲在 `<h3 title>` 上），其余逐处 `title={t('…Hint')}`，挂在**它说明的那个
+   标题 / 标签 / 按钮 / 行容器**上。**不得挂到没有可见文字的东西上**：一个 `<span>` 只装控件时先找它左边
+   那行标签，找不到就挂按钮本身（`SyncProbeRow` 的「测试连接」、`WorkDirCard` 的「收养」）；
+2. **常驻正文** —— 用户**当下**必须看到才能安全决策的那句（判据见下）。这类文案不许降级成 `title`
+   —— 没悬停就等于没写。
 
-**KEEP 常驻**（渲染与文案必须与改动前**逐字一致**，一处都不许动）：
-1. **动态**校验错误 / 失败原因（`css.formError`、`ErrorBanner`、`ErrorList`、`ReportView` 的失败文本）；
-2. **动态**安全与不可逆操作告警 —— **当下就要拦住用户**的那些句子：锁定中 / SAFE MODE 生效中 / 恢复失败 /
-   「取消勾选会删除已保存的密码」/ 隔离与回滚的逐条后果（`sessions.layout.keepHint`、`quarantineNote`、`refreshHint`）。
-   **静态**机制说明（加密算法、密码存在哪、凭据写到哪个槽位、救援模式会改写哪几层、清理只动可重建区）
-   自 **2026-10-12** 起属 MOVE —— 见下方 t7 清单；
-3. 状态 / 进度 / 等待文本（运行中、已停止、等待 N 分钟、下载中）；
-4. 按钮与选项的禁用原因（`title=` 上的解释）；
-5. 空态解释（列表为空时说明「为什么什么都没有」的那一行）；
-6. 行内防截断的 `title=`（表格/列表/长路径上的全量提示，**不是**页面文案）；
-7. `SectionTitle` 的 `subtitle` / `css.cellMeta`：**只允许承载动态或元数据**（当前条目名、计数、时间、
-   状态说明、必须看到的「下一步」指引）；**静态说明性副标题一律改走 `SectionTitle.info`**（ⓘ，2026-10-12）；
-8. `ConfirmDialog` / `Modal` 内的危险操作说明（点下去之前必须读到的规则与后果）。
+**常驻不动（原 KEEP 八类，仍然逐字适用）**：① 动态校验错误 / 失败原因（`css.formError`、`ErrorBanner`、
+`ErrorList`、`ReportView` 失败文本）；② 动态安全与不可逆告警（锁定中 / SAFE MODE 生效中 / 恢复失败 /
+「取消勾选会删除已保存的密码」/ 隔离与回滚的逐条后果）；③ 状态 / 进度 / 等待文本；④ 禁用原因（`title=`
+上的解释 —— 它本就是 title，但必须**当场**可读）；⑤ 空态解释；⑥ 行内防截断 `title=`；
+⑦ `SectionTitle.subtitle` / `css.cellMeta` 只承载动态或元数据；⑧ `ConfirmDialog` / `Modal` 内的
+危险操作说明。
 
-**用法与边界**：
-- ⓘ 只承载**可选的补充信息**：任何用户「**当下**必须看到才能安全决策」的文本都不得移入（那正是 KEEP 的 8 类）
-  —— 判据是**动态还是静态**：会随状态出现/消失的（校验失败、锁定中、SAFE MODE 生效中、逐条回滚后果）常驻；
-  一句话说清的**静态**机制 / 安全 / 边界说明自 2026-10-12 起进 ⓘ（见下方 t7 清单）；
-- 输入规则类文案移入后，校验失败的错误文案**必须仍然重申规则**，否则规则变得不可见；
-- **摆放：ⓘ 必须与它说明的标题/操作/控件**同一行**（贴在右侧），不得单独成行**（2026-10-03 用户反馈：
-  同步页与通道配置 / 分区选择弹窗里出现「孤零零一个图标」的断行）。五种落地形态：
-  ① 放进承载标题/标签的元素内（`<span className={css.groupLabel}>标题 <InfoHint … /></span>`，
-  见 AboutPanel / EnvironmentPanel）；② 放进该操作所在的 flex 行（`.actionRowTop` / `.actionRow`，
-  如「选择同步分区」「完成」旁）；③ **弹窗级说明**放进 `Modal.Header` 的 `trailing`（渲在标题与
-  `.dialogClose` 之间 —— 后者 `margin-left:auto`，所以 ⓘ 紧贴标题右侧）；④ **控件旁的说明**用
-  `.controlRow`（控件 + ⓘ 同一行，控件按自身宽度）；⑤ **页级 / 分区级副标题**用 `SectionTitle.info`、
-  **表单字段说明**用 `Field.info`（两者都接受一个 `<InfoHint>` 节点，渲在标题 / 字段标签同一行右侧；
-  标题行的行容器 = `.sectionTitleRow`，标题可换行、ⓘ 不收缩）。新增调用点按此摆放，下次迁移不再另起一套。
-- **带 ⓘ 的字段壳不用 `<label>`（2026-11-04 用户第 4 条，守卫 t12）**：`Field` 在传了 `info` 时
-  渲染 `<div className={css.field}>`，其余字段仍是 `<label>`。原因不是样式，而是 `<label>` 的**点击激活转发**：
-  点它包裹的控件以外的东西（含 ⓘ）会顺手切勾选框 / 打开下拉 / 聚焦输入框。ⓘ 自己的 `onClick` 首句
-  `event.preventDefault()` 掐掉这条默认行为（固定态、点外部取消照常）；裸写字段时**同样别把 ⓘ 塞进
-  `<label>`**。代价：脱离 `<label>` 后控件失去隐式可访问名 ⇒ 同一容器里的控件必须有 `aria-label`
-  （`ariaLabel` prop 亦可），或仍被内层 `<label>` 包裹（`SyncRepositoryPicker` 的
-  `div.field > span.groupLabel + label.field` 就是这样）。`Checkbox` 内部包 `<span>{label}</span>` 的既有形态
-  是已知例外（点击转发已被 preventDefault 兜住），守卫只扫本文件内的字面 `<label>`。
-- 触发按钮 18px、颜色取 `--dsw-alias-label-tertiary`，hover 必须给出可见 affordance
-  （`--dsw-alias-interactive-bg-hover` 底 + `label-primary` 前景）；固定态用主色 tint；
-- 样式只进 `config-manager.module.css`（`.infoHint / .infoHintBtn / .infoHintBubble`），
-  颜色/底色/边框/阴影全走 `--dsw-*` token；位置由组件量测后写入内联 `top/left`
-  （动态坐标无法用静态类表达，是本仓库「style 属性只允许极小修补」的正当例外，与 `Select` 的 `data-align` 同源）；
-- **渲染契约（t9 修 T7-F1，源码级守卫 `common/info-hint-guard.test.ts` 的 t9-1）**：气泡**必须经
-  `createPortal` 渲进插件根容器**（`resolveModalRoot()` = `#dsh-config-manager-root`，与 `Modal.tsx`
-  共用同一份实现；**绝不挂 `document.body`** —— 会被宿主 overlay z-index:1000 盖住，并连带 body
-  `pointer-events` 失效）。为什么非 portal 不可：`.dialogContentCenter` 带常驻
-  `transform: translate(-50%,-50%)`，按 CSS Transforms L1 会成为后代 `position: fixed` 的**包含块** ——
-  裸 fixed 的气泡在 Modal 内会整体偏移卡片位移，并被 `.dialogBody{overflow-y:auto}` 裁剪。
-- **气泡边界 = 宿主画布 ∪ 锚点，不是浏览器视口（t9 修 T7-F2 / 2026-10-04 修偏移，守卫 t9-2 + t11-2）**：
-  夹紧矩形取**插件根容器的可见矩形 ∩ 窗口**，容器缺失 / 尺寸为 0 / 交集退化时才回落窗口矩形；
-  再**并进锚点矩形**（只放宽、不收紧）—— 弹窗卡片是 `position:fixed`（相对浏览器窗口居中），而画布在宿主
-  设置弹窗里靠右（左边还有宿主导航），弹窗左半边的 ⓘ 会比画布左缘更靠左，严格夹进画布会把气泡整体推进
-  画布、与自己的 ⓘ 脱开（用户报告「提示文字位置有偏移」）；并入锚点后右侧 / 下方仍以画布为界。
-  「下方空间不足且上方更宽裕 → 向上翻转」保留。
-  `window.innerWidth/innerHeight` 在 `InfoHint.tsx` 里只允许各出现一次（即仅兜底分支）。
+**分界线仍是那一句**：**删掉这句，用户还能不能做出同样的决定？** 能 → 要么删，要么挂 `title`；
+不能 → 常驻。
 
-- **Select 弹层：portal 进弹层容器 + 容器内绝对定位 + 夹紧（2026-10-04 两轮修复：先「被裁掉一截」，
-  再「位置偏移 / 选项点不动」）**：容器 = 弹窗内为**弹窗卡片**（`Modal.tsx` 的 `data-cm-dialog`），
-  否则为插件根容器（`resolveModalRoot()`）。为什么弹窗内非进卡片不可（`@radix-ui/react-dismissable-layer`
-  源码实证）：① 弹窗打开时执行 `body.style.pointerEvents = "none"`，只给 `Dialog.Content` 写回 `auto` ——
-  卡片外的菜单**收不到任何指针事件**（点不动、无 hover）；② 卡片外在 radix 眼里是「点了弹窗外」→ 弹窗被关掉；
-  ③ radix 的 `RemoveScroll` 只放行内容子树（`shards=[contentRef]`）→ 卡片外的长菜单滚不动；
-  ④ 卡片是 `position: fixed` 且相对**窗口**居中，而插件画布 `.section` 在宿主设置弹窗里靠右 ——
-  拿画布当夹紧基准会把卡片左半边的菜单整块推进画布（触发器 x≈18、菜单被推到画布左缘 + 8 ≈ 185）。
-  进卡片后菜单的包含块就是卡片（包含块链不经过 `.section` ⇒ 不被画布的 `overflow` 裁剪），
-  夹紧基准相应改用**视口**；画布内的普通下拉仍用 `canvasBounds()`（= 画布 ∩ 窗口）。
-  放置判据在 `src/ui/menu-placement.ts`（纯函数 + node 单测，与高亮模型同一分层）：下方放不下且上方更宽裕
-  → 向上翻转；左右越界 → 先右对齐再夹紧；空间不足 → 限高内滚。量测完成前靠 `[data-ready]` 不绘制
-  （同 `.infoHintBubble`）；打开期间跟随滚动 / 缩放重算。留在原地的弹层（导航条 MoreMenu）
-  继续用 `absolute + data-align`：它贴顶展开，没有下方的裁剪风险。
-- **ⓘ 的键盘聚焦必须由用户发起（2026-10-04，守卫 t11-1）**：Radix 的 FocusScope 在弹窗挂载时
-  `focusFirst(...)`，初始焦点落在容器内第一个可聚焦元素上 —— 标题行 trailing 的 ⓘ 常常正是它，
-  于是「一进弹窗就自动选中 ⓘ 并弹出气泡」。判据 = 聚焦事件的 `relatedTarget` 是否在同一
-  `[role=dialog]` 内（初始焦点来自弹窗外的触发器 / body / null → 忽略）；焦点环同时只在气泡打开时绘制，
-  所以程序化初始焦点既无气泡也无蓝框，而用户 Tab 到 ⓘ 时两者同时出现。
-- **本次落地（t1–t5 全量清单，共 42 键；机器化台账 `common/info-hint-guard.test.ts` 的 `MOVE_PINS`。
-  原为 43 键 —— 2026-10-04 用户要求移除产物库页首行，`snapshots.retentionHint` 随之退出台账）**：
-  - **common/（t1，2）**：`runs.retentionHint`（运行中心列表头部 ⓘ）、`picker.sessionWorkspaceLinked`
-    （选择器工具栏 ⓘ，仅当「会话 ↔ 工作区」配对确实存在时出现）；
-  - **sync/（t2，16）**：`channel.perChannelHint` / `config.repoUrlHint` / `github.description` /
-    `webdav.presetHint` / `webdav.urlHint` / `webdav.usernameHint` / `config.saveHint`（通道配置弹窗 7 处）、
-    `mode.sessionsPickHint` / `mode.pickerHint` / `mode.sessionsLimitHint` / `mode.sectionsHint`
-    （分区选择弹窗 4 处）、`mode.hint` / `mode.persistHint`（同步页）、`channel.openHint`（通道入口卡）、
-    `autosync.description` / `autosync.intervalHint`（自动同步卡）；
-  - **snapshots/ + export/（t3，13）**：`backupFiles.hint`、
-    `diskUsage.backupRetention`、`backupSchedule.hint` / `enabledHint` / `customHint`、
-    `retention.hint` / `keepLastHint` / `keepMonthlyHint` / `keepYearlyHint` / `retention.appliesTo`、
-    `export.hint`（工具栏）、`export.fileNameHint` / `export.noteHint`（字段标签旁）——**导出页 3 处**；
-  - **market/ + about/ + profiles/（t4，9）**：`myconfigs.login.hint`、`myconfigs.update.zipHint`、
-    `myconfigs.upload.form.nameHint`、`about.diag.hint`、`about.feedbackHint`、`about.update.offline`、
-    `about.cli.hint`、`profiles.create.hint`、`profiles.list.hint`（**档案列表 1 处**，
-    同一键在行内 `title=` 仍常驻）；
-  - **recovery/（t5，2）**：`sessions.desc`、`recovery.preview.hint`；
-  - **零 MOVE 的面板**：history / overview / import / consult（`.hint` 类全部命中 KEEP）。
-  `common/ui.tsx` 的 `Field.hint` / `SectionTitle.subtitle` 由调用方传入且大量命中 KEEP
-  （如 `export.encryptHint` 是安全告警），**不整体自动迁移**。逐键台账与 deferred 见
-  `docs/archive/2026-10-info-hint-migration.md`。
-- **t7（2026-10-12，用户要求「把**所有**描述都收进 ⓘ，页面更简洁」）：41 键** —— 把上一轮按
-  「安全 / 副标题」判为 KEEP 的**静态**文案一并收进 ⓘ（判据仍是上方 KEEP 的 8 类，变的是第 2 / 第 7 条的边界）：
-  - **页级 / 分区级副标题 → `SectionTitle.info`**：`profiles.subtitle`、`section.description`（同步页 + 市场页）、
-    `about.subtitle`、`history.subtitle`（3 个分支同一文案）、`rollback.desc`、`import.select.hint` /
-    `import.consult.hint` / `import.decryptArchive.hint` / `import.conflicts.hint` / `import.paths.hint` /
-    `import.picker.hint` / `import.secrets.hint` / `foreign.source.hint`（两处渲染点同改；导入选择页那处已随按钮一起移除，现只剩来源选择页）；
-  - **卡片 / 字段说明 → 标题行或字段标签行的 ⓘ**（`span.groupLabel` / `span.fieldLabel` / `.controlRow` /
-    `Modal.Header.trailing` / `SectionTitle.info`，`Field.info` 是新加的原语入口）：
-    `mode.encryptHint` + `mode.encryptAutosyncNotice`（合成同一颗 ⓘ）、`mode.includeSecretsHint`、
-    `mode.passwordSavedHint`、`mode.decryptPasswordHint`、`export.encryptHint`、`export.includeSecretsHint`、
-    `export.compositionHint`、`config.tokenHint`、`webdav.passwordHint`、`cloud.secretHint`、`cloud.tokenHint`、
-    `repoPicker.privateOnly`、`diskUsage.clean.hint`、`recovery.safeMode.detail`、`sessions.repair.desc`、
-    `recovery.rescue.desc`、`sessions.layout.planReadOnly`、`recovery.incomplete.hint`、`snapshots.selectHint`、
-    `foreign.lossy.hint`、`foreign.previewDryRun`、`myconfigs.upload.selectHint`、`myconfigs.upload.mode.shareHint`、
-    `rollback.preview.hint`；`cloud.gistLargeSectionHint`（走常量而非字面量，
-    故不进 `MOVE_PINS`，但同样已进 ⓘ）；
-  - **`rollback.autopoint.hint` 下线渲染点**：它与卡头 ⓘ 的 `rollback.desc` 同义（后者是超集），
-    字典键保留、界面上不再重复一行；
-  - **同轮仍常驻（有意为之，不是漏改）**：动态错误 / 状态 / 空态 / 禁用原因 `title=`；
-    `ConfirmDialog` 内的危险操作说明；`nextSteps.restart.hint` / `nextSteps.sessionsRestart.hint` /
-    `about.update.dialog.restart`（必须看到的「下一步」）；`foreign.conflict.policy`（导入前必读的冲突规则）；
-    `sessions.layout.keepHint` / `quarantineNote` / `refreshHint`（隔离与回滚的逐条后果）；
-    `mode.passwordClearNotice`（取消勾选会删除已保存的密码）；`recovery.crash.guidance`（处置指引）；
-    `diskUsage.location` 与计数类元数据；`myconfigs.upload.form.autoHint`（「以下字段由系统自动生成：」引导行）。
-- **t8（2026-10-31，用户要求「按钮标题能说清作用就不要 ⓘ」）：删 1 处渲染点 + 6 键瘦身 + 2 个按钮标题改写** ——
-  判据句：**一个没用过本插件的用户读按钮标题，能否预测点击结果与作用对象？能 → 就地删 ⓘ，或删掉 ⓘ 里复述它的那半句。**
-  - **标题改写（改字典值，zh/en 同步）**：`config.save`「保存配置 → 立即保存」——表单本就自动保存，
-    原标题暗示「必须手动保存」，这正是 `config.saveHint` 曾经存在的根因；
-    `myconfigs.upload.run`「一键上传 → 上传配置包」——点它先开向导、必须先选 zip，不是一键。
-  - **删渲染点（同义重复，字典键保留）**：`myconfigs.upload.selectHint` 从市场页「上传」按钮行移除 ——
-    同一句已在点开后的向导头 `Modal.Header.trailing`（`MyConfigsWizard.tsx`）逐字出现，
-    与上方 `rollback.autopoint.hint` 同处理口径。
-  - **删复述子句（ⓘ / 提示在复述同一行/同一屏的按钮名或标题，见 §7 ⑤）**：
-    `config.saveHint` 删「也可点击按钮立即保存」；`export.hint` 删「点「选择要导出的内容」可按分区、逐条目调整…」；
-    `mode.hint` 删「点按钮在弹窗里勾选要同步的分区：」并改写为「同步范围 = 勾选的分区集合（…）」；
-    `channel.openHint` 删「点击按钮在弹窗中配置或修改」；`mode.decryptPasswordHint` 删「删除请点「删除已保存密码」」；
-    `myconfigs.update.zipHint` 删「更新需要新的配置包：…通过后即可一键更新」并改写为「选择新 zip 后自动校验，通过才能更新」。
-    六条瘦身后都仍保留**会改变决定**的那部分（写入位置 / 默认导出范围 / 范围定义 / 通道类型 / 密码只服务加密快照 / 必须先过校验）。
-  - **本轮仍常驻（有意为之，不是漏改）**：`about.update.offline`（离线失败属正常的预期管理）、
-    `backupFiles.hint`（保留策略）、`recovery.preview.hint`（零写入）、`probe.hint`（WebDAV 会幂等建上级目录）、
-    `workdir.adoptHint`（可 `git revert`）、`merge.scopeNotice` / `merge.bulk.hint`（整分区裁决）、
-    `picker.sessionWorkspaceLinked`（会话↔工作区联动后果）。
-  - **`MOVE_PINS` 长度不变（81）**：本轮删的是**重复渲染点**，被删处那个键的 pin 记在仍渲染它的 `MyConfigsWizard.tsx` 上。
+**输出形态**：`title` 挂的是**纯字符串**（`t('…Hint')`），不是节点；多句要拼就按阅读顺序用空格连
+（`title={t('merge.scopeNotice') + ' ' + t('merge.bulk.hint')}`）。`Field` / `SectionTitle` 删掉了
+`info?: ReactNode` 入口（改 `tooltip?: string`），组件因此**恒渲染 `<label>`** —— 没有 ⓘ 按钮就不存在
+「点 label 转发到按钮」的问题（t12 那条纪律随之失效）。
+
+**为什么不用自绘气泡**（记判据，别再试第二版）：要把气泡渲染稳，需要 Portal 进插件根容器、宿主画布 ∪ 锚点
+夹紧、悬停/聚焦/点击固定三通道、Esc 不得连带关外层弹窗、初始焦点不得抢、量测前不绘制 —— 这一整套
+只服务一个灰点图标，而用户得先发现它才可能读到；原生 `title` 零实现、零守卫、浏览器自带可达性。
+
+**迁移台账（2026-11-14，71 处，逐键见 git 与 `docs/archive/2026-10-info-hint-migration.md` 的 t1–t15 历史）**：
+- 页面级副标题 → `SectionTitle.tooltip`：`section.description`（同步页 + 市场页）、`profiles.subtitle`、
+  `merge.subtitle`、`rollback.desc`、`foreign.source.hint`、`import.{select,consult,decryptArchive,paths,secrets,
+  compatibility,picker}.hint`；
+- 段头 / 字段标签 → 同一元素 `title`：通道配置弹窗 13 处、`workdir.title`、`diskUsage.clean.hint`、
+  `profiles.create.hint`、`about.{diag.hint,update.offline,cli.hint}`、首页备份卡 4 处、`history.retention.hint`、
+  `export.{encryptHint,includeSecretsHint,fileNameHint}`、`authosync.*` 等；
+- 按钮 / 行容器：`probe.hint`（测试连接按钮）、`workdir.adoptHint`（收养按钮）、`cloud.pathStyleHint`（S3 行）、
+  `merge.scopeNotice + merge.bulk.hint`（工具栏标签）；
+- 弹窗级说明（原 `Modal.Header.trailing` 的 ⓘ）：`mode.sessionsPickHint` / `sessions.desc` / `sessions.layout.desc`
+  改挂各自标题或页签、标题行文字；
+- 2026-11-14 前四轮（t13–t15）已删的键**照旧不恢复**（同步设置弹窗那 12 处、`export.hint` 等）。
 
 ---
 
@@ -1733,9 +1674,9 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
     **低频诊断动作收成图标按钮**（28px，与同排控件同高，`aria-label` + `title` 给全名）。
 26. **按钮文案带尾随省略号**（`配置…` / `选择…` / `Configure…`，2026-11-01 同步页）—— 省略号在本仓
     只用于**文本截断**（§8 mid-ellipsis）与**进行时**（`正在同步…`），不承担「点了会打开对话框」的暗示：
-    按钮形状、ⓘ、▾ 已经说明有下一步，加省略号只让按钮更宽、更犹豫。
-27. **ⓘ 只解释「你没得选的事」**——「改动会即时保存」「关闭即完成」给不了任何决策依据：用户没有
-    「不保存」这个选项，读完不改变任何动作。ⓘ 的准入是**能改变下一步动作**的信息（凭据写哪儿、
+    按钮形状、▾ 已经说明有下一步，加省略号只让按钮更宽、更犹豫。
+27. **悬停提示只解释「你没得选的事」**——「改动会即时保存」「关闭即完成」给不了任何决策依据：用户没有
+    「不保存」这个选项，读完不改变任何动作。`title` 的准入是**能改变下一步动作**的信息（凭据写哪儿、
     覆盖谁、冲突怎么办、失败能否重试），不满足就删，不缩成一行小字安慰自己。
 28. **英文文案写 `(s)` / `(ies)` 括号式复数**（`1 file(s)`、`3 day(ies)`，2026-11-01 全站）—— 单数时读作
     「渲染漏了」，复数时多打一对括号白占宽。插值层已有 `{n, plural, <one>|<other>}`（`src/ui/i18n.ts` 的
@@ -1749,9 +1690,9 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
     结果点中的是「回退」。
 31. **把小节标题下的开关拆成独立一行「☑ 启用」**（2026-11-01 自动同步卡）—— 标题已经说明了这块是什么，
     再把同一件事写成一行「启用」等于让它和下面的子设置（间隔、作用域、冲突策略）平级，读起来像四个
-    互不相干的选项。判据：**开关是这一整块的主语就并入标题行**（标题 + ⓘ + `statusSpacer` + 右侧开关，
-    `.subBlockHead`），只有「一行一开关」的纯清单才用 `.toggleRow`（左 label 右 input）。开关的
-    `<label>` 只包文字、不包 ⓘ —— ⓘ 在 label 里会让「点提示」变成「改设置」；没有可见文字时用
+    互不相干的选项。判据：**开关是这一整块的主语就并入标题行**（标题 + `statusSpacer` + 右侧开关，
+    `.settingsGroupHead`），只有「一行一开关」的纯清单才用 `.settingsRow`（左 label 右控件）。开关的
+    `<label>` 只包文字、不包任何可点元素 —— 否则「点提示」会变成「改设置」；没有可见文字时用
     `aria-label` 补齐，别为了放下文字再加一行。
 32. **一次性的成功回执做成常驻面板块**（2026-11-01 环境页启动档案）—— 启动成功这种「发生完就结束」的
     事实，若同时走 toast 又留一块行内 Banner，用户关不掉、还以为是需要处理的状态。**瞬时回执用

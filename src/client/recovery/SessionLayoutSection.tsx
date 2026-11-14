@@ -9,7 +9,6 @@
 import { useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, StatusDot } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import {
   sessionLayoutApplyItems,
   sessionLayoutCandidates,
@@ -136,14 +135,13 @@ export function SessionLayoutSection({ recoveryApi, t, response, onScan }: Sessi
   if (sectionState === 'hidden') return null
 
   // 本档是否真的有可执行的动作：空档时机制散文与运行时告警整段不渲染（DESIGN.md §7 文案分层），
-  // 说明走 ⓘ；安全口径（运行时写入门 / 隔离目录不删会话）只在真会写盘时常驻。
+  // 说明走悬停 title；安全口径（运行时写入门 / 隔离目录不删会话）只在真会写盘时常驻。
   const actionable = sectionState !== 'empty'
 
   return (
     <div className={css.card}>
       <div className={css.shSectionHead}>
-        <span className={css.groupLabel}>{t('sessions.layout.title')}</span>
-        <InfoHint text={t('sessions.layout.desc')} label={t('common.infoHint')} />
+        <span className={css.groupLabel} title={t('sessions.layout.desc')}>{t('sessions.layout.title')}</span>
       </div>
       {/* 与离线 CLI 的差异（它要求先停 DSH）：真会写盘时才占据屏幕（安全告警类，必须可见） */}
       {actionable && <Banner kind="warn">{t('sessions.layout.runtimeNote')}</Banner>}
@@ -178,7 +176,7 @@ export function SessionLayoutSection({ recoveryApi, t, response, onScan }: Sessi
         <div className={css.shPanel}>
           <div className={css.shPanelHead}>
             <span className={css.shPanelTitle}>{t('sessions.layout.planTitle')}</span>
-            <InfoHint text={t('sessions.layout.planReadOnly')} label={t('common.infoHint')} />
+            <span className={css.hint}>{t('sessions.layout.planReadOnly')}</span>
           </div>
           <div className={css.statRow}>
             <Badge kind="info">{t('sessions.layout.summary', { move: String(plan.summary.move), quarantine: String(plan.summary.quarantine) })}</Badge>

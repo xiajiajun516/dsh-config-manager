@@ -22,7 +22,6 @@ import type { ConfigManagerApi } from '../api.ts'
 import { Badge, Banner, Button, Card } from '../common/ui.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { ABOUT_CLI, ABOUT_LINKS, ABOUT_META, aboutStatusRows, aboutUpdateView, buildFeedbackSnippet } from './about-view.ts'
 import type { AboutStatusRows, AboutUpdateView } from './about-view.ts'
 import { ReleaseNotesDialog } from './ReleaseNotesDialog.tsx'
@@ -134,7 +133,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
             用于自查「装了插件却没被备份识别到」——此前用户完全无从查看。 */}
         {state.rows?.diagnostics != null && (
           <div className={css.statRow + ' ' + css.statRowStack}>
-            <span className={css.groupLabel}>{t('about.diag.label')} <InfoHint text={t('about.diag.hint')} label={t('common.infoHint')} /></span>
+            <span className={css.groupLabel} title={t('about.diag.hint')}>{t('about.diag.label')}</span>
             <span>{t('about.diag.profileDir', { path: state.rows.diagnostics.profileDir })}</span>
             <span>{t('about.diag.profile', { profile: state.rows.diagnostics.profile })}</span>
             <span>{t('about.diag.pluginCount', { count: String(state.rows.diagnostics.pluginCount) })}</span>
@@ -148,7 +147,6 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
             拼接规则是 ./about-view.ts 的纯函数，组件只装配（AGENTS.md §UI 分层铁律）。 */}
         {state.rows !== null && (
           <div className={css.actionRow}>
-            <InfoHint text={t('about.feedbackHint')} label={t('common.infoHint')} />
             <CopyButton
               text={buildFeedbackSnippet(state.rows, t)}
               label={t('about.copyEnv')}
@@ -162,7 +160,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
           为什么放在「关于」页：这是用户唯一会主动查看「我装的是哪一版」的地方；
           检查失败如实显示原因并允许重试，绝不显示成「已是最新」。 */}
       <Card>
-        <span className={css.groupLabel}>{t('about.update.title')} <InfoHint text={t('about.update.offline')} label={t('common.infoHint')} /></span>
+        <span className={css.groupLabel} title={t('about.update.offline')}>{t('about.update.title')}</span>
         <div className={css.statRow}>
           {state.rows !== null && (
             <Badge kind="info">{t('about.update.current', { version: state.rows.version })}</Badge>
@@ -242,7 +240,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
 
       {/* P1-⑩：CLI 救援工具引导卡（GUI 里唯一能发现 CLI 的地方；独立安装、DSH 挂了也能用） */}
       <Card>
-        <span className={css.groupLabel}>{t('about.cli.title')} <InfoHint text={t('about.cli.hint')} label={t('common.infoHint')} /></span>
+        <span className={css.groupLabel} title={t('about.cli.hint')}>{t('about.cli.title')}</span>
         <pre className={css.cliCommand}>{ABOUT_CLI.installCommand}</pre>
         <ul className={css.reportList}>
           {ABOUT_CLI.commands.map((c) => (

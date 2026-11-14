@@ -20,7 +20,7 @@ import {
   EXPORTS_RETENTION_DEFAULT_MS, MARKET_RETENTION_DEFAULT_MS, TMP_RETENTION_DEFAULT_MS,
 } from '../core/cache-cleaner.ts'
 import { scanDiskUsage, type DiskUsageDirs, type DiskUsageReport } from '../core/disk-usage.ts'
-import { readSafeModeMarkerSync, safeModeMarkerPath } from '../core/phase3-host.ts'
+import { readSafeModeMarkerSync } from '../core/phase3-host.ts'
 import { listSnapshots, type SnapshotMeta } from '../core/restore.ts'
 import { readInstalledVersion, resolveProfileDir } from '../core/plugin-cli.ts'
 import { DshProfileError, DshProfileManager } from '../profiles/dsh-profile-manager.ts'
@@ -31,75 +31,20 @@ import { readTextSafe } from '../profiles/dsh-profile-io.ts'
 import {
   AUTO_BACKUP_PREFIX, DEFAULT_BACKUP_RETENTION, listBackupFiles, type BackupFileMeta,
 } from '../sync/backup-files.ts'
-import { EnvironmentLockManager, OWNERSHIP_FILE } from '../utils/env-lock.ts'
 import { scanSessionHealth, type SessionHealthScanResult } from '../utils/session-health-scan.ts'
 import type { SessionVerifyResult } from '../utils/session-verify.ts'
 import { formatDateStamp } from '../utils/time.ts'
 
-/* ------------------------------------------------------------ 进程/实例事实 */
-
-/** 进程是否存活（不发送信号，只探测）。EPERM = 存在但无权限发信号 → 仍算存活。 */
-export function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-/** 一个在跑的 DSH 实例（来自 `<root>/running/<profile>.json` 心跳）。 */
-export interface RunningInstance {
-  name: string
-  pid: number
-  port: number | null
-  startedAt: string
-  updatedAt: number
-}
-
-/**
- * 读「本机正在跑的 DSH 实例」。
- *
- * **为什么按候选根扫描**：心跳在 `<插件 dataDir>/running/`，而 CLI 的 `--data-dir` 语义是
- * 「快照目录」（缺省 `$DSH_HOME/dsh-config-manager/snapshots`）。旧实现把快照目录当 dataDir 用，
- * 于是缺省路径下**永远找不到心跳** —— 那道「DSH 在跑就别写会话字节」的门形同虚设（fail-open）。
- * 这里改为复用 `resolveControlRoots` 的候选根：显式 `--data-root` 只认它，否则同时看
- * `--data-dir` 本身与它的父目录，再叠加缺省根；多查几处只会更保守。
- */
-export async function readRunningInstances(controlRoots: readonly string[]): Promise<RunningInstance[]> {
-  const alive: RunningInstance[] = []
-  const seen = new Set<string>()
-  const now = Date.now()
-  for (const root of controlRoots) {
-    const dir = path.join(root, 'running')
-    let names: string[]
-    try {
-      names = (await fsp.readdir(dir)).filter((n) => n.endsWith('.json'))
-    } catch {
-      continue // 该候选根没有心跳目录：正常情况，不阻断
-    }
-    for (const name of names) {
-      try {
-        const record = parseRuntimeRecord(await fsp.readFile(path.join(dir, name), 'utf8'))
-        if (record === null) continue
-        if (!isProcessAlive(record.pid) || now - record.updatedAt > RUNTIME_STALE_MS) continue
-        const key = record.name + '#' + String(record.pid)
-        if (seen.has(key)) continue
-        seen.add(key)
-        alive.push({
-          name: record.name,
-          pid: record.pid,
-          port: record.port,
-          startedAt: record.startedAt,
-          updatedAt: record.updatedAt,
-        })
-      } catch {
-        // 单条心跳读不出来不阻断（best-effort）
-      }
-    }
-  }
-  return alive
-}
+// 只读事实层与写入门已拆到独立模块（体量棘轮：本文件曾顶格 1574 行），re-export 保持既有调用点不变。
+import {
+  isProcessAlive, readLockState, readRunningInstances, readSafeMode,
+  type LockReport, type RunningInstance, type SafeModeReport,
+} from './control-state.ts'
+import { checkWriteGates, locksDirFromControlRoots } from './write-gates.ts'
+export { isProcessAlive, readLockState, readRunningInstances, readSafeMode } from './control-state.ts'
+export type { LockReport, RunningInstance, SafeModeReport } from './control-state.ts'
+export { checkWriteGates, SAFE_MODE_REFUSAL_CODE, locksDirFromControlRoots } from './write-gates.ts'
+export type { WriteGateOutcome, WriteGateRefusal, WriteRefusalCode } from './write-gates.ts'
 
 /* ------------------------------------------------------------ 备份自检（verify） */
 
@@ -232,69 +177,6 @@ export async function readSessionsHealth(homeDir: string): Promise<SessionsHealt
   }
 }
 
-/* ------------------------------------------------------------ SAFE MODE / 环境锁 */
-
-export interface SafeModeReport {
-  /** 候选控制面根 */
-  root: string
-  /** 标记文件绝对路径（写进界面，便于人工核对） */
-  marker: string
-  /** clear = 明确没有标记；blocked = 有未结案的 transaction；unknown = 读不出来（按阻断处理） */
-  state: ReturnType<typeof readSafeModeMarkerSync>
-  /**
-   * 该候选根下是否已经存在有效的「控制面目录」（dataDir 或 transactions）。
-   *
-   * 为什么需要：候选根里绝大多数**本来就不存在**（`--data-dir` 的父目录、缺省根都可能没有），
-   * 那些根的 'clear' 只是「这里什么都没建」，把它当成「SAFE MODE 未激活」的正面证据是把
-   * 「没查」说成「没问题」。界面只在**有效根**上给绿灯，其余如实说「未建立 / 未发现标记」。
-   */
-  established: boolean
-}
-
-/** 逐个候选根读 SAFE MODE 标记（fail-closed 的判定仍在 CLI/core；这里只报事实）。 */
-export function readSafeMode(controlRoots: readonly string[]): SafeModeReport[] {
-  return controlRoots.map((root) => ({
-    root,
-    marker: safeModeMarkerPath(root),
-    state: readSafeModeMarkerSync(root),
-    established: fssync.existsSync(root) || fssync.existsSync(path.join(root, 'transactions')),
-  }))
-}
-
-export interface LockReport {
-  locksDir: string
-  /** 锁文件是否存在（不存在 = 没有活动锁） */
-  present: boolean
-  /** 没有锁时恒为 'NONE'；否则为 inspectLockState 的结论 */
-  state: string
-  detail?: string
-}
-
-/**
- * 读环境锁状态（只读）。
- *
- * 复用宿主/CLI 同一套 `inspectLockState`：**绝不**因为「看起来是残留」就自动回收 ——
- * 回收只有显式命令一条路（`recover-stale-lock`）。
- */
-export async function readLockState(locksDir: string): Promise<LockReport> {
-  const present = await pathExists(path.join(locksDir, OWNERSHIP_FILE))
-  if (!present) return { locksDir, present: false, state: 'NONE' }
-  const lock = new EnvironmentLockManager({ locksDir, op: 'rescue-console-inspect', target: locksDir, lockVersion: '0.1.0' })
-  const inspection = await lock.inspectLockState()
-  return inspection.detail === undefined
-    ? { locksDir, present: true, state: inspection.state }
-    : { locksDir, present: true, state: inspection.state, detail: inspection.detail }
-}
-
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await fsp.stat(target)
-    return true
-  } catch {
-    return false
-  }
-}
-
 /* ------------------------------------------------------------ 首页聚合 */
 
 /** 救急台首页所需的路径事实（由 CLI 侧解析后注入，保证与各子命令同一口径）。 */
@@ -388,119 +270,6 @@ function errorText(error: unknown): string {
   - 写之前先跑一次**只读计划**（dry-run / 占用体检），把「会发生什么」回执给用户；
   - 回执如实：完成、失败、跳过分别列出，绝不把「没做」说成「做了」。
 */
-
-export type WriteRefusalCode =
-  | 'safe-mode'
-  | 'stale-lock'
-  | 'dsh-running'
-  | 'nothing-to-do'
-  | 'io-error'
-
-/**
- * SAFE MODE 拒因码的**单点常量**：`src/cli/index.ts` 的源码守卫（P0-11-07）禁止
- * CLI 自带 `'safe-mode'` 字面量，判据必须复用本常量（否则改一处漏一处）。
- */
-export const SAFE_MODE_REFUSAL_CODE: WriteRefusalCode = 'safe-mode'
-
-export interface WriteGateRefusal {
-  ok: false
-  code: WriteRefusalCode
-  /** 用户可读原因（页面直接展示） */
-  reason: string
-  /**
-   * 拒因的结构化明细（页面据此给出「怎么解除」的可操作指引，而不是只丢一句 reason）。
-   *
-   * 为什么要有：`dsh-running` 是最常被撞到的一道门，光给「请先关闭 DSH」用户会问
-   * 「关哪个、怎么确认关掉了」。这里把**是谁在跑**（心跳台账里的 profile/pid/端口）
-   * 如实带出来 —— 只读事实，不猜、不代关进程。
-   */
-  detail?: {
-    kind: 'dsh-running' | 'stale-lock' | 'safe-mode'
-    /** 正在运行的实例（心跳合并视图：本插件启动的 + 手动启动的） */
-    instances?: Array<{ name: string; pid: number; port: number | null }>
-    /** 环境锁状态（kind = 'stale-lock'） */
-    lock?: { state: string; locksDir: string }
-    /** SAFE MODE 标记文件（kind = 'safe-mode'） */
-    markers?: string[]
-    /** 与 CLI 逐字同源的等价命令（可复制去终端跑） */
-    commands: string[]
-  }
-}
-
-export type WriteGateOutcome = { ok: true } | WriteGateRefusal
-
-/**
- * 写动作的前置门（与 CLI `sessions repair --fix` 同一判据）。
- *
- * `needsDshStopped`：**改写/搬动会话字节**的动作（会话布局归位 repairSessions、字节级就地修复
- * repairSessionLogInline）与**快照恢复**（runSnapshotRestore 会覆盖/删除 `$DSH_HOME` 下正在使用的文件）
- * 都要「DSH 已停」这一条；磁盘清理不需要（只碰可重建缓存）。
- */
-export async function checkWriteGates(
-  controlRoots: readonly string[],
-  options: { needsDshStopped: boolean; locksDir?: string } = { needsDshStopped: true },
-): Promise<WriteGateOutcome> {
-  for (const report of readSafeMode(controlRoots)) {
-    if (report.state === 'blocked') {
-      return {
-        ok: false,
-        code: 'safe-mode',
-        reason: 'SAFE MODE 已激活（存在未结案的配置 transaction）：先处理恢复事项再改磁盘。标记：' + report.marker,
-      }
-    }
-    if (report.state === 'unknown') {
-      return {
-        ok: false,
-        code: 'safe-mode',
-        reason: 'SAFE MODE 标记无法判定（按最保守口径处理）：先人工核对标记文件。路径：' + report.marker,
-      }
-    }
-  }
-  /**
-   * ② 环境锁：**存在锁就必须先处理**。
-   *
-   * 为什么不能跳过：CLI 侧 destructive 入口（restore/reinstall）都要求成功获取 GLOBAL 环境锁，
-   * 而残留锁（STALE_LOCK_DETECTED）正是「上次异常退出、别的操作也被挡着」的状态；
-   * 这时改磁盘等于在一个已知不一致的状态上继续写。判据与 `recover-stale-lock` 同源（inspectLockState），
-   * 所以**不给自动回收**，只如实拒绝并把出口指出来。
-   */
-  if (options.locksDir !== undefined) {
-    const lock = await readLockState(options.locksDir)
-    if (lock.present) {
-      const stale = lock.state === 'STALE_LOCK_DETECTED'
-      return {
-        ok: false,
-        code: 'stale-lock',
-        reason: (stale
-          ? '检测到残留的环境锁（持有进程已被确证不存在）：先回收它再执行写动作。'
-          : '环境锁被持有或状态无法判定（' + lock.state + '）：先确认没有其它操作在跑，再执行写动作。')
-          + '锁目录：' + lock.locksDir + '；出口：dsh-config-manager recover-stale-lock（本机救急台的「环境锁」页也可回收）。',
-      }
-    }
-  }
-  if (options.needsDshStopped) {
-    const running = await readRunningInstances(controlRoots)
-    if (running.length > 0) {
-      return {
-        ok: false,
-        code: 'dsh-running',
-        reason: '检测到 DSH 正在运行（' + running.map((i) => i.name + ' pid=' + String(i.pid)).join('、')
-          + '）：请先关闭 DSH 再改写会话字节。',
-        detail: {
-          kind: 'dsh-running',
-          instances: running.map((i) => ({ name: i.name, pid: i.pid, port: i.port })),
-          commands: [
-            // 桌面端独占档案不让普通 CLI 停，如实给出「关窗口」这条唯一通道（见 AGENTS.md 的 desktop 条）
-            ...running.filter((i) => i.name === 'desktop').map(() => '桌面端（desktop）：直接关闭 DSH 桌面窗口；它不接受命令行停止'),
-            ...running.filter((i) => i.name !== 'desktop').map((i) => 'dsh-config-manager stop ' + i.name + '  # 或在「档案与实例」页点「停止 ' + i.name + '」'),
-            'dsh-config-manager web  # 停完再回本页点「重新检查」',
-          ],
-        },
-      }
-    }
-  }
-  return { ok: true }
-}
 
 /** 会话修复步骤的机器可读形态（页面渲染用；CLI 走它自己的文本输出）。 */
 export interface RepairStep {
@@ -662,7 +431,12 @@ export function sessionRepairRowMessage(facts: SessionRepairRowFacts): string {
  * 而 `session-repair-service` 的 CLI 出入口此前只挂在应用内通道上 —— 离线时用户只能敲命令。
  */
 export async function repairSessionLogInline(
-  options: { home: string; dataDir: string; unitIds: readonly string[]; apply: boolean; expects?: Record<string, { size: number; mtimeMs: number }> },
+  options: {
+    home: string; dataDir: string; unitIds: readonly string[]; apply: boolean
+    expects?: Record<string, { size: number; mtimeMs: number }>
+    /** 环境锁目录（缺省由 controlRoots 派生；显式给出时优先） */
+    locksDir?: string
+  },
   controlRoots: readonly string[],
 ): Promise<InlineRepairOutcome> {
   const base: InlineRepairOutcome = {
@@ -675,8 +449,13 @@ export async function repairSessionLogInline(
   }
   if (options.unitIds.length === 0) return { ...base, ok: false, error: '没有选中任何会话单元。' }
   if (options.apply) {
-    // 与 CLI 写动作共用同一道写入门：改写会话字节必须先停 DSH（+ SAFE MODE + 环境锁）
-    const gate = await checkWriteGates(controlRoots, { needsDshStopped: true })
+    // 与 CLI 写动作共用同一道写入门：改写会话字节必须先停 DSH（+ SAFE MODE + 环境锁）。
+    // 环境锁目录由控制面根派生（审计 P11-4：此前不传 locksDir，锁存在时也照样改写字节）。
+    const locksDir = options.locksDir ?? locksDirFromControlRoots(controlRoots)
+    const gate = await checkWriteGates(controlRoots, {
+      needsDshStopped: true,
+      ...(locksDir !== undefined ? { locksDir } : {}),
+    })
     if (!gate.ok) return { ...base, ok: false, error: gate.reason }
   }
   const svc = await import('../utils/session-repair-service.ts')
@@ -741,9 +520,11 @@ export async function repairSessions(
     done: [], errors: [], notices: [],
   }
   if (options.fix) {
+    // 环境锁目录同样由根派生：调用点漏传时不再静默跳过环境锁检查（与 repairSessionLogInline 同一口径）
+    const locksDir = options.locksDir ?? locksDirFromControlRoots(controlRoots)
     const gate = await checkWriteGates(controlRoots, {
       needsDshStopped: true,
-      ...(options.locksDir !== undefined ? { locksDir: options.locksDir } : {}),
+      ...(locksDir !== undefined ? { locksDir } : {}),
     })
     if (!gate.ok) {
       return { ...base, ok: false, error: gate.reason, errors: [gate.reason] }
