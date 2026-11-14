@@ -9,8 +9,12 @@ import { useId } from 'react'
  * 2026-11-14 用户要求：本页（连同自动同步段）的 ⓘ 全部移除，只留设置本身。
  *
  * 2026-11-14 二次收口（Stitch 稿 D-39）：段内改成**行式设置行**（标签左、控件右、行高 34、
- * 0.5px 行线），段头的开关贴右。原来每项都是「标题一行 + 控件一行」的竖排 .field ——
+ * 0.5px 行线）。原来每项都是「标题一行 + 控件一行」的竖排 .field ——
  * 同一页还要放自动同步四项，竖排一屏装不下。
+ *
+ * 2026-11-14 五次收口（用户：「加密备份标题的位置不对，他应该是单独一行」）：段头右角不再挂控件，
+ * 段头只写段名；「加密备份」降为段内第一行，与密码/导出密钥同构 —— 一行里只能有一个标签，
+ * 段名与控件名挤在同一行时读起来像「加密与密钥导出 加密备份」两件事叠在一起。
  *
  * 约定同其余渲染段（t42）：只看渲染所需字段 + 回调；联动规则在 ui/sync-settings-view.ts 的
  * encryptToggle / includeSecretsToggle。
@@ -41,13 +45,18 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
   return (
     <>
       <div className={css.settingsGroup}>
-        {/* 段头：段名在左，属于这一段的开关（加密备份）连它的名字一起贴右 ——
-            标题只标段名，控件自己的名字必须贴在控件旁边。 */}
+        {/* 段头只标段名（2026-11-14 用户要求：「加密备份」不再贴在段头右侧，它要单独一行）。 */}
         <div className={css.settingsGroupHead}>
           <span className={css.settingsGroupTitle}>{t('mode.security')}</span>
-          <span className={css.settingsGroupAction}>
+        </div>
+        {/* 加密备份独占一行：与下面两个密码框、导出密钥同构（标签左 / 开关右），
+            开关的名字贴在它自己那一行 —— 段头的右角只留给「这一段的状态」，不挂控件。 */}
+        <div className={css.settingsRow}>
+          <span className={css.settingsRowMain}>
             <label className={css.settingsRowLabel} htmlFor={encryptId}>{t('mode.encrypt')}</label>
-            {/* 弹性开关（2026-11-14）：与自动同步段同一类 —— 单一布尔、拨动即落库。 */}
+          </span>
+          <span className={css.settingsRowControl}>
+            {/* 弹性开关（2026-11-14）：单一布尔、拨动即落库 */}
             <Switch id={encryptId} checked={settings.encrypt} onChange={onToggleEncrypt} label={t('mode.encrypt')} />
           </span>
         </div>

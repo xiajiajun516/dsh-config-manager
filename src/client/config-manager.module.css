@@ -8513,12 +8513,6 @@ button.profileRowMain:hover {
   letter-spacing: 0.04em;
   color: var(--cm-text-2);
 }
-.settingsGroupAction {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
 .settingsRow {
   display: flex;
   align-items: center;

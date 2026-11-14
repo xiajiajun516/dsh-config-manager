@@ -1401,7 +1401,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 | 活动（RunsCenter） | `.runsCenter` `.runsCardStack` `.runsProgressRow` `.runsProgressStatus` `.runsLockDesc` `.runsLogLine` | 卡片内元素零外边距；进度条与状态字同排；锁卡说明降级；日志尾部单行省略、末行主色 |
 | 迁移历史 | `.historyTightCard` `.historyControlRow` `.historyControlRowEnd` `.historySearch` `.historySearchInput` `.historyGroup` | 策略/过滤两卡压成两行；搜索框外壳化（描边在框上，focus-within 整框变色），不再内嵌滚动盒 |
 | 同步 | `.channelCompactRow` `.confirmMessage` `.addChannelCard` `.addChannelLabel` `.addChannelHint` `.channelPickList` `.channelPickRow` `.channelPickLabel` `.channelPickDesc` | 未配置通道单行矮态（覆盖 `.cardTitleRow` 的 baseline+8px）；2026-11-14 起页面只渲染已配置的通道卡，其余收进末尾的虚线「添加通道」卡（`AddChannelCard`：整宽 button + 选通道弹窗，行内两段文字），`.channelCompactRow` 只作为未配置通道的兜底形态保留 |
-| 同步·设置弹窗（D-39，2026-11-14 二次收口） | `.settingsTabs` `.settingsTab` `.settingsTabOn` `.settingsPage` `.settingsGroup` `.settingsGroupHead` `.settingsGroupTitle` `.settingsGroupAction` `.settingsRow` `.settingsRowMain` `.settingsRowLabel` `.settingsRowControl` `.settingsSelect` `.settingsInput` `.settingsNote` `.settingsGroupFoot` | 两页签「同步内容 / 设置」（2026-11-14 第三轮：页签「自动同步与密码」改名「设置」，两页的 ⓘ **全部移除** —— 界面只留设置本身）：页签条 44 高（padding 4 + 项高 34）、项 13px、选中项白底 + 1px 描边（白底必须落在灰条上，否则选中态只剩字重差异，远看分不出当前页）。策略页按 D-39 行式重排成四段（自动同步 / 加密与密钥导出 / 解密密码 / 插件·跟随远端删除）：段头是 11px/500/0.04em 小标题，右侧挂该段的主开关或状态徽章；段内每行「左标签 / 右控件」高 34、行间 0.5px 细线、最后一行无线；行内控件宽度统一 240（`.input` 自带高 28，行里不带 `.field` ⇒ 不会被 `.field > .input` 的 100% 覆盖）。原 `.dialogSection`/`.dialogSectionDivide`/`.syncSubBlock`/`.subBlockHead`/`.toggleRow` 已随结构删除；`.snapshotPickerRow` 快照行按用户要求仍留在通道卡内 |
+| 同步·设置弹窗（D-39，2026-11-14 二次收口） | `.settingsTabs` `.settingsTab` `.settingsTabOn` `.settingsPage` `.settingsGroup` `.settingsGroupHead` `.settingsGroupTitle` `.settingsRow` `.settingsRowMain` `.settingsRowLabel` `.settingsRowControl` `.settingsSelect` `.settingsInput` `.settingsNote` `.settingsGroupFoot` | 两页签「同步内容 / 设置」（2026-11-14 第三轮：页签「自动同步与密码」改名「设置」，两页的 ⓘ **全部移除** —— 界面只留设置本身）：页签条 44 高（padding 4 + 项高 34）、项 13px、选中项白底 + 1px 描边（白底必须落在灰条上，否则选中态只剩字重差异，远看分不出当前页）。策略页按 D-39 行式重排成四段（自动同步 / 加密与密钥导出 / 解密密码 / 插件·跟随远端删除）：段头是 11px/500/0.04em 小标题，**右角不挂控件**（2026-11-14 第五轮：`.settingsGroupAction` 已删，「加密备份」原是贴在段头右侧，用户要求它单独一行 ⇒ 段名与控件名不共行；自动同步的总开关仍在段头，因为它就是段名的开关，没有第二行可放）；段内每行「左标签 / 右控件」高 34、行间 0.5px 细线、最后一行无线；行内控件宽度统一 240（`.input` 自带高 28，行里不带 `.field` ⇒ 不会被 `.field > .input` 的 100% 覆盖）。原 `.dialogSection`/`.dialogSectionDivide`/`.syncSubBlock`/`.subBlockHead`/`.toggleRow` 已随结构删除；`.snapshotPickerRow` 快照行按用户要求仍留在通道卡内 |
 | 导入 | `.dropZone` `.dropZoneIcon` `.conflictBulk` | 选文件拖放区（虚线 `line-2` + `r-3`）；冲突项批量操作纵向成组 |
 | 市场 | `.marketView` `.marketListCard(Fill)` `.marketItem(List/Head/Main/Desc/Meta)` `.marketSearchBox` `.marketSearchInput` `.marketFilterMeta` `.marketRepoRow` `.marketLoginCard` `.marketLoginRow` `.marketUploadCard` `.marketMyListCard` `.marketMyListHead` `.marketMyItem*` `.myconfigsView` | 页签为作用域内独立胶囊（不动共享 `.modeTabs`）；筛选卡定高吃满剩余高度；条目「名称/说明/元信息」三段；我的配置限高内滚 |
 | 产物库·快照弹窗（D-02/D-05/D-06/D-07） | `.restorePlanCard` `.restorePlanStatBadge` `.inspectItem` `.inspectDot` `.inspectAdapter` `.inspectDesc` `.inspectItemsScroll` `.inspectSubGroup` `.inspectBadge` `.reportItem` `.reportItemPath` `.reportGroupTitle` `.confirmNote` `.confirmNoteIcon` | 分组卡片化（组头 30px 铺顶边、行 30px 表行 + 细分隔线）；摘要徽章 4px 方角细描边；条目「圆点 + 等宽 accent adapter + 描述」三段；「路径 + 原因」两段报告行；删除确认的基线注意句独立成 warn tint 盒 |
@@ -1716,6 +1716,11 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
   `mode.decryptPasswordHint`。判据句：**这一页每个控件都是自解释的（行标签就是控件名），说明文字不再有承载体** ——
   用户要求的是「页面上不要图标」，不是「把说明改成常驻文字」。其余页面的 ⓘ（通道配置弹窗、首页备份卡、
   产物库、导入向导等）**不动**；`MOVE_PINS` 台账随之 54 → 46，守卫的目录覆盖与 KEEP 分类不受影响。
+- **t15（2026-11-14 第五轮，用户「加密备份标题的位置不对，他应该是单独一行」）：段头右角不许挂控件名** ——
+  「加密与密钥导出」段头右侧原挂 `<label>加密备份</label> + Switch`，一行里出现两个标签（段名 + 控件名），
+  读起来像两件事叠在一起；`encrypt` 开关降为段内第一行（`.settingsRow` + `.settingsRowMain` 标签 + `.settingsRowControl` 开关），
+  与下面两个密码框、导出密钥行完全同构，`.settingsGroupAction` 随之删除。判据：**段头只回答「这是哪一段」，行才回答「这一项开不开」**；
+  例外只有「开关就是段名的开关、且段内没有第二行可放」的自动同步总开关（它没有独立名字，aria-label 即段名）。
 
 ---
 
