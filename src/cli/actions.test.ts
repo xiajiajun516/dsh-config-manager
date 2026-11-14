@@ -589,6 +589,26 @@ test('P11-4 写门：locksDir 由控制面根派生（第一个真实带锁的�
   })
 })
 
+test('P11-10 写门：不传 locksDir 也不再跳过环境锁检查（派生在门内完成，5 个调用点不再各拼参数）', async () => {
+  await withTmp(async (tmp) => {
+    const dataDir = path.join(tmp, 'dsh-config-manager')
+    await fs.mkdir(dataDir, { recursive: true })
+    const locksDir = path.join(dataDir, 'locks')
+    const mgr = new EnvironmentLockManager({ locksDir, heartbeatIntervalMs: 60_000 })
+    const acquired = await mgr.acquire({ op: 'test-hold', target: 'p11-10' })
+    assert.equal(acquired.state, 'ACQUIRED')
+    try {
+      // 只有 controlRoots，没有 locksDir —— 改前这就是「静默不查锁」的形态
+      const derived = await checkWriteGates([dataDir], { needsDshStopped: false })
+      assert.equal(derived.ok, false, '锁被持有时必须拒绝，不能因少传参数放行')
+      assert.equal(derived.ok === false ? derived.code : null, 'stale-lock')
+    } finally {
+      if (acquired.token !== null) await mgr.release(acquired.token)
+      await mgr.stopHeartbeatAndDrain()
+    }
+  })
+})
+
 test('P11-4 写门：真实持有的环境锁 → 就地修复必须拒绝（改前不传 locksDir，锁在也照样改写字节）', async () => {
   await withTmp(async (tmp) => {
     const home = path.join(tmp, 'home')

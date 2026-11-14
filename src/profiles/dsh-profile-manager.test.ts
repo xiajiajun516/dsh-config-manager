@@ -349,6 +349,36 @@ test('remove：物理删除目录；当前 profile 需显式确认', () => {
   }
 })
 
+test('removeAsync（审计 P11-9）：同一套护栏 + 删除期间事件循环不被独占', async () => {
+  const { mgr, home, cleanup } = makeManager()
+  try {
+    mgr.create('work', 'base')
+    const dir = join(home, 'profiles', 'work')
+    mkdirSync(join(dir, 'node_modules', 'pkg'), { recursive: true })
+    for (let i = 0; i < 400; i += 1) writeFileSync(join(dir, 'node_modules', 'pkg', `f-${i}.js`), 'x')
+
+    // 删除期间每 5 ms 一次的心跳（真机对应宿主里的定时探测）：同步实现期间一次都不会触发
+    let ticks = 0
+    const timer = setInterval(() => { ticks += 1 }, 5)
+    try {
+      await mgr.removeAsync('work')
+    } finally {
+      clearInterval(timer)
+    }
+    assert.equal(existsSync(dir), false, '目录必须真的删净')
+    assert.ok(ticks > 0, `异步删除期间事件循环必须能跑定时器，实际 ticks=${ticks}`)
+
+    // 护栏与同步版一致
+    mgr.create('live', 'web')
+    const current = new DshProfileManager({ homeDir: home, currentProfile: () => 'live' })
+    await assert.rejects(() => current.removeAsync('live'), (e: unknown) => e instanceof DshProfileError && e.code === 'currentProfile')
+    await assert.rejects(() => mgr.removeAsync('desktop'), (e: unknown) => e instanceof DshProfileError && e.code === 'managedProfile')
+    await assert.rejects(() => mgr.removeAsync('gone'), (e: unknown) => e instanceof DshProfileError && e.code === 'notFound')
+  } finally {
+    cleanup()
+  }
+})
+
 test('remove：含悬空 junction 的档案也能删净（fs.rm 静默失效的回归）', () => {
   const { mgr, home, cleanup } = makeManager()
   try {

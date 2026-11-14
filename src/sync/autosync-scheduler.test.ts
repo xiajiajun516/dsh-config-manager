@@ -854,6 +854,60 @@ test('双通道：git/webdav 同时 enabled → 各自独立排期；runOnce 写
   assert.deepEqual(configs.git, gitBefore, 'git 通道配置未被 webdav 运行改变');
   assert.equal(configs.webdav.lastRunStatus, 'success', 'webdav 通道写入自己的运行状态');
 });
+test('审计 P5-2：一条通道到点只重排它自己，不得连带清掉另一条通道的定时器', async () => {
+  const configs = {} as Record<SyncTransportType, AutosyncConfig>;
+  for (const ch of SYNC_CHANNELS) {
+    configs[ch] = { enabled: false, interval: '30m', startupMinIntervalMs: 300_000, consecutiveFailures: 0, realtime: false };
+  }
+  configs.git = { enabled: true, interval: '30m', startupMinIntervalMs: 300_000, consecutiveFailures: 0, realtime: false };
+  configs.webdav = { enabled: true, interval: '5m', startupMinIntervalMs: 300_000, consecutiveFailures: 0, realtime: false };
+
+  // setTimer 记录 (通道, 句柄) 的归属：调度器只把句柄交回来，我们用自增 id 反查是哪个通道的
+  const armed = new Map<string, () => void>();
+  const cleared: string[] = [];
+  let seq = 0;
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => makeMergePlan([]),
+  };
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp',
+    host: { log: nullLogger() },
+    makeSyncEngine: () => engine as SyncEngine,
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(1_000_000_000_000),
+    readConfig: async (channel: SyncTransportType) => configs[channel],
+    writeConfig: async (channel: SyncTransportType, c: AutosyncConfig) => { configs[channel] = c; },
+    readSyncConfigFn: async (channel: SyncTransportType) => channel === 'webdav'
+      ? ({ schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com/dav' } } as SyncConfig)
+      : ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } } as SyncConfig),
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: (fn) => { seq += 1; const id = `t${seq}`; armed.set(id, fn); return id as unknown as ReturnType<typeof setTimeout>; },
+    clearTimer: (timer) => { cleared.push(String(timer)); armed.delete(String(timer)); },
+  });
+  scheduler.start();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const ids = [...armed.keys()];
+  assert.equal(ids.length, 2, `两个通道各排一个定时器，实际 ${ids.join(',')}`);
+  const [first, second] = ids as [string, string];
+  cleared.length = 0;
+
+  // 只点火**一个**通道的定时器（先排的那个 = SYNC_CHANNELS 里靠前的 git）
+  const fire = armed.get(first);
+  assert.ok(fire !== undefined);
+  fire();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  // 关键判据：另一条通道的句柄既不能被清、也不能被覆盖（清掉又不重排 = 该通道从此停摆）
+  assert.ok(!cleared.includes(second), `另一条通道的句柄被清了：${JSON.stringify(cleared)}`);
+  assert.ok(armed.has(second), '另一条通道的定时器必须仍然在跑（不得被连带清掉后不重排）');
+  scheduler.stop();
+});
+
 /* ---------------- t32：通道枚举唯一来源 ---------------- */
 
 test('t32：排期覆盖 SYNC_CHANNELS 的每个通道（长度取自枚举，不硬编码 2；此前同一数组写两遍）', async () => {

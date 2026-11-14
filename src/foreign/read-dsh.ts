@@ -22,7 +22,7 @@
  * detail = too-large / max-logs-reached / session-byte-budget），绝不静默截断。
  */
 import { envValue, joinFor, normalizePlatform } from './platform-paths.ts';
-import { listDirNames, listFileNames, readBytesSafe, statOrNull } from './session-read.ts';
+import { listDirNames, listFileNames, readBytesPrefixSafe, readBytesSafe, statOrNull } from './session-read.ts';
 import { readLogHeaderFromBytes } from '../utils/session-log.ts';
 import type { SessionLogHeader } from '../utils/session-log.ts';
 import type { RootProbeOptions, SessionReadOutcome } from './session-source.ts';
@@ -38,6 +38,13 @@ export type DshGeneration = 'v3' | 'v4';
 const DEFAULT_MAX_LOGS = 2000;
 const DEFAULT_MAX_FILE_BYTES = 32 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+
+/**
+ * 代次嗅探窗口（审计 P7-7）：header 是第一行 JSON，64 KiB 覆盖任何真实 cwd/标题组合
+ * （首行实测 < 1 KiB）。窗口内解析不出 header 时退回整读，因此这个值只影响「能不能提前
+ * 跳过非目标代次」，不会改变任何判定结果。
+ */
+const HEADER_SNIFF_BYTES = 64 * 1024;
 const HEADER_WINDOW_BYTES = 64 * 1024;
 
 export interface DshResolvedHome { readonly home: string; readonly overridden: boolean }
@@ -158,6 +165,23 @@ export async function readDshLogs(opts: DshReadOptions): Promise<SessionReadOutc
         scanned += 1;
         if (st.size > maxFileBytes) { truncated = truncated ?? 'too-large'; continue; }
         if (bytesRead + st.size > maxTotalBytes) { truncated = 'byte-budget'; break outer; }
+        /**
+         * 代次嗅探（审计 P7-7）：日志的 header 就在第一行，而 dsh 与 dsh4 两代并存的机器上
+         * 一半文件属于「非目标代次」——旧实现为了看那 1 KB header 把 31 MiB 的日志整份读进来
+         * 再丢掉。现在先只读头部窗口，判定为别的代次就直接 countedContinue，一次整读都不做。
+         *
+         * 退化路径保持旧行为：头部窗口解析不出 header（首行比窗口还长 / 读不出）时仍整读一次，
+         * 让 log-header-unreadable / log-read-error 这些既有码的触发条件逐字不变。
+         */
+        const head = await readBytesPrefixSafe(abs, HEADER_SNIFF_BYTES);
+        if (head !== null) {
+          const sniffed = dshHeaderOfLogBytes(head);
+          const sniffedGeneration = sniffed === undefined ? undefined : dshGenerationOfVersion(sniffed.version);
+          if (sniffedGeneration !== undefined && sniffedGeneration !== opts.generation) {
+            otherGeneration += 1;
+            continue;
+          }
+        }
         const data = await readBytesSafe(abs, maxFileBytes);
         if (data === null) {
           findings.push({ code: 'source-unreadable', origin: name, detail: 'log-read-error' });

@@ -212,7 +212,8 @@ export function profileRoutes(env: RoutesEnv): WebRoute[] {
       const allowCurrent = body['allowCurrent'] === true
       try {
         if (runningView().some((r) => r.name === name)) throw new DshProfileError('instanceRunning')
-        profiles.remove(name, { allowCurrent })
+        // 档案目录是整仓最大的树：异步删除，别让事件循环停摆十几秒（审计 P11-9）。
+        await profiles.removeAsync(name, { allowCurrent })
         const historyError = await tryAppendHistory({
           kind: 'profile-delete',
           result: 'success',

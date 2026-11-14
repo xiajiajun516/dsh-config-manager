@@ -105,6 +105,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **The update check measures response size in bytes**: the limit used to compare character counts, so a 120 KB response full of three-byte characters passed as 40 KB; it is measured in real bytes now and an oversized response is cut off early instead of being read into memory.
 - **打包插件超时不再留下后台进程**：以前超时只结束外层的命令包装进程，真正干活的 npm 进程继续在已删除的临时目录里写文件；现在整棵进程树一起终止。
   **A timed-out plugin pack no longer leaves processes behind**: the timeout used to kill only the wrapper command while the real npm process kept writing into an already-deleted temp directory; the whole process tree is terminated now.
+- **删除一个装满依赖的档案不再让面板卡住十几秒**：档案目录里往往有几万个文件，以前是在请求线程里同步删，期间心跳、实例状态、同步定时器全部停摆（面板表现成「后端没反应」）；现在删除在后台推进，界面照常响应。
+  **Deleting a profile full of dependencies no longer freezes the panel for seconds**: a profile directory can hold tens of thousands of files, and the removal used to run synchronously inside the request, stalling heartbeats, instance status and sync timers (the panel looked unresponsive); it now runs asynchronously while the UI stays live.
+- **迁移历史目录读不出来时不再显示「暂无记录」**：权限不足或路径类型不对时，以前被当成空目录，历史页显示 0 条、自动清理也当作没东西可删；现在明确报「读取失败」，只有目录真的不存在才算空。
+  **An unreadable migration-history directory no longer shows "no records"**: permission problems or a wrong path type used to count as an empty directory, so the history page showed zero entries and auto-pruning found nothing to delete; a read failure is now reported, and only a genuinely missing directory counts as empty.
+- **扫描外部来源会话时不再白读另一代次的整份日志**：装了新版 DSH 的机器上两代日志并存，以前为了看一眼文件头就把另一代那几十 MB 的日志整份读进内存再丢掉；现在只读文件头判定代次，别的代次直接跳过。
+  **Scanning third-party sessions no longer reads entire logs from the other generation**: machines that ran both DSH generations have both kinds of logs, and the scan used to read tens of megabytes just to inspect the first line before discarding it; it now reads only the header to decide the generation and skips the rest.
 
 ## [0.8.2] - 2026-11-12
 

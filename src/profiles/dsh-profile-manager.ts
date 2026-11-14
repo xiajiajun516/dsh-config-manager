@@ -450,6 +450,30 @@ export class DshProfileManager {
   }
 
   /**
+   * remove() 的异步版本：语义、护栏、错误码完全一致，只是不阻塞事件循环（审计 P11-9）。
+   *
+   * 为什么需要两份：档案目录是整仓里最大的一棵树（含 node_modules，真机 2 万文件）。实测
+   * removeTreeSync 删 2 万文件耗 15.5 s，期间宿主 20 ms 定时器 0/776 次触发 —— 心跳、实例
+   * 存活探测、同步定时器全停摆，面板表现成「后端卡死」。HTTP 删除走这里；只有确实同步
+   * 上下文（脚本、收尾清理）才用 remove()，且必须是自己知道很小的树。
+   */
+  async removeAsync(name: string, opts: { allowCurrent?: boolean } = {}): Promise<void> {
+    if (isManagedProfileName(name)) throw new DshProfileError('managedProfile')
+    const dir = this.requireManagedDir(name)
+    if (name === this.currentProfile() && opts.allowCurrent !== true) {
+      throw new DshProfileError('currentProfile')
+    }
+    try {
+      await removeTree(dir)
+    } catch (error) {
+      throw new DshProfileError('deleteFailed', error instanceof Error ? error.message : String(error))
+    }
+    if (existsSync(dir)) {
+      throw new DshProfileError('deleteFailed', `profile directory still exists after removal: ${dir}`)
+    }
+  }
+
+  /**
    * cross-F3：目标目录 = **正常 profile（有 package.json）** 或 **中断的复制残留（有进行中标记）**；
    * 两者都没有 → notFound。残余标记的目录必须能被定位与删除，否则就是孤儿。
    */

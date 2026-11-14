@@ -398,6 +398,33 @@ test('best-effort：注入失败 IO → append 返回 ok:false 不 throw', async
   assert.ok(res.error);
 });
 
+test('P3-6：目录读不出（EACCES/ENOTDIR）必须显式失败，不得谎报「0 条、无损坏」', async (t) => {
+  const dir = tmp(t);
+  const denies = (code: string): MigrationIo => ({
+    async mkdir() { return; },
+    async readdirNames() { throw Object.assign(new Error(`${code}: scandir failed`), { code }); },
+    async readFileText() { return ''; },
+    async writeAll() { return; },
+    async rm() { return; },
+    async lstat() { return null; },
+    async exists() { return false; },
+  });
+  for (const code of ['EACCES', 'ENOTDIR']) {
+    const store = new MigrationStore({ dir: path.join(dir, `denied-${code}`), io: denies(code) });
+    await assert.rejects(() => store.read(), new RegExp(code), `read 必须抛 ${code}`);
+    await assert.rejects(() => store.count(), new RegExp(code), `count 必须抛 ${code}`);
+    await assert.rejects(() => store.retention(10), new RegExp(code), `retention 必须抛 ${code}`);
+  }
+});
+
+test('P3-6：默认 IO 仍把 ENOENT（目录不存在）当空目录，不算失败', async (t) => {
+  const dir = tmp(t);
+  const store = new MigrationStore({ dir: path.join(dir, 'missing-dir') });
+  assert.deepEqual(await store.read(), { entries: [], corrupted: [], total: 0 });
+  assert.equal(await store.count(), 0);
+  assert.deepEqual(await store.retention(10), []);
+});
+
 test('best-effort：read 目录不存在 → 空结果不 throw', async (t) => {
   const dir = tmp(t);
   const store = new MigrationStore({ dir: path.join(dir, 'no-such-dir') });
