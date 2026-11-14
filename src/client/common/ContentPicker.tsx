@@ -492,7 +492,6 @@ export function ContentPicker({
                       </span>
                     )}
                     {/* 未读时不给「读取该分区」按钮：展开这一行就是读取入口（与其他分区行同一套惰性语义） */}
-                    {bucket.loaded && <InfoHint text={t('picker.bucketHint')} t={t} />}
                   </span>
                 }
               />

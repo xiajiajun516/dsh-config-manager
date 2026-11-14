@@ -583,7 +583,7 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
       {phase === 'ready' && profileList.length > 0 && (
         <>
           <div className={css.listHeaderRow}>
-            <span className={css.groupLabel}>{t('profiles.list.title')} <InfoHint text={t('profiles.list.hint')} label={t('common.infoHint')} /></span>
+            <span className={css.groupLabel}>{t('profiles.list.title')}</span>
             <span className={css.cellMeta}>
               {/* 只留计数与「需处理」：形态 / node_modules 已是每行徽章，汇总句不改变任何决定 */}
               {t('profiles.list.count', { count: summary.total })}
@@ -607,7 +607,7 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                 <div key={profile.name} className={css.profileRow} role="listitem" data-selected={profile.name === state.selectedName ? '' : undefined}>
                   <div className={css.profileRowHeader}>
                     {/* 整行「信息区」可点：行内只给计数，完整清单（bundle 层 / 逐条依赖 / patch 原文）在详情弹窗里 */}
-                    <button type="button" className={css.profileRowMain} title={t(incomplete ? 'profiles.incomplete.hint' : 'profiles.list.hint')} onClick={() => { openDetail(profile) }}>
+                    <button type="button" className={css.profileRowMain} title={incomplete ? t('profiles.incomplete.hint') : undefined} onClick={() => { openDetail(profile) }}>
                       <span className={css.profileRowTitle}>
                         <span className={`${css.mono} ${css.profileRowName}`}>{profile.name}</span>
                         <span className={css.badgeRow}>
@@ -703,7 +703,6 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                       {caps.duplicate && (
                         <Button
                           size="sm"
-                          title={t('profiles.duplicateHint')}
                           disabled={state.copying}
                           onClick={() => {
                             patch({

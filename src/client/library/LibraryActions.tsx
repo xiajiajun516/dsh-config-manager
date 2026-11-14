@@ -26,7 +26,6 @@ import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Empty, Spinner } from '../common/ui.tsx'
 import { Icon } from '../common/Icon.tsx'
 import { Skeleton, SkeletonList, SkeletonTable } from '../common/Skeleton.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -490,7 +489,6 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
           closeLabel={t('common.close')}
           onClose={() => { setPlan(null) }}
           closeDisabled={running}
-          trailing={<InfoHint text={t('snapshots.selectHint')} label={t('common.infoHint')} />}
         />
         <Modal.Body scroll>
           {/* 恢复计划预览：结果是一张「文件 → 动作」表 → 按表格铺骨架 */}

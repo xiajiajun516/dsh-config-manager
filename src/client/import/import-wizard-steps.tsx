@@ -250,7 +250,7 @@ export function ConflictsStage(props: {
   const { collector, onChanged, onBack, onNext, t } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.conflicts.title')} info={<InfoHint text={t('import.conflicts.hint')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('import.conflicts.title')} />
       <ConflictList
         collector={collector}
         t={t}

@@ -54,6 +54,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🗑️ 移除 · Removed
 
+- **同步通道配置弹窗去掉了「立即保存」按钮**：表单本来就是改完即存，按钮既改变不了结果也给不出新信息；现在关掉弹窗再进来，值还在，成功时标题行只闪过一枚「已保存」徽章。
+  **The "Save now" button is gone from the sync channel dialog**: the form already saves as you type, so the button changed nothing and told you nothing new; reopen the dialog and your values are still there, with a short "Saved" badge in the header on success.
+- **一批只复述控件名的 ⓘ 说明去掉了**：说明图标现在只挂在「删了会让人做错决定」的地方——不可逆后果、凭据去向、后台静默行为、输入规则与看不出来的边界；会话体检那张卡上重复的长说明也只剩弹窗里一处。
+  **A batch of ⓘ notes that merely restated a control's name is gone**: the icon now marks only what would change a decision — irreversible consequences, where credentials go, silent background behaviour, input rules and invisible boundaries; the duplicated long note on the sessions card also survives only inside its dialog.
 - **同步页不再有「在产物库查看远端快照」那一行**：远端快照本来就在产物库的来源页签里，多一条指路按钮只是给同步页加噪音。
   **The "view remote snapshots in Library" line is gone from Sync**: remote snapshots already live under the Library source tabs, so the pointer only added noise to the sync page.
 

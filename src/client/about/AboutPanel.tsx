@@ -148,7 +148,6 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
             拼接规则是 ./about-view.ts 的纯函数，组件只装配（AGENTS.md §UI 分层铁律）。 */}
         {state.rows !== null && (
           <div className={css.actionRow}>
-            <InfoHint text={t('about.feedbackHint')} label={t('common.infoHint')} />
             <CopyButton
               text={buildFeedbackSnippet(state.rows, t)}
               label={t('about.copyEnv')}

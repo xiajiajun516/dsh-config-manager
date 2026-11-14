@@ -89,26 +89,24 @@ interface KeepPin {
   needle?: string;
 }
 
-/** MOVE 判定清单（t1: 2 / t2: 16 / t3: 13 / t4: 9 / t5: 2 = 42 键；t7（2026-10-12）= 41 键，合计 83）。 */
+/** MOVE 判定清单（t1: 2 / t2: 16 / t3: 13 / t4: 9 / t5: 2 = 42 键；t7（2026-10-12）= 41 键，合计 83）。
+ *  2026-11-14 用户要求「只把用户从名字读不出来的东西放进 ⓘ」：删 10 条「把控件名换句话」的说明
+ *  （channel.perChannelHint / webdav.presetHint / webdav.usernameHint / cloud.providerHint(无 pin) /
+ *  channel.openHint / mode.hint / import.conflicts.hint / myconfigs.update.zipHint /
+ *  myconfigs.upload.form.nameHint / profiles.list.hint / about.feedbackHint）→ 83 → 67。 */
 const MOVE_PINS: readonly MovePin[] = [
   // t1：common/
   { key: 'runs.retentionHint', file: 'src/client/common/RunsCenter.tsx', kind: '机制' },
   { key: 'picker.sessionWorkspaceLinked', file: 'src/client/common/ContentPicker.tsx', kind: '机制' },
   // t2：sync/
-  { key: 'channel.perChannelHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '机制' },
   { key: 'config.repoUrlHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
   { key: 'github.description', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '机制' },
-  { key: 'webdav.presetHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
   { key: 'webdav.urlHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
-  { key: 'webdav.usernameHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
-  { key: 'config.saveHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '机制' },
   { key: 'mode.sessionsPickHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '机制' },
   { key: 'mode.sessionsLimitHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '输入规则' },
   { key: 'mode.sectionsHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '机制' },
-  { key: 'mode.hint', file: 'src/client/sync/SyncPanel.tsx', kind: '机制' },
   // 2026-11-01 用户要求：删掉两处「保存/即时生效」ⓘ（弹窗底部与同步页分区行）——
   // 它们在解释用户无从选择的事，MOVE 台账随之退出 2 条。
-  { key: 'channel.openHint', file: 'src/client/sync/SyncChannelEntryCard.tsx', kind: '机制' },
   { key: 'autosync.description', file: 'src/client/sync/AutosyncCard.tsx', kind: '机制' },
   { key: 'autosync.intervalHint', file: 'src/client/sync/AutosyncCard.tsx', kind: '机制' },
   // t3：environment/maintenance + home + library + export/（v3 搬移后的落点）
@@ -130,16 +128,12 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'export.noteHint', file: 'src/client/export/ExportView.tsx', kind: '背景' },
   // t4：market/ + about/ + profiles/
   { key: 'myconfigs.login.hint', file: 'src/client/market/MyConfigsLoginCard.tsx', kind: '机制' },
-  { key: 'myconfigs.update.zipHint', file: 'src/client/market/MyConfigsWizard.tsx', kind: '机制' },
-  { key: 'myconfigs.upload.form.nameHint', file: 'src/client/market/MyConfigsWizard.tsx', kind: '省事提示' },
   { key: 'about.diag.hint', file: 'src/client/about/AboutPanel.tsx', kind: '背景' },
-  { key: 'about.feedbackHint', file: 'src/client/about/AboutPanel.tsx', kind: '省事提示' },
   { key: 'about.update.offline', file: 'src/client/about/AboutPanel.tsx', kind: '边界' },
   { key: 'about.cli.hint', file: 'src/client/about/AboutPanel.tsx', kind: '背景' },
   { key: 'profiles.create.hint', file: 'src/client/environment/EnvironmentPanel.tsx', kind: '机制' },
-  { key: 'profiles.list.hint', file: 'src/client/environment/EnvironmentPanel.tsx', kind: '省事提示' },
   // t5：recovery/
-  { key: 'sessions.desc', file: 'src/client/recovery/SessionHealthCard.tsx', kind: '机制' },
+  { key: 'sessions.desc', file: 'src/client/recovery/SessionHealthDialog.tsx', kind: '机制' },
   { key: 'recovery.preview.hint', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
   // t7（2026-10-12 用户要求「所有描述都收进 ⓘ」）：页级 / 分区级副标题 + 卡片 / 字段说明。
   // 判定口径见 DESIGN.md §7（本次把原 KEEP-2 的**静态安全说明**与 KEEP-7 的**静态副标题**一并纳入 MOVE；
@@ -153,7 +147,6 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'import.select.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.consult.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.decryptArchive.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
-  { key: 'import.conflicts.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.paths.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.secrets.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.picker.hint', file: 'src/client/import/ImportWizardView.tsx', kind: '机制' },
@@ -169,7 +162,6 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'export.encryptHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
   { key: 'export.includeSecretsHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
   { key: 'export.compositionHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
-  { key: 'snapshots.selectHint', file: 'src/client/library/LibraryActions.tsx', kind: '省事提示' },
   { key: 'diskUsage.clean.hint', file: 'src/client/environment/maintenance/DiskUsageCard.tsx', kind: '边界' },
   { key: 'recovery.safeMode.detail', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
   { key: 'sessions.repair.desc', file: 'src/client/recovery/SessionHealthDialog.tsx', kind: '机制' },
@@ -391,7 +383,7 @@ function parseInfoHintEntry(rel: string): { zh: string | undefined; en: string |
   return { zh: values[0], en: values[1], count: values.length };
 }
 
-test('t6-1 MOVE：79 个说明键都已收进 ⓘ（逐字复用原键）且不再有可见说明行', () => {
+test('t6-1 MOVE：67 个说明键都已收进 ⓘ（逐字复用原键）且不再有可见说明行', () => {
   const files = readClientSources();
   // 扫描范围自检：客户端源码至少覆盖 t6 涉及的面板目录
   const dirs = new Set(MOVE_PINS.map((p) => p.file.split('/').slice(0, 3).join('/')));
@@ -401,7 +393,9 @@ test('t6-1 MOVE：79 个说明键都已收进 ⓘ（逐字复用原键）且不�
   // 2026-11-01：删掉「改动即时生效并保存」「分区选择已保存到本机」两处 ⓘ（用户要求，
 // 属解释「用户无从选择的事」的废话）⇒ 81 降到 79（不是删检查项）。
   // 2026-11-01：导入选择页的「从其它 agent 导入」按钮与其 ⓘ 一并移除（首页已有直达入口）⇒ 79 降到 78。
-  assert.ok(MOVE_PINS.length === 79, 'MOVE 清单长度应为 79（实际 ' + String(MOVE_PINS.length) + '）');
+  // 2026-11-14 用户要求「页面尽可能简洁」：删 `config.saveHint`（表单本就自动保存，手动按钮已删）
+  // 与 `snapshots.selectHint`（恢复计划弹窗里「选择快照…」是死句，快照早已选定）⇒ 78 降到 77。
+  assert.ok(MOVE_PINS.length === 67, 'MOVE 清单长度应为 67（实际 ' + String(MOVE_PINS.length) + '）');
   assert.ok(
     MOVE_PINS.filter((p) => p.kind === '输入规则').length >= 5,
     '输入规则类 MOVE 至少 5 处（config.repoUrlHint / webdav.urlHint / mode.sessionsLimitHint / retention.keep*Hint / export.fileNameHint）',

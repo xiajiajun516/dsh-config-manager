@@ -59,7 +59,7 @@ export type ChannelFormPatch = {
  * 拆出的职责单元只接收「渲染所需数据 + 回调」：`onFormChange` 由父组件实现为
  * 「patch 表单 + 防抖自动保存」—— 防抖定时器与卸载 flush 仍归父组件（单一状态源）。
  */
-export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIssues, busy, savingConfig, remoteReady, statusInfo, githubSignedIn, saveTick, githubView, onFormChange, onGithubStart, onGithubCancel, onSave }: {
+export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIssues, busy, savingConfig, statusInfo, githubSignedIn, saveTick, githubView, onFormChange, onGithubStart, onGithubCancel }: {
   open: boolean
   onClose: () => void
   api: SyncApi
@@ -75,7 +75,6 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
   cloudIssues: readonly CloudFormIssue[]
   busy: boolean
   savingConfig: boolean
-  remoteReady: boolean
   statusInfo: SyncStatusResponse | null
   githubSignedIn: boolean | null
   /**
@@ -88,7 +87,6 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
   onFormChange: (patch: ChannelFormPatch) => void
   onGithubStart: () => void
   onGithubCancel: () => void
-  onSave: () => void
 }) {
   const channel = form.channel
   const {
@@ -128,7 +126,12 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
         closeDisabled={savingConfig}
         // 通道身份徽章 + 弹窗级说明：贴在标题右边，不单独成行
         // （子 tab 已移除，弹窗只配置**打开它的那条通道** —— 通道切换在页面的两张通道卡上做）
-        trailing={<><Badge kind="info">{t(SYNC_CHANNEL_LABEL_KEY[channel])}</Badge> <InfoHint text={t('channel.perChannelHint')} label={t('common.infoHint')} /></>}
+        trailing={<>
+          <Badge kind="info">{t(SYNC_CHANNEL_LABEL_KEY[channel])}</Badge>
+          {/* 自动保存的可见回执：改动即存此前完全静默；徽章只闪 2.4s，不占正文行
+              （原「立即保存」按钮与它的 ⓘ 已删：表单本来就自动保存，重复的凭据说明已在各密钥字段旁） */}
+          {savedVisible && <span className={css.savedTick}><Badge kind="ok">{t('config.savedTick')}</Badge></span>}
+        </>}
       />
       <Modal.Body scroll>
 
@@ -246,19 +249,18 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
         <>
           <span className={css.groupLabel}>{t('webdav.title')}</span>
           {/* 常见 WebDAV 服务器预设：选择后填充 url 模板（含占位符待替换）。
-              ⓘ 与控件**同一行**（.controlRow：控件按自身宽度，ⓘ 保持自身尺寸）。 */}
+              原来跟一颗解释「点了会填地址」的 ⓘ —— 那是把按钮名换句话，2026-11-14 删除。 */}
           <div className={css.controlRow}>
             <Select
               value={presetIdForUrl(webdavUrl)}
               disabled={busy}
-              ariaLabel={t('webdav.presetHint')}
+              ariaLabel={t('webdav.title')}
               onChange={(next) => {
                 const preset = presetById(next)
                 onFormChange({ webdavUrl: preset.url })
               }}
               options={WEBDAV_PRESETS.map((preset) => ({ value: preset.id, label: t(preset.labelKey) }))}
             />
-            <InfoHint text={t('webdav.presetHint')} label={t('common.infoHint')} />
           </div>
           <div className={css.field}>
             <span className={css.fieldLabel}>{t('webdav.url')} <InfoHint text={t('webdav.urlHint')} label={t('common.infoHint')} /></span>
@@ -278,8 +280,6 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               {t('webdav.username')}
               {' '}
               {statusInfo?.webdav?.usernameConfigured === true && <Badge kind="ok">{t('config.tokenSaved')}</Badge>}
-              {' '}
-              <InfoHint text={t('webdav.usernameHint')} label={t('common.infoHint')} />
             </span>
             <input aria-label={t('webdav.username')}
               type="text"
@@ -328,7 +328,6 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               onChange={(next) => { onFormChange({ s3Provider: next }) }}
               options={S3_PROVIDERS.map((p) => ({ value: p, label: t(S3_PROVIDER_LABEL_KEY[p]) }))}
             />
-            <InfoHint text={t('cloud.providerHint')} label={t('common.infoHint')} />
           </div>
           <div className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.endpoint')} <InfoHint text={t('cloud.endpointHint')} label={t('common.infoHint')} /></span>
@@ -483,20 +482,6 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
         </Banner>
       )}
 
-      {/* 配置保存：改动自动保存（防抖，静默）；按钮立即保存并给出 Toast 回执（announce=true） */}
-      <div className={css.actionRow}>
-        <Button
-          variant="primary"
-          loading={savingConfig}
-          disabled={busy || !remoteReady}
-          onClick={() => { onSave() }}
-        >
-          {t('config.save')}
-        </Button>
-        {/* 自动保存的可见回执：改动即存这件事此前完全静默，用户改完字段没有任何反馈 */}
-        {savedVisible && <span className={css.savedTick}><Badge kind="ok">{t('config.savedTick')}</Badge></span>}
-        <InfoHint text={t('config.saveHint')} label={t('common.infoHint')} />
-      </div>
       </Modal.Body>
     </Modal>
   )

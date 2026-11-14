@@ -727,7 +727,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
                           {cacheLabel(it.cacheState)}
                         </Badge>
                         {it.stars !== undefined && (
-                          <Badge kind="info" title={t('list.starsHint')}>{t('list.stars', { count: String(it.stars) })}</Badge>
+                          <Badge kind="info">{t('list.stars', { count: String(it.stars) })}</Badge>
                         )}
                       </div>
                     </div>

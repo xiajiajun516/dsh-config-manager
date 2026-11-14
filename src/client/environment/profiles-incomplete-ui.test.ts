@@ -71,7 +71,8 @@ test('cross-F3 UI：残留行展示来源 / 开始时间 / 目录（目录经 re
   assert.match(panelSrc, /t\('profiles\.incomplete\.from', \{ name: copyFacts\.copiedFrom \}\)/, '必须显示来源档案')
   assert.match(panelSrc, /t\('profiles\.incomplete\.startedAt', \{ time: copyStartedText \}\)/, '必须显示开始时间')
   assert.match(panelSrc, /t\('profiles\.incomplete\.dir', \{ path: redact\(copyFacts\.dir\) \}\)/, '目录必须脱敏后展示')
-  assert.match(panelSrc, /t\(incomplete \? 'profiles\.incomplete\.hint' : 'profiles\.list\.hint'\)/, '残留行要给一段解释（tooltip）')
+  // 2026-11-14：`profiles.list.hint`（「点行看详情」）判为可删的省事提示，行 tooltip 只在残留行给解释
+  assert.match(panelSrc, /title=\{incomplete \? t\('profiles\.incomplete\.hint'\) : undefined\}/, '残留行要给一段解释（tooltip）')
 })
 
 test('cross-F3 UI：删除确认对残留行给专属文案', () => {

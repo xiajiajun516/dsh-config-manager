@@ -108,7 +108,7 @@ export function MyConfigsList({
               <div className={css.marketMyItemMeta}>
                 <Badge kind={badge.kind}>{badge.text}</Badge>
                 {view.stars !== undefined && (
-                  <Badge kind="info" title={t('list.starsHint')}>{t('list.stars', { count: String(view.stars) })}</Badge>
+                  <Badge kind="info">{t('list.stars', { count: String(view.stars) })}</Badge>
                 )}
                 {view.author !== '' && <Badge kind="info">{view.author}</Badge>}
                 {view.updatedAt !== '' && <Badge kind="info">{view.updatedAt}</Badge>}

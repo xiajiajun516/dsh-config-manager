@@ -22,9 +22,7 @@ export const zh = {
   'config.tokenSaved': '凭据已配置',
   'config.tokenMissing': '未配置令牌：可拉取公开仓库，无法推送',
   'config.tokenPlaceholder': 'ghp_…（可选）',
-  // 配置保存（自动保存 + 显式保存按钮）
-  'config.save': '立即保存',
-  'config.saveHint': '表单改动会自动保存：密码/token 安全写入 DSH credentials，不会写入同步文件或日志。',
+  // 配置保存（全自动保存：无手动按钮，成功后标题行闪「已保存」徽章；凭据去向在各密钥字段的 ⓘ 里）
   'config.savedTick': '已保存',
   // 通道选择器
   'channel.title': '同步通道',
@@ -32,10 +30,8 @@ export const zh = {
   'channel.webdav': 'WebDAV 服务器',
   'channel.s3': '对象存储（S3 兼容）',
   'channel.gist': 'GitHub Gist',
-  'channel.perChannelHint': '每条通道（Git / WebDAV / 对象存储 / Gist）的自动同步、同步模式、加密与远端快照各自独立配置。',
   // 通道入口卡（弹窗驱动：点按钮 → 弹窗内配置通道）
   'channel.open': '配置',
-  'channel.openHint': '远程同步通过「同步通道」进行：Git 私有仓库或 WebDAV 服务器。',
   // 断开通道配置（用户实测要求：配置过就必须能删掉，否则打不通的通道会永久占位）
   'channel.expand': '展开通道详情',
   'channel.collapse': '收起通道详情',
@@ -87,12 +83,10 @@ export const zh = {
   'webdav.url': '服务器地址',
   'webdav.urlHint': 'WebDAV 服务器根地址（https://…）。同步快照与索引存放于该地址的 dsh-config-manager/ 子目录下。请勿在地址中包含用户名/密码。',
   'webdav.username': '用户名',
-  'webdav.usernameHint': 'HTTP Basic 认证用户名（非敏感，可回显）。',
   'webdav.password': '密码',
   'webdav.passwordHint': '将安全写入 DSH credentials（引用名 {ref}），不会写入同步文件或日志。留空表示沿用已保存的凭据。',
   'webdav.passwordSaved': '凭据已配置',
   'webdav.passwordPlaceholder': '密码（可选）',
-  'webdav.presetHint': '选择常见 WebDAV 服务器可快速填入地址；含 <占位符> 的模板请替换为你的真实服务器/用户名。',
   // 预设服务器的显示名（英文界面零中文：中文名只住在 zh 目录，en 用品牌英文名）
   'webdav.preset.custom': 'Custom URL',
   'webdav.preset.jianguoyun': '坚果云 (Jianguoyun)',
@@ -191,7 +185,6 @@ export const zh = {
   'syncflow.remoteEmptyGuide': '远端还没有任何快照：这是首次同步，先点「推送到远端」把本机配置推上去（推送会创建第一个快照），之后才能拉取。',
   // 同步模式（默认快速导出 / 高级自定义导出）
   'mode.title': '同步分区',
-  'mode.hint': '同步范围 = 勾选的分区集合（默认已勾选推荐分区，可随时改）。',
   'mode.selectedCount': '已勾选 {n} / {total}',
   'mode.sectionsHint': '默认可同步的是可移植分区；平台相关分区（MCP 服务器）与设备相关分区（插件文件、凭据状态、历史会话）只有你在这里主动勾选才参与同步。',
   'mode.deletePlugins': '跟随远端删除插件',
@@ -317,8 +310,6 @@ export const zh = {
   // 会被 store 的去重逻辑合并（互相顶掉），故此处为每个动作单独给出可区分文案。
   'toast.autosyncLoadFailed': '读取自动同步状态失败',
   'toast.configSaveFailed': '保存通道配置失败',
-  'toast.configSaved': '通道配置已保存',
-  'toast.configNothingToSave': '请先填写通道地址再保存',
   'toast.channelCleared': '{channel} 配置已断开',
   'toast.githubCodeCopied': '已复制一次性授权代码 {code}',
   'toast.githubCodeCopyFailed': '自动复制失败，请手动复制上面的一次性授权代码',
@@ -359,7 +350,6 @@ export const zh = {
   'cloud.s3Title': '对象存储（S3 兼容）',
   'cloud.gistTitle': 'GitHub Gist',
   'cloud.provider': '兼容商',
-  'cloud.providerHint': '五家共用同一套 SigV4 签名实现；端点与寻址风格按兼容商取缺省。',
   'cloud.provider.s3': 'AWS S3',
   'cloud.provider.oss': '阿里云 OSS',
   'cloud.provider.cos': '腾讯云 COS',
@@ -498,19 +488,15 @@ export const en: Record<keyof typeof zh, string> = {
   'config.tokenSaved': 'Credential configured',
   'config.tokenMissing': 'No token: public repos can be pulled, but pushing will fail',
   'config.tokenPlaceholder': 'ghp_… (optional)',
-  // Config save (auto-save + explicit save button)
-  'config.save': 'Save now',
-  'config.saveHint': 'Form changes are saved automatically: password/token goes securely into DSH credentials, never into sync files or logs.',
+  // Config save (automatic only: no manual button; the title row flashes a "Saved" badge)
   'config.savedTick': 'Saved',
   'channel.title': 'Sync Channel',
   'channel.git': 'Git private repo',
   'channel.webdav': 'WebDAV server',
   'channel.s3': 'Object storage (S3-compatible)',
   'channel.gist': 'GitHub Gist',
-  'channel.perChannelHint': 'Auto sync, sync mode, encryption and remote snapshots are configured independently for each channel (Git / WebDAV / object storage / Gist).',
   // Channel entry card (dialog-driven: click the button → configure the channel in the dialog)
   'channel.open': 'Configure',
-  'channel.openHint': 'Remote sync runs through a sync channel: a private Git repository or a WebDAV server.',
   // Disconnect channel config (user report: once configured there was no way out)
   'channel.expand': 'Expand channel details',
   'channel.collapse': 'Collapse channel details',
@@ -562,12 +548,10 @@ export const en: Record<keyof typeof zh, string> = {
   'webdav.url': 'Server URL',
   'webdav.urlHint': 'WebDAV server root URL (https://…). Sync snapshots and the index are stored under a dsh-config-manager/ subdirectory of that URL. Do not include a username/password in the URL.',
   'webdav.username': 'Username',
-  'webdav.usernameHint': 'HTTP Basic auth username (not sensitive, may be shown).',
   'webdav.password': 'Password',
   'webdav.passwordHint': 'Securely written into DSH credentials (ref {ref}); never written into sync files or logs. Leave blank to reuse the saved credential.',
   'webdav.passwordSaved': 'Credential configured',
   'webdav.passwordPlaceholder': 'Password (optional)',
-  'webdav.presetHint': 'Pick a common WebDAV server to prefill the URL; templates containing <placeholders> need to be replaced with your real server/username.',
   'webdav.preset.custom': 'Custom URL',
   'webdav.preset.jianguoyun': 'Jianguoyun (Nutstore)',
   'webdav.preset.nextcloud': 'Nextcloud',
@@ -657,7 +641,6 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.remoteEmptyGuide': 'No remote snapshots yet: this is the first sync — click "Push to remote" to upload your local config (that push creates the first snapshot); pulling only works afterwards.',
   // Sync mode (default quick export / advanced custom export)
   'mode.title': 'Sync Sections',
-  'mode.hint': 'Sync scope = the ticked set of sections (recommended sections are ticked by default and can be changed any time).',
   'mode.selectedCount': '{n} / {total} selected',
   'mode.sectionsHint': 'Portable sections sync by default; platform-dependent sections (MCP servers) and device-specific sections (plugin files, credentials status, sessions) only participate when you explicitly tick them here.',
   'mode.deletePlugins': 'Delete plugins to follow the remote',
@@ -778,8 +761,6 @@ export const en: Record<keyof typeof zh, string> = {
   // Toast receipts (R-20: per-action wording; identical kind+text would be de-duplicated)
   'toast.autosyncLoadFailed': 'Failed to load auto-sync status',
   'toast.configSaveFailed': 'Failed to save channel config',
-  'toast.configSaved': 'Channel config saved',
-  'toast.configNothingToSave': 'Enter a channel URL before saving',
   'toast.channelCleared': '{channel} configuration disconnected',
   'toast.githubCodeCopied': 'One-time code {code} copied to clipboard',
   'toast.githubCodeCopyFailed': 'Auto-copy failed — copy the one-time code above manually',
@@ -818,7 +799,6 @@ export const en: Record<keyof typeof zh, string> = {
   'cloud.s3Title': 'Object storage (S3-compatible)',
   'cloud.gistTitle': 'GitHub Gist',
   'cloud.provider': 'Vendor',
-  'cloud.providerHint': 'All five vendors share one SigV4 implementation; endpoint and addressing style follow the vendor defaults.',
   'cloud.provider.s3': 'AWS S3',
   'cloud.provider.oss': 'Alibaba Cloud OSS',
   'cloud.provider.cos': 'Tencent Cloud COS',

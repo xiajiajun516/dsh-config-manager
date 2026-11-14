@@ -196,11 +196,15 @@ test('仓库列表在登录成功那一刻自动加载，不必用户先点开�
 })
 
 test('静默自动保存必须有可见回执（四通道共用：输入防抖保存此前成功后完全静默）', () => {
-  // 主文件：自动保存成功（announce=false）→ 计数 +1；弹窗据此闪一次「已保存」徽章。
-  assert.match(viewSource, /else setSaveTick\(\(n\) => n \+ 1\)/, '自动保存成功后必须递增 saveTick（不进 SyncUiState 契约）')
+  // 主文件：保存成功（唯一路径 = 自动保存）→ 计数 +1；弹窗据此闪一次「已保存」徽章。
+  assert.match(viewSource, /setSaveTick\(\(n\) => n \+ 1\)/, '自动保存成功后必须递增 saveTick（不进 SyncUiState 契约）')
   assert.match(viewSource, /<ChannelConfigDialog[\s\S]*?saveTick=\{saveTick\}/, 'saveTick 必须传给配置弹窗')
   const dialog = readSource(fileURLToPath(new URL('./ChannelConfigDialog.tsx', import.meta.url)))
   assert.match(dialog, /\{savedVisible && <span className=\{css\.savedTick\}>/, '弹窗必须渲染「已保存」回执')
   assert.match(dialog, /t\('config\.savedTick'\)/, '回执文案必须走字典（i18n 禁硬编码）')
   assert.match(dialog, /SAVED_TICK_MS = 2400/, '回执是瞬时提示（2.4s 后隐藏），不得常驻')
+  // 2026-11-14 用户要求：表单本就自动保存，手动「立即保存」按钮与它的 ⓘ 是重复动作 ⇒ 已删
+  assert.doesNotMatch(dialog, /t\('config\.save'\)/, '弹窗不得再有手动保存按钮')
+  assert.doesNotMatch(dialog, /t\('config\.saveHint'\)/, '弹窗不得再有「改动会自动保存」的 ⓘ（凭据去向已写在各密钥字段旁）')
+  assert.doesNotMatch(dialog, /onSave/, '手动保存回调整条链路必须移除')
 })

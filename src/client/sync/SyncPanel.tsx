@@ -647,15 +647,15 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   /** 表单快照 → 请求体（t42 起组装逻辑在 ui/sync-settings-view.ts，组件只装配） */
   const payload = (): SyncPushPayload => buildSyncChannelBody(formOf(state))
 
-  /* ------------------------------------------------ 通道配置持久化（自动保存 + 显式保存） */
+  /* ------------------------------------------------ 通道配置持久化（全自动保存：防抖 + 卸载补发） */
 
   /** 按给定 state 构建「保存配置」请求体；当前通道远端地址未就绪（webdav url / git repoUrl 为空）
    *  → 返回 null（无可保存内容，自动保存跳过）。password/token 仅非空携带（空 = 沿用已保存凭据）。 */
   const buildConfigPayload = (s: SyncUiState): SyncPushPayload | null => buildSyncConfigBody(formOf(s))
 
   /** 实际发送保存请求：成功清空已入库的 password/token 并刷新凭据徽章；失败保留表单值以便重试。
-   *  防重入：保存中又排入新改动 → 完成后补发。announce 仅手动保存为 true（自动保存不刷 toast，失败必须提示）。 */
-  const doSaveConfig = async (payloadToSave: SyncPushPayload, announce = false): Promise<void> => {
+   *  防重入：保存中又排入新改动 → 完成后补发。成功只闪「已保存」徽章（弹窗标题行），失败必须提示。 */
+  const doSaveConfig = async (payloadToSave: SyncPushPayload): Promise<void> => {
     // t42：防重入状态机（在途 → 记下最新待发改动并返回 'queue'）在 ui/sync-settings-view.ts
     const decision = saveQueueOnRequest(saveQueueRef.current, payloadToSave)
     saveQueueRef.current = decision.state
@@ -677,15 +677,14 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         const next: SyncUiState = { ...s, ...savedConfigState(s, saved, payloadToSave) }
         commit(next)
         dirtyRef.current = resetDirty() // 宿主回执即权威：落盘字段不再算「用户输入中」
-        // M-17：手动保存给出 toast 回执；自动保存不弹 toast（防抖会刷屏），改为计数 +1 → 弹窗内的「已保存」徽章
-        if (announce) toast.ok(t('toast.configSaved'))
-        else setSaveTick((n) => n + 1)
+        // M-17：成功只闪「已保存」徽章（防抖保存不弹 toast，否则每次停顿都刷屏）；计数 +1 让连续保存各闪一次
+        setSaveTick((n) => n + 1)
         // 手动填入的 git token 保存成功 → 校验有效性（有效则隐藏 GitHub 登录块）。
         // 只有 git 通道用 SYNC_CREDENTIAL_REF：云端点通道的密钥走各自的槽位，与 GitHub 登录无关。
         if (payloadToSave.transport === 'git' && saved.credentialConfigured) void validateGithub()
       }
     } catch (err) {
-      // R-20：保存失败**始终**提示（无论手动还是自动）——用户的改动没有落盘
+      // R-20：保存失败**始终**提示 —— 用户的改动没有落盘，静默等于骗人
       toast.error(t('toast.configSaveFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
       patch({ savingConfig: false })
     } finally {
@@ -694,7 +693,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       if (!stale) {
         const settled = saveQueueOnSettled(saveQueueRef.current)
         saveQueueRef.current = settled.state
-        if (settled.next !== null) void doSaveConfig(settled.next, announce)
+        if (settled.next !== null) void doSaveConfig(settled.next)
       }
     }
   }
@@ -715,9 +714,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     }, SYNC_CONFIG_SAVE_DEBOUNCE_MS)
   }
 
-  /** 立即保存（「保存配置」按钮 / 防抖到点）：优先待发改动，否则按当前表单值。
-   *  announce：仅手动点按钮为 true —— 自动保存成功不弹回执（见 doSaveConfig）。 */
-  const flushConfigSave = (announce = false): void => {
+  /** 立即保存（防抖到点 / 卸载补发共用）：优先待发改动，否则按当前表单值。 */
+  const flushConfigSave = (): void => {
     if (saveTimer.current !== null) {
       clearTimeout(saveTimer.current)
       saveTimer.current = null
@@ -725,12 +723,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     // t42：flush 取哪个载荷（优先待发改动，否则按当前表单值重建）由纯函数决策
     const flushed = saveQueueOnFlush(saveQueueRef.current, buildConfigPayload(stateRef.current))
     saveQueueRef.current = flushed.state
-    if (flushed.payload === null) {
-      // M-17：手动点保存但地址未填写 → 此前直接 return（按钮看起来无反应），现给出明确提示
-      if (announce) toast.info(t('toast.configNothingToSave'))
-      return
-    }
-    void doSaveConfig(flushed.payload, announce)
+    if (flushed.payload === null) return // 地址还没填全：无可保存内容（表单会校验并内联报错）
+    void doSaveConfig(flushed.payload)
   }
 
   /* ------------------------------------------------ 断开通道配置（用户要求：配置过必须能删掉） */
@@ -1174,8 +1168,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const remoteReadyOf = (channel: SyncChannel): boolean => channelRemoteReady({ ...formOf(state), channel })
   /** 云端点表单的校验问题（对话框内联提示用；git/webdav 恒为空表）。 */
   const cloudIssues: CloudFormIssue[] = validateCloudForm(formOf(state))
-  /** 激活通道的远端就绪态（弹窗 / 页面级判断用） */
-  const remoteReady = remoteReadyOf(state.channel)
   const pushView = pushReportView(state.pushReport, uiT, state.pushSectionCounts)
   const githubView = computeGithubLoginView(
     state.github.phase, state.github.userCode, state.github.verificationUri, state.github.error, uiT,
@@ -1249,7 +1241,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             {/* ⓘ 一律跟在**相关标题/操作的右边**（同一行）：单独成行会让卡片出现「孤零零一个图标」
                 的断行。标题内联沿用 AboutPanel / EnvironmentPanel 的既有写法（零新增样式）。 */}
             <div className={css.sectionPickerRow}>
-              <span className={css.groupLabel}>{t('mode.title')} <InfoHint text={t('mode.hint')} label={t('common.infoHint')} /></span>
+              <span className={css.groupLabel}>{t('mode.title')}</span>
               <span className={css.categoryDesc}>
                 {state.loadError !== null ? t('load.failed')
                   : state.catalog.length === 0 ? t('common.loading')
@@ -1412,7 +1404,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             cloudIssues={cloudIssues}
             busy={state.busy !== null}
             savingConfig={state.savingConfig}
-            remoteReady={remoteReady}
             statusInfo={state.statusInfo}
             githubSignedIn={state.githubSignedIn}
             saveTick={saveTick}
@@ -1421,7 +1412,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             onFormChange={(p) => { dirtyRef.current = markDirty(dirtyRef.current, Object.keys(p)); patch(p); scheduleConfigSave() }}
             onGithubStart={() => { void runGithubStart() }}
             onGithubCancel={() => { void runGithubCancel() }}
-            onSave={() => { flushConfigSave(true) }}
           />
           {/* 断开通道配置的二次确认：**独立于配置弹窗**（不在弹窗里嵌套弹窗 —— Radix 遮罩层
               嵌套会让内层点不动，见 Modal.tsx 的说明）。确认成功后由 onChannelCleared 统一收尾。 */}

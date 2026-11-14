@@ -147,7 +147,6 @@ export const uiZh = {
   'snapshots.failed': '失败',
   'snapshots.skipped': '跳过',
   'snapshots.noActions': '该快照无可恢复动作（或全部跳过）。',
-  'snapshots.selectHint': '选择一个快照预览其恢复计划（只读预览，不会改动任何设置）：',
   'snapshots.reportTitle': '恢复报告',
   // 同步区块（sync-view）
   'sync.privateRepoHint': '安全要求：同步仓库必须为私有仓库（public 仓库会公开你的配置内容）。认证 token 仅用于仓库访问，绝不写入同步文件、提交内容或日志。',
@@ -649,7 +648,6 @@ export const uiEn: Record<UiTextKey, string> = {
   'snapshots.failed': 'Failed',
   'snapshots.skipped': 'Skipped',
   'snapshots.noActions': 'No restorable actions for this snapshot (or all skipped).',
-  'snapshots.selectHint': 'Select a snapshot to preview its restore plan (read-only preview, changes nothing):',
   'snapshots.reportTitle': 'Restore Report',
   'sync.privateRepoHint': 'Security requirement: the sync repository MUST be private (a public repo would expose your configuration). The auth token is only used for repository access and is never written into sync files, commit content, or logs.',
   'sync.kind.create': 'Create',

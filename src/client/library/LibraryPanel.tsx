@@ -210,12 +210,12 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
    * 行首来源徽章：档案名恒显示；只有「已知当前档案且不同」时才升到 warn 并带差异说明
    * （宿主没给当前档案时只显示名字 —— 那是无法证明的结论）。
    */
-  const originBadgeOf = (row: ArtifactRow): { label: string; hint?: string; kind: 'info' | 'warn' } | undefined => {
+  const originBadgeOf = (row: ArtifactRow): { label: string; kind: 'info' | 'warn' } | undefined => {
     if (row.kind !== 'snapshot') return undefined
     const profile = originOfSnapshot.get(row.ref.snapshotId ?? '')
     if (profile === undefined) return undefined
     return snapshotOriginState({ originProfile: profile }, currentProfile ?? undefined) === 'foreign'
-      ? { label: profile, hint: t('library.origin.foreign'), kind: 'warn' }
+      ? { label: profile, kind: 'warn' }
       : { label: profile, kind: 'info' }
   }
 

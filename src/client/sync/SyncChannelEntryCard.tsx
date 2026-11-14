@@ -7,7 +7,6 @@
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Button, Card } from '../common/ui.tsx'
 import { ExpandChevron } from '../common/Icon.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import type { SyncStatusResponse } from './sync-api.ts'
 import type { SyncChannel } from './sync-view.ts'
 import { formatSyncStatusTimestamp, formatSyncUrlPreview, workdirStateKey, workdirStateBadgeKind } from '../../ui/sync-settings-view.ts'
@@ -58,7 +57,7 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
     return (
       <Card>
         <div className={`${css.cardTitleRow} ${css.channelCompactRow ?? ''}`}>
-          <span className={css.groupLabel}>{t(SYNC_CHANNEL_LABEL_KEY[channel])} <InfoHint text={t('channel.openHint')} label={t('common.infoHint')} /></span>
+          <span className={css.groupLabel}>{t(SYNC_CHANNEL_LABEL_KEY[channel])}</span>
           <Badge kind="warn">{t('channel.notConfigured')}</Badge>
           <span className={css.statusSpacer} />
           <Button variant="ghost" size="sm" onClick={onOpen}>
@@ -71,7 +70,7 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
   return (
     <Card>
       <div className={css.cardTitleRow}>
-        <span className={css.groupLabel}>{t(SYNC_CHANNEL_LABEL_KEY[channel])} <InfoHint text={t('channel.openHint')} label={t('common.infoHint')} /></span>
+        <span className={css.groupLabel}>{t(SYNC_CHANNEL_LABEL_KEY[channel])}</span>
         {/* 上次同步是单条事实，贴标题行右端（见 .cardTitleRow 注释） */}
         <span className={css.statusSpacer} />
         <span className={css.factInline}>

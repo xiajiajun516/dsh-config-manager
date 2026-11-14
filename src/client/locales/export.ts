@@ -66,8 +66,7 @@ export const zh = {
   'picker.pluginAreaAbsent': '无内容',
   'picker.bucketPlugins': '插件分区的其他条目（补丁行 / pnpm-workspace.yaml）',
   'picker.bucketLooseFiles': '未归属到插件的配置（~/.dsh 根）',
-  'picker.bucketHint': '这些条目没有可证明的插件归属，不猜；展开可逐条勾选。',
-  'picker.groupHint.extensions': '只列出能证明的归属（内置来源表 + 插件自述 dsh.dataDirs）；没有包名信息的配置留在「未归属」。',
+  'picker.groupHint.extensions': '只列出能证明归属的条目：某个插件不在这里，不代表本机没有它的配置。',
   // 导出目录的分组标题（与 ui/types.ts 的 EXPORT_GROUPS 一一对应，顺序由它决定）
   'group.general': '通用',
   'group.ai': 'AI',
@@ -157,8 +156,7 @@ export const en: Record<keyof typeof zh, string> = {
   'picker.pluginAreaAbsent': 'No content',
   'picker.bucketPlugins': 'Other entries of the plugins section (patch lines / pnpm-workspace.yaml)',
   'picker.bucketLooseFiles': 'Config not attributable to a plugin (~/.dsh root)',
-  'picker.bucketHint': 'These entries have no provable plugin ownership — we never guess; expand to tick them one by one.',
-  'picker.groupHint.extensions': 'Only provable ownership is listed (built-in source table + plugins that declare dsh.dataDirs); config without a package name stays under "unowned".',
+  'picker.groupHint.extensions': 'Only entries with provable ownership are listed: a plugin missing here may still have config on this machine.',
   // Export catalog group titles (mirror of ui/types.ts EXPORT_GROUPS; it decides the order)
   'group.general': 'General',
   'group.ai': 'AI',

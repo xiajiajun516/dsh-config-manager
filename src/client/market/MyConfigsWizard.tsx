@@ -139,7 +139,6 @@ export function MyConfigsWizard({
       {wizard.step === 'form' && (<>
         {/* update 模式：表单页内嵌「选择新 ZIP」入口（选中自动校验，通过后才可一键更新） */}
         {wizard.mode === 'update' && (<>
-          <InfoHint text={t('myconfigs.update.zipHint')} label={t('common.infoHint')} />
           <input
             ref={fileInput}
             type="file"
@@ -174,10 +173,7 @@ export function MyConfigsWizard({
         )}
         {/* ⓘ 走 info 属性（它是标签的一部分），不再当 children 塞进字段体内：塞进去就等于
             把它放进了 <label>，悬停/点击标签会连带作用到 ⓘ 上（Field 现在按 info 有无降级外壳）。 */}
-        <Field
-          label={t('myconfigs.upload.form.name')}
-          info={<InfoHint text={t('myconfigs.upload.form.nameHint')} label={t('common.infoHint')} />}
-        >
+        <Field label={t('myconfigs.upload.form.name')}>
           <input
             className={css.input}
             aria-label={t('myconfigs.upload.form.name')}
