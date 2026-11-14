@@ -108,6 +108,10 @@ export function RollbackFileChanges({ files, removals, rt, view, renderFileIcon,
   // 勾选与归属都用集合查（清单可达几百条，逐条 includes 是 O(n²)）
   const selectedSet = selection === undefined ? null : new Set(selection.selected)
   const foreignSet = selection === undefined ? null : new Set(selection.foreign)
+  /** 给了 selection 的行多出「勾选」这一格 ⇒ 版式从三列变四列（见 CSS 的 .rollbackFileRowSelectable）。
+   *  两种行必须都用这个类：改动行有勾选框，删除行**没有**（删除集不在可勾选范围内，它没有
+   *  「看差异」也不该有「这次别动它」——勾了也没处生效），但要占同一格，否则图标左右错位。 */
+  const selectable = selection !== undefined && selectedSet !== null
   return (
     <div className={css.rollbackFileList} role="list">
       {files.map((file, index) => {
@@ -122,7 +126,7 @@ export function RollbackFileChanges({ files, removals, rt, view, renderFileIcon,
         return (
           <div
             key={rollbackPreviewFileKey(file.path, file.added, file.removed, index)}
-            className={css.rollbackFileRow}
+            className={selectable ? `${css.rollbackFileRow} ${css.rollbackFileRowSelectable}` : css.rollbackFileRow}
             role="listitem"
             data-kind={previewFileStatusKnown(file.status) ? file.status : undefined}
           >
@@ -142,28 +146,32 @@ export function RollbackFileChanges({ files, removals, rt, view, renderFileIcon,
             <span className={css.rollbackFileIcon} aria-hidden="true">
               <RollbackFileIcon path={file.path} size={14} render={renderFileIcon} />
             </span>
-            {/* 主标签 = 目录（弱化）+ 文件名（主色）。给了 `view` 时**它本身就是那颗按钮**
-                （2026-10-12 用户要求：不要尾部的独立「查看」按钮，点文件名直接跳）。
-                为什么按钮不是整行：整行做热区会把右侧 `+N −M` 也变成可点区域，鼠标停在统计上
-                像是要点它；这里只有名字/目录可点，统计永远点不到。完整路径仍在 title 里。 */}
-            {view === undefined ? (
-              <span className={`${css.rollbackFilePath} ${css.mono}`} title={file.path}>{label}</span>
-            ) : (
-              <button
-                type="button"
-                className={`${css.rollbackFilePath} ${css.mono}`}
-                title={file.path}
-                aria-label={view.hint(file.path)}
-                disabled={view.disabled}
-                onClick={() => { view.onView(file.path) }}
-              >
-                {label}
-              </button>
-            )}
-            {/* 归属提示（B）：这一行在留点之后是**别的对话**写的 —— 默认没勾它，勾上就会覆盖对方的改动。 */}
-            {selection !== undefined && foreignSet !== null && foreignSet.has(file.path) && (
-              <span className={css.hint} data-foreign="true">{selection.foreignLabel}</span>
-            )}
+            {/* 路径格 = 主标签（目录弱化 + 基名主色）+ 归属提示，**合成一格**：两者原先是并列的
+                grid 子项，多出来的那一项会把统计列挤到隐式第二行（2026-11-14 用户截图：±行数掉到
+                勾选框下面、清单读不成四列）。给了 `view` 时主标签**本身就是那颗按钮**
+                （2026-10-12 用户要求：不要尾部的独立「查看」按钮，点文件名直接跳）；
+                为什么按钮不是整行：整行做热区会把右侧 `+N −M` 也变成可点区域。
+                完整路径仍在 title 里。 */}
+            <span className={css.rollbackFilePathCell}>
+              {view === undefined ? (
+                <span className={`${css.rollbackFilePath} ${css.mono}`} title={file.path}>{label}</span>
+              ) : (
+                <button
+                  type="button"
+                  className={`${css.rollbackFilePath} ${css.mono}`}
+                  title={file.path}
+                  aria-label={view.hint(file.path)}
+                  disabled={view.disabled}
+                  onClick={() => { view.onView(file.path) }}
+                >
+                  {label}
+                </button>
+              )}
+              {/* 归属提示（B）：这一行在留点之后是**别的对话**写的 —— 默认没勾它，勾上就会覆盖对方的改动。 */}
+              {selection !== undefined && foreignSet !== null && foreignSet.has(file.path) && (
+                <span className={css.hint} data-foreign="true">{selection.foreignLabel}</span>
+              )}
+            </span>
             {/* ±行数紧跟文件名（统计列右对齐、列宽固定）：三种取值的右缘对齐成一条竖线。 */}
             <span className={css.rollbackFileStat}>
               <FileStat
@@ -184,17 +192,22 @@ export function RollbackFileChanges({ files, removals, rt, view, renderFileIcon,
         return (
           <div
             key={'remove:' + rollbackPreviewFileKey(path, null, null, index)}
-            className={css.rollbackFileRow}
+            className={selectable ? `${css.rollbackFileRow} ${css.rollbackFileRowSelectable}` : css.rollbackFileRow}
             role="listitem"
             data-kind="delete"
           >
+            {/* 勾选格的**占位**（删除行不可勾：它不在可勾选集合里，见 rollbackSelectionRows）——
+                不占这一格，图标就会落到第一列，与上面的改动行左右错开一格。 */}
+            {selectable && <span className={css.rollbackFileToggleSlot} aria-hidden="true" />}
             <span className={css.rollbackFileIcon} aria-hidden="true">
               <RollbackFileIcon path={path} size={14} render={renderFileIcon} />
             </span>
             {/* 删除行**不是按钮**（纯文本）：见文件头「诚实边界」第 1 条。 */}
-            <span className={`${css.rollbackFilePath} ${css.mono}`} title={path}>
-              {dir !== '' && <span className={css.rollbackFileDir}>{dir}</span>}
-              {base || rollbackPreviewFileLabel(path)}
+            <span className={css.rollbackFilePathCell}>
+              <span className={`${css.rollbackFilePath} ${css.mono}`} title={path}>
+                {dir !== '' && <span className={css.rollbackFileDir}>{dir}</span>}
+                {base || rollbackPreviewFileLabel(path)}
+              </span>
             </span>
             <span className={css.rollbackFileStat}>
               <span className={css.rollbackDeleted}>{rt(rk('rollback.preview.file.deleted'))}</span>

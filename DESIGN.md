@@ -730,7 +730,12 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   ① 文件行 = 文件类型图标 · **目录（弱化 `.rollbackFileDir`）+ 基名（主色）** · **右对齐**的 ±行数 或「删除」：
      行是 `display: grid` 三列（`auto minmax(0,1fr) auto`），统计列 `justify-self: end` ⇒
      数字位数不同也不跳、纵向扫读成一列（第二轮修的就是「文件名长短不一把统计列挤得左右乱跳」）；
-     完整路径仍进 `title`（信息不丢）；
+     完整路径仍进 `title`（信息不丢）。
+     **给了逐行勾选（设置页回滚卡）时前插 16px 勾选列 ⇒ 四列**（`.rollbackFileRowSelectable`）：
+     子项比列多一格时 grid 会把统计挤进**隐式第二行第一列**、第一列又被「行数未统计」撑宽 ⇒
+     图标整列右移、±行数掉到勾选框下面（2026-11-14 用户截图）。现在改动行放勾选框、**删除行放同宽空占位**
+     （`.rollbackFileToggleSlot`，删除集不可勾）⇒ 每行图标落在同一条竖线上；
+     路径与归属提示合成一格 `.rollbackFilePathCell`（并列会把统计再挤下一行）；
   ② **整文件删除写「删除」**（`.rollbackDeleted` / `rollback.preview.file.deleted`），**不写 `+0 −N`** ——
      那是「把文件清空」的意思；数据源 = `preview.workspace.removals`（引擎 `planCreatedRemovals` 的产物，
      与**执行阶段同一个函数** ⇒ 预览列出的 = 实际删的；`leftovers` 含永不删除的拒删项，**不得**拿它当删除清单）；
