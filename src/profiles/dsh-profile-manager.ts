@@ -27,7 +27,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, type 
 // 复制走 async fs（整档案上万个文件，cpSync 会把宿主事件循环卡住二十多秒）
 import { copyFile, cp, mkdir, readdir, readlink, stat, symlink, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { atomicWriteFileSync } from '../utils/atomic-write.ts'
+import { atomicWriteFileSync, type AtomicIoSync } from '../utils/atomic-write.ts'
 import { removeTree, removeTreeSync } from '../utils/remove-tree.ts'
 import { isRecord } from '../utils/guards.ts'
 import { resolveProfileDir, validateProfileName } from '../core/plugin-cli.ts'
@@ -81,6 +81,13 @@ export interface DshProfileManagerOptions {
   /** 插件 dataDir（保留给调用方复用；本引擎不再落任何状态） */
   /** 当前运行中的 profile 名（惰性读取，宿主注入） */
   currentProfile?: () => string
+  /**
+   * 「复制进行中标记」那一次写盘用的可注入同步 io（缺省 undefined = 真实 fs）。
+   *
+   * 只给单测用：Windows 上造不出「目录建好、标记写不出来」的真实故障（写完立刻腾空间就失败了），
+   * 而这条窄缝恰恰会留下既不在 list() 里、remove() 又报 notFound 的空目录。
+   */
+  markerIo?: AtomicIoSync
 }
 
 /**
@@ -182,10 +189,13 @@ export async function rollbackCopiedProfileDir(
 export class DshProfileManager {
   private readonly homeDir: string
   private readonly currentProfile: () => string
+  /** 见 DshProfileManagerOptions.markerIo：只作用于「复制进行中标记」的写入 */
+  private readonly markerIo: AtomicIoSync | undefined
 
   constructor(options: DshProfileManagerOptions) {
     this.homeDir = options.homeDir
     this.currentProfile = options.currentProfile ?? ((): string => 'web')
+    this.markerIo = options.markerIo
   }
 
   /** profiles 根目录（`$DSH_HOME/profiles`） */
@@ -297,9 +307,6 @@ export class DshProfileManager {
     if (existsSync(destDir)) throw new DshProfileError('exists')
     const includeNodeModules = opts.includeNodeModules !== false
     const startedAt = Date.now()
-    await mkdir(destDir, { recursive: true })
-    // cross-F3：**先落标记再拷文件**。进程被强杀时标记留在目标目录里，使这个半截副本可被
-    // 档案列表 / 恢复面板辨识并物理删除；不留标记的话它既不在列表里、删除又报 notFound。
     const marker: DshProfileCopyMarker = {
       sourceName: name,
       newName,
@@ -307,8 +314,13 @@ export class DshProfileManager {
       includeNodeModules,
       pid: process.pid,
     }
-    atomicWriteFileSync(this.copyMarkerPath(destDir), `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o644 })
+    // 建目录与落标记同属一个回滚范围：标记写不出来时这个目录还没有任何可辨认身份，
+    // 留在盘上就是「list() 看不到、remove() 报 notFound」的空壳 —— 必须在 catch 里一并清掉。
     try {
+      await mkdir(destDir, { recursive: true })
+      // cross-F3：**先落标记再拷文件**。进程被强杀时标记留在目标目录里，使这个半截副本可被
+      // 档案列表 / 恢复面板辨识并物理删除；不留标记的话它既不在列表里、删除又报 notFound。
+      this.writeCopyMarker(destDir, marker)
       const entries = await readdir(srcDir, { withFileTypes: true })
       for (const entry of entries) {
         // node_modules 与 DSH 投影出来的 .dsh-module-fallback 同进同出（后者的链接都指向前者）
@@ -487,6 +499,18 @@ export class DshProfileManager {
     if (existsSync(join(dir, 'package.json'))) return dir
     if (this.readCopyMarker(dir).present) return dir
     throw new DshProfileError('notFound')
+  }
+
+  /**
+   * 落「复制进行中标记」（cross-F3 的唯一凭据）。
+   *
+   * 单独抽出来只为把注入点收窄到这一处写入：调用方（copy）据此保证「标记写失败 ⇒ 目录一起回滚」。
+   */
+  private writeCopyMarker(dir: string, marker: DshProfileCopyMarker): void {
+    atomicWriteFileSync(this.copyMarkerPath(dir), `${JSON.stringify(marker, null, 2)}\n`, {
+      mode: 0o644,
+      ...(this.markerIo === undefined ? {} : { syncIo: this.markerIo }),
+    })
   }
 
   /** 复制进行中标记的路径。 */

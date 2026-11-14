@@ -44,8 +44,14 @@ export function classifyStartup(opts: {
       const insp = await inspectStartup(opts.store, opts.hooks, opts.env, opts.options ?? {}, opts.lockState);
       let state: StartupRecoveryState;
       if (opts.lockState === 'LOCKED') {
-        // fresh heartbeat：活锁；若仍有 unresolved journal → 视为 live op（LOCKED_LIVE，不作 recovery/接管）
-        state = insp.unresolved.length > 0 ? { kind: 'LOCKED_LIVE', operationId: insp.unresolved[0] } : { kind: 'NORMAL' };
+        // fresh heartbeat：活锁。判据 = 「另一实例持锁 + 确实有 live 且未到 terminal 的 journal」——
+        // 那才是正在跑的操作，分类为 LOCKED_LIVE（不作 recovery/接管，也不启动调度器）。
+        // 审计 P3-8：旧实现在这里看 unresolved，但 live 分支恒 unresolved:false（且 LOCKED 下所有
+        // journal 都被强制按 live 处理），于是「持锁 + 真正在跑」永远落到 NORMAL；只有 parse 失败
+        // 的 corrupt journal（走 quarantine 分支）才碰巧命中 LOCKED_LIVE。现在改用 liveIncomplete。
+        state = insp.liveIncomplete.length > 0
+          ? { kind: 'LOCKED_LIVE', operationId: insp.liveIncomplete[0] }
+          : { kind: 'NORMAL' };
       } else if (insp.recoveryRequired) {
         state = { kind: 'RECOVERY_REQUIRED', operationId: insp.unresolved[0] };
       } else if (insp.unresolved.length > 0 || insp.safeModeRequired) {

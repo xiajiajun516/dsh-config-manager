@@ -70,6 +70,17 @@ test('关键词命中（同义说法）', () => {
   assert.ok(ids(filterCommands(COMMANDS, 'webdav', titleOf, ctx())).includes('go.sync'))
 })
 
+test('关键词命中：四个同步通道都能搜到「同步」（P10-1：手写镜像漏过 s3/gist）', () => {
+  // 镜像只抄了 git/webdav 两通道时，搜 s3 或 gist 一条「同步」命令都不出现 ——
+  // 现在关键词从 SYNC_CHANNELS 派生（唯一事实源在 utils/shared-constants.ts）。
+  for (const channel of ['git', 'webdav', 's3', 'gist']) {
+    assert.ok(
+      ids(filterCommands(COMMANDS, channel, titleOf, ctx())).includes('go.sync'),
+      '搜 ' + channel + ' 必须命中 go.sync',
+    )
+  }
+})
+
 test('关键词命中：口语「磁盘」直达维护与诊断、「恢复」直达事故恢复', () => {
   assert.ok(ids(filterCommands(COMMANDS, '磁盘', titleOf, ctx())).includes('maintenance.open'))
   assert.ok(ids(filterCommands(COMMANDS, '恢复', titleOf, ctx())).includes('recovery.open'))

@@ -378,11 +378,14 @@ async function collectSourceFiles(dir: string): Promise<string[]> {
 }
 
 /**
- * t32 源码守卫：通道字面量数组只允许出现在唯一声明处；任何其它出现都必须带「客户端镜像」标记
- * （satisfies readonly SyncTransportType[] + 穷尽检查），否则视为偷偷多出一份枚举
- * （历史上 autosync-scheduler 把同一个数组写了两遍，漏改一处即某通道永不排期）。
+ * t32 源码守卫：通道字面量数组只允许出现在**唯一声明处**，不得有任何镜像。
+ *
+ * 历史教训：autosync-scheduler 把同一个数组写了两遍，漏改一处即某通道永不排期；
+ * 后来允许「带 satisfies 穷尽标记的客户端镜像」，但 satisfies 只拦「少写通道」，
+ * 拦不住顺序/拼写漂移，而且命令面板的镜像真的漏了 s3/gist（审计 P10-1）。
+ * 因此口径收紧为零镜像：要用通道清单就运行时 import `SYNC_CHANNELS`。
  */
-test('t32 源码守卫：地面代码里通道数组只有一处声明（其余只允许被守卫的客户端镜像）', async () => {
+test('t32 源码守卫：地面代码里通道数组只有一处声明（其余零镜像）', async () => {
   // 声明处已迁到**零依赖**的 utils/shared-constants.ts（client 半必须能运行时 import；
   // sync/sync-config.ts 依赖 node:fs，不能被浏览器半 import）——本守卫的意图不变：
   // 通道数组全仓只允许一处声明，其余只允许带穷尽检查标记的镜像。
@@ -421,15 +424,39 @@ test('t32 源码守卫：地面代码里通道数组只有一处声明（其余�
     'sync-config.ts 不得再自己声明通道数组',
   );
   const others = hits.filter((h) => h.text !== canonical[0]!.text || h.file !== canonical[0]!.file);
-  for (const h of others) {
-    assert.ok(
-      h.text.includes('satisfies readonly SyncTransportType[]'),
-      '除 SYNC_CHANNELS 外只允许带穷尽检查标记的客户端镜像: ' + h.file + ':' + String(h.line) + ' ' + h.text,
-    );
-  }
-  // 宿主 sync 目录不得再出现通道数组字面量（客户端镜像在 src/client/sync/ 下，不在此列）
-  const hostDupes = others.filter((h) => h.file.startsWith('sync/') || h.file.startsWith('core/'));
+  assert.deepEqual(
+    others,
+    [],
+    '除 SYNC_CHANNELS 外不得再写通道数组（含 satisfies 镜像）：改为运行时 import 唯一事实源',
+  );
+  // 宿主 sync 目录不得再出现通道数组字面量（本用例已全局零镜像，这条只把错误信息指向宿主侧）
+  // 注意：从 hits 重新筛，而不是复用已断言为 [] 的 others（node:assert 会把 others 收窄成 never[]）
+  const hostDupes = hits.filter((h) => h.file.startsWith('sync/') || h.file.startsWith('core/'));
   assert.deepEqual(hostDupes, [], '宿主代码不得出现第二处通道数组: ' + JSON.stringify(hostDupes));
+});
+
+/**
+ * t32b 语义守卫（审计 P10-5）：**派生清单必须等于权威声明**。
+ *
+ * t32 只看源码文本形状，抄漏一个通道（P10-1 的 commands.ts 只写了 git/webdav）也能过。
+ * 这条用例真实 import 命令面板与唯一事实源，逐项比对 —— 少抄 / 多抄 / 顺序漂移都必然红。
+ */
+test('t32b 命令面板的同步通道搜索词 == SYNC_CHANNELS（真实 import 比对）', async () => {
+  const { COMMANDS } = await import('../ui/commands.ts');
+  const goSync = COMMANDS.find((c) => c.id === 'go.sync');
+  assert.ok(goSync, '命令表必须有 go.sync，否则同步入口在面板里搜不到');
+  const channelKeywords = (goSync.keywords ?? []).filter((k) =>
+    (SYNC_CHANNELS as readonly string[]).includes(k),
+  );
+  assert.deepEqual(
+    channelKeywords,
+    [...SYNC_CHANNELS],
+    'go.sync 的通道搜索词必须逐项等于 SYNC_CHANNELS（顺序也算；别再手写清单）',
+  );
+  // 每个通道都必须真的能搜到这条命令（关键词在 filterKeywords 里是独立命中项）
+  for (const channel of SYNC_CHANNELS) {
+    assert.ok(goSync.keywords?.includes(channel), '通道 ' + channel + ' 搜不到「同步」命令');
+  }
 });
 
 /**

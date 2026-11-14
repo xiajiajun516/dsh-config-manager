@@ -113,6 +113,28 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **An unreadable migration-history directory no longer shows "no records"**: permission problems or a wrong path type used to count as an empty directory, so the history page showed zero entries and auto-pruning found nothing to delete; a read failure is now reported, and only a genuinely missing directory counts as empty.
 - **扫描外部来源会话时不再白读另一代次的整份日志**：装了新版 DSH 的机器上两代日志并存，以前为了看一眼文件头就把另一代那几十 MB 的日志整份读进内存再丢掉；现在只读文件头判定代次，别的代次直接跳过。
   **Scanning third-party sessions no longer reads entire logs from the other generation**: machines that ran both DSH generations have both kinds of logs, and the scan used to read tens of megabytes just to inspect the first line before discarding it; it now reads only the header to decide the generation and skips the rest.
+- **命令面板里搜 gist 或 s3 也能找到「同步」了**：以前通道搜索词是手抄的一份名单，只抄了 git 与 webdav，用另外两个通道的人搜不到这条命令；现在搜索词直接跟着同步通道清单走，加通道不会再漏。
+  **Searching gist or s3 in the command palette now finds Sync**: the channel keywords used to be a hand-copied list that only covered git and webdav, so people on the other two channels got nothing; the keywords now follow the channel catalogue, so a new channel cannot be missed.
+- **导出报告里的文件大小到 GB 级不再写成 2048.0 MB**：超过 1 GiB 会显示成 GB，大小算不出来时也不再出现 NaN MB。
+  **Export reports no longer render gigabytes as 2048.0 MB**: sizes past 1 GiB show in GB, and an unknown size no longer turns into NaN MB.
+- **中文界面里的导出报告不再夹着半句英文**：分区计数以前直接把内部措辞拼进句子（settings (18 namespaces, 3 files)），现在与导出摘要共用同一套文案组装。
+  **The export report no longer mixes English fragments into a Chinese UI**: section counts used to paste internal wording straight into the sentence; they now share one formatter with the export summary.
+- **迁移前咨询失败时会告诉你失败了**：以前请求出错被吞掉，界面只显示「暂无咨询结论」，看起来和宿主不支持这个功能一样；现在把失败原因报出来。
+  **A failed pre-migration consultation now says it failed**: the error used to be swallowed so the UI just showed no consultation result, which looked the same as a host that does not support the feature; the reason is shown now.
+- **解锁加密包后若分析失败，界面回到解锁这一步**：以前解锁成功后再出错，状态停在「已解锁但还在解锁页」的混合态；现在失败即回滚解锁态，重新输入密码即可再来。
+  **A failure right after unlocking an encrypted archive returns to the unlock step**: an error after a successful unlock used to leave the flow unlocked but still on the unlock page; the unlocked state is rolled back so entering the password again just works.
+- **删远端快照不再留下指向已删对象的索引条目**：以前对象先删、索引后改，索引写失败时远端会留一条指向不存在对象的记录，之后按它拉取直接失败；现在先摘索引再删对象，最坏只留下可补删的孤儿对象。
+  **Deleting a remote snapshot no longer leaves index entries pointing at deleted objects**: the object used to be removed first, so a failed index write left a dangling entry that made the next pull fail outright; the index entry is removed first now, and the worst case is an orphan object that can be cleaned up later.
+- **远端索引一时读不到时不再被当成空索引整份覆盖**：以前网络抖动或返回格式坏掉都算「没有条目」，随后的写入会把已登记的条目全冲掉；现在只有明确的不存在才算空，其它情况直接报错重试。
+  **A temporarily unreadable remote index is no longer treated as empty and overwritten**: a network hiccup or a malformed response used to count as no entries, and the next write wiped every entry already there; only a definite absence counts as empty now, everything else fails and retries.
+- **备份校验不再把兄弟快照里的文件认成本快照的**：以前路径检查按字符串前缀比较，../snap10/... 这种同前缀的兄弟目录能绕过校验；现在按真实路径段判定，越界直接拒绝。
+  **Backup verification no longer accepts files from a sibling snapshot**: the path check compared string prefixes, so a sibling directory sharing the prefix passed; it now compares real path segments and refuses anything outside.
+- **恢复预览把「存在但读不出」如实标成读不出**：文件权限导致读失败时，以前被算成「新增」（看起来磁盘上没有），现在与目录形态一致，标成读不出并跳过。
+  **Restore preview reports present-but-unreadable as such**: a file that failed to read because of permissions used to count as newly added (as if it were absent); it is now labelled unreadable and skipped, matching how directories are handled.
+- **外部来源的插件文件数恰好等于上限时不再误报「已截断」**：读取上限内的文件也会被报成截断，让人以为漏了内容；现在只有真的超过上限才算截断。
+  **Third-party plugin reads no longer report truncation when the file count lands exactly on the limit**: reading everything within the cap was still reported as truncated, suggesting content was dropped; only a real overflow counts now.
+- **复制配置档案失败时不再留下一个删不掉的空目录**：以前目标目录建好、标记写失败就撒手，这个目录既不在列表里、删除又报找不到；现在失败即整个回滚。
+  **A failed profile copy no longer leaves an undeletable empty directory**: the target directory was created before the marker write, so a marker failure left something invisible in the list yet reported as missing on delete; it is rolled back entirely now.
 
 ## [0.8.2] - 2026-11-12
 

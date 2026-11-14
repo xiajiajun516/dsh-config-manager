@@ -219,6 +219,63 @@ test('单插件文件数触顶报 max-plugin-files-reached，且载荷里不超�
   });
 });
 
+
+/**
+ * 审计 P7-9（边界回归）：文件数**恰好等于**上限不是截断。
+ *
+ * 旧实现拿 walkFiles 返回数组的长度反推「是否触顶」（length >= maxPluginFiles）—— 共享内核
+ * 最多只返回 maxFiles 条，于是「正好 N 个」必然被误报成 max-plugin-files-reached。
+ * 现在由 walkFilesChecked 多要一条来取证：N+1 条才算真截断。
+ */
+test('审计 P7-9（边界回归）：文件数恰好等于上限时不报触顶，超过上限才报', async () => {
+  await withClaudeDir(async (claudeDir) => {
+    const marketDir = path.join(claudeDir, 'plugins', 'marketplaces', 'm');
+    await write(path.join(marketDir, '.claude-plugin', 'marketplace.json'), JSON.stringify({
+      name: 'm',
+      plugins: [{ name: 'exact', source: { source: 'github', repo: 'acme/exact' } }],
+    }));
+    /** 只带 commands/ 的极简插件：文件总数可精确控制 */
+    const makePlugin = async (name: string, commandFiles: number): Promise<string> => {
+      const dir = path.join(marketDir, 'plugins', name);
+      await write(path.join(dir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name }));
+      for (let k = 0; k < commandFiles; k += 1) {
+        await write(path.join(dir, 'commands', 'c' + String(k) + '.md'), 'cmd ' + String(k));
+      }
+      return dir;
+    };
+
+    // 恰好 2 个文件 + 上限 2 → 没有被截断，不得报码（旧实现会误报）
+    await makePlugin('exact', 2);
+    const atLimit = await readClaudePlugins({
+      claudeDir,
+      settings: { enabledPlugins: { 'exact@m': true } },
+      limits: { maxPluginFiles: 2 },
+    });
+    const exact = pluginOf(atLimit, 'exact');
+    assert.ok(exact !== undefined, '插件必须产出：' + JSON.stringify(atLimit.skipped));
+    assert.equal(exact.commandCount, 2, '恰好等于上限时必须完整计数');
+    assert.equal(
+      exact.readFindings?.find((f) => f.detail === 'max-plugin-files-reached'),
+      undefined,
+      '恰好等于上限不是截断，实际 findings：' + JSON.stringify(exact.readFindings),
+    );
+
+    // 3 个文件 + 上限 2 → 真的截断了：必须报码，且计数不超过上限
+    await makePlugin('over', 3);
+    const overLimit = await readClaudePlugins({
+      claudeDir,
+      settings: { enabledPlugins: { 'over@m': true } },
+      limits: { maxPluginFiles: 2 },
+    });
+    const over = pluginOf(overLimit, 'over');
+    assert.ok(over !== undefined, '插件必须产出：' + JSON.stringify(overLimit.skipped));
+    const finding = over.readFindings?.find((f) => f.detail === 'max-plugin-files-reached');
+    assert.ok(finding !== undefined, '真触顶必须报码：' + JSON.stringify(over.readFindings));
+    assert.equal(finding.count, 2);
+    assert.ok((over.commandCount ?? 0) <= 2, '截断后计数不得带超过上限的条目');
+  });
+});
+
 test('plugin.json 解析失败：回落目录名并报码（绝不猜字段）', async () => {
   await withClaudeDir(async (claudeDir) => {
     const pluginDir = path.join(claudeDir, 'plugins', 'marketplaces', 'm', 'plugins', 'broken');

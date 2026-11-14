@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyNetworkErrorText, computeSnapshotMeta, manifestSummaryFrom } from './transport.ts';
+import { classifyNetworkErrorText, computeSnapshotMeta, isPreconditionFailedStatus, manifestSummaryFrom } from './transport.ts';
 import { hashSection } from './sync-state.ts';
 import type { ManifestSummary, SyncSnapshot, SyncTransport } from './transport.ts';
 import type { Manifest, SectionData, SectionId } from '../schema/types.ts';
@@ -129,4 +129,16 @@ test('ManifestSummary 类型形状（编译期保证 + 运行期检查）', () =
   };
   assert.equal(s.schemaVersion, 1);
   assert.ok(Array.isArray(s.sectionIds));
+});
+
+/* ------------------------------------------------- audit-sync sync-P6-5：条件写状态判定的单一实现 */
+
+test('isPreconditionFailedStatus: 412 恒为并发写失败；409 仅在带条件头（guarded）时算', () => {
+  assert.equal(isPreconditionFailedStatus(412), true, 'WebDAV If-Match/If-None-Match 冲突 = 412');
+  assert.equal(isPreconditionFailedStatus(412, { guarded: false }), true);
+  assert.equal(isPreconditionFailedStatus(409, { guarded: true }), true, 'S3 兼容端点把条件写冲突报成 409');
+  assert.equal(isPreconditionFailedStatus(409), false, '无条件 409 另有含义（如 WebDAV MKCOL 缺父目录），不得当成并发写');
+  assert.equal(isPreconditionFailedStatus(409, { guarded: false }), false);
+  assert.equal(isPreconditionFailedStatus(200), false);
+  assert.equal(isPreconditionFailedStatus(500), false);
 });

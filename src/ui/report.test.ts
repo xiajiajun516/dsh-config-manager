@@ -134,8 +134,32 @@ test('report: importProblems 抽失败/警告项（带分区与原因，保持�
   assert.equal(problems[2]!.message, undefined, '无原因时不留 undefined 字段');
 });
 
-test('report: formatBytes', () => {
+test('report: formatBytes（含 GiB 档与非法值守卫）', () => {
   assert.equal(formatBytes(512), '512 B');
   assert.equal(formatBytes(20480), '20.0 KB');
   assert.equal(formatBytes(2 * 1024 * 1024), '2.0 MB');
+  // P10-2：≥1 GiB 曾经输出「2048.0 MB」——用户得自己换算，且三位数 MB 最容易读错
+  assert.equal(formatBytes(1024 * 1024 * 1024), '1.00 GiB');
+  assert.equal(formatBytes(2 * 1024 * 1024 * 1024), '2.00 GiB', '2048 MiB 必须是 2.00 GiB，不是 2048.0 MB');
+  assert.equal(formatBytes(1.5 * 1024 * 1024 * 1024), '1.50 GiB');
+  // P10-2：非法值不得伪装成体积 —— 此前渲染成「NaN MB」/「Infinity MB」
+  assert.equal(formatBytes(Number.NaN), '', 'NaN → 空串（报告行由调用方决定怎么显示缺数据）');
+  assert.equal(formatBytes(Number.POSITIVE_INFINITY), '');
+  assert.equal(formatBytes(-1), '', '负数体积无意义');
+  assert.equal(formatBytes(0), '0 B', '0 是有效值，不能当空');
+});
+
+test('report: 导出报告的分区计数走同一份文案组装（P10-3：中文界面不出现裸适配器词汇）', () => {
+  const report = makeExportReport({
+    included: [
+      { section: 'settings', counts: { namespaces: 18, files: 3 } },
+      { section: 'plugins', counts: { plugins: 8 } },
+    ],
+  });
+  const zhText = renderExportReport(report, zhT);
+  assert.ok(zhText.includes('✓ settings (18 个命名空间，3 个文件)'), zhText);
+  assert.ok(!zhText.includes('namespaces'), '中文界面不得出现裸适配器键（exportCountsText 已修的口径必须接到这里）');
+  assert.ok(!zhText.includes('18 namespaces, 3 files'), '半英文行是本次要修的缺陷形态');
+  const enText = renderExportReport(report, enT);
+  assert.ok(enText.includes('✓ settings (18 namespaces, 3 files)'), '英文界面用半角逗号 + 单复数');
 });

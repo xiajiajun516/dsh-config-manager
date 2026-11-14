@@ -14,12 +14,14 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { DshProfileManager, rollbackCopiedProfileDir } from './dsh-profile-manager.ts'
+import { DshProfileError, DshProfileManager, rollbackCopiedProfileDir } from './dsh-profile-manager.ts'
+import type { DshProfileManagerOptions } from './dsh-profile-manager.ts'
 import type { DshProfileCopyMarker } from './dsh-profile-shared.ts'
+import type { AtomicIoSync } from '../utils/atomic-write.ts'
 
 /** 磁盘契约字面量：改名即等于把旧版本留下的残留重新变成「查不到」（与 dsh-profile-incomplete-copy.test.ts 同口径）。 */
 const MARKER = '.dcm-copy-in-progress.json'
@@ -33,12 +35,38 @@ const MARKER_OBJ: DshProfileCopyMarker = {
   pid: 4242,
 }
 
-function makeManager(): { mgr: DshProfileManager; home: string; cleanup: () => void } {
+function makeManager(extra: Partial<DshProfileManagerOptions> = {}): { mgr: DshProfileManager; home: string; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), 'dsh-copy-rollback-'))
   const home = join(root, 'home')
   mkdirSync(join(home, 'profiles'), { recursive: true })
-  const mgr = new DshProfileManager({ homeDir: home, currentProfile: () => 'web' })
+  const mgr = new DshProfileManager({ homeDir: home, currentProfile: () => 'web', ...extra })
   return { mgr, home, cleanup: () => { rmSync(root, { recursive: true, force: true }) } }
+}
+
+/**
+ * 只让「标记那一次写入」失败：除 open（atomicWriteFileSync 唯一会真的动盘前的最后一步）之外
+ * 全部转发真实 fs。用它复现「目录已建好、标记却写不出来」这条窄缝。
+ */
+function failingMarkerIo(): AtomicIoSync {
+  return {
+    mkdir: (dir, opts) => { mkdirSync(dir, { recursive: opts.recursive }) },
+    lstat: (target) => {
+      try {
+        const stat = lstatSync(target)
+        return { isSymbolicLink: () => stat.isSymbolicLink(), mode: stat.mode }
+      } catch {
+        return null
+      }
+    },
+    realpath: (target) => realpathSync(target),
+    open: () => { throw new Error('EIO: simulated copy-marker write failure') },
+    writeFd: () => {},
+    fsyncFd: () => {},
+    closeFd: () => {},
+    rename: (from, to) => { renameSync(from, to) },
+    unlink: (target) => { rmSync(target, { force: true }) },
+    fsyncDir: () => {},
+  }
 }
 
 /** 造一个「复制中途失败」的目标目录：部分内容 + 标记，**没有 package.json**。 */
@@ -150,6 +178,32 @@ test('#5-D：copy() 失败路径确实走回滚（整体接线）—— 目标�
     assert.equal(existsSync(join(home, 'profiles', 'work-copy')), false, '回滚成功时目标目录必须消失')
     assert.deepEqual(mgr.listIncompleteCopies(), [], '成功回滚 ⇒ 不留残留（也不会被当成残留）')
     assert.equal(readFileSync(join(src, 'sub', 'note.txt'), 'utf8'), 'x', '源档案零改动')
+  } finally {
+    cleanup()
+  }
+})
+
+test('#5-E：标记写不出来 ⇒ 连目标目录一起回滚，绝不留「list() 看不到、remove() 报 notFound」的空壳', async () => {
+  const { mgr, home, cleanup } = makeManager({ markerIo: failingMarkerIo() })
+  try {
+    const src = join(home, 'profiles', 'work')
+    mkdirSync(src, { recursive: true })
+    writeFileSync(join(src, 'package.json'), JSON.stringify({ name: 'dsh-profile-work', dependencies: {} }), 'utf8')
+
+    const dest = join(home, 'profiles', 'work-copy')
+    await assert.rejects(
+      mgr.copy('work', 'work-copy'),
+      (err: unknown) => err instanceof DshProfileError && err.code === 'copyFailed',
+      '标记写失败也是复制失败：必须走统一错误码，不得把底层 fs 错误原样抛给调用方',
+    )
+
+    // 三个视角同时成立，才算没有孤儿：
+    // ① 盘上没有那个目录（旧实现会留下一个空目录）
+    assert.equal(existsSync(dest), false, '标记写失败必须连目录一起清掉')
+    // ② 档案列表里没有它
+    assert.deepEqual(mgr.list().map((meta) => meta.name), ['work'], '列表里只有源档案')
+    // ③ 残留列举里也没有它（残留应该是「有标记的半截副本」，而不是空壳）
+    assert.deepEqual(mgr.listIncompleteCopies(), [])
   } finally {
     cleanup()
   }

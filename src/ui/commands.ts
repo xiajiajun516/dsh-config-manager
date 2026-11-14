@@ -12,19 +12,10 @@
  *     中文用户敲「导出」命中标题，英文用户敲 "export" 命中 id。
  */
 
-// 只导入**类型**：type-only import 在编译期被擦除，不会把 src/sync 的运行时依赖带进 client bundle。
-import type { SyncTransportType } from '../sync/sync-config.ts'
-
-/**
- * 通道搜索词 = **受守卫的客户端镜像**。
- *
- * 为什么必须写成这个形状：t32 源码守卫（`src/sync/sync-config.test.ts`）把「两个通道名的
- * 字面量相邻出现」视为第二处通道枚举声明（历史上一模一样的两份数组漏改过一份，导致某通道
- * 永不排期），只有带 `satisfies` 穷尽标记的客户端镜像才放行。**连注释里都不许把这两个名字
- * 写成相邻的带引号字面量** —— 守卫扫的是文本，不区分代码与注释。
- * 写成搜索关键词也一样要守这条规矩 —— 守卫认的是形状，不是用途。
- */
-const SYNC_CHANNEL_TERMS = ['git', 'webdav'] satisfies readonly SyncTransportType[]
+// 通道搜索词只认**唯一事实源** `SYNC_CHANNELS`（`src/utils/shared-constants.ts`，零依赖，
+// client 侧已有多处运行时 import 先例）。这里绝不再抄一份清单：手写镜像漏过 s3/gist，
+// 结果搜这两个通道名时「同步」一条命令都不出现（审计 P10-1）。通道增删时这里自动跟随。
+import { SYNC_CHANNELS } from '../utils/shared-constants.ts'
 
 /** 命令分组（渲染顺序见 `COMMAND_GROUP_ORDER`）。 */
 export type CommandGroup = 'navigate' | 'library' | 'action' | 'view' | 'rescue'
@@ -92,7 +83,7 @@ export const COMMANDS: readonly CommandItem[] = [
   // —— 前往：四个一级页面（v3 §3.1；市场不再是页面）——
   { id: 'go.home', group: 'navigate', titleKey: 'nav.home', keywords: ['home', 'overview', '首页', '总览'] },
   { id: 'go.library', group: 'navigate', titleKey: 'library.title', keywords: ['library', 'artifact', '产物', '快照'] },
-  { id: 'go.sync', group: 'navigate', titleKey: 'nav.sync', keywords: ['sync', ...SYNC_CHANNEL_TERMS, '同步'] },
+  { id: 'go.sync', group: 'navigate', titleKey: 'nav.sync', keywords: ['sync', ...SYNC_CHANNELS, '同步'] },
   {
     // 环境 = 档案 + 维护与诊断。文案用导航条上的名字（environment.title），
     // 不用旧的 nav.profiles（'档案'）—— 面板里找不到「档案」这个页面。

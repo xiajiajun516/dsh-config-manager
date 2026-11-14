@@ -150,6 +150,60 @@ test('fn 自身耗时不算等锁超时：拿到锁后跑多久都由调用方�
   assert.ok(elapsed >= 200, '确实跑满了 fn 的耗时（实测 ' + String(elapsed) + 'ms）');
 });
 
+test('审计 P12-6（死线只约束等锁）：无竞争 + fn 睡 200ms + timeoutMs 40ms ⇒ 成功返回', async (t) => {
+  // 审计条目：旧实现把 timeoutMs race 在**整条链**上（含 fn），于是一把没人竞争的锁 + 一个
+  // 合法慢任务（超过 timeoutMs）也会被判成「正被另一个任务占用」。这里钉住新语义：
+  //   timeoutMs 只是「等锁预算」，拿到锁之后 fn 跑多久由调用方决定。
+  const dir = await makeDir(t);
+  const lockPath = workdirLockPath(dir);
+  // 预热（只为消除环境噪声，不放宽任何断言）：withWorkdirLock 的**第一次**取锁会顺带触发
+  // 「一次性 tmpdir 清扫」——它读整个 %TEMP% 并逐条 stat，跟本次取锁抢 libuv 线程池；本机实测能把
+  // 无竞争的首次取锁拖到 125ms。40ms 的死线太窄，先把这两件一次性的事做掉，量的才是被测语义。
+  await pruneDeadWorkdirLocksOnce();
+  assert.equal(await withWorkdirLock(dir, async () => 'warm', { timeoutMs: 5_000 }), 'warm');
+  // 前提：确实没有竞争（无锁文件），否则本用例证明不了「无竞争 + 慢 fn」这一格
+  await assert.rejects(fs.access(lockPath), '前提：开始时不存在锁文件');
+
+  /**
+   * 旧语义的最小复刻（P12-1 修复前的形状）：把死线与「等锁 + 执行」整体 race。
+   * 它只用同一对参数在内存里跑一遍，用来证明下面这条断言对旧实现**会红**，而不是空断言。
+   */
+  const legacyRaceWholeChain = async <T>(run: () => Promise<T>, timeoutMs: number): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new WorkdirLockError(dir, timeoutMs)), timeoutMs);
+    });
+    try {
+      return await Promise.race([run(), deadline]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+  await assert.rejects(
+    legacyRaceWholeChain(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+      return 'slow-ok';
+    }, 40),
+    (err: unknown) => err instanceof WorkdirLockError,
+    '旧语义（fn 计入预算）在同一对参数下必须失败 —— 否则本用例对它没有约束力',
+  );
+
+  // 现实现：同一对参数（200ms fn / 40ms timeoutMs），无竞争 ⇒ 必须成功返回 fn 的结果
+  const t0 = Date.now();
+  const result = await withWorkdirLock(dir, async () => {
+    await new Promise((r) => setTimeout(r, 200));
+    return 'slow-ok';
+  }, { timeoutMs: 40 });
+  const elapsed = Date.now() - t0;
+
+  assert.equal(result, 'slow-ok', 'fn 慢于 timeoutMs 也必须拿到结果，不得伪造等锁冲突');
+  assert.ok(elapsed >= 200, '确实跑满了 fn 的耗时（实测 ' + String(elapsed) + 'ms）');
+  assert.ok(elapsed < 3_000, '不得额外空等到别的上限（实测 ' + String(elapsed) + 'ms）');
+  // 收尾照旧：成功返回后锁必须释放，后续调用能立刻拿到
+  await assert.rejects(fs.access(lockPath), '成功路径同样要释放锁');
+  assert.equal(await withWorkdirLock(dir, async () => 'next', { timeoutMs: 40 }), 'next');
+});
+
 test('异常也释放锁：fn 抛错后下一次仍能拿到锁（不会把后续同步永久卡死）', async (t) => {
   const dir = await makeDir(t);
   await assert.rejects(withWorkdirLock(dir, async () => { throw new Error('boom'); }), /boom/);

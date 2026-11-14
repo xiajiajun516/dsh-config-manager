@@ -39,7 +39,7 @@ import { BLOB_SECTIONS, gcBlobs, isBlobRefsSection, isFilesSectionLike, referenc
 import type { BlobRefsSection, BlobSink } from '../blob-store.ts';
 import {
   classifyHttpStatus, classifyNetworkErrorText, computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS,
-  isEncryptedSections, sectionsEqual, SyncTransportError, withSyncRetry,
+  isEncryptedSections, isPreconditionFailedStatus, sectionsEqual, SyncTransportError, withSyncRetry,
 } from '../transport.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 import type {
@@ -420,11 +420,15 @@ export class WebDavTransport implements SyncTransport {
     const merged = idxBefore.filter((m) => m.id !== snapshot.id);
     merged.push(meta);
     merged.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+    const idxHeaders = conditionalHeaders(idxEtag, indexMissing);
     const putIdx = await this.send('PUT', idxUrl, pwd, {
       body: JSON.stringify(merged),
-      headers: conditionalHeaders(idxEtag, indexMissing),
+      headers: idxHeaders,
     });
-    if (putIdx.status === 412) throw this.concurrentWrite(idxUrl, putIdx.status);
+    // 条件写失败判定与 s3 通道共用 transport.ts 的唯一实现（412 恒算；409 仅在真的带了条件头时算）
+    if (isPreconditionFailedStatus(putIdx.status, { guarded: Object.keys(idxHeaders).length > 0 })) {
+      throw this.concurrentWrite(idxUrl, putIdx.status);
+    }
     if (!putIdx.ok) {
       throw new WebDavTransportError(await this.failText('PUT', idxUrl, putIdx, pwd), classifyHttpStatus(putIdx.status));
     }
@@ -471,29 +475,46 @@ export class WebDavTransport implements SyncTransport {
     // gcBlobStore 以空引用集回收，删掉仍被现存快照文件引用的会话 blob（不可恢复）。
     // 与 F1 同口径：宁可显式失败，也不制造不可恢复的远端状态。list() 仍保留「404 = 空集合」语义。
     const { entries: idx, missing: indexMissing, etag: idxEtag } = await this.readIndexDetailed(pwd);
-    // delete 快照文件：404 = 不存在，视为成功
     const url = this.snapshotUrl(id);
+    if (indexMissing) {
+      // audit-sync sync-N1（P0）：索引真缺失（404）= **缺信息**而不是「集合为空」。此时「哪些 blob
+      // 无人引用」无从证明 —— 一律**不写回 index.json、不触发 blob GC**，其余快照与其引用的 blob
+      // 原样保留（宁可留垃圾，不可删在用的）。目标快照文件按用户意图删除（404 视为成功）。
+      const res = await this.send('DELETE', url, pwd);
+      if (!res.ok && res.status !== 404) {
+        throw new WebDavTransportError(await this.failText('DELETE', url, res, pwd), classifyHttpStatus(res.status));
+      }
+      return;
+    }
+    const remaining = idx.filter((m) => m.id !== id);
+    const entryPresent = remaining.length !== idx.length;
+    // audit-sync sync-P6-1（P3）：**先写索引、后删对象**。
+    // 反序（旧实现先 DELETE 快照文件）的伤害：索引 PUT 回 412（别的设备刚改过索引）时本次删除已
+    // 抛错中止，但对象已经没了 ⇒ 索引里留下指向不存在对象的条目；list() 不校验存在性，别的设备
+    // pull 到该 id 就是 notfound 硬失败，只能靠用户再删一次自愈。
+    // 调整顺序后的**最坏情况**：索引写成功而对象 DELETE 失败 ⇒ 远端留一个索引里不存在、list()
+    // 看不到、pull 不会命中的孤儿文件（只占空间）；重跑 delete 会把对象补删（404 视为成功）。
+    // 「多一个看不见的孤儿文件」远轻于「索引指向已删对象」，因此顺序必须是索引在前。
+    if (entryPresent) {
+      const idxHeaders = conditionalHeaders(idxEtag, false);
+      const putIdx = await this.send('PUT', idxUrl, pwd, {
+        body: JSON.stringify(remaining),
+        headers: idxHeaders,
+      });
+      // 判定与 s3 通道共用同一实现（412 恒算；409 仅在真的带了条件头时算）
+      if (isPreconditionFailedStatus(putIdx.status, { guarded: Object.keys(idxHeaders).length > 0 })) {
+        throw this.concurrentWrite(idxUrl, putIdx.status);
+      }
+      if (!putIdx.ok) {
+        throw new WebDavTransportError(await this.failText('PUT', idxUrl, putIdx, pwd), classifyHttpStatus(putIdx.status));
+      }
+    }
+    // 索引已摘除（或本来就无该 id）后才动对象：404 = 不存在，视为成功
     const res = await this.send('DELETE', url, pwd);
     if (!res.ok && res.status !== 404) {
       throw new WebDavTransportError(await this.failText('DELETE', url, res, pwd), classifyHttpStatus(res.status));
     }
-    // audit-sync sync-N1（P0）：索引真缺失（404）= **缺信息**而不是「集合为空」。此时「哪些 blob
-    // 无人引用」无从证明 —— 一律**不写回 index.json、不触发 blob GC**，其余快照与其引用的 blob
-    // 原样保留（宁可留垃圾，不可删在用的）。目标快照文件已按用户意图删除（404 视为成功）。
-    if (indexMissing) return;
-    // 若 index 中无该 id，则无需写回
-    const remaining = idx.filter((m) => m.id !== id);
-    if (remaining.length === idx.length && res.status === 404) {
-      return; // 文件与 index 都不存在 → 静默成功，无写回
-    }
-    const putIdx = await this.send('PUT', idxUrl, pwd, {
-      body: JSON.stringify(remaining),
-      headers: conditionalHeaders(idxEtag, false),
-    });
-    if (putIdx.status === 412) throw this.concurrentWrite(idxUrl, putIdx.status);
-    if (!putIdx.ok) {
-      throw new WebDavTransportError(await this.failText('PUT', idxUrl, putIdx, pwd), classifyHttpStatus(putIdx.status));
-    }
+    if (!entryPresent && !res.ok) return; // 索引无该 id 且对象本就不存在 → 静默成功，无 GC 可做
     // P1-4：快照被裁掉后回收无人引用的 blob（best-effort，失败不影响删除结果）
     await this.gcBlobStore(pwd, remaining).catch(() => undefined);
   }
@@ -528,7 +549,10 @@ export class WebDavTransport implements SyncTransport {
     }
   }
 
-  /** 把本次新写入的 blob 合并进远端索引（写失败 → 抛错，调用方看到的是上传失败而非静默漏记）。 */
+  /**
+   * 把本次新写入的 blob 合并进远端索引（写失败 → 抛错，调用方看到的是上传失败而非静默漏记）。
+   * audit-sync sync-P6-4（P3）：这里的读失败必须上抛 —— 整体 PUT 会覆盖远端已登记条目。
+   */
   private async appendBlobIndex(fresh: Map<string, number>, pwd: string): Promise<void> {
     const index = await this.readBlobIndex(pwd);
     for (const [hash, at] of fresh) index[hash] = at;
@@ -567,23 +591,51 @@ export class WebDavTransport implements SyncTransport {
     }
   }
 
-  /** 读取 blob 索引（哈希 → 写入时间 ms）；缺失/损坏 → 空（GC 只会「少删」，不会误删）。 */
+  /** 读取 blob 索引（哈希 → 写入时间 ms）；只读失败即抛，绝不回落成空索引，见 readBlobIndexDetailed。 */
   private async readBlobIndex(pwd: string): Promise<Record<string, number>> {
+    return (await this.readBlobIndexDetailed(pwd)).index;
+  }
+
+  /**
+   * audit-sync sync-P6-4（P3）：读 blob 索引的**带缺失标志**版本 —— 「读失败」与「确实没有索引」必须分开。
+   *
+   * 旧实现把 5xx / 坏 JSON / 非法结构一律当成空索引返回，紧接着 appendBlobIndex 读→合并→**整体 PUT**，
+   * 于是「一次读抖动」= 远端索引被覆盖成本次新增的那几条，已登记条目全丢（GC 从此看不见这些 blob，
+   * 等于远端漏账；再叠加 delete 的 GC 就可能删掉它们）。语义因此必须三态：
+   *  - 404 / 405 / 501 → missing = true：**缺资源**。405/501 是部分 WebDAV 服务端表达「没有这个资源」
+   *    的方言（与 remoteHasPriorContent 同口径），此时确实没有索引可丢，按空处理是安全的；
+   *  - 其它非 2xx（5xx / 403 / …）→ 抛错（可重试）：读不出来就**不许**整体覆盖，让上传显式失败；
+   *  - 200 但坏 JSON / 非对象 → 抛 protocol（不可重试）：索引损坏是远端状态问题，覆盖写会抹掉残存记录。
+   *
+   * 最坏情况（可重试失败）：本可跳过的 blob 被重传一遍，或本次 blob 漏登记（只占空间，不误删）。
+   */
+  private async readBlobIndexDetailed(pwd: string): Promise<{ index: Record<string, number>; missing: boolean }> {
     const url = this.blobsIndexUrl();
     const res = await this.send('GET', url, pwd);
-    if (res.status === 404) return {};
-    if (!res.ok) return {};
-    try {
-      const parsed = parseJsonSafe(await res.text());
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-      const out: Record<string, number> = {};
-      for (const [hash, at] of Object.entries(parsed as Record<string, unknown>)) {
-        if (BLOB_HASH_RE.test(hash) && typeof at === 'number' && Number.isFinite(at)) out[hash] = at;
-      }
-      return out;
-    } catch {
-      return {};
+    if (res.status === 404 || res.status === 405 || res.status === 501) return { index: {}, missing: true };
+    if (!res.ok) {
+      throw new WebDavTransportError(await this.failText('GET', url, res, pwd), classifyHttpStatus(res.status));
     }
+    let parsed: unknown;
+    try {
+      parsed = parseJsonSafe(await res.text());
+    } catch (err) {
+      throw new WebDavTransportError(
+        this.o.msg('sync.webdav.indexInvalid', { url, err: this.mask(String((err as Error)?.message ?? ''), pwd) }),
+        { kind: 'protocol', retryable: false },
+      );
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new WebDavTransportError(
+        this.o.msg('sync.webdav.indexInvalid', { url, err: 'not an object' }),
+        { kind: 'protocol', retryable: false },
+      );
+    }
+    const out: Record<string, number> = {};
+    for (const [hash, at] of Object.entries(parsed as Record<string, unknown>)) {
+      if (BLOB_HASH_RE.test(hash) && typeof at === 'number' && Number.isFinite(at)) out[hash] = at;
+    }
+    return { index: out, missing: false };
   }
 
   private async writeBlobIndex(pwd: string, index: Record<string, number>): Promise<void> {

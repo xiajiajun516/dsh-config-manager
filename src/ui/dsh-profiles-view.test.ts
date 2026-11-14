@@ -3,6 +3,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import {
   bundleLines, canLaunchProfile, copyWarningKey, dependencyLines, formatBytes, formatProfileTime,
@@ -211,6 +212,21 @@ test('profileInstallCommand / copyWarningKey：副本缺 node_modules 的自救�
   assert.equal(profileInstallCommand('cmtest-copy'), 'dsh plugin --profile cmtest-copy install')
   assert.notEqual(profileInstallCommand('a'), restartCommand('a'), '安装命令与启动命令不是同一条')
   assert.equal(copyWarningKey('depsNotInstalled'), 'profiles.duplicate.warn.depsNotInstalled')
+})
+
+test('copyWarningKey：未映射的告警码暴露为 undefined，不再套用 depsNotInstalled 文案（P10-4）', () => {
+  // 修复前 if + 兜底 return 同一字面量：任何入参都返回「缺 node_modules」文案，
+  // 于是新增告警码会被静默显示成错误原因。这里用类型逃逸模拟「未来新增的码」。
+  assert.equal(copyWarningKey('futureCode' as never), undefined, '未映射的码必须留白，而不是伪造原因')
+  // 穷尽性由 Record 的键类型保证（新增 DshProfileCopyWarning 而漏配 ⇒ typecheck 失败），
+  // 这里再锁一次机制本身：函数体只能是查表，不能退回手写兜底。
+  const src = readFileSync(new URL('./dsh-profiles-view.ts', import.meta.url), 'utf8')
+  assert.match(src, /const COPY_WARNING_KEY: Record<DshProfileCopyWarning, /, '映射表必须用 Record<告警码, …> 声明（穷尽性检查的来源）')
+  assert.match(
+    src,
+    /export function copyWarningKey[^}]*\{\s*return COPY_WARNING_KEY\[warning\]\s*\}/,
+    'copyWarningKey 只能是查表：任何 return 字面量兜底都会重新引入「所有码都说缺 node_modules」',
+  )
 })
 test('formatBytes：B / KB / MB 与非法输入', () => {
   assert.equal(formatBytes(0), '0 B')

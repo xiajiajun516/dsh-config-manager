@@ -89,6 +89,12 @@ export interface ReconcileOutcome {
   safeModeRequired: boolean;
   /** unresolved（未到 terminal）的 incomplete op id（RECOVERY_REQUIRED 候选）。 */
   unresolved: string[];
+  /**
+   * 「owner 仍活着（live）但 journal 本身还没到 terminal」的 op id（审计 P3-8）。
+   * 与 unresolved 的区别：它们不该进 recovery（执行方还在跑），但也**不是已收敛**。
+   * 锁被另一实例持有时启动分类据此产出 LOCKED_LIVE，而不是把「确实在跑」误报成 NORMAL。
+   */
+  liveIncomplete: string[];
 }
 
 /**
@@ -154,6 +160,7 @@ export async function reconcileActive(
 ): Promise<ReconcileOutcome> {
   const decisions: ReconcileDecision[] = [];
   const unresolved: string[] = [];
+  const liveIncomplete: string[] = [];
   let safeModeRequired = false;
 
   const activeIds = await store.scanActive();
@@ -162,8 +169,9 @@ export async function reconcileActive(
     decisions.push(outcome.decision);
     if (outcome.safeMode) safeModeRequired = true;
     if (outcome.unresolved) unresolved.push(operationId);
+    if (outcome.liveIncomplete === true) liveIncomplete.push(operationId);
   }
-  return { decisions, safeModeRequired, unresolved };
+  return { decisions, safeModeRequired, unresolved, liveIncomplete };
 }
 
 async function reconcileOne(
@@ -172,7 +180,13 @@ async function reconcileOne(
   env: ReconcileEnv,
   opts: ReconcileOptions,
   operationId: string,
-): Promise<{ decision: ReconcileDecision; safeMode: boolean; unresolved: boolean }> {
+): Promise<{
+  decision: ReconcileDecision;
+  safeMode: boolean;
+  unresolved: boolean;
+  /** live owner 但 journal 未到 terminal（仅 live 分支会置 true；审计 P3-8） */
+  liveIncomplete?: boolean;
+}> {
   const j = await store.loadActive(operationId);
   if (j === null) {
     // 存在但 parse/校验失败 → corrupt → quarantine
@@ -188,7 +202,14 @@ async function reconcileOne(
 
   // live owner 检查
   if (await env.isLiveOwner(j)) {
-    return { decision: { operationId, kind: 'live', reason: engineMsg('core.reconcile.ownerLive'), snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
+    // P3-8：live 只说明「有人还在跑」，不等于这条 journal 已收敛。未到 terminal 的 live journal
+    // 必须如实上报（liveIncomplete），否则 LOCKED 下的启动分类会把「确实在跑」误判成 NORMAL。
+    return {
+      decision: { operationId, kind: 'live', reason: engineMsg('core.reconcile.ownerLive'), snapshotId: j.snapshotId },
+      safeMode: false,
+      unresolved: false,
+      liveIncomplete: !isTerminalState(j.state),
+    };
   }
 
   // P1-A：ownership binding 强制校验（显式 recovery 捕获的 crashed ownership 证据）。
@@ -530,6 +551,8 @@ export interface StartupInspection {
   recoveryRequired: boolean;
   decisions: ReconcileDecision[];
   unresolved: string[];
+  /** live owner 持有但 journal 未到 terminal 的 op id（P3-8：LOCKED_LIVE 的判据） */
+  liveIncomplete: string[];
   /**
    * durable SAFE MODE 标记的三态判定（t37）：'blocked' / 'clear' / **'unknown'**。
    * 单独暴露的原因：`safeModeRequired` 是聚合结论（还可能因 corrupt journal / needs-attention 为 true），
@@ -576,6 +599,11 @@ export async function inspectStartup(
   const durableSafe = durableSafeState !== 'clear';
   const safeModeRequired = outcome.safeModeRequired || recoveryRequired || durableSafe;
   return {
-    safeModeRequired, recoveryRequired, decisions: outcome.decisions, unresolved: outcome.unresolved, durableSafeState,
+    safeModeRequired,
+    recoveryRequired,
+    decisions: outcome.decisions,
+    unresolved: outcome.unresolved,
+    liveIncomplete: outcome.liveIncomplete,
+    durableSafeState,
   };
 }

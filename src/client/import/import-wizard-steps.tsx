@@ -179,7 +179,7 @@ export function ConsultStage(props: {
       <SectionTitle title={t('import.preview.title')} info={<InfoHint text={t('import.consult.hint')} label={t('common.infoHint')} />} />
       {consultLoading && <Skeleton shape="line" count={5} label={apiT('consult.loading')} />}
       {consultReport !== null && <ConsultCard report={consultReport} t={apiT} />}
-      {!consultLoading && consultReport === null && (
+      {!consultLoading && consultReport === null && error === null && (
         <Banner kind="info">{t('import.consult.unavailable')}</Banner>
       )}
       {error !== null && <ErrorBanner error={error} onRetry={onNext} t={apiT} />}

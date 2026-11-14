@@ -233,18 +233,60 @@ export interface JournalIo {
   exists(p: string): Promise<boolean>;
 }
 
+/** 只有「确实不存在」才算空目录；权限/路径类型（EACCES / ENOTDIR）等错误必须抛给调用方（P3-5）。 */
+function isEnoent(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT';
+}
+
 const defaultIo: JournalIo = {
   async mkdir(d, o) { await fs.mkdir(d, o); },
   async readFileText(p) { return (await fs.readFile(p, 'utf8')).toString(); },
   async writeAll(t, c) { await atomicWriteFile(t, c, { mode: 0o600, symlink: 'reject' }); },
   async rename(a, b) { await fs.rename(a, b); },
-  async readdirNames(d) { try { return await fs.readdir(d); } catch { return []; } },
-  async readdirEntries(d) { try { return await fs.readdir(d, { withFileTypes: true }); } catch { return []; } },
+  // P3-5：旧实现 catch 一切 → 读不出的目录被当作空目录，上层（尤其快照引用集合）把
+  // 「读不到 ≠ 没有引用」误读成「没有引用」。ENOENT 才是「真没有」。
+  async readdirNames(d) {
+    try { return await fs.readdir(d); } catch (err) {
+      if (isEnoent(err)) return [];
+      throw err;
+    }
+  },
+  async readdirEntries(d) {
+    try { return await fs.readdir(d, { withFileTypes: true }); } catch (err) {
+      if (isEnoent(err)) return [];
+      throw err;
+    }
+  },
   async lstat(p) { try { return await fs.lstat(p); } catch { return null; } },
   async statMtimeMs(p) { try { return (await fs.stat(p)).mtimeMs; } catch { return null; } },
   async rm(p, o) { await fs.rm(p, o); },
   async exists(p) { try { await fs.access(p); return true; } catch { return false; } },
 };
+
+/** 引用集合的取证式扫描结果（P3-5）。`complete === false` 时 referenced 只是下界。 */
+export interface JournalReferenceScan {
+  /** 可解析 journal 引用的 snapshotId（不完整时是下界） */
+  referenced: Set<string>;
+  /** 读不到/解析不了的 journal 位置（相对 transactions 的 posix 形式） */
+  unreadable: string[];
+  /** true = 三个目录都读到、每条 journal 都可解析，referenced 可当完整集合使用 */
+  complete: boolean;
+}
+
+/**
+ * 引用集合读不完整（P3-5）：有 journal 但读不出/解析不了，或 journal 目录读不到。
+ * 调用方必须 fail-closed —— 快照删除（409 recovery-reference-unreadable）与自动 prune
+ * （放弃本轮清理）都依赖「读不到 ≠ 没有引用」。`unreadable` 是相对路径，供日志定位。
+ */
+export class JournalReferenceUnreadableError extends Error {
+  readonly code = 'journal-reference-unreadable';
+  readonly unreadable: string[];
+  constructor(unreadable: string[]) {
+    super('journal reference set is unreadable (unreadable is not the same as no reference): ' + unreadable.join(', '));
+    this.name = 'JournalReferenceUnreadableError';
+    this.unreadable = unreadable;
+  }
+}
 
 export interface JournalStoreOptions {
   transactionsDir: string;
@@ -260,6 +302,18 @@ export function isValidOperationId(id: unknown): id is string {
 export function isJournalBasename(name: string): boolean {
   if (!UUID_BASENAME_RE.test(name)) return false;
   return !name.startsWith(TMP_PREFIX);
+}
+
+/**
+ * recovery-history 文件名的时间键：`<epochMs>-<randomHex>.<marker>.json`（appendRecoveryHistory 的命名口径）。
+ * 该目录没有记录内时间字段，文件名前缀就是唯一时间来源；带不出 epoch 毫秒 → null
+ *（retention 判不了新旧，不参与删除）。
+ */
+function historyEntryAt(name: string): number | null {
+  const m = /^(\d+)-/.exec(name);
+  if (m === null) return null;
+  const at = Number(m[1]);
+  return Number.isSafeInteger(at) ? at : null;
 }
 
 /**
@@ -492,7 +546,7 @@ export class JournalStore {
   /**
    * 收集已被「可恢复 / 未收敛 journal」引用的 snapshotId（Phase 4 F3 prune 保护）：
    * 扫描 active/ + quarantine/ + completed/ 下的 journal，凡「快照仍可能被 recovery/人工恢复用到」
-   * 且 snapshotId 合法 → 收集。返回 Set<string>。该集合用于 FileSnapshotStore.prune 豁免 ——
+   * 且 snapshotId 合法 → 收集。该集合用于 FileSnapshotStore.prune 豁免 ——
    * 引用的 recovery snapshot 绝不可被自动淘汰。
    *
    * 什么算「已消费」（不保护）：
@@ -501,23 +555,64 @@ export class JournalStore {
    * 审计 P0-3：**半回滚态**（ROLLED_BACK + full === false）与 NEEDS_ATTENTION / ROLLING_BACK /
    * RECOVERING 仍需 recovery 或人工恢复 —— 它们会被规整进 completed/，所以 completed/ 必须一起扫，
    * 否则「已回滚但没回滚干净」的回滚点会在 10 次快照后被静默淘汰（而它正是用户唯一的退路）。
+   *
+   * 审计 P3-5：**读不到 ≠ 没有引用**。旧实现把目录读不到折成空、把单条读不出/解析不了折成跳过，
+   * 于是「有 journal 但读不出」与「没有 journal」在上层无法区分：deleteSnapshot 的
+   * recovery-reference-unreadable 保守分支永远不可达，快照会被真删。这里改为：
+   *  - 目录 ENOENT（真没有）→ 空；其余目录错误 → 记进 unreadable（不折叠）；
+   *  - 单条 journal 读不出（非 ENOENT）/解析不了 → 记进 unreadable；
+   *  - 有任何 unreadable ⇒ 集合不完整，listReferencedSnapshotIds 显式抛错（调用方 fail-closed）。
+   * 需要区分「具体哪条读不出」的诊断面用 scanSnapshotReferences()。
    */
   async listReferencedSnapshotIds(): Promise<Set<string>> {
-    const out = new Set<string>();
-    const dirs = [this.activeDir(), this.quarantineDir(), this.completedDir()];
-    for (const dir of dirs) {
-      for (const name of await this.io.readdirNames(dir)) {
+    const scan = await this.scanSnapshotReferences();
+    if (!scan.complete) throw new JournalReferenceUnreadableError(scan.unreadable);
+    return scan.referenced;
+  }
+
+  /** 引用集合的**取证式**扫描：既给出可用的 snapshotId，也如实给出读不出的位置（P3-5）。
+   *  `complete === false` 时 `referenced` 只是下界，调用方必须按 fail-closed 处理。 */
+  async scanSnapshotReferences(): Promise<JournalReferenceScan> {
+    const referenced = new Set<string>();
+    const unreadable: string[] = [];
+    for (const dir of [this.activeDir(), this.quarantineDir(), this.completedDir()]) {
+      let names: string[];
+      try {
+        names = await this.io.readdirNames(dir);
+      } catch (err) {
+        if (isEnoent(err)) continue; // 目录确实不存在 = 没有 journal
+        unreadable.push(this.referenceLabel(dir));
+        continue;
+      }
+      for (const name of names) {
         if (!isJournalBasename(name)) continue;
-        const text = await this.io.readFileText(path.join(dir, name)).catch(() => null);
-        if (text === null) continue;
+        const file = path.join(dir, name);
+        let text: string;
+        try {
+          text = await this.io.readFileText(file);
+        } catch (err) {
+          if (isEnoent(err)) continue; // 扫描与读取之间被移走/删除：此刻已没有这条 journal
+          unreadable.push(this.referenceLabel(file));
+          continue;
+        }
         const j = parseSafe(text);
-        if (j === null) continue;
+        if (j === null) {
+          // 解析不了 = 无法证明它没引用某个快照（可能是更高 schemaVersion 的 journal）→ 不完整
+          unreadable.push(this.referenceLabel(file));
+          continue;
+        }
         if (j.state === 'COMMITTED') continue; // 已消费，不保护
         if (j.state === 'ROLLED_BACK' && j.rollback.full === true) continue; // 完整回滚：已回到导入前状态
-        if (typeof j.snapshotId === 'string' && j.snapshotId !== '') out.add(j.snapshotId);
+        if (typeof j.snapshotId === 'string' && j.snapshotId !== '') referenced.add(j.snapshotId);
       }
     }
-    return out;
+    return { referenced, unreadable, complete: unreadable.length === 0 };
+  }
+
+  /** 诊断用位置标签（相对 transactions 的 posix 形式；绝不带绝对路径进日志/响应）。 */
+  private referenceLabel(p: string): string {
+    const rel = path.relative(this.transactionsDir, p);
+    return (rel === '' ? '.' : rel).split(path.sep).join('/');
   }
 
   // ---------- SAFE MODE ----------
@@ -558,22 +653,65 @@ export class JournalStore {
 
   // ---------- retention ----------
 
-  /** 保留策略：completed 保留 N，recovery-history 保留 M。删最旧。幂等。 */
-  async retention(completedLimit = 50, historyLimit = 200): Promise<void> {
-    const completed = (await this.io.readdirNames(this.completedDir()))
-      .filter(isJournalBasename).sort();
-    await this.pruneOldest(this.completedDir(), completed, completedLimit);
-
-    const hist = (await this.io.readdirNames(this.recoveryHistoryDir())).sort();
-    await this.pruneOldest(this.recoveryHistoryDir(), hist, historyLimit);
+  /**
+   * 保留策略：completed 保留 N，recovery-history 保留 M；**按真实时间删最旧**，幂等。
+   *
+   * 排序键（唯一来源，注释即实现）：
+   *  - completed/：journal 记录内的 `updatedAt`（落盘/状态推进时刻）。刻意不用 mtime ——
+   *    completed 文件名是 randomBytes UUID，与时间无关；而复制/恢复会重写 mtime，
+   *    旧实现按文件名字典序「删最旧」，实际可能删掉最新的那条（审计 P3-7）。
+   *  - recovery-history/：文件名前缀的 epoch 毫秒（appendRecoveryHistory 的命名口径；
+   *    该目录没有记录内时间字段）。
+   *
+   * 判不了新旧的文件（读不出 / 解析不了 / 文件名带不出时间）**既不计入上限也不删**：
+   * 宁可暂时超出上限，也不拿一个未知年龄的 journal 当「最旧」删掉。
+   */
+  async retention(completedLimit = 50, historyLimit = 200): Promise<{ completed: number; history: number }> {
+    const completedNames = (await this.io.readdirNames(this.completedDir())).filter(isJournalBasename);
+    const completed = await this.pruneOldestByAge(
+      this.completedDir(), completedNames, completedLimit, (name) => this.completedJournalAt(name),
+    );
+    const historyNames = await this.io.readdirNames(this.recoveryHistoryDir());
+    const history = await this.pruneOldestByAge(
+      this.recoveryHistoryDir(), historyNames, historyLimit, async (name) => historyEntryAt(name),
+    );
+    return { completed, history };
   }
 
-  private async pruneOldest(dir: string, names: string[], limit: number): Promise<void> {
-    if (names.length <= limit) return;
-    const toRemove = names.slice(0, names.length - limit);
-    for (const n of toRemove) {
-      await this.io.rm(path.join(dir, n), { force: true }).catch(() => undefined);
+  /** completed journal 的时间键：记录内 updatedAt；读不出/解析不了 → null（判不了新旧）。 */
+  private async completedJournalAt(name: string): Promise<number | null> {
+    try {
+      const j = parseSafe(await this.io.readFileText(path.join(this.completedDir(), name)));
+      if (j === null) return null;
+      const at = Date.parse(j.updatedAt);
+      return Number.isFinite(at) ? at : null;
+    } catch {
+      return null; // 读不出 / 并发消失：判不了新旧就不删
     }
+  }
+
+  /** 按时间键升序删除超出上限的最旧项；键为 null 的项不参与计数、绝不被删。返回删除条数。 */
+  private async pruneOldestByAge(
+    dir: string, names: string[], limit: number, atOf: (name: string) => Promise<number | null>,
+  ): Promise<number> {
+    const keyed: { name: string; at: number }[] = [];
+    for (const name of names) {
+      const at = await atOf(name);
+      if (at !== null) keyed.push({ name, at });
+    }
+    if (keyed.length <= limit) return 0;
+    // 同一时刻用文件名做稳定次序，保证幂等（不依赖 readdir 顺序）
+    keyed.sort((a, b) => a.at - b.at || a.name.localeCompare(b.name));
+    let removed = 0;
+    for (const item of keyed.slice(0, keyed.length - limit)) {
+      try {
+        await this.io.rm(path.join(dir, item.name), { force: true });
+        removed += 1;
+      } catch {
+        /* 单条删失败不中断其余，留待下一次 */
+      }
+    }
+    return removed;
   }
 }
 
