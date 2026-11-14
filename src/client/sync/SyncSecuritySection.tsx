@@ -1,3 +1,4 @@
+import { useId } from 'react'
 /**
  * 加密与密钥导出 + 解密密码（原来是两张独立的 Card：SecurityOptionsCard / DecryptPasswordCard）。
  * 2026-11-14 用户要求：三块设置收进**一个**弹窗，页面只剩摘要行 —— 两张卡因此不再是卡，
@@ -11,7 +12,7 @@
  */
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
-import { Badge, Button, Checkbox } from '../common/ui.tsx'
+import { Badge, Button, Switch } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import type { ChannelSyncState } from './sync-view.ts'
 import type { SyncChannelSettingsPatch } from '../../ui/sync-settings-view.ts'
@@ -27,17 +28,18 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
   onPersistDecryptPassword: () => void
   onClearSavedPassword: () => void
 }) {
+  /** 开关的 id：让标题文字也能拨动（label htmlFor），与原来勾选框的点击面一致 */
+  const encryptId = useId()
+  const includeSecretsId = useId()
   return (
     <div className={css.dialogSection}>
       <span className={css.groupLabel}>{t('mode.security')}</span>
       {/* 说明性文案一律进 ⓘ（2026-10-12 用户要求：卡里只留勾选项与控件）。
           「加密方式 + 密码存哪 + 自动同步跳过加密快照」在 2026-11-14 合成一个键。 */}
       <div className={css.controlRow}>
-        <Checkbox
-          checked={settings.encrypt}
-          onChange={onToggleEncrypt}
-          label={<span className={css.categoryName}>{t('mode.encrypt')}</span>}
-        />
+        {/* 弹性开关（2026-11-14）：与「自动同步」页签同一类 —— 单一布尔、拨动即落库。 */}
+        <Switch id={encryptId} checked={settings.encrypt} onChange={onToggleEncrypt} label={t('mode.encrypt')} />
+        <label className={css.categoryName} htmlFor={encryptId}>{t('mode.encrypt')}</label>
         <InfoHint
           text={t('mode.encryptHint')}
           label={t('common.infoHint')}
@@ -86,11 +88,8 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
         </div>
       )}
       <div className={css.controlRow}>
-        <Checkbox
-          checked={settings.includeSecrets}
-          onChange={onToggleIncludeSecrets}
-          label={<span className={css.categoryName}>{t('mode.includeSecrets')}</span>}
-        />
+        <Switch id={includeSecretsId} checked={settings.includeSecrets} onChange={onToggleIncludeSecrets} label={t('mode.includeSecrets')} />
+        <label className={css.categoryName} htmlFor={includeSecretsId}>{t('mode.includeSecrets')}</label>
         <InfoHint text={t('mode.includeSecretsHint')} label={t('common.infoHint')} />
       </div>
       {/* 段间分隔：读方向（拉取加密快照）与写方向（给远端加密）各自成段，但同页 —— 它们

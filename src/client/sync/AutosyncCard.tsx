@@ -5,10 +5,9 @@
  * SyncPanel 持有（单一状态源）；可测纯逻辑在 src/ui/sync-settings-view.ts。
  */
 import { useEffect, useId, useMemo, useState } from 'react'
-import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { UiT } from '../../ui/i18n.ts'
-import { Badge } from '../common/ui.tsx'
+import { Badge, Switch } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import {
@@ -113,14 +112,13 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
       <div className={css.subBlockHead}>
         <span className={css.groupLabel}>{t('autosync.title')} <InfoHint text={t('autosync.description')} label={t('common.infoHint')} /></span>
         <span className={css.statusSpacer} />
-        <input
+        {/* 弹性开关（2026-11-14 用户要求）：单一布尔、拨动即落库 ⇒ 用 Switch 而不是勾选框 */}
+        <Switch
           id={enableId}
-          className={css.toggleInput}
-          type="checkbox"
           checked={settings.autosyncEnabled}
           disabled={busy}
-          aria-label={t('autosync.enable')}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => { onToggleAutosync(e.target.checked) }}
+          label={t('autosync.enable')}
+          onChange={onToggleAutosync}
         />
       </div>
       {/* 关闭时不再展示策略项（2026-11-01）：Enabled 没勾选，下面 4 个下拉 + 状态徽章 +
@@ -147,13 +145,12 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
         <label className={css.toggleLabel} htmlFor={realtimeId}>{t('autosync.realtime')}</label>
         <InfoHint text={t('autosync.realtimeHint')} label={t('common.infoHint')} />
         <span className={css.statusSpacer} />
-        <input
+        <Switch
           id={realtimeId}
-          className={css.toggleInput}
-          type="checkbox"
           checked={realtime}
           disabled={busy}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => { onUpdateOptions({ realtime: e.target.checked }) }}
+          label={t('autosync.realtime')}
+          onChange={(next) => { onUpdateOptions({ realtime: next }) }}
         />
       </div>
       {/* div 而非 label：同第一个字段（ⓘ 是按钮，不能被 label 转发悬停/点击） */}

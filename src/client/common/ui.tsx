@@ -10,6 +10,7 @@
  *   - StatusDot（状态栏/行内状态点）
  *   - Segmented（页内子视图分段切换）
  */
+import { useState } from 'react'
 import type { ChangeEvent, CSSProperties, ReactNode } from 'react'
 import { ExpandChevron } from './Icon.tsx'
 import { badgeTone, type BadgeKind } from '../../ui/badge-tone.ts'
@@ -430,6 +431,53 @@ export function Checkbox({ checked, onChange, label, disabled }: CheckboxProps) 
         onChange={(event: ChangeEvent<HTMLInputElement>) => { onChange(event.target.checked) }}
       />
       <span>{label}</span>
+    </label>
+  )
+}
+
+/* ---------------- Switch（弹性开关） ---------------- */
+
+export interface SwitchProps {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  /** 无障碍名：可见标题在外部时不重复渲染，读屏用它播报 */
+  label: string
+  disabled?: boolean
+  /** 与外部 <label htmlFor> 配对的 id（点标题也能拨动） */
+  id?: string
+}
+
+/**
+ * 弹性开关（拨动时圆点先拉长成胶囊、前缘到位后后缘追上，收尾轻微回弹）。
+ *
+ * 与 Checkbox 的分工（判据见 DESIGN.md §6）：**设置型 / 模式型的单一布尔、拨动即生效**用它；
+ * 列表多选、执行前选项、危险确认仍用 Checkbox —— 那些勾选是「这次要做的事」，不是「这台机器的状态」。
+ *
+ * 为什么仍是 <input type=checkbox>：原生控件自带 checked / disabled / 键盘空格切换以及
+ * <label htmlFor> 联动，`role="switch"` 只把读屏播报换成「开关 开/关」。视觉件（轨道 + 圆点）
+ * 放在同级 span 里，输入框本身 opacity:0 —— 于是它还能接键盘焦点与原生切换逻辑。
+ */
+export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) {
+  /** 首次交互才播动画：挂载那一下不该看到圆点从另一侧滑进来（弹窗每次打开都会挂载） */
+  const [animated, setAnimated] = useState(false)
+  return (
+    <label className={disabled === true ? `${css.switchRoot} ${css.switchRootDisabled}` : css.switchRoot}>
+      <input
+        id={id}
+        className={css.switchInput}
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        disabled={disabled}
+        aria-label={label}
+        onChange={(event: ChangeEvent<HTMLInputElement>) => {
+          setAnimated(true)
+          onChange(event.target.checked)
+        }}
+      />
+      <span className={animated ? `${css.switchTrack} ${css.switchTrackAnimated}` : css.switchTrack} aria-hidden="true">
+        <span className={css.switchKnob} />
+      </span>
     </label>
   )
 }

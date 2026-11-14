@@ -13,7 +13,7 @@
  * 逻辑、文案键、CSS 类与调用顺序按编译产物逐段翻译，**排版与注释措辞是重建的**。
  * 教训见 AGENTS.md「常见坑」。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import {
   BACKUP_INTERVAL_OPTIONS, DEFAULT_RETENTION_POLICY, RETENTION_FIELDS, RETENTION_FIELD_LIMITS,
   backupDraftDirty, backupRunBadgeKind, hasRetentionTiers, normalizeRetentionPolicy,
@@ -34,7 +34,7 @@ import { describeSkipReason } from '../sync/history-model.ts'
 import { runStore } from '../run-store.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Badge, Banner, Button, Card, Checkbox, StatusDot } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, StatusDot, Switch } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
@@ -66,6 +66,8 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState<BackupScheduleDraft>({ enabled: false, interval: '24h' })
+  /** 开关的 id：让标题文字也能拨动（label htmlFor），与原来勾选框的点击面一致 */
+  const enabledSwitchId = useId()
   const [saved, setSaved] = useState<BackupScheduleStatus | null>(null)
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
@@ -281,12 +283,17 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
 
           {/* 设置行：开关 + 间隔（+ 自定义档的星期/时/分） */}
           <div className={css.actionRow} style={{ marginTop: 10, marginBottom: 0 }}>
-            <Checkbox
+            {/* 弹性开关（2026-11-14 用户要求）：这里是「定时备份是否启用」这个单一布尔。
+                注意它改的是**草稿**（本卡仍是「改完点保存」），拨动即时可见、落库仍在保存时 ——
+                与「拨动即生效」的开关惯例不同，按用户明确要求保留这个位置。 */}
+            <Switch
+              id={enabledSwitchId}
               checked={draft.enabled}
               onChange={(checked: boolean) => { updateDraft({ ...draft, enabled: checked }) }}
               label={t('backupSchedule.enabled')}
               disabled={busy}
             />
+            <label className={css.toggleLabel} htmlFor={enabledSwitchId}>{t('backupSchedule.enabled')}</label>
             {draft.enabled && <InfoHint text={t('backupSchedule.enabledHint')} label={t('common.infoHint')} />}
             {draft.enabled && (
               <Select

@@ -1534,18 +1534,174 @@ body {
   cursor: pointer;
 }
 
-.toggleInput {
-  width: 16px;
-  height: 16px;
-  margin: 0;
+/* —— 弹性开关（2026-11-14 用户要求）——
+   拨动时圆点先横向拉长成胶囊、前缘到位后后缘追上，收尾轻微回弹成圆。
+
+   为什么用 keyframes 而不是 transition：transition 只在两端值之间插值，而「飞行中变宽、
+   到位再收回圆」需要中间帧；动画名在 on/off 之间切换会重新起跑，所以来回拨都能重放。
+
+   几何：轨道 32×18（1px 边框 + 2px 内缩，内宽 30），圆点 12×12。关键帧里始终
+   left + width ≤ 30，圆点绝不越出胶囊：
+     · 开：后缘（left）钉在 2、宽度涨到 20（前缘先冲到 22），随后 left 追到 18、宽度收回 12。
+     · 关：前缘（right）钉在 30、宽度涨到 20（后缘先退到 10），随后 right 收到 14、宽度收回 12。
+   收尾用 linear() 弹簧曲线（进度 >1 再落回）：圆点会轻微过冲约 1px —— 就是「回弹」本身。
+   仓库已有同款用法（--cm-press-spring），不引第二套缓动体系。
+
+   首帧不播：Switch 组件在第一次 onChange 之后才挂 .switchTrackAnimated，否则弹窗每次
+   打开都会看到圆点从另一侧滑过来。 */
+.switchRoot {
+  position: relative;
+  display: inline-flex;
   flex: none;
-  accent-color: var(--cm-brand);
+  align-items: center;
   cursor: pointer;
 }
 
-.toggleInput:focus-visible {
+.switchRootDisabled {
+  cursor: default;
+}
+
+/* 输入框只负责命中、键盘焦点与原生切换，视觉全交给同级轨道。
+
+   选择器为什么带 .section .switchRoot 前缀：全局 .section input[type='checkbox']
+   的特异度是 (0,2,1)，会把勾选框画成 16px 方块并 position: relative，直接压过单类
+   选择器 (0,1,0) —— 后果是输入框退回文档流、把 label 撑宽 16px，禁用态还会露出
+   半个半透明勾选框。这里用 (0,3,0) / (0,4,0) 把它逐项复位成「铺满 label 的透明
+   命中层」，勾形 ::after 也跟着 input 一起不可见。 */
+.section .switchRoot .switchInput {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  opacity: 0;
+  cursor: pointer;
+  transition: none;
+}
+
+.section .switchRoot .switchInput:checked,
+.section .switchRoot .switchInput:disabled {
+  border: 0;
+  background: none;
+}
+
+.section .switchRoot .switchInput:disabled {
+  opacity: 0;
+  cursor: default;
+}
+
+/* 焦点环只画在轨道上，输入框本身不留 UA 框 */
+.section .switchRoot .switchInput:focus-visible {
+  outline: none;
+}
+
+.switchTrack {
+  box-sizing: border-box;
+  position: relative;
+  display: block;
+  width: 32px;
+  height: 18px;
+  flex: none;
+  border: 1px solid var(--cm-line-2);
+  border-radius: 999px;
+  background-color: var(--cm-input-bg);
+  transition: background-color var(--cm-motion-fast) ease, border-color var(--cm-motion-fast) ease;
+}
+
+.switchRoot:hover .switchTrack {
+  border-color: var(--cm-brand);
+}
+
+/* 焦点环画在轨道上：输入框是透明覆盖层，画在它身上看不见 */
+.switchInput:focus-visible + .switchTrack {
   outline: var(--cm-focus-width) solid var(--cm-focus-color);
   outline-offset: 2px;
+}
+
+.switchInput:checked + .switchTrack {
+  border-color: var(--cm-brand);
+  background-color: var(--cm-brand);
+}
+
+.switchRootDisabled .switchTrack {
+  opacity: 0.5;
+}
+
+.switchKnob {
+  box-sizing: border-box;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background-color: var(--cm-line-2);
+  transition: background-color var(--cm-motion-fast) ease;
+}
+
+.switchInput:checked + .switchTrack .switchKnob {
+  left: 18px;
+  background-color: var(--cm-text-on-accent);
+}
+
+.switchTrackAnimated .switchKnob {
+  animation-duration: 320ms;
+}
+
+.switchInput:checked + .switchTrackAnimated .switchKnob {
+  animation-name: switchKnobOn;
+}
+
+.switchInput:not(:checked) + .switchTrackAnimated .switchKnob {
+  animation-name: switchKnobOff;
+}
+
+@keyframes switchKnobOn {
+  0% {
+    left: 2px;
+    width: 12px;
+    animation-timing-function: var(--cm-motion-ease-out);
+  }
+  42% {
+    left: 2px;
+    width: 20px;
+    animation-timing-function: linear(0, 0.42 22%, 0.78 44%, 1.06 68%, 1.01 86%, 1);
+  }
+  100% {
+    left: 18px;
+    width: 12px;
+  }
+}
+
+@keyframes switchKnobOff {
+  0% {
+    left: 18px;
+    width: 12px;
+    animation-timing-function: var(--cm-motion-ease-out);
+  }
+  42% {
+    left: 10px;
+    width: 20px;
+    animation-timing-function: linear(0, 0.42 22%, 0.78 44%, 1.06 68%, 1.01 86%, 1);
+  }
+  100% {
+    left: 2px;
+    width: 12px;
+  }
+}
+
+/* 减弱动效：开关只留瞬时切换（状态信息不丢，滑动与回弹都是装饰）。 */
+@media (prefers-reduced-motion: reduce) {
+  .switchTrackAnimated .switchKnob {
+    animation: none;
+  }
+  .switchTrack,
+  .switchKnob {
+    transition: none;
+  }
 }
 
 /* 小节标题行：标题在左、该节的开关贴右（与 .toggleRow 同一口径）。 */

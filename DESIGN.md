@@ -1408,17 +1408,19 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 | 产物库·拉取下载（D-04） | `.pullMeta` `.pullStatus` `.pullBadge` `.pullName` `.pullTrack` `.pullBar` | 状态与文件名同排（文件名等宽省略）；标题行「同步中」徽章；复用 `.progressIndeterminate` 做不定态进度（宿主无分区级进度，禁编百分比） |
 | 迁移咨询（D-03） | `.consultWillApply` `.consultDimensionRow` `.consultDimensionName` `.consultDimensionScroll` `.reasonLine::before` | 维度名纯文本 + 分数按档位分色（`consultScoreBadgeKind`）；建议依据行首 3px 圆点；维度区去共享滚框形态只留滚动 |
 | 内容选择器（D-14b） | `.pickerToolbarCount` | 工具条末尾常驻「已选 N / M」（`picker.selectedOf` + `pickerSummary.totalUnits`），合计仍在页脚 |
+| 原语·弹性开关（2026-11-14） | `.switchRoot` `.switchRootDisabled` `.switchInput` `.switchTrack` `.switchTrackAnimated` `.switchKnob` | `common/ui.tsx` 的 `Switch`：32×18 轨道 + 12px 圆点，拨动时圆点先横拉成 20px 胶囊、到位再收回圆（`switchKnobOn`/`switchKnobOff` 两条 keyframes，收尾用 `linear()` 弹簧造成约 1px 过冲 = 回弹）；仍是原生 `<input type=checkbox role=switch>` + `opacity:0` 覆盖层，键盘/`label htmlFor`/`disabled` 语义全部由浏览器给；首帧不播动画（首次 onChange 才挂 `.switchTrackAnimated`），`prefers-reduced-motion` 下退化为瞬时切换 |
 | 环境 | `.duRowNote` `.duRowPolicy` | 磁盘占用每分区一行（名称·过期量·占用·策略），文件数并入 `title` |
 | 恢复 | `.recoveryEmptyBar` `.factBox` | 空态条；事实格带框（与 `.factGrid` 同类名并联，不新增包裹层） |
 | 备份 | `.retentionCard` `.retentionCardLabel` | 保留策略三张数字卡（输入右对齐、单位提示贴格尾） |
 | 命令面板 | `.paletteInput` `.paletteList` `.paletteHint` | 顶部浮层：输入条 44 高只留底边线、列表吃满剩余高度、提示行吸底 |
 | Modal | `.dialogTop`（+`dialogOutTop`） | `placement="top"` 的定位与退场；缺省仍居中，退出动画必须跟随定位类（否则关闭帧瞬移到屏幕中央） |
 
-三条纪律（本轮踩到过的）：
+纪律（本轮踩到过的，逐条都是返工换来的）：
 - `.marketListCard` 必须 `overflow: visible`，否则卡内 Select 弹层被裁；定高靠外层 `.marketListCardFill`。
 - `.factBox` 与 `.factGrid` 并联而非新包裹层；`.rollbackWarnings` 复用现成私有类，不新建 `.previewHintBox`。
 - 共享滚动容器（`.reportScroll`/`.consultScroll`）要「只留滚动」时，叠一枚屏私有类把描边/圆角/底色/限高逐项复位，不改共享规则本体；`.badge`/`.chip` 新增可选 `className` 只透传形态修饰类（方角、细描边），四态语义色仍由 `kind` 决定。
 - `.paletteInput` 的底边线落在 `.dialogBody` 16px 内距内：贴卡边需负 margin，会被 `css-scale-guard` 的间距白名单拦（只放行 `-4px` 一次），按「不破守卫」保留内缩。
+- **开关还是勾选框看「它是什么」**：设置型 / 模式型的单一布尔、拨动即生效（自动同步、本地改动即时同步、定时备份启用、加密备份、导出密钥）用 `Switch`；列表多选（分区、文件、逐条采纳）、执行前选项、危险确认仍用 `Checkbox` —— 前者的勾是「这台机器的状态」，后者的勾是「这次要做的事」。弹性动画是装饰，减弱动效时只留瞬时切换，状态信息不受影响。
 
 ---
 
