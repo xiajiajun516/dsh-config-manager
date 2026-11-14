@@ -1,10 +1,16 @@
 /**
  * 同步设置弹窗（2026-11-14 用户要求：同步分区 / 加密与密钥导出 / 解密密码三块从通道卡
- * 收进**一个**弹窗 —— 三块各自成卡会把一条通道撑成四张卡，整页读成清单。
+ * 收进**一个**弹窗 —— 三块各自成卡会把一条通道撑成四张卡，整页读成清单）。
  *
  * 为什么是页签而不是单页竖排：12 个分区勾选已经占满 720 画布的首屏，安全设置与自动同步的
  * 四项策略会被挤到滚动区外 —— 用户点「设置」想改加密时必须先滚过所有分区。页签让每页
- * 首屏见底、高度稳定。2026-11-14 用户追加：卡内的「自动同步」表单也搬进来（第三页签）。
+ * 首屏见底、高度稳定。
+ *
+ * 2026-11-14 二次收口（用户三条要求）：① 自动同步与「加密与密码」**合成一页**（三个页签
+ * 减到两个 —— 它们都是「这条通道的策略」，原本分两页只是历史遗留）；② 原先挂在「插件」分区
+ * 勾选框下的「跟随远端删除插件」搬进这一页（它是策略，不是分区内容）；③ 页面布局按 Stitch
+ * 稿 D-39 重排成**行式设置行**（标签左 / 控件右 / 行高 34 / 0.5px 行线），三段的段头各带
+ * 自己的开关或状态。
  *
  * 约定同其余渲染段（t42）：只接收「渲染所需的数据 + 回调」；React 状态、副作用与网络调用
  * 仍在 SyncPanel（单一状态源），可测纯逻辑在 src/ui/sync-settings-view.ts。
@@ -12,11 +18,11 @@
  * P0-3：逐会话勾选仍是**同一个 Modal 内的视图切换**（不嵌套第二个 Modal —— 双 overlay 会与
  * 宿主遮罩互相打架，关闭语义也会变得含糊），会话清单复用 ContentPicker。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SectionId } from '../../schema/types.ts'
-import { Badge, Banner, Button, Card, Checkbox } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Switch } from '../common/ui.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ContentPicker } from '../common/ContentPicker.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
@@ -34,8 +40,8 @@ import { AutosyncCard } from './AutosyncCard.tsx'
 import type { AutosyncAutoApplyTier, AutosyncConflictPolicy, AutosyncInterval } from './sync-api.ts'
 import css from '../config-manager.module.css'
 
-/** 弹窗内的三个页签：同步内容 / 自动同步 / 加密与密码（两个方向的密码同页、各有自己的标题）。 */
-type SyncSettingsTab = 'content' | 'autosync' | 'security'
+/** 弹窗内的两个页签：同步内容 / 自动同步与密码（一条通道的策略全在这一页）。 */
+type SyncSettingsTab = 'content' | 'settings'
 
 /**
  * 同步设置弹窗（Radix Modal，与通道配置弹窗同一体系）。
@@ -98,6 +104,8 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
     sessionIds,
     initialSessionPicks(sessionIds, sessionsInclude, sessionsLimit),
   )
+  /** 「跟随远端删除插件」开关的 id：标签文字点一下就拨动（行式布局里两者不在一个 label 内） */
+  const deletePluginsId = useId()
 
   if (view === 'sessions') {
     return (
@@ -157,26 +165,18 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
           <button
             type="button"
             role="tab"
-            aria-selected={tab === 'autosync'}
-            className={tab === 'autosync' ? css.settingsTabOn : css.settingsTab}
-            onClick={() => { setTab('autosync') }}
+            aria-selected={tab === 'settings'}
+            className={tab === 'settings' ? css.settingsTabOn : css.settingsTab}
+            onClick={() => { setTab('settings') }}
           >
-            {t('mode.tabAutosync')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'security'}
-            className={tab === 'security' ? css.settingsTabOn : css.settingsTab}
-            onClick={() => { setTab('security') }}
-          >
-            {t('mode.tabSecurity')}
+            {t('mode.tabAutosyncSecurity')}
           </button>
         </div>
-        {tab === 'autosync' ? (
-          /* 自动同步（2026-11-14 用户要求从通道卡搬进来）：总开关 + 兜底间隔 + 三项策略 +
-             状态徽章与倒计时全部由 AutosyncCard 派生，本弹窗只提供外壳与页签。 */
-          <div className={css.dialogSection}>
+        {tab === 'settings' ? (
+          /* 这条通道的全部策略一页装完（D-39）：自动同步（段头带总开关）→ 加密与密钥导出
+             （段头带加密开关）→ 解密密码（段头带「已保存」）→ 插件（跟随远端删除）。
+             三段各自成 .settingsGroup，段间距由 .settingsPage 给，段内是行式设置行。 */
+          <div className={css.settingsPage}>
             <AutosyncCard
               t={t}
               uiT={uiT}
@@ -186,18 +186,41 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
               onUpdateInterval={onUpdateAutosyncInterval}
               onUpdateOptions={onUpdateAutosyncOptions}
             />
+            <SyncSecuritySection
+              t={t}
+              settings={settings}
+              onToggleEncrypt={onToggleEncrypt}
+              onToggleIncludeSecrets={onToggleIncludeSecrets}
+              onPatchSettings={onPatchSettings}
+              onPersistEncryptPassword={onPersistEncryptPassword}
+              onPersistDecryptPassword={onPersistDecryptPassword}
+              onClearSavedPassword={onClearSavedPassword}
+            />
+            {/* issue 132：插件专属的「跟随远端删除」。原先挂在「插件」分区勾选框下面 ——
+                它是一条件随策略（勾了才会真的删），不是分区内容，所以搬到这一页。
+                仍然只在 plugins 已被勾选时出现：没勾这个分区，这条开关没有作用对象。 */}
+            {sections.includes('plugins') && (
+              <div className={css.settingsGroup}>
+                <div className={css.settingsGroupHead}>
+                  <span className={css.settingsGroupTitle}>{t('mode.pluginsGroup')}</span>
+                </div>
+                <div className={css.settingsRow}>
+                  <span className={css.settingsRowMain}>
+                    <label className={css.settingsRowLabel} htmlFor={deletePluginsId}>{t('mode.deletePlugins')}</label>
+                    <InfoHint text={t('mode.deletePluginsHint')} label={t('common.infoHint')} />
+                  </span>
+                  <span className={css.settingsRowControl}>
+                    <Switch
+                      id={deletePluginsId}
+                      checked={deletePlugins}
+                      onChange={onToggleDeletePlugins}
+                      label={t('mode.deletePlugins')}
+                    />
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
-        ) : tab === 'security' ? (
-          <SyncSecuritySection
-            t={t}
-            settings={settings}
-            onToggleEncrypt={onToggleEncrypt}
-            onToggleIncludeSecrets={onToggleIncludeSecrets}
-            onPatchSettings={onPatchSettings}
-            onPersistEncryptPassword={onPersistEncryptPassword}
-            onPersistDecryptPassword={onPersistDecryptPassword}
-            onClearSavedPassword={onClearSavedPassword}
-          />
         ) : catalog.length === 0 ? (
           <Skeleton count={4} label={t('common.loading')} />
         ) : (
@@ -262,19 +285,6 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
                               </Button>
                             )}
                           </div>
-                        </div>
-                      )}
-                      {/* issue 132：插件专属的「跟随远端删除」。放在 Checkbox **之外**（同 sessions
-                          参数的理由：Checkbox 内部是 label，嵌进去点开关会连带切换分区勾选）。
-                          只在 plugins 已被勾选时出现 —— 没勾这个分区，这条开关没有作用对象。 */}
-                      {s.id === 'plugins' && sections.includes('plugins') && (
-                        <div className={css.controlRow}>
-                          <Checkbox
-                            checked={deletePlugins}
-                            onChange={onToggleDeletePlugins}
-                            label={<span className={css.categoryName}>{t('mode.deletePlugins')}</span>}
-                          />
-                          <InfoHint text={t('mode.deletePluginsHint')} label={t('common.infoHint')} />
                         </div>
                       )}
                     </div>

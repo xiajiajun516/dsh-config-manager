@@ -2,10 +2,14 @@ import { useId } from 'react'
 /**
  * 加密与密钥导出 + 解密密码（原来是两张独立的 Card：SecurityOptionsCard / DecryptPasswordCard）。
  * 2026-11-14 用户要求：三块设置收进**一个**弹窗，页面只剩摘要行 —— 两张卡因此不再是卡，
- * 而是弹窗里的两段（`.dialogSection` + 段间分隔线），由 SyncSettingsDialog 的第二页签承载。
+ * 而是弹窗里的两段（.settingsGroup），由 SyncSettingsDialog 的「自动同步与密码」页承载。
  *
  * 为什么写方向（加密密码）与读方向（解密密码）同页：它们服务同一份加密快照，一写一读；
- * 但两段各有自己的标题与 ⓘ —— 分开表达「给远端加密」与「读远端的加密」，不混成一个密码。
+ * 但两段各有自己的段头与 ⓘ —— 分开表达「给远端加密」与「读远端的加密」，不混成一个密码。
+ *
+ * 2026-11-14 二次收口（Stitch 稿 D-39）：段内改成**行式设置行**（标签左、控件右、行高 34、
+ * 0.5px 行线），段头的开关贴右。原来每项都是「标题一行 + 控件一行」的竖排 .field ——
+ * 同一页还要放自动同步四项，竖排一屏装不下。
  *
  * 约定同其余渲染段（t42）：只看渲染所需字段 + 回调；联动规则在 ui/sync-settings-view.ts 的
  * encryptToggle / includeSecretsToggle。
@@ -28,94 +32,122 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
   onPersistDecryptPassword: () => void
   onClearSavedPassword: () => void
 }) {
-  /** 开关的 id：让标题文字也能拨动（label htmlFor），与原来勾选框的点击面一致 */
+  /** 开关的 id：段头那句「加密备份」也能拨动（label htmlFor），与原来勾选框的点击面一致 */
   const encryptId = useId()
   const includeSecretsId = useId()
+  /** 两个密码框的 id：标签文字点一下就聚焦（行式布局里标签与输入框不再同属一个 .field） */
+  const passwordId = useId()
+  const confirmId = useId()
   return (
-    <div className={css.dialogSection}>
-      <span className={css.groupLabel}>{t('mode.security')}</span>
-      {/* 说明性文案一律进 ⓘ（2026-10-12 用户要求：卡里只留勾选项与控件）。
-          「加密方式 + 密码存哪 + 自动同步跳过加密快照」在 2026-11-14 合成一个键。 */}
-      <div className={css.controlRow}>
-        {/* 弹性开关（2026-11-14）：与「自动同步」页签同一类 —— 单一布尔、拨动即落库。 */}
-        <Switch id={encryptId} checked={settings.encrypt} onChange={onToggleEncrypt} label={t('mode.encrypt')} />
-        <label className={css.categoryName} htmlFor={encryptId}>{t('mode.encrypt')}</label>
-        <InfoHint
-          text={t('mode.encryptHint')}
-          label={t('common.infoHint')}
-        />
+    <>
+      <div className={css.settingsGroup}>
+        {/* 段头：段名在左，属于这一段的开关（加密备份）连它的名字 + ⓘ 一起贴右 ——
+            标题只标段名，控件自己的名字必须贴在控件旁边。 */}
+        <div className={css.settingsGroupHead}>
+          <span className={css.settingsGroupTitle}>{t('mode.security')}</span>
+          <span className={css.settingsGroupAction}>
+            <label className={css.settingsRowLabel} htmlFor={encryptId}>{t('mode.encrypt')}</label>
+            {/* 说明性文案一律进 ⓘ（2026-10-12 用户要求：卡里只留勾选项与控件）。
+                「加密方式 + 密码存哪 + 自动同步跳过加密快照」在 2026-11-14 合成一个键。 */}
+            <InfoHint text={t('mode.encryptHint')} label={t('common.infoHint')} />
+            {/* 弹性开关（2026-11-14）：与自动同步段同一类 —— 单一布尔、拨动即落库。 */}
+            <Switch id={encryptId} checked={settings.encrypt} onChange={onToggleEncrypt} label={t('mode.encrypt')} />
+          </span>
+        </div>
+        {settings.encrypt && (
+          <>
+            <div className={css.settingsRow}>
+              <span className={css.settingsRowMain}>
+                <label className={css.settingsRowLabel} htmlFor={passwordId}>{t('mode.password')}</label>
+              </span>
+              <span className={css.settingsRowControl}>
+                <input id={passwordId}
+                  aria-label={t('mode.password')}
+                  type="password"
+                  className={css.input + ' ' + css.settingsInput}
+                  value={settings.encryptPassword}
+                  autoComplete="new-password"
+                  placeholder={settings.encryptPasswordSaved ? t('mode.passwordPlaceholder') : undefined}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => { onPatchSettings({ encryptPassword: e.target.value }) }}
+                  // 失焦即落库（两个框一致才写）——用户不必手动保存，下次留空即沿用
+                  onBlur={onPersistEncryptPassword}
+                />
+              </span>
+            </div>
+            <div className={css.settingsRow}>
+              <span className={css.settingsRowMain}>
+                <label className={css.settingsRowLabel} htmlFor={confirmId}>{t('mode.passwordConfirm')}</label>
+              </span>
+              <span className={css.settingsRowControl}>
+                <input id={confirmId}
+                  aria-label={t('mode.passwordConfirm')}
+                  type="password"
+                  className={css.input + ' ' + css.settingsInput}
+                  value={settings.encryptPasswordConfirm}
+                  autoComplete="new-password"
+                  placeholder={settings.encryptPasswordSaved ? t('mode.passwordPlaceholder') : undefined}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => { onPatchSettings({ encryptPasswordConfirm: e.target.value }) }}
+                  onBlur={onPersistEncryptPassword}
+                />
+              </span>
+            </div>
+            {/* 数据丢失后果贴在它真正发生的那个开关下面（且只在确有已保存密码时出现）。
+                原先写在密码输入区里：用户在「改密码」的位置读到「取消勾选会删密码」，位置与决定对不上。 */}
+            {settings.encryptPasswordSaved && (
+              <span className={css.hint + ' ' + css.warnText + ' ' + css.settingsNote}>{t('mode.passwordClearNotice')}</span>
+            )}
+            {settings.encryptPassword !== '' && settings.encryptPassword !== settings.encryptPasswordConfirm && (
+              <span className={css.formError + ' ' + css.settingsNote}>{t('mode.passwordMismatch')}</span>
+            )}
+            {settings.encryptPassword === '' && !settings.encryptPasswordSaved && (
+              <span className={css.formError + ' ' + css.settingsNote}>{t('mode.passwordRequired')}</span>
+            )}
+          </>
+        )}
+        <div className={css.settingsRow}>
+          <span className={css.settingsRowMain}>
+            <label className={css.settingsRowLabel} htmlFor={includeSecretsId}>{t('mode.includeSecrets')}</label>
+            <InfoHint text={t('mode.includeSecretsHint')} label={t('common.infoHint')} />
+          </span>
+          <span className={css.settingsRowControl}>
+            <Switch id={includeSecretsId} checked={settings.includeSecrets} onChange={onToggleIncludeSecrets} label={t('mode.includeSecrets')} />
+          </span>
+        </div>
       </div>
-      {/* 数据丢失后果贴在它真正发生的那个勾选框下面（且只在确有已保存密码时出现）。
-          原先写在密码输入区里：用户在「改密码」的位置读到「取消勾选会删密码」，位置与决定对不上。 */}
-      {settings.encrypt && settings.encryptPasswordSaved && (
-        <span className={css.hint + ' ' + css.warnText}>{t('mode.passwordClearNotice')}</span>
-      )}
-      {settings.encrypt && (
-        <div className={css.secretFields}>
-          <div className={css.field}>
-            <span className={css.fieldLabel}>
-              {t('mode.password')}
-            </span>
-            <input aria-label={t('mode.password')}
+      {/* 读方向（拉取加密快照）自成一段，但同页 —— 它们服务同一份加密快照，分开在两页
+          会让用户以为要用两个密码。段头右侧的「已保存到本机」只说这一段的存储状态。 */}
+      <div className={css.settingsGroup}>
+        <div className={css.settingsGroupHead}>
+          <span className={css.settingsGroupTitle}>{t('mode.decryptGroup')}</span>
+          {settings.decryptPasswordSaved && <Badge kind="ok">{t('mode.decryptPasswordSaved')}</Badge>}
+        </div>
+        <div className={css.settingsRow}>
+          <span className={css.settingsRowMain}>
+            <span className={css.settingsRowLabel}>{t('mode.decryptPassword')}</span>
+            <InfoHint text={t('mode.decryptPasswordHint')} label={t('common.infoHint')} />
+          </span>
+          <span className={css.settingsRowControl}>
+            <input aria-label={t('mode.decryptPassword')}
               type="password"
-              className={css.input}
-              value={settings.encryptPassword}
-              autoComplete="new-password"
-              placeholder={settings.encryptPasswordSaved ? t('mode.passwordPlaceholder') : undefined}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => { onPatchSettings({ encryptPassword: e.target.value }) }}
-              // 失焦即落库（两个框一致才写）——用户不必手动保存，下次留空即沿用
-              onBlur={onPersistEncryptPassword}
+              className={css.input + ' ' + css.settingsInput}
+              value={settings.decryptPassword}
+              autoComplete="off"
+              placeholder={settings.decryptPasswordSaved ? t('mode.decryptPasswordPlaceholder') : undefined}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => { onPatchSettings({ decryptPassword: e.target.value }) }}
+              onBlur={onPersistDecryptPassword}
             />
+          </span>
+        </div>
+        {settings.decryptPasswordSaved && (
+          /* 危险语义：删除本机已保存的密码（不可逆，用户主动操作）—— 段尾右对齐，不与上面的
+             输入框挤一行（挤在一起会读成「这个按钮作用于当前正在输入的密码」）。 */
+          <div className={css.settingsGroupFoot}>
+            <Button size="sm" variant="danger" onClick={onClearSavedPassword}>
+              {t('mode.clearSavedPassword')}
+            </Button>
           </div>
-          <label className={css.field}>
-            <span className={css.fieldLabel}>{t('mode.passwordConfirm')}</span>
-            <input
-              type="password"
-              className={css.input}
-              value={settings.encryptPasswordConfirm}
-              autoComplete="new-password"
-              placeholder={settings.encryptPasswordSaved ? t('mode.passwordPlaceholder') : undefined}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => { onPatchSettings({ encryptPasswordConfirm: e.target.value }) }}
-              onBlur={onPersistEncryptPassword}
-            />
-          </label>
-          {settings.encryptPassword !== '' && settings.encryptPassword !== settings.encryptPasswordConfirm && (
-            <span className={css.formError}>{t('mode.passwordMismatch')}</span>
-          )}
-          {settings.encryptPassword === '' && !settings.encryptPasswordSaved && (
-            <span className={css.formError}>{t('mode.passwordRequired')}</span>
-          )}
-        </div>
-      )}
-      <div className={css.controlRow}>
-        <Switch id={includeSecretsId} checked={settings.includeSecrets} onChange={onToggleIncludeSecrets} label={t('mode.includeSecrets')} />
-        <label className={css.categoryName} htmlFor={includeSecretsId}>{t('mode.includeSecrets')}</label>
-        <InfoHint text={t('mode.includeSecretsHint')} label={t('common.infoHint')} />
+        )}
       </div>
-      {/* 段间分隔：读方向（拉取加密快照）与写方向（给远端加密）各自成段，但同页 —— 它们
-          服务同一份加密快照，分开在两页会让用户以为要用两个密码。 */}
-      <div className={css.dialogSectionDivide} />
-      <div className={css.field}>
-        <span className={css.fieldLabel}>{t('mode.decryptPassword')} <InfoHint text={t('mode.decryptPasswordHint')} label={t('common.infoHint')} /></span>
-        <input aria-label={t('mode.decryptPassword')}
-          type="password"
-          className={css.input}
-          value={settings.decryptPassword}
-          autoComplete="off"
-          placeholder={settings.decryptPasswordSaved ? t('mode.decryptPasswordPlaceholder') : undefined}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => { onPatchSettings({ decryptPassword: e.target.value }) }}
-          onBlur={onPersistDecryptPassword}
-        />
-      </div>
-      {settings.decryptPasswordSaved && (
-        <div className={css.actionRow}>
-          <Badge kind="ok">{t('mode.decryptPasswordSaved')}</Badge>
-          {/* 危险语义：删除本机已保存的密码（不可逆，用户主动操作） */}
-          <Button size="sm" variant="danger" onClick={onClearSavedPassword}>
-            {t('mode.clearSavedPassword')}
-          </Button>
-        </div>
-      )}
-    </div>
+    </>
   )
 }

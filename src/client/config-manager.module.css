@@ -1518,18 +1518,6 @@ body {
   }
 }
 
-/* 「左标题 · 右开关」行（2026-11-01）。设置类开关的标题就是这一行的名字，
-   开关是这一行的值 —— 控件跟在标题后面读起来是「启用 ☑」，用户得先读半句再找方框，
-   而 564px 画布里每行右侧本来就空着。开关统一贴右：勾选框仍在标签内（点标题也能切），
-   但 InfoHint 不放进 label，否则点 ⓘ 会顺手改掉设置。 */
-.toggleRow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--cm-fs-base);
-  color: var(--dsw-alias-label-primary);
-}
-
 .toggleLabel {
   cursor: pointer;
 }
@@ -1656,17 +1644,6 @@ body {
   .switchKnob {
     transition: none;
   }
-}
-
-/* 小节标题行：标题在左、该节的开关贴右（与 .toggleRow 同一口径）。 */
-.subBlockHead {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.subBlockHead > .groupLabel {
-  margin-bottom: 0;
 }
 
 /* —— 徽章 —— */
@@ -3938,12 +3915,6 @@ body {
    窄到放不下时随 flex-wrap 掉到下一行，仍然靠右。 */
 .sectionPickerRow > .pickerBtn {
   margin-left: auto;
-}
-
-.syncSubBlock {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 /* D-01 事实网格的**外框**（2026-11-14 设计稿「带框卡格」）：
@@ -8475,33 +8446,37 @@ button.profileRowMain:hover {
 
 
 
-/* ── 同步设置弹窗（2026-11-14 用户要求：同步分区 / 加密与密钥导出 / 解密密码三块收进一个弹窗）
-   两页签的理由：12 个分区勾选已占满 720 画布首屏，安全设置若竖排在同一页会被挤出滚动区。
-   页签做成分段控件（整宽等分 + 选中换底色），不引入第二套视觉体系。 */
+/* ── 同步设置弹窗（2026-11-14 用户要求：同步分区 / 自动同步与密码收进一个弹窗）
+   两个页签的理由：12 个分区勾选已占满 720 画布首屏，策略设置若竖排在同一页会被挤出滚动区。
+   页签做成分段控件（整宽等分 + 选中换底色），不引入第二套视觉体系。
+   D-39（2026-11-14 Stitch 稿）：条高 44（内距 4 + 项高 34）、项 13px，选中项白底 + 1px 边 ——
+   白底必须落在灰条上，否则选中态只剩字重差异，远看分不出当前页。 */
 .settingsTabs {
   display: flex;
   gap: 4px;
-  padding: 2px;
+  padding: 4px;
   border-radius: var(--cm-r-3);
   background: var(--dsw-alias-bg-layer-2);
-  margin-bottom: 12px;
+  margin: 0 0 14px;
 }
 .settingsTab,
 .settingsTabOn {
   flex: 1 1 0;
-  height: 26px;
-  border: none;
+  height: 34px;
+  border: 1px solid transparent;
   border-radius: var(--cm-r-2);
   background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  font-size: var(--cm-fs-sm);
+  color: var(--cm-text-2);
+  font-size: var(--cm-fs-title);
   cursor: pointer;
+  transition: background-color var(--cm-motion-fast) ease, color var(--cm-motion-fast) ease;
 }
 .settingsTab:hover {
   color: var(--cm-text-1);
 }
 .settingsTabOn {
   background: var(--dsw-alias-bg-layer-1);
+  border-color: var(--cm-line-2);
   color: var(--cm-text-1);
   font-weight: 500;
 }
@@ -8510,22 +8485,79 @@ button.profileRowMain:hover {
   outline: 2px solid var(--cm-accent);
   outline-offset: -2px;
 }
-/* 弹窗内的一段（原来是独立 Card）：段内纵向节奏 8，段与段之间靠分隔线，不靠留白堆叠 */
-.dialogSection {
+
+/* ── 行式设置页（D-39）：几段各自成 .settingsGroup，段头是 11px 小标题（右侧可挂开关或状态），
+   段内每行是「左标签（+ⓘ） / 右控件」；行高 34、行间 0.5px 细线、最后一行无线。
+   为什么是行式而不是卡内竖排：这一页有 8 个以上设置，竖排 .field（label 上、控件下）会占掉
+   480px 以上，而且每行控件宽度不一；行式把右边界对齐成一条竖线，扫读成本低一半。 */
+.settingsPage {
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+.settingsGroup {
+  display: flex;
+  flex-direction: column;
+}
+.settingsGroupHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  min-height: 22px;
+  margin-bottom: 2px;
 }
-/* 弹窗内的自动同步段：AutosyncCard 自带 0.5px 顶线与 10px 上内距（它是页面卡内的分节），
-   搬进弹窗后第一行就在页签下面 —— 顶线会变成一条无意义的横线，故在弹窗内归零。 */
-.dialogSection > .syncSubBlock {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 0;
+.settingsGroupTitle {
+  font-size: var(--cm-fs-meta);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--cm-text-2);
 }
-
-.dialogSectionDivide {
-  height: 1px;
-  background: var(--dsw-alias-border-l1);
-  margin: 14px 0;
+.settingsGroupAction {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.settingsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  border-bottom: 0.5px solid var(--cm-line-2);
+}
+.settingsRow:last-child {
+  border-bottom: 0;
+}
+.settingsRowMain {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.settingsRowLabel {
+  font-size: var(--cm-fs-base);
+  line-height: 1.25;
+  color: var(--cm-text-1);
+}
+.settingsRowControl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+/* 行式页里的输入控件统一 240 宽：右边界对齐才有「一列」的观感（D-39 的 240×30）。
+   .input 自带 height 28，不带 .field ⇒ 不会被 .field > .input 的 100% 覆盖。 */
+.settingsSelect,
+.settingsInput {
+  width: 240px;
+}
+.settingsNote {
+  padding: 4px 0;
+}
+.settingsGroupFoot {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
 }
