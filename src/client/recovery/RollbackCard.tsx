@@ -786,7 +786,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                     </span>
                   </span>
                 </div>
-                <div className={css.planScroll}>
+                <div className={`${css.planScroll} ${css.planScrollPadded}`}>
                   <RollbackFileChanges
                     files={previewFiles}
                     removals={previewRemovals}

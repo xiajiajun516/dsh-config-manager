@@ -2603,6 +2603,13 @@ body {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 装在受框限高容器里的回滚清单（RollbackCard）：行自己只留「语义色条」那一档左内边距、
+   右侧不留（那是给**无框**清单定的规矩），直接贴框时会变成勾选框贴左边框、±行数贴右边框
+   （2026-11-14 用户截图：文字与边框紧贴）。受框的那种由容器补左右内边距。 */
+.planScrollPadded {
+  padding: var(--cm-sp-2) var(--cm-sp-4);
+}
+
 /* —— 限高滚动容器（大报告/列表通用） —— */
 .planScroll,
 .mergeScroll,

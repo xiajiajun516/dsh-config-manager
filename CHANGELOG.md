@@ -90,8 +90,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
-- **回滚预览里每行的文件图标重新对齐成一列**：带逐行勾选的那份清单（设置页回滚卡的回滚预览）以前每行的「+2 −2 / 行数未统计」会掉到勾选框下面、图标整列跟着右移，看着像清单排版坏了；现在勾选框、图标、路径、行数各占固定一列，图标逐行落在同一条竖线上，删除项没有勾选框也留出同样一格。
-  **File icons in the rollback preview line up again**: in the version with per-file checkboxes (the preview opened from the rollback card in Settings) each row's "+2 −2" or "lines not counted" used to drop below the checkbox and push the icon one column right; the checkbox, icon, path and line counts now each keep a fixed column, so every icon sits on the same vertical line and deleted files reserve the same cell even though they cannot be ticked.
+- **回滚预览里每行的文件图标重新对齐成一列**：带逐行勾选的那份清单（设置页回滚卡的回滚预览）以前每行的「+2 −2 / 行数未统计」会掉到勾选框下面、图标整列跟着右移，看着像清单排版坏了；现在勾选框、图标、路径、行数各占固定一列，图标逐行落在同一条竖线上，删除项没有勾选框也留出同样一格；清单四周补了内边距，文字与行数不再紧贴边框。
+  **File icons in the rollback preview line up again**: in the version with per-file checkboxes (the preview opened from the rollback card in Settings) each row's "+2 −2" or "lines not counted" used to drop below the checkbox and push the icon one column right; the checkbox, icon, path and line counts now each keep a fixed column, so every icon sits on the same vertical line and deleted files reserve the same cell even though they cannot be ticked; the list also gained padding, so text and counts no longer sit hard against its border.
 - **让 agent 触发的同步带上你勾选的 MCP 等可选分区**：以前让模型推送或拉取时，即使你在同步分区里勾了「MCP」，快照里也不会带上它，还会提示该分区不可移植、已跳过；现在与界面手动同步一致，勾选的可选分区照常进入快照，会话内容仍然永远不上行。（issue #138）
   **Agent-triggered sync now carries the optional sections you ticked, MCP included**: previously a push or pull requested by the model shipped without MCP even though you had ticked it in the sync sections, and reported the section as non-portable and skipped; it now matches manual sync from the UI, and session content still never goes up.
 - **窄窗口下「更多 ▾」能正常展开**：页签放不下收进「更多」时，点开不再只剩一条缝——导航条过去会把弹层跟着一起裁掉，现在菜单完整浮在分段条下方，选中项与「我在这一页」的高亮都不变。
