@@ -36,6 +36,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
   **Patch write-back now checks config key names before writing**: when a key would be read by the host as a number, a boolean or null (`007`, `True` or `~`, for instance), or when it is an empty key that makes the host fail to parse the whole file, that item is skipped instead of written and the import result names the key and the quoted form to use; the other items in the same import still apply, so one bad key never rolls everything back. (issue #137)
 
+- **远端仓库里多了一份「最新配置」目录**：用 git 通道推送后，仓库根（或你配置的子目录）下会多出 `latest/`，里面永远是最新那份明文快照的内容，方便你自己或别的工具直接读，不必先翻快照列表；它与快照在**同一次提交**里写入，不会出现「快照已更新、`latest/` 还是旧的」的中间状态。它只是副本：删掉不影响任何功能，下次推送会补回来；加密快照不生成它（会给出明确提示），远端保留策略也不因它多留快照。（issue #141）
+  **The remote repo now carries a "latest config" folder**: after a git-channel push, the repo root (or your configured subdirectory) gains `latest/`, always holding the newest plaintext snapshot's content so you or another tool can read it directly without listing snapshots; it is written in the **same commit** as the snapshot, so there is never a moment where the snapshot is newer than `latest/`. It is only a copy — deleting it breaks nothing and the next push restores it; encrypted snapshots do not produce it (you get an explicit notice), and remote retention still counts snapshots only. (issue #141)
+
 ### 🔧 变更 · Changed
 
 - **说明文字改成悬停才出现，界面上不再有灰点图标**：原来每个 ⓘ 里的那句话（机制怎么工作、边界与限制、凭据写到哪儿、输入规则）现在挂在该标题、标签或按钮上，鼠标悬停即读；页面上一个说明图标都不剩，界面回到「标签 + 控件」。真正必须当场看到的东西（校验错误、危险操作后果、状态、空态、禁用原因）仍然常驻；同步设置页的段名与每一行标签也都带上了说明，悬停即读。

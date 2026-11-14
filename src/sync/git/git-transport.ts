@@ -190,6 +190,17 @@ const SNAPSHOTS_REL = 'snapshots';
  *  加密快照不写散文件目录（密文无法平铺为明文 JSON 分区；远端已存密文）。 */
 const SNAPSHOTS_ENCRYPTED_REL = 'snapshots-encrypted';
 /**
+ * 明文最新快照的**只读派生视图**（issue #141）：与 `snapshots/<id>/` 逐文件同布局，供人和 CI 直接读，
+ * 不必先知道快照 id。（契约：docs/contracts/sync-channel-v1.md）
+ *
+ * 四条硬约束，改这里之前先读：
+ *  - **只写不读**：list()/download()/合并/保留策略/冲突判定一律不把它当快照目录，也不依赖它的存在；
+ *  - **必须与快照进同一个 commit**：push 之后再单独提交一次就多出一次远端写（正是报告者担心的并发窗口）；
+ *  - 加密快照不写（密文没有明文镜像）—— 由引擎显式告警，绝不静默；
+ *  - 保留策略剪旧不动它：它永远指向最新那份明文快照。
+ */
+const LATEST_REL = 'latest';
+/**
  * 内容寻址 blob 仓在仓库内的相对目录（P1-4）。
  *
  * 为什么即使是 git 通道也要显式共享目录：git 本身按 blob 去重**存储**，但每个快照 commit
@@ -198,14 +209,20 @@ const SNAPSHOTS_ENCRYPTED_REL = 'snapshots-encrypted';
  */
 const BLOBS_REL = 'blobs';
 /**
- * 同步仓库（git 通道）顶层**只可能出现**这三个条目。issue #104 的 `adopt` 模式拿它当安全判据：
+ * 同步仓库（git 通道）顶层**只可能出现**这四个条目。issue #104 的 `adopt` 模式拿它当安全判据：
  * 远端分支的顶层出现别的名字 = 这不是本插件的同步仓库，合并它等于把别人的仓库内容搬进工作副本。
+ * `latest/` 只是承认「这是本插件写的派生视图」（issue #141），读取路径一律不碰它。
+ *
+ * 老版本客户端不知道 `latest/` ⇒ 只有在换仓库/远端历史重写时的 adopt 会 fail-closed 拒收
+ * （docs/known-issues/known-limits.md 有记录）。
  */
-const ADOPT_ROOT_ALLOW = new Set<string>([SNAPSHOTS_REL, SNAPSHOTS_ENCRYPTED_REL, BLOBS_REL]);
+const ADOPT_ROOT_ALLOW = new Set<string>([SNAPSHOTS_REL, SNAPSHOTS_ENCRYPTED_REL, BLOBS_REL, LATEST_REL]);
 /**
- * 同步仓库只在这三个顶层目录里写内容 ⇒ partial clone 的 sparse-checkout 面与它同源（issue #122）。
+ * 同步仓库只在这四个顶层目录里写内容 ⇒ partial clone 的 sparse-checkout 面与它同源（issue #122）。
  * 远端仓库比同步内容大几个数量级时（报告者现场：1.8 GB 仓库 / 6 MB 内容），全量 clone 与全量 fetch
- * 都要拉完整对象图，而工作副本真正需要的只有这三个目录。
+ * 都要拉完整对象图，而工作副本真正需要的只有这四个目录。
+ * `latest/` 虽是派生物，但它是同一 commit 里的产物：落在 cone 之外 `git add` 会直接拒收入库
+ * （"outside of your sparse-checkout definition"），所以必须进 sparse 面。
  */
 /* 具体的 sparse 面在 `syncDirs()` 里按子目录前缀派生（issue #131），基名与 ADOPT_ROOT_ALLOW 同源。 */
 /**
@@ -407,6 +424,8 @@ export class GitTransport implements SyncTransport {
    * 的唯一线索。列表接口把它如实回传，让状态自洽（绝不静默失败）。
    */
   private readErrors: { file: string; reason: string }[] = [];
+  /** 存量工作副本的 sparse cone 是否已确认包含 latest/（issue #141；只补一次，不每次同步都重设） */
+  private sparseConeCoversLatest = false;
   private readonly msg: MsgFunc;
   /** repoUrl 是否为网络地址（本地目录仓库 == false）：决定要不要额外禁 file 传输（SEC-12）。 */
   private readonly networkRepo: boolean;
@@ -544,26 +563,22 @@ export class GitTransport implements SyncTransport {
       if (await fsx.exists(dir)) await fsx.remove(dir); // 覆盖语义：先清旧目录，避免残留旧文件
       // P1-4：会话等大分区改为内容寻址外置（写进共享 blobs/，快照只留引用）
       await writeSnapshotToDir(snapshot, dir, fsx, { blobs: this.blobSink(fsx), sections: BLOB_SECTIONS });
-      // git 不跟踪空目录：为空文件类分区目录写占位文件，保证远端保留目录。
-      // 占位文件不参与 manifest.sectionHashes（基于传入数据计算）；读回时按名+内容过滤。
-      // 否则空分区（如未安装 skills）上传后目录在远端丢失，B 机全新 clone 下载即失败。
-      const plain = snapshot.sections as Partial<Record<SectionId, SectionData>>;
-      const blobSections = new Set<string>(BLOB_SECTIONS);
-      for (const [sid, prefix] of Object.entries(SECTION_FILE_PREFIXES)) {
-        // 外置分区不写 <prefix>/ 目录（引用文件已在 writeSnapshotToDir 里写好），无需占位文件
-        if (blobSections.has(sid)) continue;
-        const data = plain[sid as SectionId] as FilesSection | undefined;
-        if (data === undefined || data.files.length > 0) continue;
-        // joinFs 只接受两个参数，占位路径拼进 prefix 一起传
-        await fsx.writeFile(joinFs(dir, `${prefix}${SNAPSHOT_KEEP_FILE}`), new TextEncoder().encode(SNAPSHOT_KEEP_CONTENT));
-      }
+      // git 不跟踪空目录：为空文件类分区目录写占位文件，保证远端保留目录
+      // （否则空分区（如未安装 skills）上传后目录在远端丢失，B 机全新 clone 下载即失败）。
+      await this.writeEmptyFileSectionPlaceholders(dir, snapshot, fsx);
       // 同 id 旧密文单文件残留 → 一并清理（形态切换不残留）
       await fsx.remove(this.encryptedSnapshotFile(snapshot.id));
       rel = `${this.relDir(SNAPSHOTS_REL)}/${snapshot.id}`;
     }
+    // issue #141：`latest/` 派生视图与快照**进同一个 commit**（绝不在 push 之后补交一次）。
+    // 加密快照不写（没有明文镜像，引擎侧显式告警）；远端已有更新视图时保持不动（不变量：永远指最新）。
+    const latestRel = !encrypted && await this.writeLatestMirror(snapshot, fsx) ? this.relDir(LATEST_REL) : null;
     // blob 仓与快照同一次提交：引用文件与它引用的字节绝不跨 commit 分离
     const hasBlobs = await fsx.exists(this.blobsDir());
-    await this.runGit(hasBlobs ? ['add', '--', rel, this.relDir(BLOBS_REL)] : ['add', '--', rel]);
+    const addPaths = [rel];
+    if (hasBlobs) addPaths.push(this.relDir(BLOBS_REL));
+    if (latestRel !== null) addPaths.push(latestRel);
+    await this.runGit(['add', '--', ...addPaths]);
     const diff = await this.runGit(['diff', '--cached', '--quiet'], { allowNonZero: true });
     if (diff.code !== 0) {
       const verb = existed ? 'update' : 'add';
@@ -571,6 +586,70 @@ export class GitTransport implements SyncTransport {
       await this.runGit(['push', '-u', 'origin', 'HEAD'], { withCredential: true, requirePushToken: true });
     }
     return computeSnapshotMeta(snapshot);
+  }
+
+  /**
+   * 空文件类分区的 git 占位文件（git 不跟踪空目录）：
+   * 占位文件不参与 manifest.sectionHashes（基于传入数据计算）；读回时按名+内容过滤。
+   */
+  private async writeEmptyFileSectionPlaceholders(dir: string, snapshot: SyncSnapshot, fsx: SnapshotFs): Promise<void> {
+    const plain = snapshot.sections as Partial<Record<SectionId, SectionData>>;
+    const blobSections = new Set<string>(BLOB_SECTIONS);
+    for (const [sid, prefix] of Object.entries(SECTION_FILE_PREFIXES)) {
+      // 外置分区不写 <prefix>/ 目录（引用文件已在 writeSnapshotToDir 里写好），无需占位文件
+      if (blobSections.has(sid)) continue;
+      const data = plain[sid as SectionId] as FilesSection | undefined;
+      if (data === undefined || data.files.length > 0) continue;
+      // joinFs 只接受两个参数，占位路径拼进 prefix 一起传
+      await fsx.writeFile(joinFs(dir, `${prefix}${SNAPSHOT_KEEP_FILE}`), new TextEncoder().encode(SNAPSHOT_KEEP_CONTENT));
+    }
+  }
+
+  /**
+   * 写 `latest/` 派生视图（issue #141）：与 `snapshots/<id>/` 逐文件同布局，manifest 里保留**真实快照 id**
+   * （反向识别用）。返回本轮是否真的重建 —— false = 远端已有更新的视图，保持不动。
+   *
+   * 为什么按整份快照重写而不是拷目录：布局只有 layout.ts 一处权威，重写不会漏掉新增/删除的分区与占位文件；
+   * 外置分区只写引用文件（字节在共享 blobs/ 里按内容寻址，不重复落盘、不重复上传）。
+   */
+  private async writeLatestMirror(snapshot: SyncSnapshot, fsx: SnapshotFs): Promise<boolean> {
+    const dir = this.latestDir();
+    const existing = await this.readDirManifest(dir);
+    // 不变量：latest/ 永远指向最新那份 —— out-of-order 上传（例如补齐更旧的快照）绝不把它回退成旧的
+    if (existing !== null && existing.createdAt > snapshot.createdAt) return false;
+    // 存量工作副本的 sparse 面是旧版本建的（不含 latest/）⇒ 必须在写文件**之前**补齐 cone，否则 add 拒收
+    await this.ensureSparseConeCoversLatest();
+    await fsx.remove(dir); // 覆盖语义：先清旧视图，避免残留已下线的分区文件
+    await writeSnapshotToDir(snapshot, dir, fsx, { blobs: this.blobSink(fsx), sections: BLOB_SECTIONS });
+    await this.writeEmptyFileSectionPlaceholders(dir, snapshot, fsx);
+    return true;
+  }
+
+  /**
+   * 存量工作副本的 sparse-checkout 面是**旧版本**建的（不含 `latest/`）：cone 之外的路径 `git add` 会
+   * 拒绝入索引（"outside of your sparse-checkout definition"）⇒ 派生视图永远推不上去。
+   * 首次写 latest/ 前把 cone 补齐一次（克隆时 syncDirs() 已含它，新副本不会走到这里）。
+   *
+   * 非 sparse 副本（老 git 回落全量 clone）无需处理；读不出配置一律按「无需处理」走，绝不因优化失败。
+   */
+  private async ensureSparseConeCoversLatest(): Promise<void> {
+    if (this.sparseConeCoversLatest) return;
+    const flag = await this.runGit(['config', '--get', 'core.sparseCheckout'], { allowNonZero: true });
+    if (flag.code !== 0 || flag.stdout.trim() !== 'true') {
+      this.sparseConeCoversLatest = true;
+      return;
+    }
+    const latestLine = `/${this.relDir(LATEST_REL)}/`;
+    const gitPath = await this.runGit(['rev-parse', '--git-path', 'info/sparse-checkout'], { allowNonZero: true });
+    const relPath = gitPath.code === 0 ? gitPath.stdout.trim() : '';
+    const abs = relPath === '' ? '' : path.isAbsolute(relPath) ? relPath : path.join(this.o.workDir, relPath);
+    const content = abs === '' ? '' : await fs.readFile(abs, 'utf8').catch(() => '');
+    if (content.split(/\r?\n/).some((line) => line.trim() === latestLine)) {
+      this.sparseConeCoversLatest = true;
+      return;
+    }
+    const res = await this.runGit(['sparse-checkout', 'set', '--cone', ...this.syncDirs()], { allowNonZero: true });
+    this.sparseConeCoversLatest = res.code === 0;
   }
 
   /** 下载快照完整载荷。明文 → 读回散文件目录；加密 → 读回密文单文件。不存在的 id 必须抛错（契约）。 */
@@ -633,7 +712,12 @@ export class GitTransport implements SyncTransport {
       await fsx.remove(encFile);
       rel = `${this.relDir(SNAPSHOTS_ENCRYPTED_REL)}/${id}.json`;
     }
-    await this.runGit(['add', '-A', '--', rel]);
+    // 不变量：latest/ 绝不指向不存在的快照 —— 删掉的正是它镜像的那份时，同一 commit 里一并移除视图
+    // （保留策略永远保住刚 push 的那份，正常裁剪走不到这里；这是用户显式删最新快照的兜底）。
+    const mirror = await this.readDirManifest(this.latestDir());
+    const dropLatest = mirror !== null && mirror.id === id;
+    if (dropLatest) await fsx.remove(this.latestDir());
+    await this.runGit(dropLatest ? ['add', '-A', '--', rel, this.relDir(LATEST_REL)] : ['add', '-A', '--', rel]);
     const diff = await this.runGit(['diff', '--cached', '--quiet'], { allowNonZero: true });
     if (diff.code !== 0) {
       await this.runGit(['commit', '-m', `sync: delete snapshot ${id}`]);
@@ -1195,19 +1279,46 @@ export class GitTransport implements SyncTransport {
         { kind: 'protocol', retryable: false },
       );
     }
-    // ③ 合并（不改写任何本地提交）；冲突则 abort 回起点再报错
+    // ③ 合并（不改写任何本地提交）；冲突则 abort 回起点再报错。
+    // latest/ 是派生视图（issue #141）：两条历史各有一份内容不同的 latest/ 时是 add/add 冲突，
+    // 但它不该挡住换仓库 —— 派生层以远端为准继续合并，其它任何路径冲突仍整笔 abort。
     const mergeRes = await this.runGit(['merge', '--allow-unrelated-histories', '--no-edit', `origin/${branch}`], { allowNonZero: true });
     if (mergeRes.code !== 0) {
-      await this.runGit(['merge', '--abort'], { allowNonZero: true });
-      throw new GitTransportError(
-        this.msg('sync.git.adoptMergeConflict', { branch }),
-        { kind: 'conflict', retryable: false },
-      );
+      const resolved = await this.resolveLatestOnlyMergeConflict();
+      const committed = resolved ? await this.runGit(['commit', '--no-edit'], { allowNonZero: true }) : null;
+      if (committed === null || committed.code !== 0) {
+        await this.runGit(['merge', '--abort'], { allowNonZero: true });
+        throw new GitTransportError(
+          this.msg('sync.git.adoptMergeConflict', { branch }),
+          { kind: 'conflict', retryable: false },
+        );
+      }
     }
     // 让后续 pull --ff-only 有 upstream 可用（忽略失败：分支可能已被删/重命名）
     await this.runGit(['branch', '--set-upstream-to', `origin/${branch}`, branch], { allowNonZero: true });
     await this.writeLayoutMarker();
     this.repoReady = true;
+  }
+
+  /**
+   * adopt 合并冲突里只放行 latest/（issue #141）：派生视图两侧内容不同不算真冲突 ——
+   * 以远端的版本收敛（合并方向 origin/<branch> 即 theirs），其它路径一律不放行。
+   * 返回 false 表示冲突面不止 latest/，调用方必须 abort。
+   */
+  private async resolveLatestOnlyMergeConflict(): Promise<boolean> {
+    const unmerged = await this.runGit(['diff', '--name-only', '--diff-filter=U'], { allowNonZero: true });
+    if (unmerged.code !== 0) return false;
+    const paths = unmerged.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+    const latestRel = this.relDir(LATEST_REL);
+    const inLatest = (rel: string): boolean => rel === latestRel || rel.startsWith(`${latestRel}/`);
+    if (paths.length === 0 || !paths.every(inLatest)) return false;
+    for (const rel of paths) {
+      const takeTheirs = await this.runGit(['checkout', '--theirs', '--', rel], { allowNonZero: true });
+      // modify/delete 冲突：theirs 里没有这个文件 = 远端已不再有视图，按删除收敛
+      if (takeTheirs.code !== 0) await this.runGit(['rm', '-f', '--', rel], { allowNonZero: true });
+      else await this.runGit(['add', '--', rel], { allowNonZero: true });
+    }
+    return true;
   }
 
   /**
@@ -1496,11 +1607,11 @@ export class GitTransport implements SyncTransport {
   }
 
   /**
-   * 三个同步根目录（带前缀）：sparse 面、add 路径、adopt 判据都从这里取 ——
+   * 四个同步根目录（带前缀，含只读派生视图 latest/）：sparse 面、add 路径、adopt 判据都从这里取 ——
    * 任何一处漏加前缀都会让「写入 A、读取 B」（issue #131 的失败面）。
    */
   private syncDirs(): string[] {
-    return [this.relDir(SNAPSHOTS_REL), this.relDir(SNAPSHOTS_ENCRYPTED_REL), this.relDir(BLOBS_REL)];
+    return [this.relDir(SNAPSHOTS_REL), this.relDir(SNAPSHOTS_ENCRYPTED_REL), this.relDir(BLOBS_REL), this.relDir(LATEST_REL)];
   }
 
   private blobsDir(): string {
@@ -1591,6 +1702,11 @@ export class GitTransport implements SyncTransport {
 
   private snapshotsDir(): string {
     return joinFs(this.o.workDir, this.relDir(SNAPSHOTS_REL));
+  }
+
+  /** 明文最新快照的只读派生视图目录（<workDir>/latest/；配了前缀则在 <subdir>/latest/） */
+  private latestDir(): string {
+    return joinFs(this.o.workDir, this.relDir(LATEST_REL));
   }
 
   /** 加密快照密文单文件目录（<workDir>/snapshots-encrypted/；配了前缀则在 <subdir>/ 下） */

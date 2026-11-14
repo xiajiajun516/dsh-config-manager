@@ -12,7 +12,7 @@
 
 | 通道 | 快照位置 | 形态 |
 |---|---|---|
-| git | `snapshots/<snapshotId>/`（加密快照：`snapshots-encrypted/<snapshotId>.json`；可选的仓库内子目录前缀 `subdir` 会整体前移：`<subdir>/snapshots/...`、`<subdir>/snapshots-encrypted/...`、`<subdir>/blobs/...`） | 散文件目录（`manifest.json` + 按分区平铺） |
+| git | `snapshots/<snapshotId>/`（加密快照：`snapshots-encrypted/<snapshotId>.json`；可选的仓库内子目录前缀 `subdir` 会整体前移：`<subdir>/snapshots/...`、`<subdir>/snapshots-encrypted/...`、`<subdir>/blobs/...`） | 散文件目录（`manifest.json` + 按分区平铺）；另有**只读派生视图** `<subdir>/latest/`（见 §1.1） |
 | webdav | `<base>/dsh-config-manager/<snapshotId>.json` + 集合索引 `index.json` | 单文件 JSON 载荷 |
 | s3（含 oss / cos / minio / kodo） | `<prefix>/<snapshotId>.json` + 总索引 `<prefix>/index.json`（blob：`<prefix>/blobs/<sha256>` + `<prefix>/blobs-index.json`；`prefix` 缺省 `dsh-config-manager`） | 单文件 JSON 载荷（与 WebDAV 同构，便于跨通道迁移与排障） |
 | gist | `<filePrefix>-<snapshotId>.json` + 索引 `<filePrefix>-index.json`（`filePrefix` 缺省 `dsh-sync`） | 单文件 JSON 载荷（gist 是**扁平文件名**命名空间，故用前缀隔离；**不外置 blob**，见 §3） |
@@ -26,6 +26,31 @@ git 通道的 `subdir`（缺省空 = 仓库根，issue #131）让多个工具各
 散文件目录布局与 `layout.ts` 一致：JSON 分区按 `SECTION_JSON_PATHS` 平铺，
 文件类分区按 `SECTION_FILE_PREFIXES` 建目录放真实文件，`manifest.json` 记录
 `{ id, createdAt, manifest, sectionHashes }`。
+
+### 1.1 git 通道的 `latest/` 派生视图（issue #141）
+
+git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最新**明文**快照的逐文件副本，
+布局与 `snapshots/<id>/` 完全相同，`manifest.json` 里保留**真实快照 id**（不是字面量 `latest`）。
+用途是给人/别的工具一个「拿最新配置」的稳定路径，不必先枚举 `snapshots/`。
+
+实现方必须遵守：
+
+1. **存在性**：它是派生物，**允许不存在**（用户手工删掉、或上一次写失败）。读路径不得因为缺它报错；
+   下一次 push 会重建它。
+2. **只写不读**：`latest/` **不是**快照目录 —— 快照列表、拉取、合并、远端保留/裁剪、冲突判定
+   一律只看 `snapshots/` 与 `snapshots-encrypted/`。实现方不得把它枚举成第 N 份快照
+   （它的 `manifest.json` 里的 id 与 `snapshots/<id>/` 重复）。
+3. **同一次提交**：视图与快照写在**同一个 commit** 内，绝不能先 push 快照再补一次提交 ——
+   那正好造出「快照已更新、`latest/` 还是上一份」的窗口。
+4. **永远指向最新**：按 `createdAt` 判；补推更旧的快照不会让视图回退。被它镜像的那份快照被删除时，
+   视图**随同一提交**移除，不留悬空指向。
+5. **加密快照不生成视图**：密文没有明文镜像，也不为它造密文副本；push 侧**显式告警**（不静默跳过）。
+6. **与幂等 push 的关系**：内容哈希判定为「无变化」时不 upload，视图保持指向既有快照 id，
+   既不重建也不产生提交。
+7. **跨版本**：老版本客户端只在 `adopt`（换仓库 / 远端历史重写）时因未知顶层目录拒绝该远端
+   （fail-closed）；日常 push/pull 不受影响。见 `docs/known-issues/known-limits.md` §19。
+8. **不阻断换仓库**：`adopt` 合并两条历史时，若冲突路径**全部**落在 `latest/`，按远端版本收敛后继续合并
+   （派生层不该让换仓库失败）；只要有一处冲突在其它路径，仍整笔 abort 回起点报冲突。
 
 ## 2. `manifest` 扩展字段（相对 `bundle-format-v1`）
 

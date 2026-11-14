@@ -484,6 +484,7 @@ export const zh = {
   'sync.pruneListFailed': '远端快照裁剪失败：无法列出远端快照，{reason}',
   'sync.pruneDeleteFailed': '远端快照裁剪失败：删除快照 {id} 失败，{reason}',
   'sync.gcSkipped': '本轮已放弃回收远端孤立文件（{code}）：本轮不做回收，快照本身不受影响',
+  'sync.latestSkippedEncrypted': '加密快照不生成远端 latest/ 视图（密文无明文镜像）：latest/ 保持上一次明文快照的内容，需要明文视图请推一次非加密快照',
 
   // ---------- 配置市场（m-market：只读公开仓库目录读取 + 校验） ----------
   'market.invalidItemId': '非法市场条目 id: {id}（仅允许字母数字开头，字符限 . _ -）',
@@ -1011,6 +1012,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.pruneListFailed': 'Remote snapshot pruning failed: could not list remote snapshots, {reason}',
   'sync.pruneDeleteFailed': 'Remote snapshot pruning failed: deleting snapshot {id} failed, {reason}',
   'sync.gcSkipped': 'Skipped reclaiming remote orphan files this round ({code}); snapshots are unaffected',
+  'sync.latestSkippedEncrypted': 'Encrypted snapshots do not produce the remote latest/ view (ciphertext has no plaintext mirror): latest/ keeps the previous plaintext snapshot content; push a non-encrypted snapshot if you need it refreshed',
 
   // ---------- config marketplace (m-market: read-only public repo directory read + validation) ----------
   'market.invalidItemId': 'Invalid marketplace item id: {id} (must start with an alphanumeric; only . _ - allowed)',

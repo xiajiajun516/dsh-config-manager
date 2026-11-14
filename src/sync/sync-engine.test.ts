@@ -513,6 +513,29 @@ test('push: encrypt+password → 上传加密快照（manifest.encrypted=true，
     const state = await loadSyncState(tmp);
     assert.equal(state.lastSnapshotId, 'sync-enc');
     assert.ok(state.sections['settings'] !== undefined, '基线 hash 已记录（明文 hash，可比较）');
+    // issue #141：latest/ 只是 git 通道的明文派生视图 —— 非 git 通道不该冒这条告警
+    assert.ok(!report.warnings.some((w) => w.includes('latest/')), '非 git 通道不报 latest/ 告警: ' + JSON.stringify(report.warnings));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 加密快照 + git 通道 → 不生成 latest/ 视图且显式告警（issue #141，绝不静默）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-encrypt-git-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    // 只借 git 的通道标识：latest/ 的生成/告警由通道类型决定，与具体 git 实现无关
+    Object.defineProperty(transport, 'type', { value: 'git' });
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-enc-git', encrypt: true, password: 'pw-12345678' });
+    assert.equal(report.ok, true);
+    assert.ok(
+      report.warnings.some((w) => w.includes('latest/')),
+      '加密快照不生成 latest/ 必须显式告警（否则用户看到「push 成功但 latest/ 是旧内容」）: ' + JSON.stringify(report.warnings),
+    );
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

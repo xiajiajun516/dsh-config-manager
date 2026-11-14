@@ -103,6 +103,8 @@
 | 失败重试 | 读路径可重试，写路径明确不重试（`src/sync/git/git-transport.ts:727-729`） | 共享 `withSyncRetry` | 同左 | 同左 |
 | 单次载荷上限 | 无显式上限 | 无显式上限 | 无显式上限 | GitHub gist 文件截断 → 回落 `raw_url`（`src/sync/gist/gist-transport.ts:568-584`） |
 
+git 通道另维护一个**只读派生视图** `latest/`（issue #141，契约 → `docs/contracts/sync-channel-v1.md` §1.1）：`uploadLocked` 写快照后立即把同一份快照按同样布局写进 `latest/`，与快照**共用一个 add/commit/push**（绝不 push 后再补提交）；`list` / `download` / 保留裁剪 / merge 都不读它（`listLocked` 只枚举两个快照目录，顶层多一个目录天然被忽略）。三个约束由代码守住：① `writeLatestMirror` 比 `createdAt`，out-of-order 补推更旧的快照不回退视图；② `deleteLocked` 删除的 id 正是视图镜像的那份时，同一提交内一并移除（不留悬空）；③ 加密快照不写视图，引擎侧显式 `sync.latestSkippedEncrypted` 告警。派生视图要进 sparse cone（`syncDirs()`），存量工作副本首次写前由 `ensureSparseConeCoversLatest` 补齐 —— cone 外的路径 `git add` 会拒收。
+
 写入顺序（防止「索引指向不存在的 blob」）：webdav / s3 先把 blob 与 blob 索引落远端、**最后**写快照索引（`src/sync/webdav/webdav-transport.ts:408-422`、`src/sync/s3/s3-transport.ts:289-309`）；git 把索引与 `blobs/` 放进同一次 commit（`src/sync/git/git-transport.ts:315-336`）；gist 只有一次 PATCH，新载荷与合并后的索引一起写（`src/sync/gist/gist-transport.ts:284`）。
 
 共享契约在 `src/sync/transport.ts:123`（`list/upload/download/delete/probe`）、`:119`（412 判定）、`:355`（`sectionsEqual`：本地 sections 空 = 加密 ⇒ 必上传）。blob 语义统一在 `src/sync/blob-store.ts:31`（只有 `sessions`）、`:98-99`（引用缺失即硬失败）、`:117`（GC 保护窗口 10 分钟）。
@@ -151,6 +153,7 @@
 - `src/sync/gist/gist-conditional-write.test.ts`：强/弱 ETag 都不注入 `if-match`，删除路径同样不带（三条用例 `:108`/`:119`/`:130`，共同断言 `assertNoConditionalHeaders` `:100-104`）。
 - `src/sync/gist/gist-overwrite-semantics.test.ts`：写后复核三轮仍被覆盖 ⇒ 抛 `index-conflict`（用例 `:181`，断言 `code` `:198`）；`src/sync/gist/gist-delete-concurrency.test.ts`：删除路径同源防护（用例 `:187`，断言 `:200`）。
 - `src/sync/webdav/webdav-conditional-write.test.ts`、`src/sync/s3/s3-conditional-write.test.ts`：条件写头与 412/409 语义。
+- `src/sync/git/git-transport.test.ts`：latest/ 派生视图（同一次提交内生成、与快照逐文件一致、二次 push 不产生新 commit、加密不写、out-of-order 不回退、远端删掉后读路径不报错且可重建、存量 sparse cone 自动补齐、删快照时视图一并移除）。
 - `src/sync/autosync-scheduler.test.ts`、`src/sync/sync-state.test.ts`、`src/sync/merge.test.ts`、`src/sync/sync-selection.test.ts`、`src/sync/blob-store.test.ts`。
 - 端到端与路由：`tests/e2e-sync-apply.test.ts`（apply-items 路径）、`tests/e2e/plugin-data-migration.test.ts`、`tests/route/sync-rollback-route.test.ts`、`tests/route/sync-download-route.test.ts`、`tests/route/sync-workdir-reset-route.test.ts`、`tests/route/sync-snapshot-delete-route.test.ts`。
 - 档案：`src/profiles/dsh-profile-manager.test.ts`、`src/profiles/dsh-profile-incomplete-copy.test.ts`（标记契约，`:176`）、`src/profiles/dsh-profile-launcher.test.ts`。

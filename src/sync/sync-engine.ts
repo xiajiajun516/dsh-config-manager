@@ -998,6 +998,8 @@ export class SyncEngine {
     }
     // ② 上传远端（传输通道负责散文件落盘 + 提交推送）
     await this.transport.upload(snapshot);
+    // issue #141：git 的 latest/ 视图只由明文快照生成（密文无明文镜像）；显式告警，否则用户看到「push 成功但 latest/ 是旧内容」无从解释。
+    if (encrypted && this.transport.type === 'git') warnings.push(this.msg('sync.latestSkippedEncrypted'));
     // ②·1 裁剪远端快照：保留最新 MAX_REMOTE_SNAPSHOTS 个（含刚 push 的）。
     //      删除失败只告警（进 warnings），不上抛 —— 不阻断 push 主流程。
     //      放在 upload 之后（保证新快照已推送成功）与 recordBaseline 之前（先管好远端再记基线）。
