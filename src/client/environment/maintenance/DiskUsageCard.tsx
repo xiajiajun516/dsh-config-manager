@@ -25,7 +25,6 @@ import type { ConfigManagerApi } from '../../api.ts'
 import type { DiskUsageReport } from '../../../core/disk-usage.ts'
 import { Badge, Banner, Button, Card, Checkbox, IconButton } from '../../common/ui.tsx'
 import { SkeletonList } from '../../common/Skeleton.tsx'
-import { InfoHint } from '../../common/InfoHint.tsx'
 import { ConfirmDialog } from '../../common/ConfirmDialog.tsx'
 import { RefreshIcon } from '../../common/Icon.tsx'
 import { toast } from '../../common/toast-store.ts'
@@ -33,17 +32,11 @@ import css from '../../config-manager.module.css'
 
 export interface DiskUsageCardProps {
   api: ConfigManagerApi
-  /**
-   * ⓘ 说明按钮的可访问名（主字典 `common.infoHint`）。本卡全部文案走 **UiT**（`api.t`），
-   * 与主字典键域不同、取不到该键 —— 由调用方（环境页的维护视图）显式传入，
-   * 避免在英文界面下回落到源语言硬编码。
-   */
-  infoHintLabel: string
   /** 回收过期备份文件后通知外层刷新备份列表（否则产物库会短暂显示已删条目） */
   onBackupsChanged?: () => void
 }
 
-export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsageCardProps) {
+export function DiskUsageCard({ api, onBackupsChanged }: DiskUsageCardProps) {
   const t = api.t
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -141,19 +134,18 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
   return (
     <Card className={css.activityCard + ' ' + css.diskUsageCard}>
       <div className={css.groupHeader}>
-        <span className={css.groupLabel}>{t('diskUsage.title')}</span>
-        {/* 保留期说明属「机制怎么工作」（MOVE 类）：收进标题行的 ⓘ，不再常驻占一行；
-            标题旁也不再挂一颗「合计」徽章 —— 下面那行已经是合计，同一个数同一屏出现两次
-            只会让人先去比对它们。 */}
-        {exportRetentionDays !== null && (
-          <InfoHint
-            text={t('diskUsage.backupRetention', {
+        <span
+          className={css.groupLabel}
+          title={exportRetentionDays !== null
+            ? t('diskUsage.backupRetention', {
               count: String(report?.backupRetention.keepLast ?? 0),
               days: String(exportRetentionDays),
-            })}
-            label={infoHintLabel}
-          />
-        )}
+            })
+            : undefined}
+        >{t('diskUsage.title')}</span>
+        {/* 保留期说明属「机制怎么工作」（MOVE 类）：挂在标题文字的 title 上，不再常驻占一行；
+            标题旁也不再挂一颗「合计」徽章 —— 下面那行已经是合计，同一个数同一屏出现两次
+            只会让人先去比对它们。 */}
         <span className={css.statusSpacer} />
         <IconButton
           icon={<RefreshIcon size={14} />}
@@ -214,7 +206,7 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
             ))}
           </div>
 
-          <div className={css.groupLabel}>{t('diskUsage.clean.title')} <InfoHint text={t('diskUsage.clean.hint')} label={infoHintLabel} /></div>
+          <div className={css.groupLabel} title={t('diskUsage.clean.hint')}>{t('diskUsage.clean.title')}</div>
 
           {tmpMarket !== undefined && (
             <div className={css.actionRow} data-inline>

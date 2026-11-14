@@ -12,7 +12,6 @@ import { redact } from '../../security/redaction.ts'
 import { myPrLinkSource } from '../../ui/my-configs-view.ts'
 import { Badge, Banner, Button, Field } from '../common/ui.tsx'
 import { Modal } from '../common/Modal.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { myConfigFormValid } from './my-configs-view.ts'
 import type { AutoFieldBadge, MyConfigForm, MyWizardState } from './my-configs-view.ts'
 import css from '../config-manager.module.css'
@@ -91,7 +90,7 @@ export function MyConfigsWizard({
         closeDisabled={wizard.running || wizard.validating}
         trailing={wizard.mode === 'update'
           ? <Badge kind="info">{t('myconfigs.update.hint')}</Badge>
-          : <InfoHint text={t('myconfigs.upload.selectHint')} label={t('common.infoHint')} />}
+          : undefined}
       />
       <Modal.Body scroll>
 
@@ -109,7 +108,7 @@ export function MyConfigsWizard({
           }}
         />
         <div className={css.actionRow}>
-          <Button variant="primary" disabled={wizard.running} onClick={() => { fileInput.current?.click() }}>
+          <Button variant="primary" disabled={wizard.running} onClick={() => { fileInput.current?.click() }} title={t('myconfigs.upload.selectHint')}>
             {t('myconfigs.upload.select')}
           </Button>
         </div>
@@ -171,8 +170,8 @@ export function MyConfigsWizard({
             <Badge kind="ok">{t('myconfigs.upload.validateOk')}</Badge>
           </div>
         )}
-        {/* ⓘ 走 info 属性（它是标签的一部分），不再当 children 塞进字段体内：塞进去就等于
-            把它放进了 <label>，悬停/点击标签会连带作用到 ⓘ 上（Field 现在按 info 有无降级外壳）。 */}
+        {/* 说明文案走 Field 的 tooltip（挂在标签上），不塞进字段体内：塞进去等于放进 <label>，
+            悬停/点击标签会连带作用到说明上。 */}
         <Field label={t('myconfigs.upload.form.name')}>
           <input
             className={css.input}
@@ -191,8 +190,8 @@ export function MyConfigsWizard({
         {/* F6 发布模式：迁移（全带）/ 分享（自动排除敏感分区 + 强制隐私拦截）—— 复用既有 conflictOptions/radioLabel 单选样式 */}
         <Field
           label={t('myconfigs.upload.mode.title')}
-          info={wizard.form.publishMode === 'share'
-            ? <InfoHint text={t('myconfigs.upload.mode.shareHint')} label={t('common.infoHint')} />
+          tooltip={wizard.form.publishMode === 'share'
+            ? t('myconfigs.upload.mode.shareHint')
             : undefined}
         >
           <div className={css.conflictOptions}>

@@ -2,7 +2,7 @@
  * cross-F3（t50）客户端守卫：中断的档案复制残留必须以**独立形态**呈现，且只给删除。
  *
  * 本仓库 React 侧无组件测试框架，沿用 `src/client/common/*.test.ts` 的**源码守卫**模式
- * （与 report-dismiss.test.ts / info-hint-guard.test.ts 同风格）：
+ * （与 report-dismiss.test.ts / section-title-action.test.ts 同风格）：
  *  1. 行内形态徽章必须走 `profileShapeLabelKey(profile)`（残留行 = 「未完成的副本」，不是 generic）；
  *  2. 动作行里启动/停止、复制、改名三处必须由 `profileRowCapabilities` 的判据把守，**删除不得被把守**（它是残留行的唯一动作）；
  *  3. 残留行必须给出 dir（经 `redact()`）、来源与开始时间；

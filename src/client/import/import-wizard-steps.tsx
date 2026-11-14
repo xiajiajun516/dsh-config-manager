@@ -18,7 +18,6 @@ import {
 } from '../common/ui.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { ImportIcon } from '../common/Icon.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner, ErrorList } from '../common/ErrorBanner.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
 import {
@@ -102,7 +101,7 @@ export function SelectStep(props: {
   const { fileInput, selectModel, uploading, error, onCancel, onPickFile, onReset, apiT, t } = props
   return (
     <div className={`${css.viewBody} ${css.sparseFill}`}>
-      <SectionTitle title={t('import.select.title')} info={<InfoHint text={t('import.select.hint')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('import.select.title')} tooltip={t('import.select.hint')} />
       <input
         ref={fileInput}
         type="file"
@@ -176,7 +175,7 @@ export function ConsultStage(props: {
   const { consultLoading, consultReport, error, onNext, onReset, apiT, t } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.preview.title')} info={<InfoHint text={t('import.consult.hint')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('import.preview.title')} tooltip={t('import.consult.hint')} />
       {consultLoading && <Skeleton shape="line" count={5} label={apiT('consult.loading')} />}
       {consultReport !== null && <ConsultCard report={consultReport} t={apiT} />}
       {!consultLoading && consultReport === null && error === null && (
@@ -208,12 +207,12 @@ export function DecryptArchiveStep(props: {
   return (
     <div className={css.viewBody}>
       {/* 解锁卡（W3 R-3）：徽章 / 标题 / 密码 / 动作收进同一张卡，屏幕上只剩一个黑底主按钮。
-          机制句只进标题 ⓘ（DESIGN §7：说明性文案不进正文；info-hint-guard t6-1 钉死这条）。 */}
+          机制句只进标题 title（DESIGN §7：说明性文案不进正文）。 */}
       <Card className={css.optionsCard}>
         <div className={css.statRow}>
           <Badge kind="error">🔒 {t('import.decrypt.badge')}</Badge>
         </div>
-        <SectionTitle title={t('import.decryptArchive.title')} info={<InfoHint text={t('import.decryptArchive.hint')} label={t('common.infoHint')} />} />
+        <SectionTitle title={t('import.decryptArchive.title')} tooltip={t('import.decryptArchive.hint')} />
         <input
           type="password"
           className={css.input}
@@ -280,7 +279,7 @@ export function PathMappingStage(props: {
   const { issues, mappings, onMappingsChange, onBack, onNext, t, api } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.paths.title')} info={<InfoHint text={t('import.paths.hint')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('import.paths.title')} tooltip={t('import.paths.hint')} />
       <PathMappingForm issues={issues} initial={mappings} t={t} onChange={onMappingsChange} api={api} />
       <div className={css.actionRow}>
         <Button variant="ghost" onClick={onBack}>{t('common.back')}</Button>
@@ -302,7 +301,7 @@ export function SecretsStage(props: {
   const { missing, value, onValueChange, onBack, onNext, t } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.secrets.title')} info={<InfoHint text={t('import.secrets.hint')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('import.secrets.title')} tooltip={t('import.secrets.hint')} />
       <SecretsForm
         missing={missing}
         value={value}

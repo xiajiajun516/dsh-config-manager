@@ -11,7 +11,6 @@ import { computeGithubLoginView } from '../sync/sync-view.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import type { MyGithubFlowState } from '../../ui/my-configs-view.ts'
 import { Badge, Banner, Button, Card } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import type { LoginView } from './my-configs-view.ts'
 import css from '../config-manager.module.css'
@@ -58,7 +57,7 @@ export function MyConfigsLoginCard({ loginView, github, t, uiT, onStart, onCance
     return (
       <Card className={css.marketLoginCard}>
         <div className={css.marketLoginRow}>
-          <Button variant="primary" disabled={!githubView.canStart} onClick={() => { onStart() }}>
+          <Button variant="primary" disabled={!githubView.canStart} onClick={() => { onStart() }} title={t('myconfigs.login.hint')}>
             {githubView.startLabel}
           </Button>
           {githubView.canCancel && (
@@ -67,7 +66,6 @@ export function MyConfigsLoginCard({ loginView, github, t, uiT, onStart, onCance
             </Button>
           )}
         </div>
-        <InfoHint text={t('myconfigs.login.hint')} label={t('common.infoHint')} />
         {loginView.kind === 'token-invalid' && <Banner kind="warn">{t('myconfigs.error.loadStatus')}</Banner>}
         {githubView.showCode && renderDeviceCode()}
         <div className={css.marketLoginRow}>

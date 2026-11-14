@@ -6,7 +6,7 @@
  *
  * 交互契约（Lead 2026-10-18 冻结）：**裁决粒度 = 分区**。
  *   分区卡承载动作按钮（采用本地 / 采用远端 / 采用自动合并），冲突明细只做展示；
- *   因此界面常驻写明「冲突按分区整体裁决（本版不做逐条裁决）」—— 走 ⓘ，不占正文。
+ *   因此界面常驻写明「冲突按分区整体裁决（本版不做逐条裁决）」—— 同时挂成工具栏的 `title`，不占正文。
  *
  * 两个按钮口径（2026-10-21 用户裁决后）：
  *   - **「采用自动合并」只在真有自动合并结果时才出现**（decision === 'merge'）；
@@ -25,7 +25,6 @@ import { Badge, Banner, Button, SectionTitle } from '../common/ui.tsx'
 import { CheckIcon, RefreshIcon } from '../common/Icon.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { redact } from '../../security/redaction.ts'
 import type { MergeApplyResponse, MergePreviewResponse, SyncApi } from './sync-api.ts'
 import {
@@ -88,7 +87,7 @@ export function MergePreviewView({
       {showTitle && (
         <SectionTitle
           title={t('merge.title')}
-          info={<InfoHint text={t('merge.subtitle')} label={t('common.infoHint')} />}
+          tooltip={t('merge.subtitle')}
         />
       )}
 
@@ -107,7 +106,7 @@ export function MergePreviewView({
       {/* 工具栏：批量裁决（一次改全部分区的草稿）+ 重新预览（只读）。
           「全部采用自动合并」「留到下次」只在有意义时出现（见 MERGE_BULK_BUTTONS 的 filter）。 */}
       <div className={css.mergeToolbar}>
-        <span className={css.mergeToolbarLabel}>{t('merge.bulk.title')}</span>
+        <span className={css.mergeToolbarLabel} title={t('merge.scopeNotice') + ' ' + t('merge.bulk.hint')}>{t('merge.bulk.title')}</span>
         {MERGE_BULK_BUTTONS.filter((btn) => (
           (btn.action !== 'useMerged' || anyMerged) && (btn.action !== 'leavePending' || counts.needsDecision > 0)
         )).map((btn) => (
@@ -121,7 +120,6 @@ export function MergePreviewView({
           </Button>
         ))}
         <span className={css.statusSpacer} />
-        <InfoHint text={t('merge.scopeNotice') + ' ' + t('merge.bulk.hint')} label={t('common.infoHint')} />
         <Button size="sm" disabled={busy || loading} onClick={onReload}>
           <span className={css.mergeIconLabel}>
             <RefreshIcon size={12} />

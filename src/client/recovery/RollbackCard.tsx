@@ -58,7 +58,6 @@ import type {
 import { redact } from '../../security/redaction.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Spinner } from '../common/ui.tsx'
 import { Icon } from '../common/Icon.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -422,16 +421,16 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   return (
     <>
       <Card>
-        {/* 卡头：标题 + ⓘ 说明（2026-10-12 用户要求说明性文案进 ⓘ：原来的常驻副标题正是被它替代的那一行）。
+        {/* 卡头：标题 + 悬停说明（说明性文案挂在标题的 title 上，不再另起一行副标题）。
             2026-10-12 同一轮用户要求：本卡**退出折叠** —— 摘要与入口常驻可见，台账整块搬进弹窗。 */}
-        <SectionTitle title={t('rollback.title')} info={<InfoHint text={t('rollback.desc')} label={t('common.infoHint')} />} />
+        <SectionTitle title={t('rollback.title')} tooltip={t('rollback.desc')} />
 
         {!hasApi && <Banner kind="warn">{t('rollback.apiMissing')}</Banner>}
 
         {/* issue #88：总开关。它**必须常驻可见** —— 关掉之后，用户还得有地方能把它打开。
             关闭语义 = 不订阅会话事件、不写台账、聊天入口收起（文案逐条对应代码，不含糊）。 */}
         {hasPrefsApi && (
-          <div className={css.actionRowTop}>
+          <div className={css.actionRowTop} title={t('rollback.switch.hint')}>
             <Checkbox
               // 三态：`null`（还没读到）显示为未勾选且**禁用** —— 绝不替磁盘猜一个值
               checked={prefsEnabled === true}
@@ -439,7 +438,6 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
               onChange={togglePrefs}
               label={t('rollback.switch.label')}
             />
-            <InfoHint text={t('rollback.switch.hint')} label={t('common.infoHint')} />
             {/* 三态不再各占一行解释：提示做成开关**旁边**的状态徽章，分歧态再给一次点击就生效的动作。
                 「还没读到」= info 徽章（开关此时同时禁用）；「磁盘开着但本进程没生效」= warn 徽章 + 立即生效。 */}
             {hasPrefsApi && prefsEnabled === null && <Badge kind="info">{t('rollback.switch.reading')}</Badge>}
@@ -549,18 +547,23 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             closeLabel={t('common.close')}
             trailing={(
               <span className={css.shHeaderTrailing}>
-                {/* 留存/淘汰口径属机制说明 → 收进 ⓘ（DESIGN.md §7「说明性文案分层」）：屏上只留数字摘要，
+                {/* 留存/淘汰口径属机制说明 → 挂在刷新按钮的 title 上（DESIGN.md §7「说明性文案分层」）：屏上只留数字摘要，
                     20/50/救援点上限这些细节一个字不改，仍在同一条字典键里。 */}
-                <InfoHint
-                  text={t('rollback.retention.hint', {
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy || refreshing}
+                  loading={refreshing}
+                  onClick={() => { load({ keep: true }) }}
+                  title={t('rollback.retention.hint', {
                     perSession: ROLLBACK_MAX_POINTS_PER_SESSION,
                     total: ROLLBACK_MAX_POINTS_TOTAL,
                     guardsPerSession: ROLLBACK_MAX_POINTS_GUARDS_PER_SESSION,
                     guards: ROLLBACK_MAX_POINTS_GUARDS_TOTAL,
                   })}
-                  label={t('common.infoHint')}
-                />
-                <Button size="sm" variant="ghost" disabled={busy || refreshing} loading={refreshing} onClick={() => { load({ keep: true }) }}>{t('rollback.refresh')}</Button>
+                >
+                  {t('rollback.refresh')}
+                </Button>
               </span>
             )}
           />

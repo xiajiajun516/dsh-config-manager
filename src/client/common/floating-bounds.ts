@@ -1,5 +1,5 @@
 /**
- * 浮层夹紧基准（UI v2）—— InfoHint 气泡与 Select 菜单**共用这一份实现**。
+ * 浮层夹紧基准（UI v2）—— Select 菜单与其它自绘浮层**共用这一份实现**。
  *
  * 为什么必须有它：本插件的弹层（气泡 / 下拉 / 菜单）**都要 portal 进插件根容器**
  * `#dsh-config-manager-root`（见 Modal.tsx 的 MODAL_ROOT_ID 说明 —— 挂 body 会被宿主

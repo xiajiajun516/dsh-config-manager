@@ -48,7 +48,6 @@ import { runStore } from '../run-store.ts'
 import {
   Badge, Banner, Button, Card, SectionTitle, Stepper,
 } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner, ErrorList } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
 import type { RunProgress } from '../common/progress-view.ts'
@@ -150,7 +149,7 @@ function CompatibilityStep(props: {
   const notes = compatibilityNotes(analysis.compatibilityReasons)
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.compatibility.title')} info={<InfoHint text={t('import.compatibility.hint')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('import.compatibility.title')} tooltip={t('import.compatibility.hint')} />
       <div className={css.statRow}>
         <Badge kind={compatibilityBadgeKind(level)}>
           {t('import.compatibility.score', { score: t(scoreKey) })}
@@ -263,7 +262,7 @@ function ContentSelectStage(props: {
   } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.picker.title')} info={<InfoHint text={t('import.picker.hint')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('import.picker.title')} tooltip={t('import.picker.hint')} />
       <div className={css.statRow}>
         <Badge kind={summary.willChange > 0 ? 'info' : 'ok'}>{t('import.preview.willChange', { count: String(summary.willChange) })}</Badge>
         {summary.unchanged > 0 && <Badge kind="ok">{t('import.preview.unchanged', { count: String(summary.unchanged) })}</Badge>}

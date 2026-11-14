@@ -327,33 +327,33 @@ export function Spinner({ label }: SpinnerProps) {
 export interface FieldProps {
   label: string
   /**
-   * 常驻说明：只留给**动态/元数据**文案（校验失败重申、当前值、计数）。纯说明性文案走 `info`。
+   * 常驻说明：只留给**动态/元数据**文案（校验失败重申、当前值、计数）。纯说明性文案走 `tooltip`。
    */
   hint?: string
-  /** 说明性文案的 ⓘ（调用点传 `<InfoHint text={t('原键')} label={t('common.infoHint')} />`），贴在字段标签右侧 */
-  info?: ReactNode
+  /**
+   * 说明性文案的**悬停承载**（2026-11-14 用户要求「把所有页面的 ⓘ 都换成悬停能读到的 title」）：
+   * 传原 ⓘ 的那句话，组件把它挂成标签的 `title`，界面不再有图标。
+   */
+  tooltip?: string
   children: ReactNode
 }
 
 /**
- * 表单字段（标签 + 控件 + 说明 / ⓘ）。
+ * 表单字段（标签 + 控件 + 常驻说明）。
  *
- * **带 ⓘ 时外壳不是 `<label>`**（2026-11-04 用户反馈：悬停选择框会连带点亮 ⓘ）。
- * 为什么：`<label>` 会把「指针在标签区域」、「点击」两件事都转发给它的控件 ——
- * ⓘ 是个按钮，塞进 label 后它的悬停/点击与控件成了一件事（在这之前连「点 ⓘ 会顺手
- * 切掉设置」都得靠调用点自己躲）。控件自己的无障碍名不靠这层标签：本仓库的控件一律
- * 由调用点给 `aria-label` / `ariaLabel`（Select 的必填 prop、input 的 aria-label）。
- * 不带 ⓘ 时仍是 `<label>`（点标签文字聚焦控件是免费的可用性），行为一字未改。
+ * 外壳恒为 `<label>`（点标签文字即聚焦控件）。历史上带 ⓘ 时外壳被迫降级成 `<div>`，
+ * 因为 `<label>` 会把「指针在标签区域 / 点击」转发给控件，而 ⓘ 是个按钮；2026-11-14
+ * 起 ⓘ 全部换成标签上的 `title`，那条转发又变回想要的行为，于是外壳统一回 `<label>`。
+ * 控件自己的无障碍名不靠这层标签：本仓库的控件一律由调用点给 `aria-label` / `ariaLabel`。
  */
-export function Field({ label, hint, info, children }: FieldProps) {
-  const body = (
-    <>
-      <span className={css.fieldLabel}>{label}{info !== undefined ? <> {info}</> : null}</span>
+export function Field({ label, hint, tooltip, children }: FieldProps) {
+  return (
+    <label className={css.field}>
+      <span className={css.fieldLabel} title={tooltip}>{label}</span>
       {children}
       {hint !== undefined && <span className={css.hint}>{hint}</span>}
-    </>
+    </label>
   )
-  return info === undefined ? <label className={css.field}>{body}</label> : <div className={css.field}>{body}</div>
 }
 
 /* ---------------- SectionTitle ---------------- */
@@ -362,15 +362,14 @@ export interface SectionTitleProps {
   title: string
   /**
    * 常驻副标题：只留给**动态/元数据**文案（当前项名、计数、状态说明、必须看到的下一步指引）。
-   * 纯说明性文案（机制 / 边界 / 背景 / 输入规则）一律走 `info`。
+   * 纯说明性文案（机制 / 边界 / 背景 / 输入规则）一律走 `tooltip`。
    */
   subtitle?: string
   /**
-   * 说明性文案的 ⓘ（调用点传 `<InfoHint text={t('原键')} label={t('common.infoHint')} />`）。
-   * 渲在标题**同一行**右侧（DESIGN.md §7「摆放」形态①）；与它互斥的旧写法是把同一句话
-   * 常驻成 `subtitle` —— 那就把页面又撑长了一行。
+   * 说明性文案的**悬停承载**（2026-11-14 用户要求「把所有页面的 ⓘ 都换成悬停能读到的 title」）：
+   * 挂成标题的 `title` —— 鼠标停在这行标题上就能读到机制/边界/背景那几句话，界面不再有图标。
    */
-  info?: ReactNode
+  tooltip?: string
   /**
    * 标题行右端的动作控件（刷新 / 体检这类「只作用于本区块」的按钮）。
    * 2026-11-14：此前调用点只能把按钮塞进 `info` 槽并自己补 `statusSpacer`（见 SyncLogList），
@@ -380,13 +379,12 @@ export interface SectionTitleProps {
   action?: ReactNode
 }
 
-/** 区块标题（页面内二级标题 + 可选副标题 / ⓘ 说明 / 右侧动作） */
-export function SectionTitle({ title, subtitle, info, action }: SectionTitleProps) {
+/** 区块标题（页面内二级标题 + 可选副标题 / 悬停说明 / 右侧动作） */
+export function SectionTitle({ title, subtitle, tooltip, action }: SectionTitleProps) {
   return (
     <div className={css.sectionTitleBlock}>
       <div className={css.sectionTitleRow}>
-        <h3 className={css.sectionTitle}>{title}</h3>
-        {info}
+        <h3 className={css.sectionTitle} title={tooltip}>{title}</h3>
         {action !== undefined && (
           <>
             <span className={css.statusSpacer} />

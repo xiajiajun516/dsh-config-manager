@@ -1,7 +1,7 @@
 /**
  * SectionTitle 的 `action` 槽守卫（W5，2026-11-14）。
  *
- * 为什么需要这条：卡头要「标题 + ⓘ + 右侧动作」时，最省事的写法是调用方自己再拼一行
+ * 为什么需要这条：卡头要「标题 + 右侧动作」时，最省事的写法是调用方自己再拼一行
  * （历史上叫过 .recoveryHead 之类），于是同一页出现两套标题行 —— 字号、间距、图标基线各一套，
  * 下次改标题样式时只改到一半。口径固定为：需要标题行右侧动作时**只传 `action`**，
  * 由 SectionTitle 复用 .sectionTitleRow 的 flex 与 .statusSpacer 推尾，不新造容器类。
@@ -39,11 +39,14 @@ test('action 槽：props 可选、条件渲染、用共享 statusSpacer 推尾�
   assert.match(body, /\{action !== undefined && \(\s*<>\s*<span className=\{css\.statusSpacer\} \/>\s*\{action\}\s*<\/>\s*\)\}/,
     'action 必须是条件渲染，且先渲共享的 statusSpacer 再渲 action（纯增量：不传时 DOM 逐字不变）')
 
-  // 位置：动作必须在标题行内、{info} 之后 —— 放 subtitle 之后会另起一行（视觉上回到两套标题行）
-  const infoAt = body.indexOf('{info}')
+  // 位置：动作必须在 .sectionTitleRow 内、标题 <h3> 之后 —— 放 subtitle 之后会另起一行
+  // （视觉上回到两套标题行）。2026-11-14 起没有 info 槽（ⓘ 下线），标题行里只有标题与动作。
+  const rowAt = body.indexOf('css.sectionTitleRow')
+  const titleAt = body.indexOf('<h3')
   const actionAt = body.indexOf('{action !== undefined')
-  assert.ok(infoAt >= 0 && actionAt > infoAt,
-    'action 必须渲染在标题行的 {info} 之后（放进 sectionTitleRow，而不是 subtitle 之后另起一行）')
+  const subtitleAt = body.indexOf('{subtitle !== undefined')
+  assert.ok(rowAt >= 0 && titleAt > rowAt && actionAt > titleAt && subtitleAt > actionAt,
+    'action 必须渲染在 .sectionTitleRow 内、<h3> 之后、subtitle 之前（不得另起一行）')
 })
 
 test('恢复页（P-05）把「刷新」挂在 SectionTitle 的 action 槽上，而不是自建卡头', () => {

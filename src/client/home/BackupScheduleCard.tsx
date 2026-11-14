@@ -9,7 +9,7 @@
  * 保存成功清草稿（宿主配置为权威）。
  *
  * 本文件是**从构建产物（lib/client.js，2026-10-02T23:33Z）还原**的：一次误用的通配删除
- * 把它删掉了，而 git 里那份是**更早的修订**（还没有 InfoHint 迁移），没有可直接恢复的源。
+ * 把它删掉了，而 git 里那份是**更早的修订**（早于那批说明文案迁移），没有可直接恢复的源。
  * 逻辑、文案键、CSS 类与调用顺序按编译产物逐段翻译，**排版与注释措辞是重建的**。
  * 教训见 AGENTS.md「常见坑」。
  */
@@ -37,7 +37,6 @@ import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, StatusDot, Switch } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
@@ -216,8 +215,7 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
   return (
     <Card>
       <div className={css.groupHeader}>
-        <span className={css.groupLabel}>{t('backupSchedule.title')}</span>
-        <InfoHint text={t('backupSchedule.hint')} label={t('common.infoHint')} />
+        <span className={css.groupLabel} title={t('backupSchedule.hint')}>{t('backupSchedule.title')}</span>
         <span className={css.statusSpacer} />
         {/* 次序按设计稿（2026-11-14 D-01）：立即备份（ghost）在左、保存（primary）在右 ——
             主操作收在动作行右端，与 .actionRow / .dialogFooter 的既有收尾方向一致。 */}
@@ -293,8 +291,7 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
               label={t('backupSchedule.enabled')}
               disabled={busy}
             />
-            <label className={css.toggleLabel} htmlFor={enabledSwitchId}>{t('backupSchedule.enabled')}</label>
-            {draft.enabled && <InfoHint text={t('backupSchedule.enabledHint')} label={t('common.infoHint')} />}
+            <label className={css.toggleLabel} htmlFor={enabledSwitchId} title={t('backupSchedule.enabledHint')}>{t('backupSchedule.enabled')}</label>
             {draft.enabled && (
               <Select
                 value={draft.interval}
@@ -314,6 +311,7 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
                 disabled={busy}
                 style={{ width: 'auto' }}
                 ariaLabel={t('backupSchedule.weekday')}
+                title={t('backupSchedule.customHint')}
                 onChange={(next) => {
                   updateDraft({
                     ...draft,
@@ -329,6 +327,7 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
                 disabled={busy}
                 style={{ width: 'auto' }}
                 ariaLabel={t('backupSchedule.hour')}
+                title={t('backupSchedule.customHint')}
                 onChange={(next) => {
                   updateDraft({
                     ...draft,
@@ -344,6 +343,7 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
                 disabled={busy}
                 style={{ width: 'auto' }}
                 ariaLabel={t('backupSchedule.minute')}
+                title={t('backupSchedule.customHint')}
                 onChange={(next) => {
                   updateDraft({
                     ...draft,
@@ -353,19 +353,19 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
                 options={MINUTE_OPTIONS.map((m) => ({ value: String(m), label: String(m).padStart(2, '0') }))}
               />
             )}
-            {draft.enabled && draft.interval === 'custom' && (
-              <InfoHint text={t('backupSchedule.customHint')} label={t('common.infoHint')} />
-            )}
           </div>
 
           {/* 保留策略（三层）：与间隔同属草稿，随「保存」一起提交 */}
           <div className={css.groupHeader} style={{ marginTop: 12 }}>
-            <span className={css.groupLabel}>{t('retention.title')}</span>
-            <InfoHint text={t('retention.hint')} label={t('common.infoHint')} />
+            <span className={css.groupLabel} title={t('retention.hint')}>{t('retention.title')}</span>
             <span className={css.statusSpacer} />
             <span className={css.hint}>{!hasRetentionTiers(retentionDraft) && t('retention.tiersOff')}</span>
           </div>
-          <div className={css.actionRow} style={{ marginBottom: 0 }}>
+          <div
+            className={css.actionRow}
+            style={{ marginBottom: 0 }}
+            title={hasRetentionTiers(retentionDraft) ? t('retention.keepLastHint') + ' · ' + t('retention.keepMonthlyHint') + ' · ' + t('retention.keepYearlyHint') : undefined}
+          >
             {RETENTION_FIELDS.map((field) => {
               const limits = RETENTION_FIELD_LIMITS[field]
               const unit = field === 'keepLast'
@@ -398,12 +398,6 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
                 </label>
               )
             })}
-            {hasRetentionTiers(retentionDraft) && (
-              <InfoHint
-                text={t('retention.keepLastHint') + ' · ' + t('retention.keepMonthlyHint') + ' · ' + t('retention.keepYearlyHint')}
-                label={t('common.infoHint')}
-              />
-            )}
           </div>
 
           {(saved?.consecutiveFailures ?? 0) > 0 && (

@@ -13,7 +13,6 @@ import { Badge, Banner, Button, Empty, IconButton, Spinner, StatusDot } from '..
 import { Modal } from '../common/Modal.tsx'
 import { Icon } from '../common/Icon.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { SkeletonTable } from '../common/Skeleton.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -303,8 +302,7 @@ export function SessionHealthDialog(props: SessionHealthDialogProps) {
           closeLabel={t('common.close')}
           trailing={(
             <span className={css.shHeaderTrailing}>
-              {/* 机制说明（扫什么 / 四档严重级 / 哪些能在应用内修）—— 与入口卡片上那颗 ⓘ 同一条键 */}
-              <InfoHint text={t('sessions.desc')} label={t('common.infoHint')} />
+              {/* 机制说明（扫什么 / 四档严重级 / 哪些能在应用内修）—— 与入口卡片同一条键，挂在这颗扫描按钮的 title 上 */}
               {/* 主操作搬进标题行：旧实现是正文左上角孤零零一颗按钮（要先滚过摘要才找得到） */}
               <Button
                 size="sm"
@@ -312,6 +310,7 @@ export function SessionHealthDialog(props: SessionHealthDialogProps) {
                 loading={loading}
                 disabled={loading}
                 onClick={onScan}
+                title={t('sessions.desc')}
               >
                 {loading ? t('sessions.scanning') : response === null ? t('sessions.scan') : t('sessions.rescan')}
               </Button>
@@ -383,11 +382,10 @@ export function SessionHealthDialog(props: SessionHealthDialogProps) {
 
                   {/* ② 需要处理的会话：列表与「一键修复全部」同屏，动作恒在区块头右侧 */}
                   <div className={css.shSectionHead}>
-                    {/* 操作说明属说明性文案 → 完整句进 ⓘ（DESIGN §7）；「可应用内修复 N 条」这种
+                    {/* 操作说明属说明性文案 → 完整句进悬停 title（DESIGN §7）；「可应用内修复 N 条」这种
                         计数句已删（右上按钮本身就带同一个计数）。 */}
-                    <span className={css.shSectionTitle}>
+                    <span className={css.shSectionTitle} title={summary.repairable > 0 ? t('sessions.repair.available', { count: String(summary.repairable) }) : t('sessions.repair.none')}>
                       {t('sessions.section.attention')}
-                      <InfoHint text={summary.repairable > 0 ? t('sessions.repair.available', { count: String(summary.repairable) }) : t('sessions.repair.none')} label={t('common.infoHint')} />
                     </span>
                     <Badge kind={rows.length > 0 ? 'warn' : 'ok'}>{String(rows.length)}</Badge>
                     {summary.repairable > 0 && (
@@ -590,7 +588,7 @@ export function SessionHealthDialog(props: SessionHealthDialogProps) {
 
                   {/* 应用内不动的问题类别：离线出路（命令逐条可复制） */}
                   <div className={css.shSectionHead}>
-                    <span className={css.shSectionTitle}>{t('sessions.repair.title')} <InfoHint text={t('sessions.repair.desc')} label={t('common.infoHint')} /></span>
+                    <span className={css.shSectionTitle} title={t('sessions.repair.desc')}>{t('sessions.repair.title')}</span>
                   </div>
                   <ul className={css.shCommands}>
                     {sessionRepairCommands().map((entry) => (

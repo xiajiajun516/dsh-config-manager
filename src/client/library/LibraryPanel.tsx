@@ -27,7 +27,6 @@ import { Badge, Button, Card, Empty } from '../common/ui.tsx'
 import { snapshotOriginOf, snapshotOriginState } from '../../ui/snapshots-view.ts'
 import { SkeletonRows } from '../common/Skeleton.tsx'
 import { redact } from '../../security/redaction.ts'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { ArtifactRowView, type ArtifactPendingAction } from './ArtifactRow.tsx'
 import css from '../config-manager.module.css'
 
@@ -342,12 +341,11 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
         {encryptedCount > 0 && (
           <Badge kind="warn">{uiT('library.summary.encrypted', { count: encryptedCount })}</Badge>
         )}
-        <InfoHint text={t('backupFiles.hint')} label={t('common.infoHint')} />
         <span className={css.statusSpacer} />
         {/* 底栏四个入口，只有「导出」是这一页的产品级动作（把本机配置打成可分享的包）；
             其余三个是「拿别人的东西进来 / 去别处找」。主按钮只留一个，否则整屏没有焦点
             （app-screens §13：强调色应用在数据与至多一个控件上）。 */}
-        <Button size="sm" variant="primary" onClick={onOpenExport}>{t('library.new.export')}</Button>
+        <Button size="sm" variant="primary" onClick={onOpenExport} title={t('backupFiles.hint')}>{t('library.new.export')}</Button>
         <Button size="sm" onClick={() => { onOpenTask('import') }}>{t('library.new.import')}</Button>
         <Button size="sm" onClick={() => { onOpenTask('market') }}>{t('library.new.market')}</Button>
         <Button size="sm" onClick={onOpenPublish}>{t('task.title.publish')}</Button>

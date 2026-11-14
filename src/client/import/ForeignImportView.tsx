@@ -38,7 +38,6 @@ import {
 } from '../../ui/foreign-view.ts'
 import { Badge, Banner, Button, Card, SectionTitle } from '../common/ui.tsx'
 import { SkeletonList } from '../common/Skeleton.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { redact } from '../../security/redaction.ts'
 import { sectionLabeler } from '../common/section-labels.ts'
@@ -212,7 +211,7 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('foreign.source.title')} info={<InfoHint text={t('foreign.source.hint')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('foreign.source.title')} tooltip={t('foreign.source.hint')} />
 
       {loadError !== null && (
         <ErrorBanner
@@ -256,7 +255,7 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
           **位置**：来源列表之后、动作行（含「开始导入」）之前 —— 既保证「导入前必读」，
           又不把六个来源挤出首屏（t10 的 T10-F2 真机体验反馈）。 */}
       <Card>
-        <div className={css.groupLabel}>{t('foreign.lossy.title')} <InfoHint text={t('foreign.lossy.hint')} label={t('common.infoHint')} /></div>
+        <div className={css.groupLabel} title={t('foreign.lossy.hint')}>{t('foreign.lossy.title')}</div>
         <ul className={css.skipList}>
           {lossyRows.map((row) => (
             <li key={row.kind} className={css.skipRow}>

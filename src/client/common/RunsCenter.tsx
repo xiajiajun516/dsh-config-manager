@@ -26,7 +26,6 @@ import { dialogKeyOf, isDialogStillWaiting, isStaleResponse, pickWaitingRun, pru
 import type { DialogKey } from './runs-center-view.ts'
 import { Badge, Banner, Button, Card, Empty } from './ui.tsx'
 import { Icon } from './Icon.tsx'
-import { InfoHint } from './InfoHint.tsx'
 import { SkeletonList } from './Skeleton.tsx'
 import { Modal } from './Modal.tsx'
 import { ProgressBar } from './ProgressBar.tsx'
@@ -237,12 +236,11 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
   return (
     <div className={css.runsCenter}>
       <div className={css.runsSummary}>
-        <span className={css.runsSummaryTitle}>{t('shell.runs.title')}</span>
+        <span className={css.runsSummaryTitle} title={t('runs.retentionHint')}>{t('shell.runs.title')}</span>
         {summary.running > 0 && <Badge kind="info">{t('runs.runningBadge', { count: String(summary.running) })}</Badge>}
         {summary.awaiting > 0 && <Badge kind="warn">{t('runs.awaitingBadge', { count: String(summary.awaiting) })}</Badge>}
-        {/* 保留期说明属「机制怎么工作 + 省事提示」（MOVE 类）：收进 ⓘ，不再常驻占一行。
+        {/* 保留期说明属「机制怎么工作 + 省事提示」：挂成标题的 title（悬停可读，不占一行）。
             空列表「为什么什么都没有」的常驻解释仍由下面的 <Empty>（runs.empty）承担。 */}
-        <InfoHint text={t('runs.retentionHint')} t={t} />
       </div>
       {lockError !== null && <Banner kind="warn">{t('runs.lock.readFailed', { message: redact(lockError) })}</Banner>}
       {/* 环境锁卡片：FREE 不显示（绝大多数时候是空闲，别占地方）；

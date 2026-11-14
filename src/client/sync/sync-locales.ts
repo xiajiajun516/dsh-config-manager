@@ -22,7 +22,7 @@ export const zh = {
   'config.tokenSaved': '凭据已配置',
   'config.tokenMissing': '未配置令牌：可拉取公开仓库，无法推送',
   'config.tokenPlaceholder': 'ghp_…（可选）',
-  // 配置保存（全自动保存：无手动按钮，成功后标题行闪「已保存」徽章；凭据去向在各密钥字段的 ⓘ 里）
+  // 配置保存（全自动保存：无手动按钮，成功后标题行闪「已保存」徽章；凭据去向在各密钥字段的 title 里）
   'config.savedTick': '已保存',
   // 通道选择器
   'channel.title': '同步通道',
@@ -134,7 +134,7 @@ export const zh = {
   // 名字必须写明方向（issue 121）：这条链路只下行、绝不上传 —— 叫「同步」会被读成双向。
   'syncflow.title': '从远端合并到本机',
   'syncflow.button': '从远端合并到本机',
-  // 方向说明（ⓘ，挂在动作行）：只下行 + 双向该去哪儿；常驻成行会与按钮名重复（DESIGN.md §7）
+  // 方向说明（悬停 title，挂在动作行）：只下行 + 双向该去哪儿；常驻成行会与按钮名重复（DESIGN.md §7）
   // 方案 A：有基线且三方合并全部 skip = 远端与本机一致，不必同步
   'syncflow.upToDate': '已是最新，无需同步',
   'syncflow.syncing': '正在同步…',
@@ -485,7 +485,7 @@ export const zh = {
   'mode.tabAutosyncSecurity': '设置',
   'mode.pluginsGroup': '插件',
   'mode.decryptGroup': '解密密码',
-  // 行式设置行里这行标签只放「是什么」（长括注会把 240 宽控件挤到第二行），机制仍在 mode.decryptPasswordHint 的 ⓘ 里
+  // 行式设置行里这行标签只放「是什么」（长括注会把 240 宽控件挤到第二行），机制挂在 mode.decryptPasswordHint 的 title 上
   'mode.decryptPasswordShort': '解密密码',
 } as const;
 

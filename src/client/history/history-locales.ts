@@ -41,7 +41,7 @@ type CommonKey =
   | 'history.retention.cleaned'
   | 'history.retention.noop'
   | 'history.retention.saveError'
-  /** ⓘ 说明按钮的可访问名（与主字典 / market / sync / recovery 同口径，见 info-hint-guard t6-4） */
+  /** 说明按钮的可访问名（2026-11-14 起 ⓘ 已下线、代码不再消费；键与四本字典口径一并保留，免得下游按键取文案时缺项） */
   | 'common.infoHint';
 
 export type HistoryKey = KindKey | ResultKey | CommonKey;

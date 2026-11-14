@@ -972,8 +972,7 @@ body {
 .selectMenuPortal {
   /* 兜底：即使将来被挂到弹窗内容子树之外，也把指针事件拿回来（①）。 */
   pointer-events: auto;
-  /* 量测完成前不绘制（与 .infoHintBubble 的 [data-ready] 同一条纪律）：
-     保证任何情况下都不会把「还没定位」的那一帧画出来。 */
+  /* 量测完成前不绘制：保证任何情况下都不会把「还没定位」的那一帧画出来。 */
   visibility: hidden;
 }
 
@@ -2061,112 +2060,9 @@ body {
   color: var(--cm-error);
 }
 
-/* —— ⓘ 说明原语（common/InfoHint.tsx，2026-10）——
-   分层规则见 DESIGN.md §7「说明性文案分层」：常驻可见的只有校验错误/失败原因、
-   安全与不可逆告警、状态与等待文本、禁用原因 title、空态解释、SectionTitle 副标题；
-   机制 / 边界 / 示例 / 省事提示一律收进这里。
-   气泡**经 createPortal 渲进插件根容器**（= 宿主画布，MODAL_ROOT_ID；
-   **绝不用 document.body** —— 会被宿主 overlay z-index:1000 盖住并连带 body pointer-events 失效），
-   因此不会被 Modal 卡片的常驻 transform 包含块（.dialogContentCenter 的 translate(-50%,-50%)）
-   与 .dialogBody 的 overflow 裁剪；气泡自身仍是 position: fixed（坐标 = 视口坐标，插件根容器无 transform），
-   但夹紧基准是**插件根容器的可见矩形 ∩ 窗口**（不是浏览器视口）：下方空间不足且上方更宽裕时向上翻转。
-   刻意不用原生 title：不可换行、不可定制、无法做边界处理。 */
-.infoHint {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: middle;
-}
-
-.infoHintBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  border-radius: var(--cm-r-1);
-  background: none;
-  font: inherit;
-  line-height: 1.25;
-  color: var(--dsw-alias-label-tertiary);
-  cursor: pointer;
-  flex: none;
-}
-
-/* hover 必须给出可见 affordance（否则 ⓘ 看起来只是装饰文字） */
-.infoHintBtn:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
-/* 键盘聚焦的焦点环 —— **只在气泡真的打开时**给（2026-10-04 用户反馈：一进弹窗 ⓘ 自己就亮起
-   蓝框，看起来像「图标被选中了」）。为什么要这个条件：Radix 弹窗挂载会把初始焦点派给容器内第一个
-   可聚焦元素（常常正是标题行的 ⓘ），而 Chrome 对这种**程序化**聚焦同样命中 :focus-visible；
-   那条路径下气泡不会打开（见 InfoHint.tsx 的 onFocus）—— 于是焦点环与 data-open 同进同出：
-   键盘用户 Tab 到 ⓘ 时气泡必然同时打开，焦点环照常可见，可访问性不受影响。 */
-.infoHintBtn[data-open]:focus-visible {
-  outline: var(--cm-focus-width) solid var(--cm-focus-color);
-  outline-offset: 1px;
-}
-
-/* 气泡打开期间按钮保持「激活」观感（悬停 / 聚焦 / 固定三通道统一） */
-.infoHintBtn[data-open] {
-  color: var(--dsw-alias-label-primary);
-}
-
-/* 点击固定后的锁定态（与 .iconBtn[data-active] 同一视觉语言） */
-.infoHintBtn[data-pinned] {
-  background: color-mix(in srgb, var(--cm-accent) 14%, transparent);
-  color: var(--cm-accent);
-}
-
-.infoHintBubble {
-  position: fixed;
-  /* 高于 Dialog 内容层（.dialogMask 100 / .dialogContentCenter 101），低于通知层（120） */
-  z-index: var(--cm-z-pop);
-  box-sizing: border-box;
-  max-width: min(260px, calc(100vw - 24px));
-  /* 高度的结构性上限：保证气泡在宿主 564×720 画布内**永远**放得下（480 + 上下 8px 边距 < 720；
-     宿主窗口更小时按 100vh 收缩）。分层规则里的说明文案是 1–3 行短文本，远达不到这个上限，
-     因此不会出现静默截断；它只是把「不出界」变成结构性性质而不是概率性质。 */
-  max-height: min(480px, calc(100vh - 16px));
-  overflow-y: auto;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--cm-r-2);
-  background: var(--cm-tooltip-bg);
-  box-shadow: var(--cm-shadow-1);
-  color: var(--cm-tooltip-fg);
-  font-size: var(--cm-fs-table);
-  line-height: 1.5;
-  /* 多行换行：长文本折行、显式换行符保留，绝不省略号截断 */
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  /* 不拦截指针：鼠标移出按钮即触发 mouseleave，气泡不会「粘住」 */
-  pointer-events: none;
-  /* 量测完成前不绘制（避免首帧落在未定位处） */
-  visibility: hidden;
-}
-
-.infoHintBubble[data-ready] {
-  visibility: visible;
-  animation: infoHintIn var(--cm-motion-fast) var(--cm-motion-ease-out);
-  transform-origin: center top;
-}
-
-.infoHintBubble[data-ready][data-side='top'] {
-  transform-origin: center bottom;
-}
-
-@keyframes infoHintIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-/* 控件 + ⓘ 同一行（弹窗表单：下拉/输入框旁的说明）。
-   ⓘ 一律贴**相关控件**右边，不单独成行；控件按自身收缩宽度（默认 flex: 0 1 auto，长内容可缩），
-   间隙与其它区块行统一 10px。首个使用点：通道配置弹窗的 WebDAV 预设下拉。 */
+/* 控件成一行（弹窗表单：下拉/输入框旁的行容器）。
+   控件按自身收缩宽度（默认 flex: 0 1 auto，长内容可缩），间隙与其它区块行统一 10px。
+   首个使用点：通道配置弹窗的 WebDAV 预设下拉。 */
 .controlRow {
   display: flex;
   align-items: center;
@@ -6338,10 +6234,6 @@ button.profileRowMain:hover {
     animation: none;
   }
   .restorePlan {
-    animation: none;
-  }
-  /* ⓘ 气泡入场同为装饰性动效：关掉后瞬时出现，说明文本与交互全部不变 */
-  .infoHintBubble {
     animation: none;
   }
   /* 折叠容器：关掉高度过渡（瞬时展开/收起，功能不变）与 visibility 的延迟

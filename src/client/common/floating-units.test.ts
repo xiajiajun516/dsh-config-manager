@@ -4,7 +4,7 @@
  * 为什么需要它（2026-10-03 真机事故）：Select 弹层改 portal 后写的是
  * `style={{ top: menuPos.top, left: menuPos.left }}` —— React **不会**给无单位数值补单位，
  * 浏览器把这两条声明当无效丢弃，弹层于是退回 CSS 默认位置：**恒贴在页面最右边**。
- * 同一族的 InfoHint 气泡一直写着 `top + 'px'`，所以它没事 —— 两处不同形正是漏网的原因。
+ * 同族另一处浮层（已删的 InfoHint 气泡）一直写着 `top + 'px'`，所以它没事 —— 两处不同形正是漏网的原因。
  *
  * 教训：React 的「数值自动补 px」只对**部分属性**成立（width/height/margin/padding…），
  * `top / left / right / bottom` **不在其列**，必须显式写单位。
@@ -22,7 +22,6 @@ const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 /** 所有会写视口/画布坐标的浮层实现（新增浮层请加进来）。 */
 const FLOATING_FILES = [
   'src/client/common/Select.tsx',
-  'src/client/common/InfoHint.tsx',
 ]
 
 /** 剥掉注释：注释里的示例同样含 top/left 字样，会造成假阳性。 */

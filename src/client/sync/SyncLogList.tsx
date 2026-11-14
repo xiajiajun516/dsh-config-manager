@@ -87,16 +87,13 @@ export function SyncLogList({ api, t }: SyncLogListProps): ReactNode {
     <Card>
       {/* 条数只在下面那排统计徽章里给一次：标题里的 (12) 与「共 12 条」是同一个数，
           两处并列时用户要先比对才敢确定它们说的是同一件事 */}
-      {/* 刷新走 SectionTitle 的 info 槽：它本来就渲在标题同一行的右侧，垂直居中跟标题一致；
-          另包一层 .sectionTitleRow 会让标题块的 10px 下边距把按钮压低 5px（视觉上左高右低）。 */}
+      {/* 刷新走 SectionTitle 的 action 槽：它渲在标题同一行的右侧（内部自带推右的 spacer），
+          垂直居中跟标题一致。 */}
       <SectionTitle
         title={t('history.title')}
-        info={(<>
-          <span className={css.statusSpacer} />
-          <Button size="sm" loading={loading} onClick={() => { setReloadKey((k) => k + 1) }}>
-            <RefreshIcon size={12} />{' '}{t('history.refresh')}
-          </Button>
-        </>)}
+        action={<Button size="sm" loading={loading} onClick={() => { setReloadKey((k) => k + 1) }}>
+          <RefreshIcon size={12} />{' '}{t('history.refresh')}
+        </Button>}
       />
       {/* 头部统计摘要（先扫结论）；失败/跳过仅在存在时出现，并给语义色 */}
       <div className={css.statRow} aria-label={t('history.stats.summary')}>

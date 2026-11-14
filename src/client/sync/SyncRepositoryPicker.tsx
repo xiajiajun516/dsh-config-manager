@@ -21,7 +21,6 @@ import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import { redact } from '../../security/redaction.ts'
 import { Button } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { Select } from '../common/Select.tsx'
 import { toast } from '../common/toast-store.ts'
 import type { SyncApi } from './sync-api.ts'
@@ -167,8 +166,8 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, signedIn, busy, on
   return (
     <>
       <div className={css.field}>
-        <span className={css.fieldLabel}>
-          {t('repoPicker.label')} <InfoHint text={t('repoPicker.hint')} label={t('common.infoHint')} />
+        <span className={css.fieldLabel} title={t('repoPicker.hint')}>
+          {t('repoPicker.label')}
         </span>
         <div className={css.controlRow}>
           <Select

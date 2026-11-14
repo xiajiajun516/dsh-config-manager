@@ -15,7 +15,6 @@ import { HistoryApi, type HistoryExportFormat, type HistoryListResult, type Hist
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Empty } from '../common/ui.tsx'
 import { Icon } from '../common/Icon.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { Select } from '../common/Select.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -255,13 +254,12 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
 
   return (
     <div className={css.viewBody}>
-      {/* 统计徽章行（页名在 TaskShell 头部已给一次；这里只放数据与语义 ⓘ） */}
-      <div className={css.statRow}>
+      {/* 统计徽章行（页名在 TaskShell 头部已给一次；这里只放数据） */}
+      <div className={css.statRow} title={t('history.subtitle')}>
         <Badge kind="info">{t('history.stats.total')}: {summary.total}</Badge>
         <Badge kind="ok">{t('history.stats.success')}: {summary.success}</Badge>
         <Badge kind="error">{t('history.stats.failed')}: {summary.failed}</Badge>
         <Badge kind="warn">{t('history.stats.skipped')}: {summary.skipped}</Badge>
-        <InfoHint text={t('history.subtitle')} label={t('common.infoHint')} />
       </div>
 
       {/* 损坏条目：结论句 + 计数徽章同一行（计数属于「状态」，用徽章而不是第二句灰字）。 */}
@@ -280,8 +278,8 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
       {retention !== null && (
         <Card className={css.historyTightCard}>
           <div className={css.historyControlRow}>
-            <span className={css.fieldLabel}>
-              {t('history.retention.label')} <InfoHint text={t('history.retention.hint')} label={t('common.infoHint')} />
+            <span className={css.fieldLabel} title={t('history.retention.hint')}>
+              {t('history.retention.label')}
             </span>
             <Select
               value={String(retention.maxEntries)}

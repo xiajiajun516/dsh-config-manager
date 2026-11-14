@@ -72,7 +72,7 @@ export function placeMenu(anchor: Rect, bounds: Rect, menu: Size): MenuPlacement
   if (left + menu.width > bounds.right - MENU_EDGE) left = anchor.right - menu.width
   left = clampNumber(left, minLeft, maxLeft)
 
-  // 垂直：下方优先；下方放不下且上方更宽裕 → 向上翻转（与 InfoHint 气泡同一判据）。
+  // 垂直：下方优先；下方放不下且上方更宽裕 → 向上翻转（与 Select 菜单同一判据）。
   const below = bounds.bottom - anchor.bottom - MENU_GAP - MENU_EDGE
   const above = anchor.top - bounds.top - MENU_GAP - MENU_EDGE
   const side: MenuPlacement['side'] = menu.height > below && above > below ? 'top' : 'bottom'

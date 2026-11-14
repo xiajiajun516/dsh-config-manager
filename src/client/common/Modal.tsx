@@ -44,11 +44,11 @@ export const MODAL_ROOT_ID = 'dsh-config-manager-root'
 /**
  * 插件根节点查询（Portal 容器）：渲染期与 layout effect 共用同一份实现。
  *
- * **导出的原因**：InfoHint（ⓘ 气泡）也要把它的气泡 Portal 到这里 —— 两个 Portal 的容器必须是
+ * **导出的原因**：Select 弹层（以及任何浮层）要把 Portal 容器取到同一处 —— 必须是
  * 同一个 `#dsh-config-manager-root`（同一条铁律：绝不能挂 `document.body`，见上）。
- * 而且气泡**必须**脱离 `.dialogContentCenter` 的常驻 `transform: translate(-50%,-50%)`：
+ * 而且浮层**必须**脱离 `.dialogContentCenter` 的常驻 `transform: translate(-50%,-50%)`：
  * 按 CSS Transforms L1，带 transform 的祖先会成为后代 `position: fixed` 的包含块 ——
- * 裸 fixed 的气泡在 Modal 内会整体偏移卡片位移，并被 `.dialogBody{overflow-y:auto}` 裁剪。
+ * 裸 fixed 的浮层在 Modal 内会整体偏移卡片位移，并被 `.dialogBody{overflow-y:auto}` 裁剪。
  */
 export function resolveModalRoot(): HTMLElement | null {
   return typeof document === 'undefined' ? null : document.getElementById(MODAL_ROOT_ID)

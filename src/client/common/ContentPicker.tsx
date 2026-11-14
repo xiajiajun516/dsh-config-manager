@@ -37,7 +37,6 @@ import type { ExportGroup } from '../../ui/types.ts'
 import { formatBytes } from '../../ui/report.ts'
 import { redact } from '../../security/redaction.ts'
 import { Badge, Button, Checkbox, Spinner } from './ui.tsx'
-import { InfoHint } from './InfoHint.tsx'
 import { Skeleton } from './Skeleton.tsx'
 import { Collapse } from './Motion.tsx'
 import { ExpandChevron } from './Icon.tsx'
@@ -638,8 +637,10 @@ export function ContentPicker({
               <Fragment key={node.section}>
                 {groupTitle !== undefined && (
                   <div className={css.pickerGroupTitle}>
-                    <span className={css.pickerGroupTitleName}>{t(GROUP_TITLE_KEY[groupTitle])}</span>
-                    {groupTitle === 'extensions' && <InfoHint text={t('picker.groupHint.extensions')} t={t} />}
+                    <span
+                      className={css.pickerGroupTitleName}
+                      title={groupTitle === 'extensions' ? t('picker.groupHint.extensions') : undefined}
+                    >{t(GROUP_TITLE_KEY[groupTitle])}</span>
                   </div>
                 )}
                 {node.section === firstTreeSection ? renderPluginTree() : (

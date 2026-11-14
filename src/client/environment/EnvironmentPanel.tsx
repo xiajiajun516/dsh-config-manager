@@ -37,7 +37,6 @@ import type { RecoveryPort } from '../../ui/types.ts'
 import type { IncidentApi } from '../recovery/incident-api.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Segmented } from '../common/ui.tsx'
 import { Icon } from '../common/Icon.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
@@ -429,14 +428,13 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
           t={recoveryT}
           incidentApi={incidentApi}
           copyT={t}
-          infoHintLabel={t('common.infoHint')}
           diskApi={api}
         />
       )}
 
       {subView === 'list' && (
       <>
-      <SectionTitle title={t('profiles.title')} info={<InfoHint text={t('profiles.subtitle')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('profiles.title')} tooltip={t('profiles.subtitle')} />
 
       {/* —— 运行状态：当前运行中的 profile + 本插件启动的实例（可打开 / 可停止） —— */}
       <Card className={css.card}>
@@ -545,7 +543,7 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
 
       {/* —— 新建档案 —— */}
       <Card className={css.card}>
-        <div className={css.groupLabel}>{t('profiles.create.title')} <InfoHint text={t('profiles.create.hint')} label={t('common.infoHint')} /></div>
+        <div className={css.groupLabel} title={t('profiles.create.hint')}>{t('profiles.create.title')}</div>
         <div className={css.actionRow}>
           <input
             type="text"

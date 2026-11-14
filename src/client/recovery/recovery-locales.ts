@@ -293,7 +293,7 @@ export const zh = {
   'rollback.title': '工作区 + 会话回滚',
   'rollback.desc': '每个回合结束自动留一个回滚点：工作区快照 + 会话游标，不需要手动拍点。回退只覆盖该点记录在案的工作区路径，并删除「能证明是留点之后新建」且通过安全判据的路径（.git / node_modules / 插件数据区 / 超出单文件上限一律拒删；留点时被预算挡下的既有文件也在证明名单里，不会被当成新建；证明名单本身不完整时一条都不删）；会话回退在目标回合之前的稳定边界 fork 一个新子会话，原会话日志只读、绝不被改写。',
   'rollback.list.empty': '还没有回滚点',
-  /* 2026-10-11 布局重构：工具栏只放数字摘要 + 刷新按钮；留存/淘汰口径仍在 rollback.retention.hint（改由 ⓘ 承载）。 */
+  /* 2026-10-11 布局重构：工具栏只放数字摘要 + 刷新按钮；留存/淘汰口径仍在 rollback.retention.hint（2026-11-14 起挂在该按钮的悬停 title 上）。 */
   'rollback.summary': '共 {points} 个回滚点 · {sessions} 个会话',
   'rollback.refresh': '刷新',
   // 台账弹窗（2026-10-12：卡不再折叠，台账整块搬进按会话分组的弹窗）
@@ -866,7 +866,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.desc': 'A rollback point is kept automatically at the end of every turn: a workspace snapshot plus the session cursor -- there is no manual capture form. A rewind only overwrites the workspace paths that point recorded, and deletes the paths proven to have been created after that point which pass the safety rules (.git / node_modules / the plugin data directory / oversized files are always refused; files that already existed but were passed over by the budget are in the proof list too, so they are never mistaken for new ones; nothing is removed while the proof list itself is incomplete). Session rollback forks a new child session at the stable boundary before the target turn, and the original session log stays read-only and is never rewritten.',
   'rollback.list.empty': 'No rollback points yet',
   /* 2026-10-11 layout refactor: the toolbar keeps only the numeric summary + refresh;
-     retention/pruning wording stays in rollback.retention.hint (now carried by the ⓘ). */
+     retention/pruning wording stays in rollback.retention.hint (now on the button's hover title). */
   'rollback.summary': '{points} rollback points · {sessions} sessions',
   'rollback.refresh': 'Refresh',
   // Rollback-point ledger dialog (2026-10-12: the card no longer folds; the ledger lives in this dialog, grouped by session)

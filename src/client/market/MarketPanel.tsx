@@ -26,7 +26,6 @@ import type { ConfigManagerApi } from '../api.ts'
 import type { ImportResult, ItemResolution } from '../../core/types.ts'
 import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { InspectIcon } from '../common/Icon.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
@@ -480,7 +479,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
       {/* 列表视图的表头与市场操作卡：进入条目向导页时整块让位（P2 起向导是**页面**，
           不再在列表之上叠弹窗） */}
       {!downloadOpen && (<>
-      <SectionTitle title={t('section.label')} info={<InfoHint text={t('section.description')} label={t('common.infoHint')} />} />
+      <SectionTitle title={t('section.label')} tooltip={t('section.description')} />
 
       {/* 市场操作行（2026-11-01）：原为一张卡，卡里只有标题 + 两个按钮，右侧四百多像素永远空着
           （app-screens §4.2 卡内死空间，白吃约 50px）。改成标题与动作同一行 —— 它本来就是

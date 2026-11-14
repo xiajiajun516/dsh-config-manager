@@ -13,7 +13,6 @@
 import { useState } from 'react'
 
 import { Badge, Banner, Button, Card } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
 import type { TranslateNS } from '../client-types.ts'
@@ -75,8 +74,7 @@ export function IncompleteCopiesSection(props: IncompleteCopiesSectionProps) {
   return (
     <Card>
       <div className={css.statRow}>
-        <strong>{t('recovery.incomplete.title')}</strong>
-        <InfoHint text={t('recovery.incomplete.hint')} label={t('common.infoHint')} />
+        <strong title={t('recovery.incomplete.hint')}>{t('recovery.incomplete.title')}</strong>
         <Badge kind="warn">{String(rows.length)}</Badge>
       </div>
       <div className={css.snapshotList}>
