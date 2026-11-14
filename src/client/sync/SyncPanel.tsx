@@ -343,7 +343,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const [mergeSeed, setMergeSeed] = useState<{ channel: SyncChannel; preview: MergePreviewResponse } | null>(null)
   /** 一键同步阶段（null = 空闲）：'preview' 拉远端快照预览、'sync' 差异确认/导入；只驱动文案 */
   const [syncPhase, setSyncPhase] = useState<'preview' | 'sync' | null>(null)
-  /** issue #140：确认弹窗里的「强制推送」（内容没变也新建快照）。只影响这一次推送，不持久化。 */
+  /** issue 140：确认弹窗里的「强制推送」（内容没变也新建快照）。只影响这一次推送，不持久化。 */
   const [forcePush, setForcePush] = useState(false)
   /**
    * 同步设置弹窗开关（2026-11-14 用户要求：同步分区 / 加密与密钥导出 / 解密密码三块收进
@@ -893,7 +893,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     try {
       // 推送前先把加密密码落库（下次推送不必重输）
       await persistEncryptPassword()
-      // issue #140：force 只在这一次请求里生效（勾选框默认关 = 内容没变就跳过）
+      // issue 140：force 只在这一次请求里生效（勾选框默认关 = 内容没变就跳过）
       const report = await api.push({ ...buildPushPayload(), ...(forcePush ? { force: true } : {}) })
       // 成功即清空 token/webdavPassword/加密密码输入框；失败保留以便重试
       patch({
@@ -906,7 +906,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         // 输入框清空，但「已保存」标记保留 —— 密码在本机凭据库里，下次留空即用
         patchChannel({ encryptPassword: '', encryptPasswordConfirm: '' })
         // M-19：推送终局回执（结果弹窗关闭后不再有任何痕迹）。
-        // issue #140：没新建快照时必须说「已跳过」，不能报「已推送」。
+        // issue 140：没新建快照时必须说「已跳过」，不能报「已推送」。
         toast.ok(report.skipped === 'unchanged' ? t('toast.pushSkipped') : t('toast.pushDone'))
         void loadSnapshots()
       } else {
@@ -1457,7 +1457,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             />
             <Modal.Body scroll>
               <PushPreviewCard preview={state.pushPreview.preview} t={t} uiT={uiT} sectionName={sectionName} />
-              {/* issue #140：内容没变时缺省不新建快照（远端不再堆重复快照）。要「就算一样也新建」
+              {/* issue 140：内容没变时缺省不新建快照（远端不再堆重复快照）。要「就算一样也新建」
                   必须在这里显式勾选 —— 与 agent 侧的 force 是同一个开关，只是给了等价入口。 */}
               <Checkbox
                 checked={forcePush}
