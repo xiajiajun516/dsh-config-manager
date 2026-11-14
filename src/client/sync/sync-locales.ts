@@ -487,6 +487,10 @@ export const zh = {
   'mode.decryptGroup': '解密密码',
   // 行式设置行里这行标签只放「是什么」（长括注会把 240 宽控件挤到第二行），机制挂在 mode.decryptPasswordHint 的 title 上
   'mode.decryptPasswordShort': '解密密码',
+  // 段名与行标签的悬停说明（2026-11-14 用户要求「同步页面的标题都要有能读到的 title」）
+  'mode.securityHint': '这一段管两件事：加密备份把同步快照上密码，导出密钥把本机真实凭据一起放进加密快照。两者都需要加密开启；密码与凭据都存本机凭据库，不进同步文件、日志或备份。',
+  'mode.passwordHint': '两个框填一致才会保存；失焦即落库，之后留空表示沿用已保存的密码。取消勾选「加密备份」会删掉已存密码。',
+  'mode.pluginsGroupHint': '这一段的设置只作用于「插件」分区：远端已删、本机没改过的插件会被卸载，失败逐项提示、其余同步照常完成。',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -947,6 +951,10 @@ export const en: Record<keyof typeof zh, string> = {
   'mode.pluginsGroup': 'Plugins',
   'mode.decryptGroup': 'Decryption password',
   'mode.decryptPasswordShort': 'Decryption password',
+  // Hover text for section titles and row labels (2026-11-14: every title on the sync page must be readable on hover)
+  'mode.securityHint': 'This section covers two things: encrypted backups seal the snapshot with a password, and "export secrets" puts the real credential values into that encrypted snapshot. Both require encryption; the password and credentials stay in the local credential store and never enter sync files, logs or backups.',
+  'mode.passwordHint': 'Saved only when both fields match; saving happens on blur, and an empty field later means reuse what is saved. Turning encryption off deletes the saved password.',
+  'mode.pluginsGroupHint': 'These settings apply only to the "plugins" section: plugins deleted on the remote and untouched locally get uninstalled; failures are listed per item and the rest of the sync still completes.',
 };
 
 /** 字典键联合（注册处 compile-time 校验） */

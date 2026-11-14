@@ -47,13 +47,13 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
       <div className={css.settingsGroup}>
         {/* 段头只标段名（2026-11-14 用户要求：「加密备份」不再贴在段头右侧，它要单独一行）。 */}
         <div className={css.settingsGroupHead}>
-          <span className={css.settingsGroupTitle}>{t('mode.security')}</span>
+          <span className={css.settingsGroupTitle} title={t('mode.securityHint')}>{t('mode.security')}</span>
         </div>
         {/* 加密备份独占一行：与下面两个密码框、导出密钥同构（标签左 / 开关右），
             开关的名字贴在它自己那一行 —— 段头的右角只留给「这一段的状态」，不挂控件。 */}
         <div className={css.settingsRow}>
           <span className={css.settingsRowMain}>
-            <label className={css.settingsRowLabel} htmlFor={encryptId}>{t('mode.encrypt')}</label>
+            <label className={css.settingsRowLabel} htmlFor={encryptId} title={t('mode.encryptHint')}>{t('mode.encrypt')}</label>
           </span>
           <span className={css.settingsRowControl}>
             {/* 弹性开关（2026-11-14）：单一布尔、拨动即落库 */}
@@ -64,7 +64,7 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
           <>
             <div className={css.settingsRow}>
               <span className={css.settingsRowMain}>
-                <label className={css.settingsRowLabel} htmlFor={passwordId}>{t('mode.password')}</label>
+                <label className={css.settingsRowLabel} htmlFor={passwordId} title={t('mode.passwordHint')}>{t('mode.password')}</label>
               </span>
               <span className={css.settingsRowControl}>
                 <input id={passwordId}
@@ -82,7 +82,7 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
             </div>
             <div className={css.settingsRow}>
               <span className={css.settingsRowMain}>
-                <label className={css.settingsRowLabel} htmlFor={confirmId}>{t('mode.passwordConfirm')}</label>
+                <label className={css.settingsRowLabel} htmlFor={confirmId} title={t('mode.passwordHint')}>{t('mode.passwordConfirm')}</label>
               </span>
               <span className={css.settingsRowControl}>
                 <input id={confirmId}
@@ -112,7 +112,7 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
         )}
         <div className={css.settingsRow}>
           <span className={css.settingsRowMain}>
-            <label className={css.settingsRowLabel} htmlFor={includeSecretsId}>{t('mode.includeSecrets')}</label>
+            <label className={css.settingsRowLabel} htmlFor={includeSecretsId} title={t('mode.includeSecretsHint')}>{t('mode.includeSecrets')}</label>
           </span>
           <span className={css.settingsRowControl}>
             <Switch id={includeSecretsId} checked={settings.includeSecrets} onChange={onToggleIncludeSecrets} label={t('mode.includeSecrets')} />
@@ -123,12 +123,12 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
           会让用户以为要用两个密码。段头右侧的「已保存到本机」只说这一段的存储状态。 */}
       <div className={css.settingsGroup}>
         <div className={css.settingsGroupHead}>
-          <span className={css.settingsGroupTitle}>{t('mode.decryptGroup')}</span>
+          <span className={css.settingsGroupTitle} title={t('mode.decryptPasswordHint')}>{t('mode.decryptGroup')}</span>
           {settings.decryptPasswordSaved && <Badge kind="ok">{t('mode.decryptPasswordSaved')}</Badge>}
         </div>
         <div className={css.settingsRow}>
           <span className={css.settingsRowMain}>
-            <span className={css.settingsRowLabel}>{t('mode.decryptPasswordShort')}</span>
+            <span className={css.settingsRowLabel} title={t('mode.decryptPasswordHint')}>{t('mode.decryptPasswordShort')}</span>
           </span>
           <span className={css.settingsRowControl}>
             <input aria-label={t('mode.decryptPassword')}

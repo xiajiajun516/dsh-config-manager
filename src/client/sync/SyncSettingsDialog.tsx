@@ -202,11 +202,11 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
             {sections.includes('plugins') && (
               <div className={css.settingsGroup}>
                 <div className={css.settingsGroupHead}>
-                  <span className={css.settingsGroupTitle}>{t('mode.pluginsGroup')}</span>
+                  <span className={css.settingsGroupTitle} title={t('mode.pluginsGroupHint')}>{t('mode.pluginsGroup')}</span>
                 </div>
                 <div className={css.settingsRow}>
                   <span className={css.settingsRowMain}>
-                    <label className={css.settingsRowLabel} htmlFor={deletePluginsId}>{t('mode.deletePlugins')}</label>
+                    <label className={css.settingsRowLabel} htmlFor={deletePluginsId} title={t('mode.deletePluginsHint')}>{t('mode.deletePlugins')}</label>
                   </span>
                   <span className={css.settingsRowControl}>
                     <Switch
@@ -258,7 +258,7 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
                       {s.id === 'sessions' && sections.includes('sessions') && (
                         <div className={css.field}>
                           <div className={css.field}>
-                            <span className={css.fieldLabel}>{t('mode.sessionsLimit')}</span>
+                            <span className={css.fieldLabel} title={t('mode.sessionsLimitHint')}>{t('mode.sessionsLimit')}</span>
                             <input aria-label={t('mode.sessionsLimit')}
                               type="number"
                               min={0}

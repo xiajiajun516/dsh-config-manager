@@ -111,7 +111,7 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
       {/* 段头：标题左、总开关右（2026-11-01 用户要求「左标题右按钮」）。开关此刻就叫
           「自动同步」是否开启 —— 标题与开关是同一件事，不该各占一行。 */}
       <div className={css.settingsGroupHead}>
-        <span className={css.settingsGroupTitle}>
+        <span className={css.settingsGroupTitle} title={t('autosync.description')}>
           {t('autosync.title')}
         </span>
         {/* 弹性开关（2026-11-14 用户要求）：单一布尔、拨动即落库 ⇒ 用 Switch 而不是勾选框 */}
@@ -135,7 +135,7 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
               不靠标签：Select 自带 ariaLabel、Switch 自带 label。 */}
           <div className={css.settingsRow}>
             <span className={css.settingsRowMain}>
-              <span className={css.settingsRowLabel}>{t('autosync.interval')}</span>
+              <span className={css.settingsRowLabel} title={t('autosync.intervalHint')}>{t('autosync.interval')}</span>
             </span>
             <span className={css.settingsRowControl}>
               <Select
@@ -150,7 +150,7 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           </div>
           <div className={css.settingsRow}>
             <span className={css.settingsRowMain}>
-              <label className={css.settingsRowLabel} htmlFor={realtimeId}>{t('autosync.realtime')}</label>
+              <label className={css.settingsRowLabel} htmlFor={realtimeId} title={t('autosync.realtimeHint')}>{t('autosync.realtime')}</label>
             </span>
             <span className={css.settingsRowControl}>
               <Switch
@@ -164,7 +164,7 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           </div>
           <div className={css.settingsRow}>
             <span className={css.settingsRowMain}>
-              <span className={css.settingsRowLabel}>{t('autosync.autoApplyTier')}</span>
+              <span className={css.settingsRowLabel} title={t('autosync.autoApplyTierHint')}>{t('autosync.autoApplyTier')}</span>
             </span>
             <span className={css.settingsRowControl}>
               <Select
@@ -182,7 +182,7 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           </div>
           <div className={css.settingsRow}>
             <span className={css.settingsRowMain}>
-              <span className={css.settingsRowLabel}>{t('autosync.conflictPolicy')}</span>
+              <span className={css.settingsRowLabel} title={t('autosync.conflictPolicyHint')}>{t('autosync.conflictPolicy')}</span>
             </span>
             <span className={css.settingsRowControl}>
               <Select
