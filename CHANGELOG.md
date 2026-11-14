@@ -43,6 +43,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Import**: file selection is a drop zone, conflict bulk actions sit together, foreign-import section names follow the UI language with full detail on hover, and the compatibility note moves into an ⓘ.
 - **市场**：页签与筛选条重排，条目分「名称 / 说明 / 元信息」三段；我的配置列表限高内滚，星标、作者与时间仍在一行可见。
   **Market**: tabs and filters are reorganised, entries split into name / description / meta, and the my-configs list scrolls inside a fixed height with star, author and time still visible.
+- **产物库**：快照对比、备份查看与恢复报告里的条目按「圆点 + 名称 + 说明」重排，迁移前咨询把每个维度的分数按好坏分色；删除远端快照时若它正是当前基线，会单独提示而不是塞进一句话里；拉取与下载显示进度条；内容选择器始终显示「已选 N / M」。
+  **Library**: diff, inspect and restore-report entries are laid out as dot + name + description, the pre-migration consult colours each dimension score by how good it is, deleting a remote snapshot that is your current baseline gets its own notice instead of a clause in one sentence, pull and download show a progress bar, and the content picker always shows "N/M selected".
 - **环境、恢复与备份**：磁盘占用改为每分区一行并给出合计；配置的复制与删除改成文字按钮；恢复页与活动面板的刷新、进度提到标题行；命令面板改成顶部浮层；备份保留策略改成三张数字卡。
   **Environment, Recovery, Backup**: disk usage is one line per section plus a total, copy/delete become text buttons, refresh and progress move to the section header, the command palette is a top overlay, and retention policies become three numeric cards.
 - **「磁盘占用」卡里那块「遗留数据」整块去掉了**：它只是几个不再被读取的旧目录（例如迁移前的 checkpoints），既不进合计也不能一键清，单独占一块反而让卡片显得零碎；这些目录仍会如实出现在无遗留数据时的常规扫描里，体积与文件数不受影响。

@@ -1399,6 +1399,10 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 | 同步 | `.channelCompactRow` `.confirmMessage` | 未配置通道单行矮态（覆盖 `.cardTitleRow` 的 baseline+8px） |
 | 导入 | `.dropZone` `.dropZoneIcon` `.conflictBulk` | 选文件拖放区（虚线 `line-2` + `r-3`）；冲突项批量操作纵向成组 |
 | 市场 | `.marketView` `.marketListCard(Fill)` `.marketItem(List/Head/Main/Desc/Meta)` `.marketSearchBox` `.marketSearchInput` `.marketFilterMeta` `.marketRepoRow` `.marketLoginCard` `.marketLoginRow` `.marketUploadCard` `.marketMyListCard` `.marketMyListHead` `.marketMyItem*` `.myconfigsView` | 页签为作用域内独立胶囊（不动共享 `.modeTabs`）；筛选卡定高吃满剩余高度；条目「名称/说明/元信息」三段；我的配置限高内滚 |
+| 产物库·快照弹窗（D-02/D-05/D-06/D-07） | `.restorePlanCard` `.restorePlanStatBadge` `.inspectItem` `.inspectDot` `.inspectAdapter` `.inspectDesc` `.inspectItemsScroll` `.inspectSubGroup` `.inspectBadge` `.reportItem` `.reportItemPath` `.reportGroupTitle` `.confirmNote` `.confirmNoteIcon` | 分组卡片化（组头 30px 铺顶边、行 30px 表行 + 细分隔线）；摘要徽章 4px 方角细描边；条目「圆点 + 等宽 accent adapter + 描述」三段；「路径 + 原因」两段报告行；删除确认的基线注意句独立成 warn tint 盒 |
+| 产物库·拉取下载（D-04） | `.pullMeta` `.pullStatus` `.pullBadge` `.pullName` `.pullTrack` `.pullBar` | 状态与文件名同排（文件名等宽省略）；标题行「同步中」徽章；复用 `.progressIndeterminate` 做不定态进度（宿主无分区级进度，禁编百分比） |
+| 迁移咨询（D-03） | `.consultWillApply` `.consultDimensionRow` `.consultDimensionName` `.consultDimensionScroll` `.reasonLine::before` | 维度名纯文本 + 分数按档位分色（`consultScoreBadgeKind`）；建议依据行首 3px 圆点；维度区去共享滚框形态只留滚动 |
+| 内容选择器（D-14b） | `.pickerToolbarCount` | 工具条末尾常驻「已选 N / M」（`picker.selectedOf` + `pickerSummary.totalUnits`），合计仍在页脚 |
 | 环境 | `.duRowNote` `.duRowPolicy` | 磁盘占用每分区一行（名称·过期量·占用·策略），文件数并入 `title` |
 | 恢复 | `.recoveryEmptyBar` `.factBox` | 空态条；事实格带框（与 `.factGrid` 同类名并联，不新增包裹层） |
 | 备份 | `.retentionCard` `.retentionCardLabel` | 保留策略三张数字卡（输入右对齐、单位提示贴格尾） |
@@ -1408,6 +1412,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 三条纪律（本轮踩到过的）：
 - `.marketListCard` 必须 `overflow: visible`，否则卡内 Select 弹层被裁；定高靠外层 `.marketListCardFill`。
 - `.factBox` 与 `.factGrid` 并联而非新包裹层；`.rollbackWarnings` 复用现成私有类，不新建 `.previewHintBox`。
+- 共享滚动容器（`.reportScroll`/`.consultScroll`）要「只留滚动」时，叠一枚屏私有类把描边/圆角/底色/限高逐项复位，不改共享规则本体；`.badge`/`.chip` 新增可选 `className` 只透传形态修饰类（方角、细描边），四态语义色仍由 `kind` 决定。
 - `.paletteInput` 的底边线落在 `.dialogBody` 16px 内距内：贴卡边需负 margin，会被 `css-scale-guard` 的间距白名单拦（只放行 `-4px` 一次），按「不破守卫」保留内缩。
 
 ---
