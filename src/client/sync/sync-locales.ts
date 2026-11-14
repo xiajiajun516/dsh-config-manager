@@ -478,7 +478,7 @@ export const zh = {
   // 「不支持自检」= 能力边界（不是故障）：中性结论一句，绝不显示「操作失败」
   'probe.unsupported': '该通道不提供连通性自检',
   // ---- 2026-11-14 同步设置弹窗收成两页签（用户要求：自动同步与密码合一页）----
-  'mode.tabAutosyncSecurity': '自动同步与密码',
+  'mode.tabAutosyncSecurity': '设置',
   'mode.pluginsGroup': '插件',
   'mode.decryptGroup': '解密密码',
   // 行式设置行里这行标签只放「是什么」（长括注会把 240 宽控件挤到第二行），机制仍在 mode.decryptPasswordHint 的 ⓘ 里
@@ -937,7 +937,7 @@ export const en: Record<keyof typeof zh, string> = {
   // "Unsupported" is a capability boundary, not a failure: neutral wording, never "operation failed"
   'probe.unsupported': 'This channel does not offer a connectivity self-check',
   // ---- 2026-11-14 settings dialog collapsed to two tabs (auto sync + passwords merged) ----
-  'mode.tabAutosyncSecurity': 'Auto sync & passwords',
+  'mode.tabAutosyncSecurity': 'Settings',
   'mode.pluginsGroup': 'Plugins',
   'mode.decryptGroup': 'Decryption password',
   'mode.decryptPasswordShort': 'Decryption password',

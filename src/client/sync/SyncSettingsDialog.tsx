@@ -12,6 +12,9 @@
  * 稿 D-39 重排成**行式设置行**（标签左 / 控件右 / 行高 34 / 0.5px 行线），三段的段头各带
  * 自己的开关或状态。
  *
+ * 2026-11-14 三次收口（用户要求）：本弹窗**两页的 ⓘ 全部移除**，页签「自动同步与密码」改名「设置」——
+ * 说明文案不再挂在图标里，界面只留设置本身（DESIGN.md §7 的「只留能改变用户决定的信息」）。
+ *
  * 约定同其余渲染段（t42）：只接收「渲染所需的数据 + 回调」；React 状态、副作用与网络调用
  * 仍在 SyncPanel（单一状态源），可测纯逻辑在 src/ui/sync-settings-view.ts。
  *
@@ -26,7 +29,6 @@ import { Badge, Banner, Button, Card, Checkbox, Switch } from '../common/ui.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ContentPicker } from '../common/ContentPicker.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import type { SelectionSection } from '../../ui/selection-model.ts'
 import {
   initialSessionPicks, pickedSessionIds, sessionPickerSelection,
@@ -40,7 +42,7 @@ import { AutosyncCard } from './AutosyncCard.tsx'
 import type { AutosyncAutoApplyTier, AutosyncConflictPolicy, AutosyncInterval } from './sync-api.ts'
 import css from '../config-manager.module.css'
 
-/** 弹窗内的两个页签：同步内容 / 自动同步与密码（一条通道的策略全在这一页）。 */
+/** 弹窗内的两个页签：同步内容 / 设置（一条通道的策略全在这一页；2026-11-14 由「自动同步与密码」改名）。 */
 type SyncSettingsTab = 'content' | 'settings'
 
 /**
@@ -114,8 +116,6 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
           title={t('mode.sessionsPickTitle')}
           closeLabel={t('common.close')}
           onClose={onClose}
-          // 视图级说明：贴在标题右边（Modal.Header trailing），不单独成行
-          trailing={<InfoHint text={t('mode.sessionsPickHint')} label={t('common.infoHint')} />}
         />
         <Modal.Body scroll style={{ maxHeight: '66vh' }}>
           {sessionFailed && <span className={css.hint}>{cmT('picker.unitsUnavailable')}</span>}
@@ -207,7 +207,6 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
                 <div className={css.settingsRow}>
                   <span className={css.settingsRowMain}>
                     <label className={css.settingsRowLabel} htmlFor={deletePluginsId}>{t('mode.deletePlugins')}</label>
-                    <InfoHint text={t('mode.deletePluginsHint')} label={t('common.infoHint')} />
                   </span>
                   <span className={css.settingsRowControl}>
                     <Switch
@@ -250,9 +249,6 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
                             {s.portability === 'deviceSpecific' && (
                               <Badge kind="warn">{t('mode.sectionDeviceSpecific')}</Badge>
                             )}
-                            {/* issue #78：MCP 的机器相关内容（绝对路径 command / cwd、缺运行时）走 ⓘ，
-                                与「机制说明进 InfoHint」的同一条纪律（见 info-hint-guard）。 */}
-                            {s.id === 'mcp' && <InfoHint text={t('mode.mcpHint')} label={t('common.infoHint')} />}
                             {s.defaultIncluded && <Badge kind="ok">{t('mode.sectionRecommended')}</Badge>}
                           </span>
                         }
@@ -262,7 +258,7 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
                       {s.id === 'sessions' && sections.includes('sessions') && (
                         <div className={css.field}>
                           <div className={css.field}>
-                            <span className={css.fieldLabel}>{t('mode.sessionsLimit')} <InfoHint text={t('mode.sessionsLimitHint')} label={t('common.infoHint')} /></span>
+                            <span className={css.fieldLabel}>{t('mode.sessionsLimit')}</span>
                             <input aria-label={t('mode.sessionsLimit')}
                               type="number"
                               min={0}

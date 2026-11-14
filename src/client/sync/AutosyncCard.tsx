@@ -14,7 +14,6 @@ import type { TranslateNS } from '../client-types.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import { Badge, Switch } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import {
   autosyncFailureMessage, autosyncIntervalMs, autosyncSkipDetail, autosyncStatusText, computeAutosyncCountdown,
   formatIntervalDuration,
@@ -113,7 +112,7 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           「自动同步」是否开启 —— 标题与开关是同一件事，不该各占一行。 */}
       <div className={css.settingsGroupHead}>
         <span className={css.settingsGroupTitle}>
-          {t('autosync.title')} <InfoHint text={t('autosync.description')} label={t('common.infoHint')} />
+          {t('autosync.title')}
         </span>
         {/* 弹性开关（2026-11-14 用户要求）：单一布尔、拨动即落库 ⇒ 用 Switch 而不是勾选框 */}
         <Switch
@@ -130,14 +129,13 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           同口径：不给未启用的能力配满配置项。开启后这些控件立刻出现，没有隐藏的能力。 */}
       {settings.autosyncEnabled && (
         <>
-          {/* 行式设置行（D-39）：标签 + ⓘ 在左、控件在右。外壳用 <span> 而不是 <label>
-              （2026-11-04 用户反馈：悬停选择框会连带点亮 ⓘ）—— <label> 会把指针在标签区域 /
-              点击标签转发给它包裹的控件，而 ⓘ 是按钮，两者绑成一件事后悬停下拉会顺手触发
-              ⓘ 的悬停观感、点 ⓘ 会顺手改掉设置。控件的无障碍名不靠标签：Select 自带 ariaLabel。 */}
+          {/* 行式设置行（D-39）：标签在左、控件在右。外壳用 <span> 而不是 <label>：
+              这一行里存在的是一段纯文字（2026-11-14 用户要求移除全部 ⓘ 后不再有按钮），
+              用 <span> 就不会把指针在标签区域的点击转发给右侧控件。控件的无障碍名
+              不靠标签：Select 自带 ariaLabel、Switch 自带 label。 */}
           <div className={css.settingsRow}>
             <span className={css.settingsRowMain}>
               <span className={css.settingsRowLabel}>{t('autosync.interval')}</span>
-              <InfoHint text={t('autosync.intervalHint')} label={t('common.infoHint')} />
             </span>
             <span className={css.settingsRowControl}>
               <Select
@@ -153,7 +151,6 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           <div className={css.settingsRow}>
             <span className={css.settingsRowMain}>
               <label className={css.settingsRowLabel} htmlFor={realtimeId}>{t('autosync.realtime')}</label>
-              <InfoHint text={t('autosync.realtimeHint')} label={t('common.infoHint')} />
             </span>
             <span className={css.settingsRowControl}>
               <Switch
@@ -168,7 +165,6 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           <div className={css.settingsRow}>
             <span className={css.settingsRowMain}>
               <span className={css.settingsRowLabel}>{t('autosync.autoApplyTier')}</span>
-              <InfoHint text={t('autosync.autoApplyTierHint')} label={t('common.infoHint')} />
             </span>
             <span className={css.settingsRowControl}>
               <Select
@@ -187,7 +183,6 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           <div className={css.settingsRow}>
             <span className={css.settingsRowMain}>
               <span className={css.settingsRowLabel}>{t('autosync.conflictPolicy')}</span>
-              <InfoHint text={t('autosync.conflictPolicyHint')} label={t('common.infoHint')} />
             </span>
             <span className={css.settingsRowControl}>
               <Select

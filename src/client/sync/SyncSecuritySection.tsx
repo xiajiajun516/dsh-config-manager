@@ -2,10 +2,11 @@ import { useId } from 'react'
 /**
  * 加密与密钥导出 + 解密密码（原来是两张独立的 Card：SecurityOptionsCard / DecryptPasswordCard）。
  * 2026-11-14 用户要求：三块设置收进**一个**弹窗，页面只剩摘要行 —— 两张卡因此不再是卡，
- * 而是弹窗里的两段（.settingsGroup），由 SyncSettingsDialog 的「自动同步与密码」页承载。
+ * 而是弹窗里的两段（.settingsGroup），由 SyncSettingsDialog 的「设置」页承载（该页签 2026-11-14 由「自动同步与密码」改名）。
  *
  * 为什么写方向（加密密码）与读方向（解密密码）同页：它们服务同一份加密快照，一写一读；
- * 但两段各有自己的段头与 ⓘ —— 分开表达「给远端加密」与「读远端的加密」，不混成一个密码。
+ * 但两段各有自己的段头与状态 —— 分开表达「给远端加密」与「读远端的加密」，不混成一个密码。
+ * 2026-11-14 用户要求：本页（连同自动同步段）的 ⓘ 全部移除，只留设置本身。
  *
  * 2026-11-14 二次收口（Stitch 稿 D-39）：段内改成**行式设置行**（标签左、控件右、行高 34、
  * 0.5px 行线），段头的开关贴右。原来每项都是「标题一行 + 控件一行」的竖排 .field ——
@@ -17,7 +18,6 @@ import { useId } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Button, Switch } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import type { ChannelSyncState } from './sync-view.ts'
 import type { SyncChannelSettingsPatch } from '../../ui/sync-settings-view.ts'
 import css from '../config-manager.module.css'
@@ -41,15 +41,12 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
   return (
     <>
       <div className={css.settingsGroup}>
-        {/* 段头：段名在左，属于这一段的开关（加密备份）连它的名字 + ⓘ 一起贴右 ——
+        {/* 段头：段名在左，属于这一段的开关（加密备份）连它的名字一起贴右 ——
             标题只标段名，控件自己的名字必须贴在控件旁边。 */}
         <div className={css.settingsGroupHead}>
           <span className={css.settingsGroupTitle}>{t('mode.security')}</span>
           <span className={css.settingsGroupAction}>
             <label className={css.settingsRowLabel} htmlFor={encryptId}>{t('mode.encrypt')}</label>
-            {/* 说明性文案一律进 ⓘ（2026-10-12 用户要求：卡里只留勾选项与控件）。
-                「加密方式 + 密码存哪 + 自动同步跳过加密快照」在 2026-11-14 合成一个键。 */}
-            <InfoHint text={t('mode.encryptHint')} label={t('common.infoHint')} />
             {/* 弹性开关（2026-11-14）：与自动同步段同一类 —— 单一布尔、拨动即落库。 */}
             <Switch id={encryptId} checked={settings.encrypt} onChange={onToggleEncrypt} label={t('mode.encrypt')} />
           </span>
@@ -107,7 +104,6 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
         <div className={css.settingsRow}>
           <span className={css.settingsRowMain}>
             <label className={css.settingsRowLabel} htmlFor={includeSecretsId}>{t('mode.includeSecrets')}</label>
-            <InfoHint text={t('mode.includeSecretsHint')} label={t('common.infoHint')} />
           </span>
           <span className={css.settingsRowControl}>
             <Switch id={includeSecretsId} checked={settings.includeSecrets} onChange={onToggleIncludeSecrets} label={t('mode.includeSecrets')} />
@@ -124,7 +120,6 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
         <div className={css.settingsRow}>
           <span className={css.settingsRowMain}>
             <span className={css.settingsRowLabel}>{t('mode.decryptPasswordShort')}</span>
-            <InfoHint text={t('mode.decryptPasswordHint')} label={t('common.infoHint')} />
           </span>
           <span className={css.settingsRowControl}>
             <input aria-label={t('mode.decryptPassword')}

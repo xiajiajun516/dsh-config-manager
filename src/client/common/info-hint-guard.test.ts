@@ -109,12 +109,10 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'config.repoUrlHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
   { key: 'github.description', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '机制' },
   { key: 'webdav.urlHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
-  { key: 'mode.sessionsPickHint', file: 'src/client/sync/SyncSettingsDialog.tsx', kind: '机制' },
-  { key: 'mode.sessionsLimitHint', file: 'src/client/sync/SyncSettingsDialog.tsx', kind: '输入规则' },
-  // 2026-11-01 用户要求：删掉两处「保存/即时生效」ⓘ（弹窗底部与同步页分区行）——
-  // 它们在解释用户无从选择的事，MOVE 台账随之退出 2 条。
-  { key: 'autosync.description', file: 'src/client/sync/AutosyncCard.tsx', kind: '机制' },
-  { key: 'autosync.intervalHint', file: 'src/client/sync/AutosyncCard.tsx', kind: '机制' },
+  // 2026-11-01 用户要求：删掉两处「保存/即时生效」ⓘ（弹窗底部与同步页分区行）。
+  // 2026-11-14 第三轮（用户要求「同步设置弹窗两页的 ⓘ 全部移除」）：本弹窗与它内嵌的
+  // AutosyncCard / SyncSecuritySection 的 8 个 ⓘ 一起下线 → 台账退出 8 条（54 → 46）。
+  // 留在这三份文件里的只剩设置本身；其余页面的 ⓘ 不受影响（通道配置弹窗、首页、产物库等照旧）。
   // t3：environment/maintenance + home + library + export/（v3 搬移后的落点）
   // UI v2：产物列表搬进产物库 → MOVE 键的渲染点随之改址
   // 2026-10-04 用户要求：产物库页首标题行（含保留期 ⓘ）整体移除 → `snapshots.retentionHint` 退出 MOVE 台账（43 → 42）
@@ -153,10 +151,6 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'import.picker.hint', file: 'src/client/import/ImportWizardView.tsx', kind: '机制' },
   { key: 'foreign.source.hint', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
   { key: 'foreign.lossy.hint', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
-  { key: 'mode.encryptHint', file: 'src/client/sync/SyncSecuritySection.tsx', kind: '机制' },
-  { key: 'mode.includeSecretsHint', file: 'src/client/sync/SyncSecuritySection.tsx', kind: '机制' },
-  { key: 'mode.deletePluginsHint', file: 'src/client/sync/SyncSettingsDialog.tsx', kind: '边界' },
-  { key: 'mode.decryptPasswordHint', file: 'src/client/sync/SyncSecuritySection.tsx', kind: '机制' },
   { key: 'export.encryptHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
   { key: 'export.includeSecretsHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
   { key: 'diskUsage.clean.hint', file: 'src/client/environment/maintenance/DiskUsageCard.tsx', kind: '边界' },
@@ -391,7 +385,7 @@ test('t6-1 MOVE：54 个说明键都已收进 ⓘ（逐字复用原键）且不�
   // 2026-11-01：导入选择页的「从其它 agent 导入」按钮与其 ⓘ 一并移除（首页已有直达入口）⇒ 79 降到 78。
   // 2026-11-14 用户要求「页面尽可能简洁」：删 `config.saveHint`（表单本就自动保存，手动按钮已删）
   // 与 `snapshots.selectHint`（恢复计划弹窗里「选择快照…」是死句，快照早已选定）⇒ 78 降到 77。
-  assert.ok(MOVE_PINS.length === 54, 'MOVE 清单长度应为 54（实际 ' + String(MOVE_PINS.length) + '）');
+  assert.ok(MOVE_PINS.length === 46, 'MOVE 清单长度应为 46（实际 ' + String(MOVE_PINS.length) + '）');
   assert.ok(
     MOVE_PINS.filter((p) => p.kind === '输入规则').length >= 5,
     '输入规则类 MOVE 至少 5 处（config.repoUrlHint / webdav.urlHint / mode.sessionsLimitHint / retention.keep*Hint / export.fileNameHint）',
