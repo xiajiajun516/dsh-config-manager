@@ -3618,6 +3618,53 @@ body {
   margin-top: 10px;
 }
 
+/* —— 清理块（2026-11-14 用户要求重排「文字与按钮的位置和间距」）——
+ *
+ * 改前：三行各自是一条 `.actionRow[data-inline]`（`margin: 0`）⇒ 行间零垂直间距，
+ * 勾选框贴着上一行标题的下沿，读起来像两句话挤成一段；体量徽章一个紧跟文字（3.0 MB）、
+ * 一个被 `.statusSpacer` 顶到卡右缘（0 B），同一块里两种摆法；下面那行还有个按钮也贴着右缘 ⇒ 右缘两个东西错开高度，成锯齿。
+ *
+ * 改后：三行收进一个纵向栈（统一 6px 行距），徽章一律紧跟它管辖的那句文案，
+ * 卡右缘只留「立即清理」这一颗按钮（右缘一条竖线）。
+ * 只多花 14px 高：这张卡是固定高度（--cm-disk-card-h），多出来的高度由明细表让出（它是唯一可压缩子项）。 */
+.cleanupLines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-3);
+  margin: 0 0 var(--cm-sp-4);
+}
+
+/* 清理范围行：正文主色 —— 它说明「这次会清掉什么」，比下面的勾选项更要紧；
+   此前它吃 .actionRow 的继承色（次级灰），而勾选项文案是主色 ⇒ 主次颠倒。 */
+.cleanupScope {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cm-sp-3);
+  font-size: var(--cm-fs-base);
+  font-weight: 500;
+  color: var(--cm-text-1);
+}
+
+/* 勾选项行：勾选框 · 文案 · 该勾选项自己的体量徽章，四者同一行、同一档字号。 */
+.cleanupOption {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cm-sp-3);
+  font-size: var(--cm-fs-base);
+  color: var(--cm-text-1);
+}
+
+/* 「可立即释放 N」左、按钮右：与上方两行隔 8px（由 .cleanupLines 的下外边距给），
+   自身不再带 .actionRow 的 10px 下边距 —— 那是卡内最后一块。 */
+.cleanupAction {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-3);
+  margin: 0;
+}
+
 .activityHeader {
   display: flex;
   align-items: center;

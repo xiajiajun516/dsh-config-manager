@@ -41,6 +41,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+- **磁盘占用的清理区重新排过**：清理哪块、要不要连带回收过期备份、可立即释放多少这三行现在是统一行距的一组，两处容量数字各自紧挨着它对应的那句话，右侧只留一颗「立即清理」按钮（以前勾选框贴着上一行标题、两个容量数字一个靠文字一个顶到最右边）。
+  **The cleanup area in disk usage is rearranged**: what gets cleaned, whether to reclaim expired backups as well, and how much can be freed right now sit as one group with an even rhythm, each size badge sits next to the line it belongs to, and the right edge carries a single "Clean now" button.
 - **说明文字改成悬停才出现，界面上不再有灰点图标**：原来每个 ⓘ 里的那句话（机制怎么工作、边界与限制、凭据写到哪儿、输入规则）现在挂在该标题、标签或按钮上，鼠标悬停即读；页面上一个说明图标都不剩，界面回到「标签 + 控件」。真正必须当场看到的东西（校验错误、危险操作后果、状态、空态、禁用原因）仍然常驻；同步设置页的段名与每一行标签也都带上了说明，悬停即读。
   **Explanations now appear on hover, and the grey ⓘ icons are gone**: every sentence that used to hide behind an ⓘ (how it works, limits, where credentials go, input rules) is attached to its title, label or button, so hovering reads it; the page keeps only labels and controls. Anything you must see on the spot — validation errors, dangerous-action consequences, status, empty states, disabled reasons — stays visible; the group headings and every row label in the sync settings dialog carry their explanation too.
 

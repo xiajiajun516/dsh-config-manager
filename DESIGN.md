@@ -1408,7 +1408,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 | 迁移咨询（D-03） | `.consultWillApply` `.consultDimensionRow` `.consultDimensionName` `.consultDimensionScroll` `.reasonLine::before` | 维度名纯文本 + 分数按档位分色（`consultScoreBadgeKind`）；建议依据行首 3px 圆点；维度区去共享滚框形态只留滚动 |
 | 内容选择器（D-14b） | `.pickerToolbarCount` | 工具条末尾常驻「已选 N / M」（`picker.selectedOf` + `pickerSummary.totalUnits`），合计仍在页脚 |
 | 原语·弹性开关（2026-11-14） | `.switchRoot` `.switchRootDisabled` `.switchInput` `.switchTrack` `.switchKnob` | `common/ui.tsx` 的 `Switch`：32×18 轨道 + 12px 圆点，拨动时圆点用 CSS `transition` 弹簧滑到另一端（240ms、`cubic-bezier(.34,1.28,.6,1)` 过冲约 0.4px，轨道 `overflow: hidden` 把过冲裁在胶囊内 —— 撞边挤压，不是露到轨道外）；**只动 `transform`，且不上 keyframes** ——（a）`left`/`width` 是布局属性，逐帧改会重排掉帧；（b）浏览器在 click 当帧就翻好 `input.checked`，而 React 的提交晚一帧，keyframes 只能从 0% 重播 ⇒ 圆点先瞬移到终点再倒回来（左右横跳），且中段位移钉死只放大 `scaleX` 会读出「中途停顿」（实测 `.tmp/switch-probe.html`：keyframes 版首帧 16 → 0.9 → 1.9…、8px 处停 6 帧；transition 版 0 → 1.4 → … 单调到 16）；仍是原生 `<input type=checkbox role=switch>` + `opacity:0` 覆盖层，键盘/`label htmlFor`/`disabled` 语义全部由浏览器给；挂载首帧不播动画（transition 不从初始样式计算触发），`prefers-reduced-motion` 下退化为瞬时切换 |
-| 环境 | `.duRowNote` `.duRowPolicy` | 磁盘占用每分区一行（名称·过期量·占用·策略），文件数并入 `title` |
+| 环境 | `.duRowNote` `.duRowPolicy` `.cleanupLines` `.cleanupScope` `.cleanupOption` `.cleanupAction` | 磁盘占用每分区一行（名称·过期量·占用·策略），文件数并入 `title`；清理块三行一套（清什么 / 连带回收过期备份 / 释放多少 + 按钮）：统一 6px 行距、体量徽章**紧跟它管辖的那句文案**、卡右缘只留一颗按钮。改前三行各自是 `.actionRow[data-inline]`（`margin:0`）⇒ 零行距、勾选框贴上一行下沿，且两枚徽章一枚靠文字一枚被 spacer 顶到右缘，读成两种摆法 |
 | 恢复 | `.recoveryEmptyBar` `.factBox` | 空态条；事实格带框（与 `.factGrid` 同类名并联，不新增包裹层） |
 | 备份 | `.retentionCard` `.retentionCardLabel` | 保留策略三张数字卡（输入右对齐、单位提示贴格尾） |
 | 命令面板 | `.paletteInput` `.paletteList` `.paletteHint` | 顶部浮层：输入条 44 高只留底边线、列表吃满剩余高度、提示行吸底 |

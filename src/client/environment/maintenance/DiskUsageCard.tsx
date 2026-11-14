@@ -208,26 +208,32 @@ export function DiskUsageCard({ api, onBackupsChanged }: DiskUsageCardProps) {
 
           <div className={css.groupLabel} title={t('diskUsage.clean.hint')}>{t('diskUsage.clean.title')}</div>
 
-          {tmpMarket !== undefined && (
-            <div className={css.actionRow} data-inline>
-              <span>{tmpMarket.label} <Badge kind={tmpMarket.bytes > 0 ? 'info' : 'ok'}>{tmpMarket.size}</Badge></span>
-            </div>
-          )}
+          {/* 清理块三行一套（2026-11-14 用户要求重排位置与间距）：清什么 / 是否连带回收过期备份 /
+              释放多少 + 动手按钮。改前每行是一条 `.actionRow[data-inline]`（margin 0）⇒ 行间零间距，
+              勾选框贴在前一行下沿；两枚体量徽章一枚紧跟文字、一枚被 spacer 顶到卡右缘 ⇒ 同一块两种摆法。
+              现在：统一行距的纵向栈，徽章一律紧跟它管辖的文案，卡右缘只留「立即清理」一颗按钮。 */}
+          <div className={css.cleanupLines}>
+            {tmpMarket !== undefined && (
+              <div className={css.cleanupScope}>
+                <span>{tmpMarket.label}</span>
+                <Badge kind={tmpMarket.bytes > 0 ? 'info' : 'ok'}>{tmpMarket.size}</Badge>
+              </div>
+            )}
 
-          {expiredExports !== undefined && (
-            <div className={css.actionRow} data-inline>
-              <Checkbox
-                checked={includeExpired}
-                onChange={(next) => { setIncludeExpired(next) }}
-                label={t('diskUsage.clean.includeExpired')}
-              />
-              <span className={css.statusSpacer} />
-              {/* 勾选框已经说明了「回收什么」，这里只补可回收量 */}
-              <Badge kind={expiredExports.bytes > 0 ? 'warn' : 'ok'}>{expiredExports.size}</Badge>
-            </div>
-          )}
+            {expiredExports !== undefined && (
+              <div className={css.cleanupOption}>
+                <Checkbox
+                  checked={includeExpired}
+                  onChange={(next) => { setIncludeExpired(next) }}
+                  label={t('diskUsage.clean.includeExpired')}
+                />
+                {/* 勾选框已经说明了「回收什么」，这里只补可回收量；紧挨着它管辖的那句话，不顶到右缘 */}
+                <Badge kind={expiredExports.bytes > 0 ? 'warn' : 'ok'}>{expiredExports.size}</Badge>
+              </div>
+            )}
+          </div>
 
-          <div className={css.actionRow}>
+          <div className={css.cleanupAction}>
             <span className={css.cellMeta}>{t('diskUsage.clean.reclaimableLabel')}</span>
             <span className={css.mono}>{formatBytes(reclaimTargets)}</span>
             <span className={css.statusSpacer} />
