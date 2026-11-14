@@ -6,7 +6,10 @@
  *
  * 五条实现契约照抄 `common/Select.tsx`（同一种自绘弹层，不能有两套行为）：
  *   ① 弹层 absolute 留在原地、**不 portal** —— 本插件的 Radix 弹窗已经挂在
- *      #dsh-config-manager-root 内，再 portal 一次会引入第二套层叠上下文；
+ *      #dsh-config-manager-root 内，再 portal 一次会引入第二套层叠上下文。
+ *      代价：**祖先链一级都不能 overflow 裁剪** —— .navStrip 曾写 overflow: hidden，弹层被切成
+ *      分隔条下沿的一条（2026-11-14 真机反馈「小视口下点开『更多』什么都不显示」）。
+ *      这条不变量由 nav-menu-clip-guard.test.ts 钉住；
  *   ② **Esc 必须 stopPropagation** —— 它可能位于 Radix 弹窗 / 侧滑面板内，冒泡会把它们一起关掉；
  *   ③ 点击外部关闭监听 mousedown（比 click 早，且覆盖右键与拖拽结束）；
  *   ④ 高亮移动复用 `ui/select-model.ts`（已有 node 单测），本文件只装配；

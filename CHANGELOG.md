@@ -79,6 +79,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **窄窗口下「更多 ▾」能正常展开**：页签放不下收进「更多」时，点开不再只剩一条缝——导航条过去会把弹层跟着一起裁掉，现在菜单完整浮在分段条下方，选中项与「我在这一页」的高亮都不变。
+  **The "More" menu opens properly in a narrow window**: when tabs no longer fit and move under "More", opening it shows the whole menu below the strip instead of a sliver — the nav strip used to clip the layer along with itself; the checked item and the current-page highlight are unchanged.
 - **断开同步通道会先等在途保存落定**：断开时若还有一次配置保存在路上，最多等 5 秒让它结束；等不到就提示稍后再点一次，而不是先弹「已断开」——旧保存不会再把你刚断开的地址写回，断开之后新保存的地址也不会再被悄悄删掉。
   **Disconnecting a sync channel now waits for an in-flight save**: if a settings save is still on the wire, disconnect waits up to 5 seconds for it; if it does not settle you are asked to try again rather than being told it is gone — an old save can no longer write the settings back, and a configuration saved after disconnecting is no longer silently deleted.
 - **运行中心的取消确认框会在任务落定后自动关闭**：任务被宿主超时自动裁决、或已在别处结案时，框不再一直挂着挡住后续等待；确认过一个任务之后，其它正在等你的任务仍然会弹出来。
