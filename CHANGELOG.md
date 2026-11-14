@@ -28,13 +28,19 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-14
+
+> **整个插件换了一套界面，同步也学会按内容判断**：首页、产物库、同步、环境、恢复与各个弹窗统一到同一套卡片、分隔线与按钮层级；推送前先比内容，没变就不再新建快照，git 通道还多出一份 `latest/` 副本；备份里被脱敏清空的插件字段不再盖掉本机明文。手机端也第一次能用了（dsh-Go 原生插件）。
+>
+> **Theme**: a fresh interface across the whole plugin, and sync now decides by content — no snapshot when nothing changed, a `latest/` copy for git channels, and redacted backup fields no longer overwrite local plaintext. The config manager also lands on phones as a dsh-Go native plugin.
+
 ### 🆕 新增 · Added
 
 - **写回补丁前先检查配置项的键名**：键名会被主程序读成数字、布尔或空（`007`、`True`、`~` 这类），或者干脆是空键名（会让主程序整份配置读不出来）时，这一项不再被写入，导入结果直接告诉你哪个键、改成加引号的写法；同一批里其它项照常导入，不会因为一个坏键全部回滚。（issue #137）
+  **Patch write-back now checks config key names before writing**: when a key would be read by the host as a number, a boolean or null (`007`, `True` or `~`, for instance), or when it is an empty key that makes the host fail to parse the whole file, that item is skipped instead of written and the import result names the key and the quoted form to use; the other items in the same import still apply, so one bad key never rolls everything back. (issue #137)
+
 - **手机端也能用配置管家（dsh-Go 原生插件）**：在 dsh-Go 1.0.16 及以上的「全部功能 → 配置管家」里就能看版本与同步健康、把备份导出到手机的 DSH-Go 下载目录、导入 ZIP（先试运行，冲突逐项裁决）、拉取并应用同步差异、预览并执行恢复，不必再打开网页版；加密备份、缺凭据的项和远程主机模式会明确让你到电脑端处理。
   **Config Manager now lives in the dsh-Go app (native plugin)**: on dsh-Go 1.0.16 and newer, "All features → Config Manager" shows version and sync health, exports a backup into the phone's DSH-Go download folder, imports a ZIP (dry run first, conflicts decided item by item), pulls and applies sync differences, and previews then runs a restore without opening the web UI; encrypted backups, items missing credentials and remote-host mode tell you to finish those on the desktop.
-
-  **Patch write-back now checks config key names before writing**: when a key would be read by the host as a number, a boolean or null (`007`, `True` or `~`, for instance), or when it is an empty key that makes the host fail to parse the whole file, that item is skipped instead of written and the import result names the key and the quoted form to use; the other items in the same import still apply, so one bad key never rolls everything back. (issue #137)
 
 - **远端仓库里多了一份「最新配置」目录**：用 git 通道推送后，仓库根（或你配置的子目录）下会多出 `latest/`，里面永远是最新那份明文快照的内容，方便你自己或别的工具直接读，不必先翻快照列表；它与快照在**同一次提交**里写入，不会出现「快照已更新、`latest/` 还是旧的」的中间状态。它只是副本：删掉不影响任何功能，下次推送会补回来；加密快照不生成它（会给出明确提示），远端保留策略也不因它多留快照。（issue #141）
   **The remote repo now carries a "latest config" folder**: after a git-channel push, the repo root (or your configured subdirectory) gains `latest/`, always holding the newest plaintext snapshot's content so you or another tool can read it directly without listing snapshots; it is written in the **same commit** as the snapshot, so there is never a moment where the snapshot is newer than `latest/`. It is only a copy — deleting it breaks nothing and the next push restores it; encrypted snapshots do not produce it (you get an explicit notice), and remote retention still counts snapshots only. (issue #141)
