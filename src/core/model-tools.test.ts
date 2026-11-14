@@ -364,6 +364,47 @@ test('config_sync_push：复用 SyncEngine.push（内存 transport），返回 s
   }
 })
 
+test('config_sync_push：用户放行的可选分区必须进引擎（issue #138：显式 mcp 不再 skipNonPortable）', async () => {
+  const { deps, tmp, transport, ctx } = await makeDeps()
+  try {
+    await writeSyncConfig(deps.syncDir, { schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://github.com/u/r.git' } })
+    // mcp adapter 的数据源：一行 dsh-mcp-client patch（与 sync-engine.test.ts 的 seedMcp 同形）
+    ctx.patchFile.lines.set('mcp-citra', {
+      lineId: 'mcp-citra',
+      raw: {
+        id: 'mcp-citra',
+        name: 'dsh-mcp-client',
+        config: { serverName: 'citra', command: 'npx', args: ['-y', '@sylphx/citra'] },
+      },
+    })
+    // 真实装配口径：宿主把 'auto' 档交给 deps.optInSections；这里故意混入 sessions 验证永久排除。
+    const seenOptIn: (readonly SectionId[])[] = []
+    const inner = deps.makeSyncEngine
+    const tools = createModelTools({
+      ...deps,
+      makeSyncEngine: (cfg, engineOpts) => {
+        seenOptIn.push(engineOpts?.optInSections ?? [])
+        return inner(cfg, engineOpts)
+      },
+      optInSections: () => ['mcp', 'sessions'],
+    })
+    const out = (await tools.syncPush({ channel: 'git', sections: ['settings', 'mcp'] })) as {
+      ok: boolean; sections: string[]; warnings: string[]
+    }
+    assert.equal(out.ok, true)
+    assert.ok(out.sections.includes('mcp'), '显式放行的 mcp 必须进入快照: ' + out.sections.join(','))
+    assert.ok(!out.sections.includes('sessions'), 'sessions 永不上行')
+    assert.deepEqual(seenOptIn[seenOptIn.length - 1], ['mcp'], '引擎收到的可选分区 = 放行集合 − sessions')
+    assert.ok(
+      !out.warnings.some((w) => w.includes('mcp')),
+      '放行后不得再报 skipNonPortable: ' + out.warnings.join(' | '),
+    )
+    assert.ok(transport.calls.includes('upload'), 'push 写远端')
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
 test('config_sync_pull：空远端 → 零写入空差异', async () => {
   const { deps, tmp, transport, ctx } = await makeDeps()
   try {

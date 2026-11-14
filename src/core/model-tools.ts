@@ -80,8 +80,8 @@ export interface ModelToolsDeps {
   syncDir: string
   /**
    * SyncEngine 工厂（git/webdav 按配置分支构造传输；与 host 路由同一来源）。
-   * D5：agent 侧按工具决定 optInSections（仅合并类工具带用户放行的可选分区），
-   * 推送/拉取仍走缺省（= 只 portable），与改动前的工具行为逐字节一致。
+   * D5：agent 侧按工具决定 optInSections —— 推送 / 拉取 / 预览 / 合并一律带用户放行的 'auto' 档，
+   * 再剔除 sessions（与 docs/architecture/agent-tools.md 的工具面口径同一份事实）。
    */
   makeSyncEngine: (cfg: SyncConfig, opts?: { optInSections?: readonly SectionId[] }) => SyncEngine
   /** 插件版本（manifest.exporter.version） */
@@ -163,13 +163,20 @@ async function resolveSyncTarget(
   return { cfg, channel: ch }
 }
 
-/** 解析同步引擎（推送 / 拉取：缺省只同步 portable 分区，与改动前行为逐字节一致）。 */
+/**
+ * 解析同步引擎（推送 / 拉取）。
+ * D5：与 preview/apply 同一口径 —— 引擎构造期必须拿到用户放行的 'auto' 档可选分区，
+ * 否则显式传 mcp 会在 pushTargets 里被判成非 portable 并 skipNonPortable（issue #138 ④）。
+ */
 async function resolveEngine(
   deps: ModelToolsDeps,
   channel?: SyncTransportType,
 ): Promise<{ engine: SyncEngine; channel: SyncTransportType }> {
   const target = await resolveSyncTarget(deps, channel)
-  return { engine: deps.makeSyncEngine(target.cfg), channel: target.channel }
+  return {
+    engine: deps.makeSyncEngine(target.cfg, { optInSections: agentOptInSections(deps, target.channel) }),
+    channel: target.channel,
+  }
 }
 
 /* ------------------------------------------------------------ 结构化结论与摘要 */
