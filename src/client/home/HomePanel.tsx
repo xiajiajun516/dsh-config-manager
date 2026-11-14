@@ -35,6 +35,7 @@ import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerKey } from '../locales.ts'
 import { redact } from '../../security/redaction.ts'
 import { runStore } from '../run-store.ts'
+import { requestMergeDecision } from '../sync/merge-request.ts'
 import type { ArtifactKind } from '../../ui/artifact-view.ts'
 import { toast } from '../common/toast-store.ts'
 import { isAccessModeError } from '../common/access-mode.ts'
@@ -342,6 +343,19 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
     runStore.patch({ panel: 'environment' })
   }
 
+  /**
+   * P2（2026-11-14 真机事故）：待裁决行 → 同步页并直接拉起合并裁决。
+   *
+   * 首页只知道「有事等我裁决」（宿主的 pendingMerge → 徽章 pending），
+   * 怎么把裁决视图拉起来只有同步页知道（runSyncSmart → /sync/merge-preview → MergeModal）。
+   * 所以首页只发一个一次性信号（requestMergeDecision），由同步页取走后清空 ——
+   * 不进 run-store、不落盘，刷新不会凭空弹窗。
+   */
+  const navMerge = (): void => {
+    requestMergeDecision()
+    runStore.patch({ panel: 'sync' })
+  }
+
   /** 是否存在待处理恢复事项（null = 状态未知；决定健康段是否作为「事故恢复」入口）。 */
   const recoveryRequired = store.recovery.status !== null
     ? toRecoveryView(store.recovery.status).recoveryRequired === true
@@ -544,8 +558,14 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
                   {activity.map((item, i) => {
                     const atMs = Date.parse(item.at) || 0
                     const kindText = kindLabel(item.kindKey, t)
-                    return (
-                      <div className={css.activityRow} key={`${item.at}-${i}`}>
+                    const rowKey = `${item.at}-${i}`
+                    // P2：待裁决行是可点的（去同步页裁决）；其余行保持纯信息。
+                    // 用 button 承载而不是给 div 挂 onClick —— 键盘 Tab/回车与读屏语义才能对。
+                    const rowClass = item.jumpTo === 'sync'
+                      ? `${css.activityRow} ${css.activityRowAction}`
+                      : css.activityRow
+                    const cells = (
+                      <>
                         <span className={css.activityTime} title={atMs > 0 ? new Date(atMs).toLocaleString() : undefined}>
                           {renderRelTime(atMs, t)}
                         </span>
@@ -563,8 +583,21 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
                           <CopyButton text={item.summary} label={t('overview.activity.copy')} t={t} />
                         </span>
                         <span className={css.activityBadge}>{resultNode(item.badge)}</span>
-                      </div>
+                      </>
                     )
+                    return item.jumpTo === 'sync'
+                      ? (
+                        <button
+                          type="button"
+                          className={rowClass}
+                          key={rowKey}
+                          onClick={navMerge}
+                          title={t('overview.activity.openMerge')}
+                        >
+                          {cells}
+                        </button>
+                      )
+                      : <div className={rowClass} key={rowKey}>{cells}</div>
                   })}
                 </div>
               )}

@@ -282,6 +282,14 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       autosync: await buildAutosyncStatus(syncDir, transport),
       // 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道）
       autosyncByChannel: await buildAutosyncStatusByChannel(syncDir),
+      // 待裁决分区（P2，2026-11-14 真机事故）：远端有比基线新的快照、且自动同步撞上冲突时，
+      // sync-state.pendingMerge 会记录「哪些分区等人裁决」与「从什么时候开始挂着的」。
+      // 首页「待裁决」徽章据此从纯颜色变成可点击入口（跳同步页打开裁决视图）。
+      // **绝不回 remoteSnapshotId**：与 hasBaseline 同一纪律 —— 界面只需要知不知道该裁决，
+      // 不需要（也不该拿到）远端快照坐标。
+      ...(state.pendingMerge === undefined
+        ? {}
+        : { pendingMerge: { sections: [...state.pendingMerge.sections], since: state.pendingMerge.since } }),
       // 工作副本事实（仅 git 且配置了地址时返回；'facts' = 自检成功，'error' = 自检读不出来）
       ...(workDir === null ? {} : { workDir }),
     }

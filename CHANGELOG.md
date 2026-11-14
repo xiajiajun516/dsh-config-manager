@@ -92,6 +92,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **自动同步的「待裁决」终于能点进去处理，也不再每分钟记一条同样的记录**：远端有别的设备推过的新内容时，首页那条记录整行可点、直接进同步页的合并确认，同步设置里的自动同步一栏同时写明是哪几个分区在等你裁决、从什么时候开始等；同一种冲突连着出现只保留一条记录（以前是每 60 秒写一条，200 条历史被同一句话占满），真正推进成功或失败的轮次照旧逐条留痕。
+  **"Needs decision" entries from auto sync are now actionable, and the same conflict is logged once**: when another device has pushed newer content, the home row is clickable and opens the merge confirmation on the sync page, while the auto-sync section says which sections are waiting and since when; a repeated identical conflict keeps a single entry (it used to add one every 60 seconds, filling the 200-entry history with the same sentence), and rounds that really push or fail are still logged one by one.
+- **自动同步的后台轮询不再每轮重跑一次本机全部内容的打包**：只在远端真的有新内容时才重新检查本机改动，省掉每分钟一次的重复导出（本机源插件多时这一轮要跑几十秒，机器会明显发烫、变卡）；本机改动仍由「本地改动即时同步」与定时兜底负责。
+  **Background auto-sync polling no longer re-exports all local content on every round**: local changes are re-checked only when the remote actually has something new, so the once-a-minute repeat export is gone (with several local source plugins one round took tens of seconds and kept the machine busy); local changes are still handled by sync-on-change and the interval fallback.
 - **回滚预览里每行的文件图标重新对齐成一列**：带逐行勾选的那份清单（设置页回滚卡的回滚预览）以前每行的「+2 −2 / 行数未统计」会掉到勾选框下面、图标整列跟着右移，看着像清单排版坏了；现在勾选框、图标、路径、行数各占固定一列，图标逐行落在同一条竖线上，删除项没有勾选框也留出同样一格；清单四周补了内边距，文字与行数不再紧贴边框。
   **File icons in the rollback preview line up again**: in the version with per-file checkboxes (the preview opened from the rollback card in Settings) each row's "+2 −2" or "lines not counted" used to drop below the checkbox and push the icon one column right; the checkbox, icon, path and line counts now each keep a fixed column, so every icon sits on the same vertical line and deleted files reserve the same cell even though they cannot be ticked; the list also gained padding, so text and counts no longer sit hard against its border.
 - **让 agent 触发的同步带上你勾选的 MCP 等可选分区**：以前让模型推送或拉取时，即使你在同步分区里勾了「MCP」，快照里也不会带上它，还会提示该分区不可移植、已跳过；现在与界面手动同步一致，勾选的可选分区照常进入快照，会话内容仍然永远不上行。（issue #138）

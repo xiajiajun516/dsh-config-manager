@@ -50,7 +50,7 @@ type SyncSettingsTab = 'content' | 'settings'
  * 勾选与开关**即时生效并持久化**（与导出选择器一致的弹窗语义），因此底部只有「完成」——
  * 没有「取消」（取消会让用户以为改动被丢弃）。
  */
-export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, deletePlugins, sessionNode, sessionPending, sessionFailed, busy, settings, onToggleSection, onSessionsLimit, onSessionsInclude, onToggleDeletePlugins, onToggleAutosync, onUpdateAutosyncInterval, onUpdateAutosyncOptions, onToggleEncrypt, onToggleIncludeSecrets, onPatchSettings, onPersistEncryptPassword, onPersistDecryptPassword, onClearSavedPassword, onClose }: {
+export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, deletePlugins, sessionNode, sessionPending, sessionFailed, busy, settings, pendingMerge, onToggleSection, onSessionsLimit, onSessionsInclude, onToggleDeletePlugins, onToggleAutosync, onUpdateAutosyncInterval, onUpdateAutosyncOptions, onToggleEncrypt, onToggleIncludeSecrets, onPatchSettings, onPersistEncryptPassword, onPersistDecryptPassword, onClearSavedPassword, onClose }: {
   t: TranslateNS<'config-manager-sync'>
   /** ui 命名空间的翻译器（UiT）：分区描述与分组说明的**字典键**由它解析（英文界面零中文） */
   uiT: UiT
@@ -73,6 +73,8 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
   busy: boolean
   /** 加密与两个方向的密码（全部属于**这一条通道**；弹窗只读字段 + 回调） */
   settings: Pick<ChannelSyncState, 'encrypt' | 'includeSecrets' | 'encryptPassword' | 'encryptPasswordConfirm' | 'encryptPasswordSaved' | 'decryptPassword' | 'decryptPasswordSaved' | 'autosync' | 'autosyncEnabled' | 'autosyncInterval'>
+  /** P2：宿主 sync-state.pendingMerge（有分区等人裁决）；透传给 AutosyncCard 显示状态 */
+  pendingMerge?: { sections: string[]; since: string }
   onToggleSection: (id: SectionId, checked: boolean) => void
   onSessionsLimit: (value: number) => void
   /** 点名结果（空数组 = 回到「最新 N 个」模式） */
@@ -182,6 +184,7 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
               uiT={uiT}
               settings={settings}
               busy={busy}
+              {...(pendingMerge === undefined ? {} : { pendingMerge })}
               onToggleAutosync={onToggleAutosync}
               onUpdateInterval={onUpdateAutosyncInterval}
               onUpdateOptions={onUpdateAutosyncOptions}

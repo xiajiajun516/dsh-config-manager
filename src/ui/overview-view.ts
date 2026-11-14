@@ -296,6 +296,13 @@ export interface OverviewActivityItem {
   kindKey: string
   /** 原始摘要（上层渲染前 redact()）。 */
   summary: string
+  /**
+   * P2（2026-11-14 真机事故）：这一行点得动 —— 给它一个去处。
+   * 目前只有「待裁决」的自动同步轮次：冲突分区已经落进 sync-state.pendingMerge，
+   * 真正的裁决动作在同步页（那里有合并裁决视图），首页只负责把用户送过去。
+   * 无此字段 = 纯信息行（保持原样，不伪造交互）。
+   */
+  jumpTo?: 'sync'
 }
 
 /** 最近活动列表：按时间倒序取前 limit 条（kindKey 归一 + 徽章语义映射）。 */
@@ -322,6 +329,9 @@ export function overviewActivity(
           : 'warn',
     kindKey: overviewKindKey(e.kind),
     summary: e.summary,
+    // 待裁决 = 有具体分区等用户确认（宿主侧 pendingMerge）。首页不能只挂个颜色：
+    // 有去处才给入口，其余徽章保持不可点。
+    ...(e.kind === 'autosync' && e.result === 'pending' ? { jumpTo: 'sync' as const } : {}),
   }))
 }
 

@@ -60,7 +60,12 @@ import {
 import type { SessionBookkeepingResult } from './session-tombstones.ts';
 import { DEFAULT_RETENTION_POLICY, selectPruneCandidatesByPolicy } from './retention-policy.ts';
 import type { RetentionPolicy } from './retention-policy.ts';
-import { hashSection, loadSyncState, resolveDeviceIdentity, saveSyncState } from './sync-state.ts';
+import { hashSection, loadSyncState, resolveDeviceIdentity } from './sync-state.ts';
+import {
+  pendingMergeFor as buildPendingMerge,
+  recordPendingMerge as persistPendingMerge,
+  writeMergeBaseline as persistMergeBaseline,
+} from './pending-merge.ts';
 import type { PendingMerge, SyncState } from './sync-state.ts';
 // 写基线（祖先副本 + sync-state）的实现整体下沉，引擎只做环境透传（体量棘轮 + G-44 口径集中）
 import { recordBaseline as recordBaselineAt } from './baseline-record.ts';
@@ -940,6 +945,8 @@ export class SyncEngine {
       if (diff.reason === 'same-content' && latest !== undefined) {
         await this.recordBaseline(latest.id, plainSections, this.now().toISOString(), {
           remoteSnapshotId: latest.id,
+          // P2：本轮内容已被远端收下（收养 = 远端最新就是本机内容）⇒ 冲突已有结论，清掉待裁决。
+          pendingMerge: null,
           // G-44：远端观测必须是**远端快照自己**的 sections，绝不由 state.sections 反推
           remoteSections: latest.sections,
           ...(bookkeeping.tracked
@@ -1018,6 +1025,8 @@ export class SyncEngine {
       // issue #140：远端刚收下的就是这份明文 hash ⇒ 记录远端观测（下一次推送/拉取的内容判定起点）。
       // 加密快照的 sections 恒空 ⇒ 不写（指针一变就清空该字段，判定因此回落 id 比较）。
       ...(encrypted ? {} : { remoteSections: hashSections(plainSections) }),
+      // P2：本机配置已经推成远端最新 ⇒ 之前的待裁决已被这次推送消解，不再挂着误导用户。
+      pendingMerge: null,
     });
 
     return {
@@ -1751,32 +1760,20 @@ export class SyncEngine {
     };
   }
 
-  /** 组装 pendingMerge 记录：同一远端快照上的连续待裁决**保留首次时间**（界面据此讲「挂了多久」）。 */
-  private pendingMergeFor(state: SyncState, remoteSnapshotId: string, sections: SectionId[]): PendingMerge {
-    const since = state.pendingMerge !== undefined && state.pendingMerge.remoteSnapshotId === remoteSnapshotId
-      ? state.pendingMerge.since
-      : this.now().toISOString();
-    return { remoteSnapshotId, sections, since };
+  /** P2（2026-11-14 真机事故）：自动同步撞冲突时把分区落成待裁决；实现与为什么见 pending-merge.ts。 */
+  async recordPendingMerge(sections: readonly SectionId[]): Promise<PendingMerge | null> {
+    const deps = { stateDir: this.stateDir, fsx: this.fsx, msg: this.msg };
+    return persistPendingMerge(deps, this.lastMergedRemoteSnapshotId, sections, this.now().toISOString());
   }
 
-  /**
-   * 基线纪律的**纯状态**写入（不写祖先副本、不碰远端）：仅在本机没有任何配置写入时使用。
-   *
-   * - pending 提供 → 写 pendingMerge；undefined → 清除该字段（「全部裁决完」）；
-   * - advanceRemoteId 提供 → 把远端指针推进到该快照 id（缺省 = 保持不变）。
-   *
-   * 为什么不走 recordBaseline：那条路径会重建祖先副本并只带本次应用的分区 —— 在「没有应用任何分区」
-   * 或「仍有未裁决冲突」时都会把共同基线改坏（下一轮所有分区都退化成「无祖先 → 冲突」）。
-   */
+  /** 组装 pendingMerge 记录（同一远端快照上连续冲突保留首次时间）；见 pending-merge.ts。 */
+  private pendingMergeFor(state: SyncState, remoteSnapshotId: string, sections: SectionId[]): PendingMerge {
+    return buildPendingMerge(state, remoteSnapshotId, sections, this.now().toISOString());
+  }
+
+  /** 基线纪律的纯状态写入（不碰祖先副本、不推远端）；为什么不用 recordBaseline 见 pending-merge.ts。 */
   private async writeMergeBaseline(opts: { pending?: PendingMerge; advanceRemoteId?: string }): Promise<void> {
-    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
-    if (opts.pending === undefined) delete state.pendingMerge;
-    else state.pendingMerge = opts.pending;
-    if (opts.advanceRemoteId !== undefined) {
-      state.lastSnapshotId = opts.advanceRemoteId;
-      state.lastSyncAt = this.now().toISOString();
-    }
-    await saveSyncState(this.stateDir, state, this.fsx);
+    await persistMergeBaseline({ stateDir: this.stateDir, fsx: this.fsx, msg: this.msg }, opts, this.now().toISOString());
   }
 
   /**

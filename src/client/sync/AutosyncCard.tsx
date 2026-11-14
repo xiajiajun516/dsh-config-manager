@@ -68,14 +68,26 @@ function intervalLabel(iv: AutosyncInterval, t: TranslateNS<'config-manager-sync
   return key === null ? iv : t(key)
 }
 
+/** 待裁决的「自某时起」：ISO → 本地可读时刻；解析不了就原样给出（绝不渲染 NaN）。 */
+function formatPendingSince(since: string): string {
+  const ms = Date.parse(since)
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toLocaleString() : since
+}
+
 /* ------------------------------------------- 拆分出的 render 段（t42，同文件内子组件） */
 
 /** 自动同步设置（当前通道）：段头（标题 + 总开关）+ 四行策略 + 状态徽章（文案/倒计时在卡内派生）。 */
-export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdateInterval, onUpdateOptions }: {
+export function AutosyncCard({ t, uiT, settings, busy, pendingMerge, onToggleAutosync, onUpdateInterval, onUpdateOptions }: {
   t: TranslateNS<'config-manager-sync'>
   uiT: UiT
   settings: Pick<ChannelSyncState, 'autosync' | 'autosyncEnabled' | 'autosyncInterval'>
   busy: boolean
+  /**
+   * P2（2026-11-14 真机事故）：宿主 sync-state.pendingMerge —— 有分区在等用户裁决。
+   * 这不是「设置」而是**状态事实**，所以渲染在总开关之外（关掉自动同步也不会让已存在的
+   * 待裁决消失），文案给出分区数与开始时间，具体裁决在同步页一键同步里完成。
+   */
+  pendingMerge?: { sections: string[]; since: string }
   onToggleAutosync: (enabled: boolean) => void
   onUpdateInterval: (interval: AutosyncInterval) => void
   /** 真·自动同步的三个策略项（realtime / 自动应用等级 / 冲突策略）；只传要改的字段 */
@@ -123,6 +135,17 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           onChange={onToggleAutosync}
         />
       </div>
+      {/* 待裁决（P2）：挂在段头之下、策略项之上 —— 它是「当前有事等你」，不是可配置项。 */}
+      {pendingMerge !== undefined && pendingMerge.sections.length > 0 && (
+        <div className={css.statRow} style={{ marginBottom: 8 }}>
+          <Badge kind="warn">
+            {t('autosync.pendingMerge', {
+              n: String(pendingMerge.sections.length),
+              time: formatPendingSince(pendingMerge.since),
+            })}
+          </Badge>
+        </div>
+      )}
       {/* 关闭时不再展示策略项（2026-11-01）：Enabled 没勾选，下面四个控件 + 状态徽章 +
           失败原文仍然全铺开，占掉画布最后三屏里的两屏 —— 用户要按的「合并 / 推送」被推到
           首屏之外，而这一整组在关闭状态下没有一个控件能生效。app-screens §11 与 DESIGN.md §9

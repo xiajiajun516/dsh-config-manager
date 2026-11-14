@@ -30,7 +30,9 @@ const CEILINGS: Record<string, number> = {
   // 4135 → 4128（2026-11-07）：环境锁装配（含失败留痕回调）下沉到 core/env-lock-lifecycle.ts 的
   // createHostMutationLock()，降回棘轮之内，不占新额度。
   'src/index.ts': 4128,
-  'src/sync/sync-engine.ts': 2213,
+  // 2213 → 2209（2026-11-14，同步缺陷 P2）：待裁决的纯状态写入下沉到 src/sync/pending-merge.ts，
+  // 引擎只留 3 行委托（recordPendingMerge / pendingMergeFor / writeMergeBaseline）。
+  'src/sync/sync-engine.ts': 2209,
   // 2166 → 2221（2026-11-04）：恢复面板「写盘进行中」瞬态切片 + begin/endRecoveryWrite
   // （不落盘，PersistedRecoveryState 显式 Omit 'write'），是 tech-debt #7 的修法本体。
   // 2221 → 2226（2026-11-09，issue 131）：git 子目录前缀 gitSubdir 进 sync 切片 ——

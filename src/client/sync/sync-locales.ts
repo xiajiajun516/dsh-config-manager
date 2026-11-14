@@ -271,6 +271,9 @@ export const zh = {
   // issue #79：跳过原因上状态行（改造前只进 info 级日志，界面完全看不到「为什么没同步」）
   'autosync.skipReasonLabel': '跳过原因',
   'autosync.skipReasonConflictCount': '{reason}（远端另有 {n} 个分区待确认，可在同步页手动处理）',
+  // P2（2026-11-14）：待裁决分区是**持久状态**（sync-state.pendingMerge），不是某一轮的结论 ——
+  // 这句话在关掉自动同步后也要说清「有什么在等」，并给出开始时间。
+  'autosync.pendingMerge': '待裁决 {n} 个分区（自 {time}）',
   'autosync.lastMessage': '本轮消息',
   // 同步历史（含自动同步记录）
   'history.title': '同步历史',
@@ -743,6 +746,8 @@ export const en: Record<keyof typeof zh, string> = {
   // issue #79: surface the skip reason in the status line (previously info-level log only)
   'autosync.skipReasonLabel': 'Skip reason',
   'autosync.skipReasonConflictCount': '{reason} ({n} more {n, plural, section|sections} on the remote need confirmation — handle them on the sync page)',
+  // P2: persisted pending-merge state (not one round's conclusion)
+  'autosync.pendingMerge': '{n} {n, plural, section|sections} need your decision (since {time})',
   'autosync.lastMessage': 'Last message',
   'history.title': 'Sync History',
   'history.refresh': 'Refresh',

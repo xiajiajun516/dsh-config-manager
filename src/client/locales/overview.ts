@@ -51,6 +51,8 @@ export const zh = {
   'overview.activity.colDetail': '详情',
   'overview.activity.colResult': '结果',
   'overview.activity.empty': '暂无操作记录',
+  // P2：待裁决行是可点的 —— 说明点下去会去哪儿（不然用户只看到徽章变色）
+  'overview.activity.openMerge': '有冲突分区等你裁决：点这一行到同步页处理',
   'overview.activity.unavailable': '活动记录读取失败（这不是「没有记录」）',
   // 首屏 5 个只读请求有失败时如实说清（此前失败被吞成 null，页面仍显示绿色健康 + 空活动）
   'overview.loadFailed': '有 {count} 项数据读取失败：{message} —— 下面的指标可能不完整',
@@ -129,6 +131,8 @@ export const en: Record<keyof typeof zh, string> = {
   'overview.activity.colDetail': 'Detail',
   'overview.activity.colResult': 'Result',
   'overview.activity.empty': 'No activity yet',
+  // P2: the pending row is clickable — say where it goes
+  'overview.activity.openMerge': 'Conflicted sections need your decision: open this row on the sync page',
   'overview.activity.unavailable': 'The activity log could not be read (this is not \"no activity\")',
   // Say it plainly when some of the five read-only requests failed (failures used to be swallowed into null)
   'overview.loadFailed': '{count} data {count, plural, request|requests} failed: {message} — the metrics below may be incomplete',

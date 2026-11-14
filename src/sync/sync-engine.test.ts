@@ -2995,6 +2995,71 @@ test('applyMergeResolutions: skip 的裁决 → 基线不推进 + pendingMerge �
   }
 });
 
+/**
+ * P2（2026-11-14 真机事故）：autosync 检测到下行冲突就 return，从不写 pendingMerge ——
+ * 首页那枚「待裁决」徽章背后没有任何可打开的对象，同步页也没有裁决入口。
+ * recordPendingMerge 让调度器把「哪几个分区在等」落成持久状态（远端 id 取最近一次 merge 的基准）。
+ */
+test('recordPendingMerge: 冲突分区落成待裁决（远端 id 取最近一次 merge，基线不推进）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-record-pending-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc') });
+    await engine.push({ snapshotId: 'sync-base' });
+    ctx.settings.ns.set('general', { value: { theme: 'blue' }, revision: 4, secrets: [] });
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-remote', 'red', 9));
+
+    const plan = await engine.merge();
+    assert.ok(plan.sections.some((s) => s.decision === 'conflict'), '前提：这一轮确实有冲突待裁决');
+
+    const pending = await engine.recordPendingMerge(['settings']);
+    assert.ok(pending !== null);
+    assert.deepEqual(pending!.sections, ['settings']);
+    assert.equal(pending!.remoteSnapshotId, 'sync-remote', '远端基准取最近一次 merge 的快照');
+    assert.notEqual(pending!.since, '');
+
+    const state = await loadSyncState(tmp);
+    assert.deepEqual(state.pendingMerge?.sections, ['settings']);
+    assert.equal(state.lastSnapshotId, 'sync-base', '待裁决不得推进基线（远端那版仍会被当作新快照）');
+
+    // 连续轮询：同一远端快照 → since 保留首次时间（界面上的「等多久」不被刷成刚刚）
+    const again = await engine.recordPendingMerge(['settings']);
+    assert.equal(again!.since, pending!.since);
+
+    // 本机覆盖远端成功（force）→ 待裁决清空：已经做了决定，不能继续挂着
+    await engine.push({ snapshotId: 'sync-next', force: true });
+    const cleared = await loadSyncState(tmp);
+    assert.equal(cleared.pendingMerge, undefined, '推送成功后待裁决必须清空');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('recordPendingMerge: 远端 id 未知（没经历过 merge）/ 分区为空 → 空操作，不写 sync-state', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-record-pending-null-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-remote', 'red', 9));
+
+    assert.equal(await engine.recordPendingMerge(['settings']), null, '没有 merge 基准就不猜远端 id');
+    const afterUnknown = await loadSyncState(tmp);
+    assert.equal(afterUnknown.pendingMerge, undefined);
+
+    await engine.merge();
+    assert.equal(await engine.recordPendingMerge([]), null, '空分区不是待裁决');
+    const afterEmpty = await loadSyncState(tmp);
+    assert.equal(afterEmpty.pendingMerge, undefined);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('applyMergeResolutions: 全部裁决 → 基线推进到远端快照 + pendingMerge 清空 + 本机被写', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-merge-resolved-'));
   try {

@@ -59,6 +59,7 @@ import type {
   SyncPushPayload, SyncStartResponse, SyncStatusResponse,
 } from './sync-api.ts'
 import { resolveSmartSync } from './sync-entry.ts'
+import { consumeMergeDecision } from './merge-request.ts'
 import { reportPreviewFailure } from './preview-failure.ts'
 import { savedConfigState } from './config-save-state.ts'
 import { formPatchFromStatus, markDirty, resetDirty } from './config-dirty.ts'
@@ -598,7 +599,13 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   }
 
   useEffect(() => {
-    void loadStatus()
+    void (async () => {
+      await loadStatus()
+      // P2（2026-11-14 真机事故）：首页「待裁决」活动行用一次性信号把用户送到这里
+      // （merge-request.ts；取走即清空）。首页只知道「有事要裁决」，怎么把裁决视图
+      // 拉起来只有这里知道 —— 一键同步 → /sync/merge-preview → MergeModal。
+      if (consumeMergeDecision() > 0) void runSyncSmart(stateRef.current.channel)
+    })()
     // api 为注入单例（注册时创建），生命周期内稳定；仅挂载时加载一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -1427,6 +1434,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             onUpdateAutosyncInterval={(interval) => { void updateAutosyncInterval(state.channel, interval) }}
             onUpdateAutosyncOptions={(patchOptions) => { void updateAutosyncOptions(state.channel, patchOptions) }}
             settings={chState}
+            {...(state.statusInfo?.pendingMerge === undefined ? {} : { pendingMerge: state.statusInfo.pendingMerge })}
             onToggleEncrypt={(next) => { setEncrypt(state.channel, next) }}
             onToggleIncludeSecrets={(next) => { setIncludeSecrets(state.channel, next) }}
             onPatchSettings={(patchSettings) => { patchChannelOf(state.channel, patchSettings) }}

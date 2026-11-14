@@ -1509,3 +1509,193 @@ test('P5-1 回归：一个通道到点只重排自己，另一通道的定时器
   }
 });
 
+/* ============ 2026-11-14 真机事故：待裁决无入口 + 每分钟一条历史（P0 / P1 / P2） ============ */
+
+/** 真·取锁成功的锁端口：覆盖「预检 → 取锁 → 锁内重跑检测」这条真机路径。 */
+function freeLockPort(): MutationLockPort {
+  const token: MutationLockToken = { tokenId: 'tok-1', managerId: 'mgr-1', instanceId: 'inst-1', acquiredAt: 1_000_000_000_000 };
+  return {
+    acquire: async () => ({ state: 'ACQUIRED', token, detail: 'op=autosync' }),
+    validate: (t: unknown): t is MutationLockToken => t === token,
+    release: async () => undefined,
+  };
+}
+
+/**
+ * P0 回归：锁内重跑检测必须与预检同口径（localCheck）。
+ *
+ * 现场：remote-poll 每 60s 一轮，预检已按 localCheck:false 跳过本地导出（plugins 分区的 npm pack，
+ * 实测单插件 44.7s/轮）；取锁后锁内重跑漏传该开关 → 预检省下的开销整轮还回去，而且它能证明
+ * 「每 60s 真的在跑一次全量导出」。
+ */
+test('P0 回归：reason=remote-poll + 取到锁 → 锁内重跑也不得再跑本地全量导出', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let localCalls = 0;
+  const engine = {
+    listSnapshots: async () => [],
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'skip']]),
+  };
+  const { scheduler } = makeScheduler({
+    cfg,
+    engine: engine as unknown as SyncEngine,
+    history: [],
+    mutationLock: freeLockPort(),
+    detectRemoteNew: async () => true,
+    detectLocalChange: async () => { localCalls += 1; return false; },
+  });
+
+  const result = await scheduler.runOnce('git', { reason: 'remote-poll' });
+  assert.equal(localCalls, 0, '远端轮询轮在锁内也不得导出本地分区（P0 回归：锁内重跑漏传 localCheck）');
+  assert.equal(result.status, 'success');
+});
+
+test('P0 反向控制：其它触发原因取到锁后，预检与锁内各检测一次本地改动（不能被优化成「只查一次」）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let localCalls = 0;
+  const engine = {
+    listSnapshots: async () => [],
+    push: async () => ({ ok: true, snapshotId: 'snap-x', sections: [] as never, warnings: [] }),
+  };
+  const { scheduler } = makeScheduler({
+    cfg,
+    engine: engine as unknown as SyncEngine,
+    history: [],
+    mutationLock: freeLockPort(),
+    detectRemoteNew: async () => false,
+    detectLocalChange: async () => { localCalls += 1; return true; },
+  });
+
+  const result = await scheduler.runOnce('git', { reason: 'local-change' });
+  assert.equal(result.status, 'success');
+  assert.equal(localCalls, 2, '预检一次 + 锁内重跑一次（同一口径，不因优化少查）');
+});
+
+/**
+ * P1 回归：连续轮询撞上**同一个**结论时只记一条历史。
+ *
+ * 现场：sync-history 上限 200 条，其中 196 条是间隔精确 60s 的同一句 partial|conflict ——
+ * 用户真正关心的「上次真实推进是什么时候」被自己的重复结论挤出记录。
+ * 去重只针对「没有推进、结论逐字相同」的轮次：状态仍要刷新（lastRunAt / 计数照旧），
+ * 否则会从「刷屏」变成「安静地卡住」。
+ */
+test('P1 回归：连续三轮撞同一冲突 → 历史只留一条，但 run 状态照旧刷新', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let message = '远端最新快照 sync-remote 与本地基线 sync-base 不一致：本次推送未执行';
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async () => ({ ok: false, snapshotId: '', sections: [] as never, warnings: [], conflict: true, message }),
+  };
+  const { scheduler, getEntries, getConfig } = makeScheduler({ cfg, engine, history: [] });
+
+  const first = await scheduler.runOnce('git');
+  const second = await scheduler.runOnce('git');
+  const third = await scheduler.runOnce('git');
+
+  for (const r of [first, second, third]) {
+    assert.equal(r.skipReason, 'conflict');
+    assert.equal(r.consecutiveFailures, 0, '冲突不是失败');
+  }
+  assert.equal(getEntries().length, 1, '同一结论连续三轮只记一条（真机现场是 196 条同一句）');
+  assert.equal(getEntries()[0]!.status, 'skipped');
+  assert.equal(getConfig().lastRunSkipReason, 'conflict', '状态仍然是活的：界面能说出为什么没同步');
+  assert.equal(getConfig().lastRunStatus, 'skipped');
+
+  // 结论变化 = 新事实：必须留新记录（换个远端快照就不是同一件事了）
+  message = '远端最新快照 sync-newer 与本地基线 sync-base 不一致：本次推送未执行';
+  await scheduler.runOnce('git');
+  assert.equal(getEntries().length, 2, '冲突对象变了必须再记一条');
+});
+
+test('P1 回归：成功 / 失败轮照旧逐条记录（去重只吃掉重复的同一结论）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let fail = false;
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async () => (fail
+      ? { ok: false, snapshotId: '', sections: [] as never, warnings: [], message: 'git push 失败: Connection timed out' }
+      : { ok: true, snapshotId: 'snap-ok', sections: [] as never, warnings: [] }),
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+
+  await scheduler.runOnce('git');
+  await scheduler.runOnce('git');
+  assert.equal(getEntries().length, 2, '两次成功各自是推进，必须都留痕');
+
+  fail = true;
+  await scheduler.runOnce('git');
+  await scheduler.runOnce('git');
+  assert.equal(getEntries().length, 4, '失败必须逐条可见（不合并、不吞）');
+  assert.deepEqual(getEntries().slice(2).map((e) => e.status), ['failed', 'failed']);
+});
+
+/**
+ * P2 回归：冲突分区必须落成**持久**的待裁决记录。
+ *
+ * 修复前：autosync 检测到下行冲突就 return，从不写 pendingMerge（只有人工合并写回路径会写），
+ * 于是首页只有一枚「待裁决」徽章、同步页没有可打开的裁决对象 —— 用户既看不到入口，也不知道
+ * 等的是哪几个分区。
+ */
+test('P2 回归：push 被远端推进挡下 → 冲突分区落进待裁决（recordPendingMerge）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const recorded: string[][] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => true,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['plugins', 'conflict']]),
+    push: async () => ({
+      ok: false, snapshotId: '', sections: [] as never, warnings: [], conflict: true,
+      message: '远端最新快照 sync-remote 与本地基线 sync-base 不一致：本次推送未执行',
+    }),
+    recordPendingMerge: async (sections: readonly string[]) => { recorded.push([...sections]); return null; },
+  };
+  const { scheduler } = makeScheduler({
+    cfg, engine: engine as unknown as SyncEngine, history: [],
+    detectRemoteNew: async () => true,
+    detectLocalChange: async () => true,
+  });
+
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.skipReason, 'conflict');
+  assert.deepEqual(result.conflictedSections, ['plugins']);
+  assert.deepEqual(recorded, [['plugins']], '冲突分区必须落成待裁决对象，否则首页徽章没有去处');
+});
+
+test('P2 回归：本机无改动的下行冲突（skipped）同样要落待裁决', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const recorded: string[][] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'conflict'], ['plugins', 'conflict']]),
+    recordPendingMerge: async (sections: readonly string[]) => { recorded.push([...sections]); return null; },
+  };
+  const { scheduler } = makeScheduler({
+    cfg, engine: engine as unknown as SyncEngine, history: [],
+    detectRemoteNew: async () => true,
+    detectLocalChange: async () => false,
+  });
+
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.skipReason, 'conflict');
+  assert.deepEqual(recorded, [['settings', 'plugins']]);
+});
+
+test('P2 反向控制：干净的成功轮不写待裁决（不能凭空挂一条「等你裁决」）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const recorded: string[][] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async () => ({ ok: true, snapshotId: 'snap-clean', sections: [] as never, warnings: [] }),
+    recordPendingMerge: async (sections: readonly string[]) => { recorded.push([...sections]); return null; },
+  };
+  const { scheduler } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.status, 'success');
+  assert.deepEqual(recorded, []);
+});
+
+

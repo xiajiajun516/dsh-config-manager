@@ -3734,6 +3734,24 @@ body {
   border-bottom: none;
 }
 
+/* P2（2026-11-14）：待裁决行可点（去同步页裁决）。用 button 承载 —— 键盘与读屏都要能用，
+   外观与静态行逐字对齐：背景/字体/颜色照旧，只补 hover 的浅底提示「这行是入口」。 */
+.activityRowAction {
+  width: 100%;
+  text-align: left;
+  /* button 自带 UA 边框/背景/字体：全部归零后逐字对齐静态行（border-bottom 与 .activityRow 同值）。 */
+  border: 0;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.activityRowAction:hover {
+  background: color-mix(in srgb, var(--cm-accent) 8%, transparent);
+}
+
 .activityTime {
   justify-self: end;
   line-height: 1.5;
