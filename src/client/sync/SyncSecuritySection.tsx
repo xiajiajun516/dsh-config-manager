@@ -123,7 +123,7 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
         </div>
         <div className={css.settingsRow}>
           <span className={css.settingsRowMain}>
-            <span className={css.settingsRowLabel}>{t('mode.decryptPassword')}</span>
+            <span className={css.settingsRowLabel}>{t('mode.decryptPasswordShort')}</span>
             <InfoHint text={t('mode.decryptPasswordHint')} label={t('common.infoHint')} />
           </span>
           <span className={css.settingsRowControl}>
