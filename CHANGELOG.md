@@ -61,6 +61,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **断开同步通道会先等在途保存落定**：断开时若还有一次配置保存在路上，最多等 5 秒让它结束；等不到就提示稍后再点一次，而不是先弹「已断开」——旧保存不会再把你刚断开的地址写回，断开之后新保存的地址也不会再被悄悄删掉。
+  **Disconnecting a sync channel now waits for an in-flight save**: if a settings save is still on the wire, disconnect waits up to 5 seconds for it; if it does not settle you are asked to try again rather than being told it is gone — an old save can no longer write the settings back, and a configuration saved after disconnecting is no longer silently deleted.
+- **运行中心的取消确认框会在任务落定后自动关闭**：任务被宿主超时自动裁决、或已在别处结案时，框不再一直挂着挡住后续等待；确认过一个任务之后，其它正在等你的任务仍然会弹出来。
+  **The runs-center cancel prompt closes itself once the run settles**: when the host auto-decides on timeout or the run finishes elsewhere, the prompt no longer lingers and blocks other pending runs; after confirming one run, other runs still waiting on you still prompt.
 - **加载中的占位块现在和真实内容同尺寸**：首页的最近活动、环境页的「工作区 + 会话回滚」、产物库和迁移历史以前骨架只铺半页、或者比真卡高一大截，数据一到整页就重排；现在占位块直接复用真实卡片的容器，数据到货时位置和高度都不动，首页活动卡与产物库空态还各自占满剩余空间。
   **Loading placeholders are now the size of the real content**: skeletons on Home's recent activity, the environment page's workspace/rollback card, the Library and migration history used to fill half the page or stand much taller than the real card, so the page reflowed the moment data arrived; placeholders now reuse the real card containers, so positions and heights stay put, and both the activity card and the library empty state fill the remaining space.
 - **长任务不再被「等待同步锁超时」误杀**：以前超时计时把任务自己干活的时间也算成等锁，于是只要单个任务跑得比上限久（测试里 1.5 秒就够），就会报「同步工作副本正被另一个同步任务占用」；现在只有真的排队等锁才计时。

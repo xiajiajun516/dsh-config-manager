@@ -62,11 +62,13 @@ import type {
 import { resolveSmartSync } from './sync-entry.ts'
 import { reportPreviewFailure } from './preview-failure.ts'
 import { savedConfigState } from './config-save-state.ts'
+import { formPatchFromStatus, markDirty, resetDirty } from './config-dirty.ts'
+import { clearedChannelFormFields, prepareClear, shouldDiscardSaveResult } from './config-clear-guard.ts'
 import {
   channelMapOf, channelStateMap, computeGithubLoginView, computeSyncButtons, defaultChannelSyncState,
   githubPollMessage, isClientChannel, pushReportView, readStoredChannel, sectionCountsOf,
   gistSessionsRiskKey,
-  initialSyncSections, normalizeSessionsLimit, syncSectionOptions, writeStoredChannel,
+  initialSyncSections, normalizeSessionsLimit, syncSectionOptions, writeStoredChannel, SYNC_CHANNEL_ORDER,
 } from './sync-view.ts'
 import type {
   ChannelSyncState, GithubLoginPhase, SyncChannel, SyncSectionOption,
@@ -74,7 +76,7 @@ import type {
 // t42：可测纯逻辑下沉到 src/ui（框架无关、node 可测）；本组件只做装配。
 import {
   buildSelectionRequest, buildSyncChannelBody, buildSyncConfigBody, buildSyncPushBody,
-  channelBackfillFromStatus, channelRemoteReady, cloudFormFromStatus, computeEncryptInvalid, encryptToggle,
+  channelBackfillFromStatus, channelRemoteReady, computeEncryptInvalid, encryptToggle,
   githubPollDecision, hasSelectedSections, includeSecretsToggle, isGithubFlowInFlight, pickSyncPrimary, resolveInitialChannel,
   needsSessionInventory, saveQueueOnFlush, saveQueueOnRequest, saveQueueOnSettled, toggleSectionSelection,
   validateCloudForm, DEFAULT_S3_PROVIDER,
@@ -83,6 +85,7 @@ import {
 import type { CloudFormIssue, SaveQueueState, SyncFormSnapshot } from '../../ui/sync-settings-view.ts'
 // t42 物理拆分：渲染段各自成文件（本领域目录平铺，不新增子目录），主文件只做装配
 import { SyncChannelEntryCard } from './SyncChannelEntryCard.tsx'
+import { AddChannelCard } from './AddChannelCard.tsx'
 import { ChannelConfigDialog } from './ChannelConfigDialog.tsx'
 import { ChannelClearConfirmDialog } from './ChannelClearConfirmDialog.tsx'
 import { SyncSectionPickerDialog } from './SyncSectionPickerDialog.tsx'
@@ -461,6 +464,13 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 保存防重入状态机的纯数据（在途标记 + 待发改动；t42 起由 ui/sync-settings-view.ts 决策） */
   const saveQueueRef = useRef<SaveQueueState>({ inFlight: false, pending: null })
+  /** P9-4/P9-5 时序守卫：用户改过但未落盘的表单字段 / 断开世代号 */
+  const dirtyRef = useRef<Set<string>>(new Set()); const epochRef = useRef(0)
+  /** 丢掉该通道还没发出去的输入（防抖 timer + 排队载荷）。keepInFlight=true 供断开前等待用（清掉 inFlight 会让等待立刻放行）。 */
+  const dropPendingSave = (keepInFlight: boolean): void => {
+    if (saveTimer.current !== null) { clearTimeout(saveTimer.current); saveTimer.current = null }
+    saveQueueRef.current = { inFlight: keepInFlight && saveQueueRef.current.inFlight, pending: null }
+  }
   /** 正在拉取远端快照列表（按通道独立防抖/防并发） */
   const loadingSnapshotsRef = useRef<Record<SyncChannel, boolean>>(channelMapOf(() => false))
 
@@ -500,14 +510,9 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         loading: false,
         statusInfo: info,
         channel: remembered ?? savedChannel,
-        repoUrl: info.repoUrl ?? '',
-        gitSubdir: info.subdir ?? '',
-        webdavUrl: info.webdav?.url ?? '',
-        webdavUsername: info.webdav?.username ?? '',
         catalog,
         byChannel: channelMapOf((ch) => ({ ...stateRef.current.byChannel[ch], ...backfill(ch) })),
-        // 云端点非密字段回填（s3/gist 的密钥值永不回传：只回 secretStored 布尔，供徽章显示）
-        ...cloudFormFromStatus(info),
+        ...formPatchFromStatus(info, dirtyRef.current),
       })
       // 独立拉取 autosync（若 status 未带按通道状态则补一次）
       if (autoByCh === undefined) {
@@ -648,41 +653,49 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
    *  → 返回 null（无可保存内容，自动保存跳过）。password/token 仅非空携带（空 = 沿用已保存凭据）。 */
   const buildConfigPayload = (s: SyncUiState): SyncPushPayload | null => buildSyncConfigBody(formOf(s))
 
-  /** 实际发送保存请求：成功清空已入库的 password/token（与 push 一致）并刷新凭据徽章；
-   *  失败保留表单值以便重试。防重入：保存中又排入新改动 → 完成后自动补发最新 payload。
-   *  announce：仅「手动点保存」为 true —— 自动保存（输入防抖）成功时不弹 Toast，
-   *  否则每次停顿改字段都会刷一条通知；但**失败必须始终提示**（用户的改动没落盘）。 */
+  /** 实际发送保存请求：成功清空已入库的 password/token 并刷新凭据徽章；失败保留表单值以便重试。
+   *  防重入：保存中又排入新改动 → 完成后补发。announce 仅手动保存为 true（自动保存不刷 toast，失败必须提示）。 */
   const doSaveConfig = async (payloadToSave: SyncPushPayload, announce = false): Promise<void> => {
     // t42：防重入状态机（在途 → 记下最新待发改动并返回 'queue'）在 ui/sync-settings-view.ts
     const decision = saveQueueOnRequest(saveQueueRef.current, payloadToSave)
     saveQueueRef.current = decision.state
     if (decision.action === 'queue') return
     patch({ savingConfig: true })
+    const sendEpoch = epochRef.current // P9-5：期间用户断开通道 ⇒ 这次回执描述的配置已不存在（见下）
+    let stale = false
     try {
       const saved = await api.saveConfig(payloadToSave)
-      // 基于 stateRef 计算（同步权威），经 commit 落库：即使保存完成时组件已卸载
-      // （切走 tab），savingConfig 复位与凭据清空仍会镜像进 store，切回后一致
-      const s = stateRef.current
-      // 凭据清空 + 徽章合并的自包含演算下沉到 ./config-save-state.ts（本文件有行数棘轮）
-      const next: SyncUiState = { ...s, ...savedConfigState(s, saved, payloadToSave) }
-      commit(next)
-      // M-17：手动保存给出 toast 回执；自动保存不弹 toast（防抖会刷屏），改为计数 +1 → 弹窗内的「已保存」徽章
-      if (announce) toast.ok(t('toast.configSaved'))
-      else setSaveTick((n) => n + 1)
-      // 手动填入的 git token 保存成功 → 校验有效性（有效则隐藏 GitHub 登录块）。
-      // 只有 git 通道用 SYNC_CREDENTIAL_REF：云端点通道的密钥走各自的槽位，与 GitHub 登录无关。
-      if (payloadToSave.transport === 'git' && saved.credentialConfigured) {
-        void validateGithub()
+      stale = shouldDiscardSaveResult(sendEpoch, epochRef.current)
+      if (stale) {
+        // 回执作废：一个字段都不写回（清空的地址/凭据不能复活）；断开前已等在途保存落定 ⇒ 宿主不会晚到写，故不做自愈 clear（反方实测：会把随后保存成功的新配置连凭据一起删掉）。
+        if (!saveQueueRef.current.inFlight) patch({ savingConfig: false })
+      } else {
+        // 基于 stateRef 计算（同步权威）后 commit 落库：即使保存完成时组件已卸载（切走 tab），
+        // savingConfig 复位与凭据清空仍镜像进 store，切回后一致
+        const s = stateRef.current
+        // 凭据清空 + 徽章合并的自包含演算下沉到 ./config-save-state.ts（本文件有行数棘轮）
+        const next: SyncUiState = { ...s, ...savedConfigState(s, saved, payloadToSave) }
+        commit(next)
+        dirtyRef.current = resetDirty() // 宿主回执即权威：落盘字段不再算「用户输入中」
+        // M-17：手动保存给出 toast 回执；自动保存不弹 toast（防抖会刷屏），改为计数 +1 → 弹窗内的「已保存」徽章
+        if (announce) toast.ok(t('toast.configSaved'))
+        else setSaveTick((n) => n + 1)
+        // 手动填入的 git token 保存成功 → 校验有效性（有效则隐藏 GitHub 登录块）。
+        // 只有 git 通道用 SYNC_CREDENTIAL_REF：云端点通道的密钥走各自的槽位，与 GitHub 登录无关。
+        if (payloadToSave.transport === 'git' && saved.credentialConfigured) void validateGithub()
       }
     } catch (err) {
       // R-20：保存失败**始终**提示（无论手动还是自动）——用户的改动没有落盘
       toast.error(t('toast.configSaveFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
       patch({ savingConfig: false })
     } finally {
-      // 保存期间又排入的新改动 → 立即补发（保底，不丢输入）
-      const settled = saveQueueOnSettled(saveQueueRef.current)
-      saveQueueRef.current = settled.state
-      if (settled.next !== null) void doSaveConfig(settled.next, announce)
+      // 保存期间又排入的新改动 → 立即补发（保底，不丢输入）。
+      // 回执作废时队列已由 onChannelCleared 重置、此刻可能有**新的**保存正飞 —— 再写 inFlight 会让防重入失效。
+      if (!stale) {
+        const settled = saveQueueOnSettled(saveQueueRef.current)
+        saveQueueRef.current = settled.state
+        if (settled.next !== null) void doSaveConfig(settled.next, announce)
+      }
     }
   }
 
@@ -722,30 +735,17 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
 
   /* ------------------------------------------------ 断开通道配置（用户要求：配置过必须能删掉） */
 
-  /** 断开成功后的收尾：清该通道的表单残留 + 撤销在途自动保存 + 重拉 status（徽章/配置态/地址重算）。
-   *  撤销自动保存是必须的：否则防抖到点的旧 payload 会把刚删掉的配置又写回去。 */
+  /** 断开成功后收尾：清表单残留 + 撤销在途自动保存 + 重拉 status；在途请求取消不掉 → 递增世代让回执作废。 */
   const onChannelCleared = (channel: SyncChannel): void => {
     setClearTarget(null)
-    if (saveTimer.current !== null) { clearTimeout(saveTimer.current); saveTimer.current = null }
-    saveQueueRef.current = { inFlight: false, pending: null }
-    // 断开 git = 删掉 SYNC_CREDENTIAL_REF（GitHub 登录与手动 token 是**同一个槽位**）→ 登录态必然失效。
-    // 不在这里复位的话 githubSignedIn 会一直是 true、登录块恒隐藏：用户以为断开了还能重新登录，
-    // 实际要重启 profile 才看得到登录入口（真机用户报告）。进行中的轮询也要一并停掉。
-    if (channel === 'git') {
-      if (githubPollTimer.current !== null) { clearTimeout(githubPollTimer.current); githubPollTimer.current = null }
-    }
+    dropPendingSave(false); epochRef.current += 1
+    dirtyRef.current = resetDirty()
+    // 断开 git = 删掉 SYNC_CREDENTIAL_REF（与手动 token 同槽位）→ 登录态必然失效：不复位 githubSignedIn 会恒隐藏
+    // 登录块（用户以为还能重新登录，真机报告）；进行中的轮询一并停掉。
+    if (channel === 'git' && githubPollTimer.current !== null) { clearTimeout(githubPollTimer.current); githubPollTimer.current = null }
     patch({
       ...(channel === 'git' ? { githubSignedIn: false, github: initialGithub } : {}),
-      ...(channel === 'webdav'
-        ? { webdavUrl: '', webdavUsername: '', webdavPassword: '' }
-        : channel === 's3'
-          ? {
-              s3Endpoint: '', s3Region: '', s3Bucket: '', s3Prefix: '', s3AccessKeyId: '',
-              s3Secret: '', s3PathStyle: false, s3Provider: DEFAULT_S3_PROVIDER,
-            }
-          : channel === 'gist'
-            ? { gistId: '', gistApiBaseUrl: '', gistFilePrefix: '', gistToken: '' }
-            : { repoUrl: '', token: '' }),
+      ...clearedChannelFormFields(channel),
     })
     patchChannelOf(channel, { snapshots: [], selectedSnapshotId: '' })
     void loadStatus()
@@ -863,7 +863,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     if (phase === 'starting' || phase === 'waiting' || phase === 'polling') {
       void runGithubCancel()
     }
-    setChannelOpen(false)
+    dirtyRef.current = resetDirty(); setChannelOpen(false)
   }
 
   /**
@@ -1108,6 +1108,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const switchChannel = (ch: SyncChannel): void => {
     if (ch === state.channel || state.busy !== null) return
     patch({ channel: ch })
+    dirtyRef.current = resetDirty() // 旧通道的 dirty 不得永久屏蔽新通道的同名键
     writeStoredChannel(ch) // 同步写 localStorage 立即生效（status 未带回填时的兜底）
     // 异步持久化到磁盘（ui-prefs.json，随 self 分区进导出备份）；失败静默降级
     void api.saveUiPrefs({ lastSyncChannel: ch }).catch(() => { /* 保存失败不阻断切换 */ })
@@ -1215,6 +1216,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const channelContentId = (c: SyncChannel): string => 'sync-channel-' + c
 
   const renderChannelCard = (channel: SyncChannel): ReactNode => {
+    // 2026-11-14：只渲染**已配置**的通道卡（判据只有 remoteReadyOf 一处），其余进 AddChannelCard
+    if (!remoteReadyOf(channel)) return null
     const cs = channelStateOf(channel)
     const ready = remoteReadyOf(channel)
     const busy = state.busy !== null
@@ -1391,13 +1394,14 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             />
           )}
 
-          {/* 两个通道卡**恒显示**（§8 定案）：未配置的走矮态。
-              一致、可发现，配置入口永远在同一位置 —— 不做「只显示已配置的」那种
-              随状态变化的页面结构（配完 Git 回来看不到 WebDAV 只会被当成 bug）。 */}
+          {/* 2026-11-14 用户要求：页面只留**已配置**的通道卡，其余通道收进末尾那张「添加通道」卡
+              （点开选通道 → 进配置弹窗）。此前四张恒显示、理由是「配完 Git 找不到 WebDAV 会被当成
+              bug」；那条理由现在由 AddChannelCard 承接 —— 只要还有未配置通道，它就常驻页面末尾。 */}
           {renderChannelCard('git')}
           {renderChannelCard('webdav')}
           {renderChannelCard('s3')}
           {renderChannelCard('gist')}
+          <AddChannelCard t={t} channels={SYNC_CHANNEL_ORDER.filter((c) => !remoteReadyOf(c))} onPick={openChannelDialogFor} />
           {/* 通道配置弹窗（渲染段拆到 ChannelConfigDialog，t42）：只配置**打开它的那条通道**，弹窗内不提供切换 */}
           <ChannelConfigDialog
             open={channelOpen}
@@ -1414,7 +1418,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             saveTick={saveTick}
             githubView={githubView}
             onClose={closeChannelDialog}
-            onFormChange={(p) => { patch(p); scheduleConfigSave() }}
+            onFormChange={(p) => { dirtyRef.current = markDirty(dirtyRef.current, Object.keys(p)); patch(p); scheduleConfigSave() }}
             onGithubStart={() => { void runGithubStart() }}
             onGithubCancel={() => { void runGithubCancel() }}
             onSave={() => { flushConfigSave(true) }}
@@ -1424,6 +1428,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
           {clearTarget !== null && (
             <ChannelClearConfirmDialog
               open channel={clearTarget} api={api} t={t}
+              beforeClear={() => prepareClear({ cancelPendingSave: () => dropPendingSave(true), isBusy: () => saveQueueRef.current.inFlight, busyMessage: t('channel.clearBusy') })}
               onCancel={() => { setClearTarget(null) }}
               onCleared={() => { onChannelCleared(clearTarget) }}
             />
@@ -1455,13 +1460,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             onClose={() => { setSectionPickerOpen(false) }}
           />
           {/* v3：页面级的加密/解密/快照列表卡已移入各自的通道卡（见 renderChannelCard）。 */}
-          {/* 同步记录（只留操作日志）：远端快照行已搬进产物库（§8）。
-              这条指路行是**必须的** —— 否则用户会以为「远端快照不见了」。 */}
-          <div className={css.actionRow}>
-            <Button size="sm" onClick={() => { runStore.patch({ panel: 'library', library: { sourceFilter: 'remote-snapshot' } }) }}>
-              {t('history.remoteMovedAction')}
-            </Button>
-          </div>
+          {/* 同步记录（只留操作日志）。2026-11-14 用户要求删掉原先那条「在产物库查看远端快照」
+              指路按钮：远端快照本来就在产物库的来源页签里，页面不必另递一只手指过去。 */}
           <SyncLogList api={api} t={t} />
 
           {/* P0-②：push 前只读预览确认弹窗（「将推送什么」→ 确认后才真正上传；Radix Modal） */}

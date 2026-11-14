@@ -21,12 +21,14 @@ import { redact } from '../../security/redaction.ts'
 import type { SyncApi } from './sync-api.ts'
 import { SYNC_CHANNEL_LABEL_KEY, type SyncChannel } from './sync-view.ts'
 
-export function ChannelClearConfirmDialog({ open, channel, api, t, onCancel, onCleared }: {
+export function ChannelClearConfirmDialog({ open, channel, api, t, onCancel, onCleared, beforeClear }: {
   open: boolean
   channel: SyncChannel
   api: SyncApi
   t: TranslateNS<'config-manager-sync'>
   onCancel: () => void
+  /** 清除前的等待（P9-5）：调用方用它在途 saveConfig 落定，避免 save 晚于 clear 到达宿主把配置写回 */
+  beforeClear?: () => Promise<unknown>
   /** 成功回调：调用方据此清表单残留、撤销在途自动保存并重拉 status（本组件不碰页面状态） */
   onCleared: () => void
 }) {
@@ -44,6 +46,8 @@ export function ChannelClearConfirmDialog({ open, channel, api, t, onCancel, onC
       cancelLabel={t('common.cancel')}
       onConfirm={async () => {
         try {
+          // 先等调用方的在途保存结束（有上限；超时也照样放行，兜底是调用方的断开世代号）
+          await beforeClear?.()
           await api.clearChannel(channel)
           toast.ok(t('toast.channelCleared', { channel: channelLabel }))
           onCleared()

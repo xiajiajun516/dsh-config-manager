@@ -13,7 +13,7 @@
  *
  * 数据：一次 GET /runs?scope=recent（含 running 与刚结束的），1.5s 轮询；面板关闭即卸载即停表。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunState } from '../../core/run-registry.ts'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
@@ -22,6 +22,8 @@ import type { RecoveryLockStatus } from '../../ui/types.ts'
 import { cancelDialogModel, runCards, runSummary } from '../../ui/runs-view.ts'
 import type { CancelDecision, CancelDialogModel, RunCardModel } from '../../ui/runs-view.ts'
 import { runStateProgress } from '../run-store.ts'
+import { dialogKeyOf, isDialogStillWaiting, isStaleResponse, pickWaitingRun, pruneDismissed } from './runs-center-view.ts'
+import type { DialogKey } from './runs-center-view.ts'
 import { Badge, Banner, Button, Card, Empty } from './ui.tsx'
 import { Icon } from './Icon.tsx'
 import { InfoHint } from './InfoHint.tsx'
@@ -76,22 +78,54 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
   /** 决策框当前针对的 run（null = 未打开）。 */
   const [dialogRun, setDialogRun] = useState<RunState | null>(null)
   const [decision, setDecision] = useState<CancelDecision>('rollback')
+  /** 每发一次 refresh 递增的请求序号（只增不减）。 */
+  const seqRef = useRef(0)
+  /**
+   * 两个通道各自「已落地的最高序号」：晚到的旧响应（序号 ≤ 已落地）整份丢弃。
+   * 为什么按通道分开记：单通道一个计数器时，同一次 refresh 的 runs 落地就把序号占掉，
+   * 紧接着自己的 lock 落地会被判成陈旧（锁状态再也写不进去）；而共用「最后一个完成的 refresh」
+   * 又会让更早发出的 runs 覆盖更新的 runs。各记一份才真正满足「旧不得覆盖新」。
+   */
+  const runsSeqRef = useRef(0)
+  const lockSeqRef = useRef(0)
+  /**
+   * 用户已关掉的决策框（按 dialogKeyOf 记）：同一个等待事件不再自动弹回来。
+   * 必须是**组件内** ref —— 模块级单例会让多实例（多个面板/页面）互相串味。
+   */
+  const dismissedRef = useRef<Set<DialogKey>>(new Set())
 
   const refresh = useCallback(async (): Promise<void> => {
+    // 序号守卫：1.5s 轮询在慢响应时必然重叠，先发的旧响应后落地会把进度条/状态改回旧值。
+    const seq = seqRef.current + 1
+    seqRef.current = seq
     try {
       const next = await api.runsRecent()
-      setRuns(next)
-      setError(null)
+      // 陈旧只丢这一份数据，**不 return**：下一段是独立的锁请求，不能被 runs 通道的时序连带跳过
+      // （runs 端点持续慢时锁状态会跟着停摆，lockError 长期停在旧值）。
+      if (!isStaleResponse(runsSeqRef.current, seq)) {
+        runsSeqRef.current = seq
+        setRuns(next)
+        setError(null)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (!isStaleResponse(runsSeqRef.current, seq)) {
+        runsSeqRef.current = seq
+        setError(err instanceof Error ? err.message : String(err))
+      }
     }
     // 锁状态单独取：它读不到不该拖垮任务列表（但也不能静默 —— 见 lockError 的渲染）
     try {
       const status = await recoveryApi.status()
-      setLock(status.lock ?? null)
-      setLockError(null)
+      if (!isStaleResponse(lockSeqRef.current, seq)) {
+        lockSeqRef.current = seq
+        setLock(status.lock ?? null)
+        setLockError(null)
+      }
     } catch (err) {
-      setLockError(err instanceof Error ? err.message : String(err))
+      if (!isStaleResponse(lockSeqRef.current, seq)) {
+        lockSeqRef.current = seq
+        setLockError(err instanceof Error ? err.message : String(err))
+      }
     }
   }, [api, recoveryApi])
 
@@ -105,11 +139,23 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
   const cards = runs === null ? [] : runCards(runs, { now: Date.now() })
   const summary = runs === null ? { running: 0, awaiting: 0, total: 0 } : runSummary(runs)
 
-  /** 待决策的 run 自动弹框：终止已到达安全点，界面必须马上要一个回答。 */
+  /**
+   * 待决策的 run 自动弹框：终止已到达安全点，界面必须马上要一个回答。
+   *
+   * 但「用户关掉过」必须算数：轮询每 1.5s 会送来一条新的 run 对象，只看 runs 就会把同一个
+   * 等待事件反复弹出来。因此按 dialogKeyOf 记忽略集合，并每轮先裁剪掉已不在等待的键
+   * （集合有界，不随历史 run 数增长）。写 ref 不触发重渲染，不存在自激循环。
+   */
   useEffect(() => {
-    if (dialogRun !== null) return
-    const waiting = (runs ?? []).find((r) => r.status === 'running' && r.pendingDecision === 'cancel')
-    if (waiting === undefined) return
+    dismissedRef.current = pruneDismissed(dismissedRef.current, runs)
+    if (dialogRun !== null) {
+      // 框里那条 run 已经不在等决定（宿主 5 分钟超时自动裁决 / 从别处提交 / 已结束）⇒ 必须关掉：
+      // 否则它在问一个已被回答的问题，而且 dialogRun !== null 会让后面所有等待都不再自动弹。
+      if (!isDialogStillWaiting(dialogRun, runs)) setDialogRun(null)
+      return
+    }
+    const waiting = pickWaitingRun(runs, dismissedRef.current)
+    if (waiting === null) return
     setDialogRun(waiting)
     setDecision(cancelDialogModel(waiting, { defaultRollbackOnError }).defaultDecision)
   }, [runs, dialogRun, defaultRollbackOnError])
@@ -145,6 +191,10 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
       const res = await api.decideRunCancel(run.runId, decision)
       if (res.accepted) toast.info(t('runs.decisionAcceptedToast'))
       else toast.warn(t('runs.decisionTooLateToast'))
+      // 先登记「已忽略」再关框：此刻 refresh 还没回来，runs 快照里那条 run 仍在等决定，
+      // effect 重跑会立刻把框重新打开，随后 refresh 落地又因 dialogRun !== null 早退 ——
+      // 框就停在一条已结案的 run 上（按钮再点只会拿到 accepted=false）。
+      dismissedRef.current.add(dialogKeyOf(run))
       setDialogRun(null)
       await refresh()
     } catch (err) { fail(err) } finally { setBusyId(null) }
@@ -163,6 +213,16 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
       const message = redactErrorText(err)
       toast.error(t('runs.lock.recoverFailed', { message }))
     } finally { setLockBusy(false) }
+  }
+
+  /**
+   * 关掉决策框 = 「这一次别再自动弹」。只按 key 记住，不按对象/时间戳：
+   * 轮询送来的是新对象、新 updatedAt，按它们记等于没记（框会自己弹回来）。
+   * 用户仍可从卡片上的「立即决策」手动打开 —— 忽略只关掉**自动**弹框。
+   */
+  const dismissDialog = (): void => {
+    if (dialogRun !== null) dismissedRef.current.add(dialogKeyOf(dialogRun))
+    setDialogRun(null)
   }
 
   const openDialog = (run: RunState): void => {
@@ -289,7 +349,7 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
           busy={busyId === dialogModel.runId}
           onChange={setDecision}
           onConfirm={() => { void submitDecision() }}
-          onCancel={() => { setDialogRun(null) }}
+          onCancel={dismissDialog}
           t={t}
         />
       )}
