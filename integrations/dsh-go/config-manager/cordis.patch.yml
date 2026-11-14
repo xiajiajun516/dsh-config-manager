@@ -1,0 +1,5 @@
+# 把本插件挂进 dsh bundle（在 $DSH_HOME 的 cordis.patch.yml 层）。
+# id 与 package.json 的 name 必须逐字一致，三处同名：package.json / 本文件 / lib/index.js 的 name。
+- insert:
+    - id: local-dsh-config-manager-go
+      name: local-dsh-config-manager-go

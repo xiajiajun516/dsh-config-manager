@@ -1,0 +1,138 @@
+{
+  "name": "local-dsh-config-manager-go",
+  "version": "0.1.0",
+  "private": true,
+  "description": "dsh-Go 原生插件：在手机原生面板里读/写 dsh-config-manager（状态、产物库、同步、导入导出、恢复）",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.19",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dshGo": {
+    "v": 1,
+    "minApp": "1.0.16",
+    "title": {
+      "zh": "配置管家",
+      "en": "Config Manager"
+    },
+    "icon": "folder",
+    "capabilities": [
+      "files"
+    ],
+    "contributes": {
+      "panels": [
+        {
+          "id": "overview",
+          "title": {
+            "zh": "配置管家",
+            "en": "Config Manager"
+          },
+          "icon": "folder",
+          "placement": [
+            "features",
+            "session.tab"
+          ]
+        },
+        {
+          "id": "library",
+          "title": {
+            "zh": "产物库",
+            "en": "Artifacts"
+          },
+          "icon": "archive",
+          "placement": [
+            "features",
+            "session.tab"
+          ]
+        },
+        {
+          "id": "sync",
+          "title": {
+            "zh": "同步",
+            "en": "Sync"
+          },
+          "icon": "refresh",
+          "placement": [
+            "features",
+            "session.tab"
+          ]
+        },
+        {
+          "id": "flow",
+          "title": {
+            "zh": "导入导出",
+            "en": "Import & Export"
+          },
+          "icon": "zip",
+          "placement": [
+            "features",
+            "session.tab"
+          ]
+        }
+      ],
+      "composer.tools": [
+        {
+          "id": "open-hub",
+          "label": {
+            "zh": "配置管家",
+            "en": "Config"
+          },
+          "icon": "folder",
+          "panel": "overview"
+        },
+        {
+          "id": "quick-export",
+          "label": {
+            "zh": "导出配置",
+            "en": "Export"
+          },
+          "icon": "zip"
+        }
+      ],
+      "session.actions": [
+        {
+          "id": "export-now",
+          "label": {
+            "zh": "导出配置",
+            "en": "Export"
+          },
+          "icon": "zip"
+        },
+        {
+          "id": "open-library",
+          "label": {
+            "zh": "产物库",
+            "en": "Artifacts"
+          },
+          "icon": "archive"
+        }
+      ],
+      "composer.strip": [
+        {
+          "id": "sync-line",
+          "icon": "refresh",
+          "panel": "sync"
+        }
+      ]
+    }
+  }
+}

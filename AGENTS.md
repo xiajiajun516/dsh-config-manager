@@ -38,6 +38,7 @@
 - **一键同步差异确认**的批量按钮覆盖「全部确认项」、只排除 Error（`sync-view.isBulkDecidable`）。
 
 ### 架构与路由
+- **dsh-Go 原生插件在 `integrations/dsh-go/config-manager/`**：只做界面，数据走宿主回环 API；包名 `local-` 三处一致，改后跑插件自带测试 + `check.mjs --load`（缺口 → `docs/evidence/dsh-go-native-plugin.md`）。
 - **双面插件**：host `src/index.ts`（Cordis `name='config-manager'`，前缀 `/api/dsh-config-manager/*`）；web `src/client/`（React，settings.section），经 api 调 host。
 - **宿主路由只经 kit 的 `endpoint()` + `registerRoutes()`**（围栏与方法白名单在注册点统一包装；未经 kit 的路由注册直接抛错）。
 - 路由源 = `src/index.ts`（窗口守卫**钉住的 7 条**）+ `src/routes/*.ts` 其余 75 条（合计 82 条）；源码级守卫必须扫**全部**路由源。
