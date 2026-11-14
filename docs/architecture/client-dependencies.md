@@ -89,6 +89,6 @@ client 需要：
 | `progress.ts` 的 `stageText` / `ProgressTracker` | `common/ProgressBar.tsx` |
 | `security/redaction.ts` 的 `redact` | 全部文本展示前的强制脱敏（双保险） |
 
-> 例外：`ui/path-mapping.ts` 的 `PathMappingEditor` 依赖 `utils/paths.ts`（`node:path`），
-> 浏览器 bundle 不可用 —— `import/PathMappingForm.tsx` 做轻量等价实现（输入输出形状
-> 与 core `PathMapping` 一致，实际前缀替换由 Host 侧 core 在 `createImportPlan` 阶段执行）。
+> 前缀映射只有**一份**实现在浏览器半：`import/PathMappingForm.tsx`，只收集用户输入（形状与 core
+> `PathMapping` 一致），实际前缀替换由 Host 侧 core 在 `createImportPlan` 阶段执行 —— 浏览器半不能引
+> `node:path`，所以不复制替换规则（同规则一份实现，判据见该文件头注释）。

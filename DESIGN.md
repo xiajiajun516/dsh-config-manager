@@ -342,10 +342,10 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
 - `Banner`（四态；操作按钮一律**内嵌右侧**）
 - `Segmented`（页内子视图切换；受控）
 - `Card` / `Field` / `SectionTitle` / `Empty` / `Checkbox` / `Stepper`
-- `InfoHint`（`common/InfoHint.tsx`）**已整体下线（2026-11-14，用户要求）** —— 用户原话「把所有页面的 ! icon
+- `InfoHint`（ⓘ 自绘气泡原语）**已整体下线（2026-11-14，用户要求）** —— 用户原话「把所有页面的 ! icon
   都替换成悬停能读到的 title」。71 处渲染点全部改挂**原生 `title`**：`Field` 的 `tooltip`、`SectionTitle` 的
-  `tooltip`，以及逐处 `title={t('…Hint')}`；`common/InfoHint.tsx`、`.infoHint` / `.infoHintBtn` / `.infoHintBubble`
-  一组 CSS、守卫 `common/info-hint-guard.test.ts`（含 `MOVE_PINS` 台账）与 `common/InfoHint` 的 Portal 依赖一并删除。
+  `tooltip`，以及逐处 `title={t('…Hint')}`；该组件文件、`.infoHint` / `.infoHintBtn` / `.infoHintBubble`
+  一组 CSS、同名的守卫测试（含 `MOVE_PINS` 台账）与它的 Portal 依赖一并删除。
   现行判据（替代原「三通道 + 摆放」全部纪律）：**说明文字只有两个承载体 —— 原生 `title`（悬停可读、界面零图标）
   与常驻正文（用户当下必须看到才能做决定的那句）**；分界线仍是§7 那句「删掉这句用户还能不能做出同样的
   决定」。为什么不是自绘气泡：Portal 进插件根、宿主画布∪锚点夹紧、悬停/聚焦/点击固定四通道、Esc 不连带关
@@ -1551,8 +1551,8 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 
 ### 说明文字：悬停 title vs 常驻正文（2026-11-14 起）
 
-**承载体只有两个**（原 `common/InfoHint.tsx`（ⓘ 自绘气泡）已于 2026-11-14 整体下线，71 处渲染点全部改挂
-原生 `title`；组件、`.infoHint*` CSS、`common/info-hint-guard.test.ts` 与 `MOVE_PINS` 台账一并删除）：
+**承载体只有两个**（原 `InfoHint`（ⓘ 自绘气泡）已于 2026-11-14 整体下线，71 处渲染点全部改挂
+原生 `title`；组件文件、`.infoHint*` CSS、同名守卫测试与 `MOVE_PINS` 台账一并删除）：
 
 1. **悬停 `title`** —— 用户从名字读不出来的补充信息：机制怎么工作 / 边界与限制 / 输入规则 / 省事提示 /
    凭据去向 / 静默后台行为。落地形态：`Field.tooltip`（渲在字段标签那个 `<span title>` 上）、

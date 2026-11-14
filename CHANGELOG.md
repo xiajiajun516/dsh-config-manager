@@ -192,6 +192,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **复制配置档案失败时不再留下一个删不掉的空目录**：以前目标目录建好、标记写失败就撒手，这个目录既不在列表里、删除又报找不到；现在失败即整个回滚。
   **A failed profile copy no longer leaves an undeletable empty directory**: the target directory was created before the marker write, so a marker failure left something invisible in the list yet reported as missing on delete; it is rolled back entirely now.
 
+- **macOS 与 Linux 上的恢复计划不再把「父级是普通文件」误判成路径越界**：目标路径上某一段被占成普通文件（例如 `sessions` 被一个同名文件顶掉）时，这两个系统报的是「不是目录」而不是「不存在」，于是整笔恢复被拒绝并提示路径越界；现在按目标不存在处理，交给父级真实路径判定，真正越出配置目录的目标仍然会被拒。
+  **Restore plans on macOS and Linux no longer read "a parent segment is a plain file" as a path escape**: when a segment of the target path was occupied by a regular file (say `sessions` replaced by a file of that name), those systems report "not a directory" instead of "missing", so the whole restore was refused with a path-escape error; the target now counts as absent and goes through the real-path parent check, and targets that really leave the config directory are still refused.
+
 ## [0.8.2] - 2026-11-12
 
 > **新版 Trae 的会话，现在也能导进来了**：这几个发行版把会话搬进了加密数据库，插件以前只认得旧文件、导出来是空的；现在两种形态都读，同一段对话不算两遍。导入失败时也不再只说一句「导入失败」，而是写清是哪一种原因，并带上问题码。

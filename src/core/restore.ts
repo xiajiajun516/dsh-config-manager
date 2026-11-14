@@ -365,7 +365,12 @@ function createTargetSafetyChecker(homeDir: string): (absTarget: string) => stri
     try {
       if (fssync.lstatSync(absTarget).isSymbolicLink()) return 'target-symlink';
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return 'target-unreadable';
+      // ENOTDIR 与 ENOENT 同义：路径上某一段是普通文件（POSIX 的 lstat 抛 ENOTDIR，
+      // Windows 抛 ERROR_PATH_NOT_FOUND ⇒ ENOENT）。目标本身既不存在，也就不可能是链接
+      // ⇒ 交给下面的父级投影判定；真越界仍会被 isPathInside 拒。
+      // 判据 → docs/evidence/recovery-console.md；CI 三平台复现见 tests/core/restore.test.ts R-ghost-unreadable。
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return 'target-unreadable';
     }
     const parentReal = projectedParentReal(path.dirname(absTarget));
     if (parentReal === null) return 'parent-unresolvable';
