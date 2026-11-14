@@ -50,8 +50,6 @@ export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncl
           <div className={css.field}>
             <span className={css.fieldLabel}>
               {t('mode.password')}
-              {' '}
-              {settings.encryptPasswordSaved && <InfoHint text={t('mode.passwordSavedHint')} label={t('common.infoHint')} />}
             </span>
             <input aria-label={t('mode.password')}
               type="password"

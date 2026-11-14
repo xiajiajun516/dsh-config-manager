@@ -397,7 +397,6 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
                 label={t('common.infoHint')}
               />
             )}
-            <InfoHint text={t('retention.appliesTo')} label={t('common.infoHint')} />
           </div>
 
           {(saved?.consecutiveFailures ?? 0) > 0 && (

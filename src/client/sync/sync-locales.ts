@@ -124,7 +124,6 @@ export const zh = {
   'repoPicker.createFailed': '新建仓库失败',
   'repoPicker.nameRequired': '请填写仓库名。',
   'repoPicker.nameInvalid': '仓库名只能包含字母、数字、点、下划线、连字符（最长 100 字符，不能以点开头）。',
-  'repoPicker.privateOnly': '新建的仓库固定为私有：公开仓库会公开你的配置内容。',
   // 状态
   // 操作
   // 报告
@@ -216,7 +215,6 @@ export const zh = {
   'mode.passwordConfirm': '确认密码',
   'mode.passwordMismatch': '两次输入的密码不一致',
   'mode.passwordRequired': '加密必须设置密码',
-  'mode.passwordSavedHint': '本机已保存密码：留空即沿用，输入新密码会覆盖已保存的密码。',
   'mode.passwordPlaceholder': '已保存（留空即沿用）',
   'mode.passwordClearNotice': '取消勾选会删除已保存的密码',
   'mode.includeSecrets': '导出密钥',
@@ -585,7 +583,6 @@ export const en: Record<keyof typeof zh, string> = {
   'repoPicker.createFailed': 'Could not create the repository',
   'repoPicker.nameRequired': 'Enter a repository name.',
   'repoPicker.nameInvalid': 'A repository name may contain letters, digits, dots, underscores and hyphens (max 100 characters, cannot start with a dot).',
-  'repoPicker.privateOnly': 'Newly created repositories are always private: a public repository would expose your config contents.',
   'push.title': 'Push Result',
   'sections.title': 'Synced Sections',
   'warnings.title': 'Section Warnings',
@@ -670,7 +667,6 @@ export const en: Record<keyof typeof zh, string> = {
   'mode.passwordConfirm': 'Confirm password',
   'mode.passwordMismatch': 'Passwords do not match',
   'mode.passwordRequired': 'Encryption requires a password',
-  'mode.passwordSavedHint': 'A password is already saved locally: leave the fields empty to reuse it, or type a new one to replace it.',
   'mode.passwordPlaceholder': 'Saved (leave empty to reuse)',
   'mode.passwordClearNotice': 'Unchecking this deletes the saved password',
   'mode.includeSecrets': 'Export secrets',

@@ -194,9 +194,6 @@ export function ContentPicker({
    */
   const unreadSections = new Set([...pendingSections, ...failedSections]).size
   const label = (id: SectionId): string => sectionLabel?.(id) ?? id
-  /** 是否存在「会话 ↔ 工作区」联动对象（只在这种时候提示联动规则，平时不打扰）。 */
-  const hasLinkedPairs = nodes.some((n) => n.section === 'sessions' && n.units.length > 0)
-    && nodes.some((n) => n.section === 'workspaces' && n.units.some((u) => (u.sessionIds?.length ?? 0) > 0))
   /**
    * 勾选动作统一出口：先过一次「父对话 ↔ 子代理会话」联动，再过一次会话↔工作区联动。
    *
@@ -587,9 +584,6 @@ export function ContentPicker({
         />
         <Button size="sm" onClick={() => { commit(selectAll(nodes, true)) }}>{t('picker.selectAll')}</Button>
         <Button size="sm" onClick={() => { commit(selectAll(nodes, false)) }}>{t('picker.selectNone')}</Button>
-        {/* 会话 ↔ 工作区联动属「机制怎么工作」（MOVE 类）：只在这种配对确实存在时给出 ⓘ，
-            不再用一整行常驻说明占掉选择器首屏。 */}
-        {hasLinkedPairs && <InfoHint text={t('picker.sessionWorkspaceLinked')} t={t} />}
         {/* 工具条常驻「已选 N / M」（稿 D-14b:114）：与分区行同一字典键、同一 .pickerCount 盒模型，
             合计仍在页脚（分区/单元/体积）—— 这里只回答「我勾了多少」。 */}
         <span className={css.pickerCount + ' ' + css.pickerToolbarCount}>

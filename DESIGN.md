@@ -1182,15 +1182,15 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     让「为什么是 review / block」可直接核对，而不是只有一个分数 —— 用户实测抱怨过
     「健康评分 89 / 建议：阻止执行」这种自相矛盾的展示（根因：结论曾由分数阈值决定，
     现在只由证据决定，见 `src/core/migration-consult.ts` 的 `HARD_BLOCKER_CODES`）。
-- **导出页（Export）**：工具栏（末尾是 `export.hint` 的 ⓘ）→ **安全选项**（`.groupLabel` = `export.security`）→
+- **导出页（Export）**：工具栏（只放「选择要导出的内容」与导出按钮，无 ⓘ）→ **安全选项**（`.groupLabel` = `export.security`）→
   **命名行**（`.groupLabel` = `export.naming`）→ 进度/报告 → **「本次将导出」构成卡**
   （最后一个数据块，`Card.fillViewport` + `.compositionViewport` 内滚；合计口径与选择器 footer
   同源 = 同一个 `pickerSummary`，构成行只列真正会导出的分区）。
-  - **模式提示不再常驻**（2026-10 ⓘ 迁移，见 §7）：`export.hint`（默认导出推荐分区 + 去哪儿调整勾选）
-    已从页面正文收进工具栏 ⓘ（`ExportView.tsx` 工具栏末尾），首屏不再有那一行提示。
+  - **模式提示已删除**（2026-10 收进 ⓘ → 2026-11-14 连 ⓘ 一起删）：`export.hint`（默认导出推荐分区 + 去哪儿
+    调整勾选）只是复述下面「本次将导出」构成卡已逐分区列出的内容，见 §7 t13。
   - **分组标题（UI-11）**：两组输入区（安全选项 / 文件名与备注）外观相同，必须各有分组标题，
-    否则读不出边界；文件名与备注的规则说明（UI-12 的 `export.fileNameHint` / `export.noteHint`）
-    已收进字段标签旁的 ⓘ —— **常驻的只有非法时的 `.formError`**（`export.fileNameInvalid`，KEEP ①，
+    否则读不出边界；文件名的规则说明（UI-12 的 `export.fileNameHint`）收进字段标签旁的 ⓘ，备注说明
+    （`export.noteHint`，只讲备注存在哪）已于 2026-11-14 删除 —— **常驻的只有非法时的 `.formError`**（`export.fileNameInvalid`，KEEP ①，
     它本身重申了允许的字符集）。UI-12 的「先说明规则后报错」随之改写为「出错时由错误文案重申规则」。
   - **并排字段间距（UI-21）**：`.secretFields` 双列栅格内的 `.field` 归零下边距
     （`.secretFields .field { margin-bottom: 0 }`），分组说明行用 `.groupHintRow`（10px）
@@ -1693,6 +1693,14 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
     `workdir.adoptHint`（可 `git revert`）、`merge.scopeNotice` / `merge.bulk.hint`（整分区裁决）、
     `picker.sessionWorkspaceLinked`（会话↔工作区联动后果）。
   - **`MOVE_PINS` 长度不变（81）**：本轮删的是**重复渲染点**，被删处那个键的 pin 记在仍渲染它的 `MyConfigsWizard.tsx` 上。
+- **t13（2026-11-14 第三轮，用户「把还能精简的都精简掉」）：删 7 键，61 → 54** —— 判据仍是「ⓘ 只放用户从名字
+  读不出来的东西」，本轮把三种「读了也不改变决定」的形态一并删掉：**① 交互自证**（做一次就看见后果）
+  `picker.sessionWorkspaceLinked`（勾会话 → 工作区当场被勾）；**② 同屏已有同义句子** `export.hint`（构成卡逐分区列出）、
+  `retention.appliesTo`（`retention.hint` 已写「快照与定时备份共用」）、`repoPicker.privateOnly`（按钮「新建私有仓库」+
+  弹窗标题已说）、`mode.passwordSavedHint`（placeholder「已保存（留空即沿用）」）；**③ 纯背景** `export.noteHint`（备注
+  存哪儿）、`export.compositionHint`（数字旁无歧义，未读取分区另有 `export.compositionPartial`）。
+  反向判据不变：不可逆后果、凭据去向、会被清理/丢数据的事实、输入规则、错误与空态**一律保留**（逐键清单见
+  `common/info-hint-guard.test.ts` 头部的三轮变更记录）。
 
 ---
 

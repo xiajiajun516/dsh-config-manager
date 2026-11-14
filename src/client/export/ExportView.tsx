@@ -386,9 +386,6 @@ export function ExportView({ api, t }: ExportViewProps) {
         <Button loading={invLoading} disabled={running} title={t('picker.title')} onClick={openPicker}>
           {invLoading ? null : <PreviewIcon size={13} />} {t('picker.title')}
         </Button>
-        {/* 工具栏「模式提示」属「机制怎么工作 + 省事提示」（MOVE 类）：收进 ⓘ，
-            不再常驻占首屏一行（默认导出推荐分区 + 去哪里调整勾选）。 */}
-        <InfoHint text={t('export.hint')} label={t('common.infoHint')} />
       </div>
       {/* 公告位 = **恒定高度**槽位（.noticeSlot）：出现/消失时不能改变内容流高度，
           否则垂直居中的选择器弹窗会跳（用户实测反馈）。 */}
@@ -454,8 +451,6 @@ export function ExportView({ api, t }: ExportViewProps) {
         <div className={css.field}>
           <span className={css.fieldLabel}>
             {t('export.note')}
-            {/* 备注说明属 MOVE 类（补充背景）：收进字段标签旁的 ⓘ，不再常驻占一行 */}
-            <InfoHint text={t('export.noteHint')} label={t('common.infoHint')} />
           </span>
           <input aria-label={t('export.note')}
             type="text"
@@ -539,7 +534,7 @@ export function ExportView({ api, t }: ExportViewProps) {
           「无内容可导出」本身就是一条需要用户看到的状态，而不是留白）。 */}
       <Card className={css.fillViewport}>
         <div className={css.groupHeader}>
-          <span className={css.groupLabel}>{t('export.compositionTitle')} <InfoHint text={t('export.compositionHint')} label={t('common.infoHint')} /></span>
+          <span className={css.groupLabel}>{t('export.compositionTitle')}</span>
           <span className={css.statusSpacer} />
           {compositionRows.length > 0 && (
             /* 有未读取分区时合计只报**下限**并显式标注（F-03）：宁可说「不少于」，也不虚报一个偏小的数 */

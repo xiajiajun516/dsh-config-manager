@@ -97,11 +97,14 @@ interface KeepPin {
  *  2026-11-14 第二轮（结构类）：「只读预览 · 零写入」四兄弟（recovery.preview.hint / rollback.preview.hint /
  *  sessions.layout.planReadOnly / foreign.previewDryRun）改成标题后缀常驻；mode.sectionsHint 的「默认不同步」
  *  写进分区徽章（mode.sectionPortable / DeviceSpecific / PlatformSpecific）；mode.encryptAutosyncNotice 并进
- *  mode.encryptHint → 67 → 61。 */
+ *  mode.encryptHint → 67 → 61；
+ *  2026-11-14 第三轮（用户「把还能精简的都精简掉」）：删 7 条 —— 交互自证（picker.sessionWorkspaceLinked）、
+ *  同屏已有同义文案（export.hint 有构成卡、retention.appliesTo 与 retention.hint 重复、
+ *  repoPicker.privateOnly 已写在按钮与弹窗标题里、mode.passwordSavedHint 已写在 placeholder 里）、
+ *  纯背景（export.noteHint、export.compositionHint）→ 61 → 54。 */
 const MOVE_PINS: readonly MovePin[] = [
   // t1：common/
   { key: 'runs.retentionHint', file: 'src/client/common/RunsCenter.tsx', kind: '机制' },
-  { key: 'picker.sessionWorkspaceLinked', file: 'src/client/common/ContentPicker.tsx', kind: '机制' },
   // t2：sync/
   { key: 'config.repoUrlHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
   { key: 'github.description', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '机制' },
@@ -125,10 +128,7 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'retention.keepLastHint', file: 'src/client/home/BackupScheduleCard.tsx', kind: '输入规则' },
   { key: 'retention.keepMonthlyHint', file: 'src/client/home/BackupScheduleCard.tsx', kind: '输入规则' },
   { key: 'retention.keepYearlyHint', file: 'src/client/home/BackupScheduleCard.tsx', kind: '输入规则' },
-  { key: 'retention.appliesTo', file: 'src/client/home/BackupScheduleCard.tsx', kind: '边界' },
-  { key: 'export.hint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
   { key: 'export.fileNameHint', file: 'src/client/export/ExportView.tsx', kind: '输入规则' },
-  { key: 'export.noteHint', file: 'src/client/export/ExportView.tsx', kind: '背景' },
   // t4：market/ + about/ + profiles/
   { key: 'myconfigs.login.hint', file: 'src/client/market/MyConfigsLoginCard.tsx', kind: '机制' },
   { key: 'about.diag.hint', file: 'src/client/about/AboutPanel.tsx', kind: '背景' },
@@ -156,17 +156,14 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'mode.encryptHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
   { key: 'mode.includeSecretsHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
   { key: 'mode.deletePluginsHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '边界' },
-  { key: 'mode.passwordSavedHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
   { key: 'mode.decryptPasswordHint', file: 'src/client/sync/DecryptPasswordCard.tsx', kind: '机制' },
   { key: 'export.encryptHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
   { key: 'export.includeSecretsHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
-  { key: 'export.compositionHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
   { key: 'diskUsage.clean.hint', file: 'src/client/environment/maintenance/DiskUsageCard.tsx', kind: '边界' },
   { key: 'recovery.safeMode.detail', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
   { key: 'sessions.repair.desc', file: 'src/client/recovery/SessionHealthDialog.tsx', kind: '机制' },
   { key: 'recovery.rescue.desc', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
   { key: 'recovery.incomplete.hint', file: 'src/client/recovery/IncompleteCopiesSection.tsx', kind: '机制' },
-  { key: 'repoPicker.privateOnly', file: 'src/client/sync/SyncRepositoryPicker.tsx', kind: '输入规则' },
   { key: 'config.tokenHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
   { key: 'webdav.passwordHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
   { key: 'cloud.secretHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
@@ -381,7 +378,7 @@ function parseInfoHintEntry(rel: string): { zh: string | undefined; en: string |
   return { zh: values[0], en: values[1], count: values.length };
 }
 
-test('t6-1 MOVE：61 个说明键都已收进 ⓘ（逐字复用原键）且不再有可见说明行', () => {
+test('t6-1 MOVE：54 个说明键都已收进 ⓘ（逐字复用原键）且不再有可见说明行', () => {
   const files = readClientSources();
   // 扫描范围自检：客户端源码至少覆盖 t6 涉及的面板目录
   const dirs = new Set(MOVE_PINS.map((p) => p.file.split('/').slice(0, 3).join('/')));
@@ -393,7 +390,7 @@ test('t6-1 MOVE：61 个说明键都已收进 ⓘ（逐字复用原键）且不�
   // 2026-11-01：导入选择页的「从其它 agent 导入」按钮与其 ⓘ 一并移除（首页已有直达入口）⇒ 79 降到 78。
   // 2026-11-14 用户要求「页面尽可能简洁」：删 `config.saveHint`（表单本就自动保存，手动按钮已删）
   // 与 `snapshots.selectHint`（恢复计划弹窗里「选择快照…」是死句，快照早已选定）⇒ 78 降到 77。
-  assert.ok(MOVE_PINS.length === 61, 'MOVE 清单长度应为 61（实际 ' + String(MOVE_PINS.length) + '）');
+  assert.ok(MOVE_PINS.length === 54, 'MOVE 清单长度应为 54（实际 ' + String(MOVE_PINS.length) + '）');
   assert.ok(
     MOVE_PINS.filter((p) => p.kind === '输入规则').length >= 5,
     '输入规则类 MOVE 至少 5 处（config.repoUrlHint / webdav.urlHint / mode.sessionsLimitHint / retention.keep*Hint / export.fileNameHint）',
@@ -466,18 +463,18 @@ test('t6-4 common.infoHint 口径一致：主字典 + market / sync / recovery �
 test('t6-5 负向自检：守卫对合成片段真的会红（避免扫不到即假绿）', () => {
   const syntheticMove: SourceFile[] = [{
     rel: 'src/client/fake/Fake.tsx',
-    code: "export const A = () => <div className={css.hint}>{t('export.hint')}</div>;\n",
+    code: "export const A = () => <div className={css.hint}>{t('config.tokenHint')}</div>;\n",
   }];
-  const movePin: MovePin[] = [{ key: 'export.hint', file: 'src/client/fake/Fake.tsx', kind: '机制' }];
+  const movePin: MovePin[] = [{ key: 'config.tokenHint', file: 'src/client/fake/Fake.tsx', kind: '机制' }];
   const moveBad = findMoveViolations(syntheticMove, movePin);
   assert.equal(moveBad.length, 2, '合成片段应同时命中「没有 ⓘ」与「仍有可见说明行」两条（实际 ' + String(moveBad.length) + '：' + moveBad.join(' | ') + '）');
   const syntheticOk: SourceFile[] = [{
     rel: 'src/client/fake/Fake.tsx',
-    code: "<InfoHint text={t('export.hint')} label={t('common.infoHint')} />\n",
+    code: "<InfoHint text={t('config.tokenHint')} label={t('common.infoHint')} />\n",
   }];
   assert.deepEqual(findMoveViolations(syntheticOk, movePin), [], '合法形态不得报红');
 
-  const keepBad = findKeepViolations(syntheticOk, [{ key: 'export.hint', file: 'src/client/fake/Fake.tsx', kind: '错误' }]);
+  const keepBad = findKeepViolations(syntheticOk, [{ key: 'config.tokenHint', file: 'src/client/fake/Fake.tsx', kind: '错误' }]);
   assert.equal(keepBad.length, 1, 'KEEP 键只剩 InfoHint（可见行被搬走）时必须报红');
 
   const a11yBad = findAccessibleNameViolations([{ rel: 'src/client/fake/Fake.tsx', code: "<InfoHint text={t('x.y')} />\n" }]);

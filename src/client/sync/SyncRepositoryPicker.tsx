@@ -206,7 +206,7 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, signedIn, busy, on
       </div>
       {createOpen && (
         <div className={css.field}>
-          <span className={css.groupLabel}>{t('repoPicker.createTitle')} <InfoHint text={t('repoPicker.privateOnly')} label={t('common.infoHint')} /></span>
+          <span className={css.groupLabel}>{t('repoPicker.createTitle')}</span>
           <label className={css.field}>
             <span className={css.fieldLabel}>{t('repoPicker.name')}</span>
             <input

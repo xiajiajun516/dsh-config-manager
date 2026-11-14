@@ -7,7 +7,6 @@
  */
 export const zh = {
   // —— 导出 ——
-  'export.hint': '默认导出推荐分区（可迁移、不含设备专属数据）。',
   'export.encrypt': '加密备份',
   'export.encryptHint': '用密码加密整个备份文件（AES-256-GCM）。密码仅用于本次加密，不会写入备份或任何配置文件；导入时必须输入该密码才能解锁。',
   'export.password': '备份加密密码',
@@ -25,9 +24,7 @@ export const zh = {
   'export.fileNameInvalid': '文件名不合法：仅允许字母数字、空格、- _ .，不能包含路径分隔符。',
   'export.note': '备注',
   'export.notePlaceholder': '例如：迁移前的完整备份 / 2026-08 存档',
-  'export.noteHint': '备注保存在本机备份列表中（随配置备份迁移），便于区分多个导出产物。',
   'export.compositionTitle': '本次将导出',
-  'export.compositionHint': '按当前勾选估算（只读预览，零写入）',
   'export.compositionPartial': '将导出 {sections} 个分区 · 已读取 {units} 个条目 · 约 {size}（含未读取分区，实际不少于该值）',
   'export.compositionEmpty': '没有勾选任何可导出的内容',
   // —— 内容选择器（Phase 1 条目级导出选择）——
@@ -50,7 +47,6 @@ export const zh = {
   'picker.loadingItems': '正在读取条目…',
   'picker.loadingSection': '读取中…',
   'picker.empty': '没有匹配的分区或条目',
-  'picker.sessionWorkspaceLinked': '会话与工作区联动勾选：勾上会话会自动勾上它所属的工作区；取消工作区会取消它的会话',
   'picker.unitsUnavailable': '部分分区的条目清单读取失败，这些分区将整体导出。',
   'picker.sectionLoadFailed': '读取失败 · 将整体导出',
   'picker.deviceSpecific': '设备相关',
@@ -97,7 +93,6 @@ export const zh = {
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
-  'export.hint': 'Exports the recommended sections by default (portable, no device-specific data).',
   'export.encrypt': 'Encrypt backup',
   'export.encryptHint': 'Encrypt the entire backup file with a password (AES-256-GCM). The password is used once and never written into the backup or any config file; it is required to unlock the backup on import.',
   'export.password': 'Backup encryption password',
@@ -115,9 +110,7 @@ export const en: Record<keyof typeof zh, string> = {
   'export.fileNameInvalid': 'Invalid file name: letters, digits, spaces, - _ . only, no path separators.',
   'export.note': 'Note',
   'export.notePlaceholder': 'e.g. Full backup before migration / 2026-08 archive',
-  'export.noteHint': 'The note is shown in the local backup list (and travels with the config backup) so you can tell exports apart.',
   'export.compositionTitle': 'This export',
-  'export.compositionHint': 'Estimated from the current selection (read-only, zero writes)',
   'export.compositionPartial': '{sections} {sections, plural, section|sections} · {units} {units, plural, item|items} read · ~{size} (includes sections not read yet; the real total is no less)',
   'export.compositionEmpty': 'Nothing selected to export',
   // —— Content picker (Phase 1: per-item export selection) ——
@@ -140,7 +133,6 @@ export const en: Record<keyof typeof zh, string> = {
   'picker.loadingItems': 'Reading items…',
   'picker.loadingSection': 'Loading…',
   'picker.empty': 'No matching sections or items',
-  'picker.sessionWorkspaceLinked': 'Session and workspace selection are linked: checking a session also checks the workspace that owns it; unchecking a workspace unchecks its sessions',
   'picker.unitsUnavailable': 'Item lists failed to load for some sections; those will be exported as a whole.',
   'picker.sectionLoadFailed': 'Load failed · exported as a whole',
   'picker.deviceSpecific': 'Device-specific',
