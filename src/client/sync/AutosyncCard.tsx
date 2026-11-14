@@ -123,7 +123,9 @@ export function AutosyncCard({ t, uiT, settings, busy, pendingMerge, onToggleAut
       {/* 段头：标题左、总开关右（2026-11-01 用户要求「左标题右按钮」）。开关此刻就叫
           「自动同步」是否开启 —— 标题与开关是同一件事，不该各占一行。 */}
       <div className={css.settingsGroupHead}>
-        <span className={css.settingsGroupTitle} title={t('autosync.description')}>
+        {/* 悬停说明按阅读顺序用空格拼两段（title 只收纯字符串）：先「自动同步怎么工作」，
+            再指出远端快照同样按保留策略裁剪、入口在首页（issue #143 —— 此前同步页没有这条线索）。 */}
+        <span className={css.settingsGroupTitle} title={t('autosync.description') + ' ' + t('autosync.retentionNotice')}>
           {t('autosync.title')}
         </span>
         {/* 弹性开关（2026-11-14 用户要求）：单一布尔、拨动即落库 ⇒ 用 Switch 而不是勾选框 */}

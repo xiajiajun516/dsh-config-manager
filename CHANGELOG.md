@@ -28,6 +28,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🔧 变更 · Changed
+
+- **保留策略不再被读成「定时备份」的一部分**：它在首页备份卡里独立成段，标题直接写明同时管快照与定时备份；同步页的自动同步说明里也能看到远端快照按同一份策略裁剪、入口在首页；产物库「导出」按钮上那条与导出无关的「自动保留最近 10 个」已摘掉。（issue #143）
+  **Retention policy no longer reads as part of scheduled backups**: it is now its own section on the Home backup card, its title states that it covers both snapshots and scheduled backups, the Auto Sync description points to it, and the library Export button no longer carries an unrelated "keeps the latest 10" note. (issue #143)
+
 ## [0.9.0] - 2026-11-14
 
 > **整个插件换了一套界面，同步也学会按内容判断**：首页、产物库、同步、环境、恢复与各个弹窗统一到同一套卡片、分隔线与按钮层级；推送前先比内容，没变就不再新建快照，git 通道还多出一份 `latest/` 副本；备份里被脱敏清空的插件字段不再盖掉本机明文。手机端也第一次能用了（dsh-Go 原生插件）。

@@ -42,6 +42,8 @@ export const zh = {
   'backupSchedule.error': '定时备份设置加载失败',
   // —— 保留策略（m-retention：GFS 分层）——
   'retention.title': '保留策略',
+  // issue #143：标题本身说出覆盖面（快照 + 定时备份），豁免细则仍只在 retention.hint 的悬停里
+  'retention.titleScoped': '保留策略（快照 + 定时备份）',
   'retention.hint': '快照与定时备份共用；置顶快照与未收敛的恢复点恒豁免自动清理。',
   'retention.keepLast': '最近保留',
   'retention.keepLastHint': '按时间保留最近 N 份；0 = 不按「最近」保留',
@@ -53,6 +55,8 @@ export const zh = {
   'retention.months': '个月',
   'retention.years': '年',
   'retention.tiersOff': '仅保留最近 N 份',
+  // 已停用（issue #143）：这句写死了旧默认值 10，且此前挂在产物库「导出」按钮上，与导出无关。
+  // 键因 engine-locale 冻结基线（372 键）不得删除，但没有消费点；保留策略的覆盖面由 retention.titleScoped 承担。
   'backupFiles.hint': '定时备份自动保留最近 10 个，更早的会被删除。',
   'backupFiles.empty': '暂无备份文件',
   'backupFiles.delete': '删除',
@@ -108,6 +112,7 @@ export const en: Record<keyof typeof zh, string> = {
   'backupSchedule.error': 'Failed to load scheduled backup settings',
   // —— Retention policy (m-retention: GFS tiers) ——
   'retention.title': 'Retention policy',
+  'retention.titleScoped': 'Retention policy (snapshots + backups)',
   'retention.hint': 'Shared by snapshots and scheduled backups; pinned snapshots and unsettled recovery points are always exempt.',
   'retention.keepLast': 'Keep last',
   'retention.keepLastHint': 'Keep the newest N by time; 0 disables the "recent" tier',

@@ -1572,6 +1572,13 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 **分界线仍是那一句**：**删掉这句，用户还能不能做出同样的决定？** 能 → 要么删，要么挂 `title`；
 不能 → 常驻。
 
+**归属不清时改标题，不加常驻说明**（issue #143，2026-11-14）：用户怀疑「这份设置到底管不管 X」时，
+那个怀疑本身就是决定的一部分 —— 但它不该变成一段常驻正文，也不该只活在悬停里。做法是让**分组标题**
+说出覆盖面（`retention.titleScoped` =「保留策略（快照 + 定时备份）」），外面套一段 `.retentionSection`
+（0.5px 发丝线 + 12px 内距）把它从相邻设置里划出来；边界细则（置顶快照 / 未收敛恢复点恒豁免）仍留在
+悬停 `title`。跨页指路同理只写进既有 `title`：`autosync.retentionNotice` 按阅读顺序用空格接在
+`autosync.description` 后面，告诉同步页读者「远端快照也按它裁剪、入口在首页」——不新开页面、不加常驻块。
+
 **输出形态**：`title` 挂的是**纯字符串**（`t('…Hint')`），不是节点；多句要拼就按阅读顺序用空格连
 （`title={t('merge.scopeNotice') + ' ' + t('merge.bulk.hint')}`）。`Field` / `SectionTitle` 删掉了
 `info?: ReactNode` 入口（改 `tooltip?: string`），组件因此**恒渲染 `<label>`** —— 没有 ⓘ 按钮就不存在

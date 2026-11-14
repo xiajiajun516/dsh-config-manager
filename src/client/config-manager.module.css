@@ -3930,6 +3930,16 @@ body {
   text-overflow: ellipsis;
 }
 
+/* 保留策略段（issue #143）：这份设置同时管远程快照与定时备份，所以在「定时备份」卡里
+   自成一段 —— 一条分隔线把它从上面的设置行里划出来，读起来不再像备份卡的第四项。
+   段容器只管分隔与内距；组头/数字卡仍复用 .groupHeader 与 .retentionCard。 */
+.retentionSection {
+  margin-top: 12px;
+  padding-top: 12px;
+  /* 设置页字段分隔线 = 0.5px 发丝线（DESIGN.md §描边粗细两档） */
+  border-top: 0.5px solid var(--cm-line-2);
+}
+
 /* D-01 保留策略的**三张数字卡**（2026-11-14 设计稿）：原先三个 label.field 是裸表单列并排，
    读起来像一整行没对齐的输入框。现在每项自成一张带框卡格 —— 标题跨两列，「数字 + 单位」压在
    卡右下。仍是 home 私有类：共享 .field / .fieldLabel / .input / .hint 的本体一个字没改。 */

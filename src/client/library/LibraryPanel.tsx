@@ -345,7 +345,8 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
         {/* 底栏四个入口，只有「导出」是这一页的产品级动作（把本机配置打成可分享的包）；
             其余三个是「拿别人的东西进来 / 去别处找」。主按钮只留一个，否则整屏没有焦点
             （app-screens §13：强调色应用在数据与至多一个控件上）。 */}
-        <Button size="sm" variant="primary" onClick={onOpenExport} title={t('backupFiles.hint')}>{t('library.new.export')}</Button>
+        {/* 不再挂 backupFiles.hint：那句写的是备份文件的清理规则，与「把配置打成可分享的包」无关（issue #143）。 */}
+        <Button size="sm" variant="primary" onClick={onOpenExport}>{t('library.new.export')}</Button>
         <Button size="sm" onClick={() => { onOpenTask('import') }}>{t('library.new.import')}</Button>
         <Button size="sm" onClick={() => { onOpenTask('market') }}>{t('library.new.market')}</Button>
         <Button size="sm" onClick={onOpenPublish}>{t('task.title.publish')}</Button>

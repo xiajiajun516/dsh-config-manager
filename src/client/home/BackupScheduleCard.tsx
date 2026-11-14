@@ -355,49 +355,54 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
             )}
           </div>
 
-          {/* 保留策略（三层）：与间隔同属草稿，随「保存」一起提交 */}
-          <div className={css.groupHeader} style={{ marginTop: 12 }}>
-            <span className={css.groupLabel} title={t('retention.hint')}>{t('retention.title')}</span>
-            <span className={css.statusSpacer} />
-            <span className={css.hint}>{!hasRetentionTiers(retentionDraft) && t('retention.tiersOff')}</span>
-          </div>
-          <div
-            className={css.actionRow}
-            style={{ marginBottom: 0 }}
-            title={hasRetentionTiers(retentionDraft) ? t('retention.keepLastHint') + ' · ' + t('retention.keepMonthlyHint') + ' · ' + t('retention.keepYearlyHint') : undefined}
-          >
-            {RETENTION_FIELDS.map((field) => {
-              const limits = RETENTION_FIELD_LIMITS[field]
-              const unit = field === 'keepLast'
-                ? t('retention.unit')
-                : field === 'keepMonthly' ? t('retention.months') : t('retention.years')
-              return (
-                /* 保留策略的三张数字卡（D-01）：标题跨满整行，「数字 + 单位」压在卡右下。
-                   卡格样式走 home 私有类 .retentionCard —— 共享 .field / .fieldLabel 本体未动。 */
-                <label key={field} className={css.retentionCard}>
-                  <span className={css.retentionCardLabel}>
-                    {field === 'keepLast'
-                      ? t('retention.keepLast')
-                      : field === 'keepMonthly' ? t('retention.keepMonthly') : t('retention.keepYearly')}
-                  </span>
-                  <input
-                    className={css.input}
-                    type="number"
-                    min={limits.min}
-                    max={limits.max}
-                    step={1}
-                    value={retentionDraft[field]}
-                    disabled={busy}
-                    onChange={(event) => {
-                      const raw = event.target.value
-                      const parsed = raw === '' ? 0 : Number(raw)
-                      updateRetention({ ...retentionDraft, [field]: Number.isFinite(parsed) ? parsed : 0 })
-                    }}
-                  />
-                  <span className={css.hint}>{unit}</span>
-                </label>
-              )
-            })}
+          {/* 保留策略（三层）：与间隔同属草稿，随「保存」一起提交。
+              issue #143：这份设置同时管远程快照与定时备份 —— 所以在这里自成一段（分隔线把
+              它从上面的设置行里划出来），标题本身说明覆盖面；豁免细则仍只在悬停 title 里。
+              仍与间隔共用同一份草稿：dirty 与「保存设置」都算上它，不另开提交入口。 */}
+          <div className={css.retentionSection}>
+            <div className={css.groupHeader}>
+              <span className={css.groupLabel} title={t('retention.hint')}>{t('retention.titleScoped')}</span>
+              <span className={css.statusSpacer} />
+              <span className={css.hint}>{!hasRetentionTiers(retentionDraft) && t('retention.tiersOff')}</span>
+            </div>
+            <div
+              className={css.actionRow}
+              style={{ marginBottom: 0 }}
+              title={hasRetentionTiers(retentionDraft) ? t('retention.keepLastHint') + ' · ' + t('retention.keepMonthlyHint') + ' · ' + t('retention.keepYearlyHint') : undefined}
+            >
+              {RETENTION_FIELDS.map((field) => {
+                const limits = RETENTION_FIELD_LIMITS[field]
+                const unit = field === 'keepLast'
+                  ? t('retention.unit')
+                  : field === 'keepMonthly' ? t('retention.months') : t('retention.years')
+                return (
+                  /* 保留策略的三张数字卡（D-01）：标题跨满整行，「数字 + 单位」压在卡右下。
+                     卡格样式走 home 私有类 .retentionCard —— 共享 .field / .fieldLabel 本体未动。 */
+                  <label key={field} className={css.retentionCard}>
+                    <span className={css.retentionCardLabel}>
+                      {field === 'keepLast'
+                        ? t('retention.keepLast')
+                        : field === 'keepMonthly' ? t('retention.keepMonthly') : t('retention.keepYearly')}
+                    </span>
+                    <input
+                      className={css.input}
+                      type="number"
+                      min={limits.min}
+                      max={limits.max}
+                      step={1}
+                      value={retentionDraft[field]}
+                      disabled={busy}
+                      onChange={(event) => {
+                        const raw = event.target.value
+                        const parsed = raw === '' ? 0 : Number(raw)
+                        updateRetention({ ...retentionDraft, [field]: Number.isFinite(parsed) ? parsed : 0 })
+                      }}
+                    />
+                    <span className={css.hint}>{unit}</span>
+                  </label>
+                )
+              })}
+            </div>
           </div>
 
           {(saved?.consecutiveFailures ?? 0) > 0 && (
