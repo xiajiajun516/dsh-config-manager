@@ -258,6 +258,11 @@ export interface SyncPushPayload {
   encryptPassword?: string;
   /** 导出真实凭据值（必须同时 encrypt=true，否则 Host 拒绝：密钥绝不明文进同步通道） */
   includeSecrets?: boolean;
+  /**
+   * issue #140：强制推送 —— 内容与远端最新快照一致时**也**新建快照。
+   * 缺省 false = 内容没变就跳过（不 upload、不建目录，报告 skipped:'unchanged'）。
+   */
+  force?: boolean;
   /* ---------------- 云端点通道（s3 / gist）字段：与宿主 parseSyncBody 的扁平形状一致 ---------------- */
   /** s3：具体兼容商（s3 / oss / cos / minio / kodo） */
   provider?: string;

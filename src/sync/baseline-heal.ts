@@ -18,6 +18,7 @@ import type { MsgFunc } from '../core/messages.ts';
 import { joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
 import { loadSyncState, resolveDeviceIdentity, saveSyncState } from './sync-state.ts';
+import type { SectionHashes } from './sync-state.ts';
 import type { SyncSnapshotMeta } from './transport.ts';
 
 export interface AdoptOwnRemoteHeadOptions {
@@ -64,6 +65,11 @@ export async function adoptOwnRemoteHead(opts: AdoptOwnRemoteHeadOptions): Promi
     if (typeof hash !== 'string' || hash === '') continue;
     state.sections[sid as SectionId] = { hash, updatedAt: meta.createdAt };
   }
+  // issue #140（G-44）：被收养的快照自己就是「远端当前观测」——它的 sections 记进独立字段。
+  // 空对象（加密快照）⇒ 删除观测：判定层因此回落 id 比较，绝不拿 state.sections 顶上。
+  const remoteHashes: SectionHashes = { ...meta.sections };
+  if (Object.keys(remoteHashes).length > 0) state.lastRemoteSections = remoteHashes;
+  else delete state.lastRemoteSections;
   state.transport = opts.transport;
   await saveSyncState(opts.stateDir, state, opts.fsx);
   opts.warnings.push(opts.msg(ancestorKnown ? 'sync.pushBaselineAdopted' : 'sync.pushBaselineAdoptedNoAncestor', {

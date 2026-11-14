@@ -585,7 +585,8 @@ export function formatLastSync(iso: string | undefined, t: UiT): string {
 /* ---------------------------------------------------------------- 报告渲染模型 */
 
 export interface PushReportView {
-  kind: 'ok' | 'error';
+  /** 'skipped' = 内容与远端最新快照一致、本轮什么都没写（issue #140；不是失败也不是「已推送」） */
+  kind: 'ok' | 'error' | 'skipped';
   headline: string;
   sections: string[];
   /**
@@ -621,6 +622,17 @@ export function pushReportView(
   if (report === null) return null;
   if (!report.ok) {
     return { kind: 'error', headline: report.message ?? t('sync.pushFailed'), sections: report.sections, counts: countsBySection, warnings: report.warnings };
+  }
+  // issue #140：内容没变时引擎不新建快照，只收养远端指针 —— 文案必须说实话，
+  // 显示「已推送 xx」会让用户以为远端多了一份快照。
+  if (report.skipped === 'unchanged') {
+    return {
+      kind: 'skipped',
+      headline: t('sync.pushSkipped', { id: report.adoptedSnapshotId ?? report.snapshotId }),
+      sections: report.sections,
+      counts: countsBySection,
+      warnings: report.warnings,
+    };
   }
   return {
     kind: 'ok',

@@ -364,6 +364,32 @@ test('config_sync_push：复用 SyncEngine.push（内存 transport），返回 s
   }
 })
 
+test('config_sync_push：内容未变 → 如实回传 skipped=unchanged（issue #140：不再造重复快照）', async () => {
+  const { deps, tmp, transport } = await makeDeps()
+  try {
+    await writeSyncConfig(deps.syncDir, { schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://github.com/u/r.git' } })
+    const tools = createModelTools(deps)
+    const first = (await tools.syncPush({ channel: 'git' })) as { ok: boolean; snapshotId: string }
+    assert.equal(first.ok, true)
+    const uploads = transport.calls.filter((c) => c === 'upload').length
+
+    const second = (await tools.syncPush({ channel: 'git' })) as {
+      ok: boolean; snapshotId: string; skipped?: string; adoptedSnapshotId?: string
+    }
+    assert.equal(second.ok, true)
+    assert.equal(second.skipped, 'unchanged', '模型必须看到「内容没变」，而不是「又推了一版」')
+    assert.equal(second.snapshotId, first.snapshotId, '沿用既有快照 id')
+    assert.equal(second.adoptedSnapshotId, first.snapshotId)
+    assert.equal(transport.calls.filter((c) => c === 'upload').length, uploads, '一次 upload 都不发')
+
+    const forced = (await tools.syncPush({ channel: 'git', force: true })) as { ok: boolean; skipped?: string }
+    assert.equal(forced.skipped, undefined, 'force 覆盖跳过判定')
+    assert.equal(transport.calls.filter((c) => c === 'upload').length, uploads + 1, 'force 才真的上传')
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
 test('config_sync_push：用户放行的可选分区必须进引擎（issue #138：显式 mcp 不再 skipNonPortable）', async () => {
   const { deps, tmp, transport, ctx } = await makeDeps()
   try {

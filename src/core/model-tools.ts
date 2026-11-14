@@ -601,6 +601,11 @@ export function createModelTools(deps: ModelToolsDeps) {
         // 否则模型会把它当成「推送成功但内容为空」继续往下走。
         ...(report.conflict === true ? { conflict: true } : {}),
         ...(report.adoptedBase === undefined ? {} : { adoptedBase: report.adoptedBase }),
+        // issue #140：内容与远端最新一致 ⇒ 引擎什么都没写（不 upload、不建目录）。
+        // 不透传的话模型会把「ok:true + snapshotId」读成「又推了一份新快照」。
+        ...(report.skipped === 'unchanged'
+          ? { skipped: 'unchanged' as const, adoptedSnapshotId: report.adoptedSnapshotId ?? report.snapshotId }
+          : {}),
         ...(report.message === undefined ? {} : { message: report.message }),
         ...(encrypt ? { passwordSource: stored === undefined ? 'argument' : 'stored' } : {}),
       }

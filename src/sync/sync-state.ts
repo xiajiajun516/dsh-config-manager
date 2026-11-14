@@ -32,6 +32,18 @@ export interface SyncSectionState {
 }
 
 /**
+ * 分区 id → 内容哈希（= hashSection 的结果）。
+ *
+ * 同一个形状服务两种**完全不同**的观测，调用方必须分清（G-44：
+ * docs/known-issues/known-gaps.md 的「祖先副本与 state.sections 一参两用」）：
+ * - `SyncState.sections`：**本机**文件最近一次基线的内容哈希（含本机尚未推送的改动）；
+ * - `SyncState.lastRemoteSections`：上一次**远端快照实际携带**的分区哈希（远端观测）；
+ * - 推送前刚导出的本地哈希（content-diff.hashSections）。
+ * 内容判定（src/sync/content-diff.ts）只接受后两者，绝不拿 state.sections 冒充远端观测。
+ */
+export type SectionHashes = Partial<Record<SectionId, string>>;
+
+/**
  * 待裁决的合并状态（基线纪律，2026-10）。
  *
  * 非空 = 上一次三方合并**仍有未裁决的冲突**，因此 lastSnapshotId 刻意**不推进**：
@@ -92,6 +104,23 @@ export interface SyncState {
    * 让冲突在下一轮重新出现（详见 PendingMerge）。
    */
   pendingMerge?: PendingMerge;
+  /**
+   * issue #140：上一次**远端快照实际携带**的分区哈希（远端观测，不是本机观测）。
+   *
+   * 用途：拉取侧判定「远端最新快照的内容是否真的变了」——只比 id 时，任何一次新推送
+   * （哪怕分区逐字相同）都会判成「有新生」，白跑 download + 三方合并。
+   *
+   * 纪律（G-44）：
+   * - 只许由「真的看到了远端快照 sections」的路径写入（推送成功 / 推送跳过收养 / 收养孤儿头 /
+   *   合并应用到某个远端快照之后）；
+   * - 指针变化但本轮没有远端观测 ⇒ 必须**删除**该字段（未知 ⇒ 调用方回落 id 比较），
+   *   绝不保留上一份观测冒充「远端现在也是这样」；
+   * - 加密快照的 sections 恒为空（transport.ts）⇒ 该字段保持缺席，判定恒为 unknown。
+   *
+   * 纯可选字段：**不提升 SYNC_STATE_SCHEMA_VERSION**（旧文件缺它 → 读回形状逐键不变；
+   * 旧版本代码读到新文件只是忽略它）。
+   */
+  lastRemoteSections?: SectionHashes;
 }
 
 /** 文件类分区判定：{ version: 1, files: [...] }（duck-typing，与 JSON 分区区分） */
@@ -165,6 +194,21 @@ function readPendingMerge(raw: unknown): PendingMerge | undefined {
   return { remoteSnapshotId: o['remoteSnapshotId'], sections: sections as SectionId[], since: o['since'] };
 }
 
+/**
+ * 读取「远端观测」（分区 id → hash）。
+ *
+ * 形状不符（损坏/被篡改）或为空对象 → undefined：空集合无法证伪任何内容，
+ * 按「没有观测」处理（调用方回落到 id 比较），绝不把空对象当成「远端什么都没有」。
+ */
+function readSectionHashes(raw: unknown): SectionHashes | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: SectionHashes = {};
+  for (const [sid, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string' && value !== '') out[sid as SectionId] = value;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** 读取同步状态；文件不存在 → 返回缺省空状态（从未同步）。
  * 旧版本文件（v1/v2）→ 在内存中迁移到当前版本（见 SYNC_STATE_SUPPORTED_VERSIONS），
  * 不在磁盘上就地升级（首次 saveSyncState 时才写回新版本）。 */
@@ -220,6 +264,10 @@ export async function loadSyncState(dir: string, fsx: SnapshotFs = createSnapsho
     ...(typeof obj['deviceName'] === 'string' && obj['deviceName'] !== '' ? { deviceName: obj['deviceName'] } : {}),
     // 基线纪律：同样「写过才回填」—— 缺席 = 无待裁决冲突（旧文件读回形状逐键不变）
     ...(readPendingMerge(obj['pendingMerge']) !== undefined ? { pendingMerge: readPendingMerge(obj['pendingMerge'])! } : {}),
+    // issue #140：远端观测同样「写过才回填」—— 缺席/空 = 未知（判定层回落 id 比较）
+    ...(readSectionHashes(obj['lastRemoteSections']) !== undefined
+      ? { lastRemoteSections: readSectionHashes(obj['lastRemoteSections'])! }
+      : {}),
   };
   const t = obj['transport'];
   if (t !== undefined) {

@@ -183,6 +183,8 @@ export const zh = {
   'syncflow.pushChanged': '有改动',
   'syncflow.pushUnchanged': '无改动',
   'syncflow.pushConfirm': '确认推送',
+  // issue #140：内容没变时缺省不新建快照；勾选 = 强制新建（与 agent 的 force 同义）
+  'syncflow.pushForce': '内容未变化也新建快照（强制推送）',
   'syncflow.pushFirstBaseline': '远端暂无快照：本次将创建首个同步基线',
   'syncflow.remoteEmptyGuide': '远端还没有任何快照：这是首次同步，先点「推送到远端」把本机配置推上去（推送会创建第一个快照），之后才能拉取。',
   // 同步模式（默认快速导出 / 高级自定义导出）
@@ -326,6 +328,8 @@ export const zh = {
   'toast.pushPreviewFailed': '推送预览失败',
   'toast.pushFailed': '推送失败',
   'toast.pushDone': '推送完成',
+  // issue #140：内容与远端最新快照一致 ⇒ 什么都没上传
+  'toast.pushSkipped': '内容未变化，已跳过',
   'toast.syncStartFailed': '从远端合并失败',
   'toast.autosyncUpdateFailed': '自动同步设置更新失败',
   'toast.autosyncUpdated': '自动同步设置已更新',
@@ -649,6 +653,7 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.pushChanged': 'Changed',
   'syncflow.pushUnchanged': 'Unchanged',
   'syncflow.pushConfirm': 'Push',
+  'syncflow.pushForce': 'Create a new snapshot even when content is unchanged (force push)',
   'syncflow.pushFirstBaseline': 'No remote snapshots yet: this push creates the first sync baseline',
   'syncflow.remoteEmptyGuide': 'No remote snapshots yet: this is the first sync — click "Push to remote" to upload your local config (that push creates the first snapshot); pulling only works afterwards.',
   // Sync mode (default quick export / advanced custom export)
@@ -787,6 +792,7 @@ export const en: Record<keyof typeof zh, string> = {
   'toast.pushPreviewFailed': 'Failed to build push preview',
   'toast.pushFailed': 'Push failed',
   'toast.pushDone': 'Push completed',
+  'toast.pushSkipped': 'No content changes — skipped',
   'toast.syncStartFailed': 'Merge from remote failed',
   'toast.autosyncUpdateFailed': 'Failed to update auto-sync settings',
   'toast.autosyncUpdated': 'Auto-sync settings updated',

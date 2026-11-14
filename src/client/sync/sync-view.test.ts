@@ -229,6 +229,18 @@ test('sync-view: push 失败报告 → error 显示引擎 message', () => {
   assert.equal(view?.headline, '全部导出失败')
 })
 
+test('sync-view: issue #140 内容未变 → skipped 头部说「已跳过」并给出沿用的远端快照', () => {
+  const report: SyncPushReport = {
+    ok: true, snapshotId: 'sync-1', sections: ['settings'], warnings: [],
+    skipped: 'unchanged', adoptedSnapshotId: 'sync-1',
+  }
+  const view = pushReportView(report, zhUiT)
+  assert.equal(view?.kind, 'skipped', '不是 ok（本轮什么都没写），也不是 error')
+  assert.match(view?.headline ?? '', /已跳过/)
+  assert.match(view?.headline ?? '', /sync-1/, '要说清沿用的是哪一份远端快照')
+  assert.deepEqual(view?.sections, ['settings'], '分区列表照常透传（用户要知道范围）')
+})
+
 test('sync-view: null 报告 → null（不渲染卡片）', () => {
   assert.equal(pushReportView(null, zhUiT), null)
   assert.equal(pullReportView(null, zhUiT), null)

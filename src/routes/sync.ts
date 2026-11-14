@@ -475,6 +475,9 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         const sessionsOpt = sections !== undefined && sections.includes('sessions') && sessions !== undefined
           ? { sessions }
           : {}
+        // issue #140：强制推送（GUI 等价入口，agent 侧早已有 force）。缺省 false = 内容与远端
+        // 最新快照一致时不新建快照（引擎返回 skipped:'unchanged'）；true 时即使一致也新建。
+        const force = body['force'] === true
         // P0-②：push 前只读预览（body.preview === true → 不写远端，只返回「将推送什么」）
         const preview = body['preview'] === true
         // 分支调用以保证 withTimeout 的泛型结果类型正确（SyncPushReport | SyncPushPreview）
@@ -494,6 +497,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
                 ...(sections === undefined ? {} : { sections }),
                 ...sessionsOpt,
                 ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets, password: effectiveEncryptPassword ?? '' } : {}),
+                ...(force ? { force: true } : {}),
               }),
               ROUTE_TIMEOUT_MS,
               msg('host.syncPushTimeout'),
