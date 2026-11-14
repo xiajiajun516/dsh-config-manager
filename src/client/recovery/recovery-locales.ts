@@ -79,7 +79,7 @@ export const zh = {
   'recovery.environment.incompatible': '环境不匹配（可能来自其他机器/安装）',
   // 预览
   'recovery.preview.title': '恢复预览',
-  'recovery.preview.hint': '以下为只读预览（零写入）。确认后才会执行恢复。',
+  'recovery.preview.hint': '只读预览 · 零写入 · 确认后才执行恢复',
   'recovery.preview.loading': '正在生成预览…',
   // 确认
   'recovery.confirm.title': '确认恢复',
@@ -405,7 +405,7 @@ export const zh = {
   /* 2026-10-10 用户第三条：预览对话框改简洁版，标题就叫「回退预览」（不再带副标题）。
      这个键只被两处预览界面使用（聊天入口的预览对话框 + 设置页回滚卡的预览弹窗），改的是同一句话。 */
   'rollback.preview.title': '回退预览',
-  'rollback.preview.hint': '以下为只读预览（零写入）。确认后才会执行回退。',
+  'rollback.preview.hint': '只读预览 · 零写入 · 确认后才执行回退',
   'rollback.preview.loading': '正在生成预览…',
   'rollback.preview.empty': '该回滚点没有可回退的内容。',
   'rollback.preview.none': '该点没有可回退的内容',
@@ -554,7 +554,7 @@ export const zh = {
   'sessions.layout.planEmpty': '计划里没有需要执行的动作。',
   'sessions.layout.apiMissing': '当前接口不支持布局归位（缺少 layoutRepairSessions）；请更新插件后重试 —— 本机未做任何改动。',
   'sessions.layout.planTitle': '布局归位计划（只读，尚未改动任何文件）',
-  'sessions.layout.planReadOnly': '计划只读：确认前零写入。',
+  'sessions.layout.planReadOnly': '只读预览 · 零写入',
   // 空态：入口在扫过之后始终可见，本机没有这一档时必须自己说明白（否则用户以为功能不存在）
   'sessions.layout.noCandidates': '本机没有需要归位或隔离的会话。',
   'sessions.layout.summary': '归位 {move} · 隔离 {quarantine}',
@@ -661,7 +661,7 @@ export const en: Record<keyof typeof zh, string> = {
   'recovery.environment.compatible': 'Environment matches',
   'recovery.environment.incompatible': 'Environment mismatch (may be from another machine / install)',
   'recovery.preview.title': 'Recovery preview',
-  'recovery.preview.hint': 'Read-only preview below (zero writes). Recovery only runs after confirmation.',
+  'recovery.preview.hint': 'Read-only preview · zero writes · recovery runs after you confirm',
   'recovery.preview.loading': 'Generating preview…',
   'recovery.confirm.title': 'Confirm recovery',
   'recovery.confirm.message': 'Recovery / rollback is a dangerous operation. Confirm execution? Current files are backed up to a safe location first.',
@@ -972,7 +972,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.warn.unknown': 'Unrecognized warning (technical detail below)',
   'rollback.preview': 'Preview rewind',
   'rollback.preview.title': 'Rewind preview',
-  'rollback.preview.hint': 'Read-only preview below (zero writes). The rewind only runs after you confirm.',
+  'rollback.preview.hint': 'Read-only preview · zero writes · the rewind runs after you confirm',
   'rollback.preview.loading': 'Generating preview…',
   'rollback.preview.empty': 'This rollback point has nothing to restore.',
   'rollback.preview.none': 'This point has nothing to restore',
@@ -1097,7 +1097,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sessions.layout.planEmpty': 'The plan has no action to run.',
   'sessions.layout.apiMissing': 'This client does not support layout repair (layoutRepairSessions is missing); update the plugin and retry -- nothing was changed on this machine.',
   'sessions.layout.planTitle': 'Layout repair plan (read-only, nothing changed yet)',
-  'sessions.layout.planReadOnly': 'The plan is read-only: zero writes before you confirm.',
+  'sessions.layout.planReadOnly': 'Read-only preview · zero writes',
   'sessions.layout.noCandidates': 'No sessions need relocating or quarantining on this machine.',
   'sessions.layout.summary': 'Relocate {move} · quarantine {quarantine}',
   'sessions.layout.planSkipped': '{count} report-only',

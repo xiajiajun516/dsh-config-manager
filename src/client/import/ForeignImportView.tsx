@@ -305,7 +305,7 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
       {/* 产包结果（成功后才出现）：让用户在进向导前先看到「包里有什么」 */}
       {produced !== null && (
         <Card>
-          <div className={css.groupLabel}>{t('foreign.previewTitle')} <InfoHint text={t('foreign.previewDryRun')} label={t('common.infoHint')} /></div>
+          <div className={css.groupLabel}>{t('foreign.previewTitle')} <span className={css.hint}>{t('foreign.previewDryRun')}</span></div>
           <div className={css.statRow}>
             <Badge kind="ok">
               {t('foreign.previewSections', { sections: produced.sections.map(sectionLabeler(t)).join(' · ') })}

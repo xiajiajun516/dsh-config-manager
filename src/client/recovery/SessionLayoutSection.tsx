@@ -178,7 +178,7 @@ export function SessionLayoutSection({ recoveryApi, t, response, onScan }: Sessi
         <div className={css.shPanel}>
           <div className={css.shPanelHead}>
             <span className={css.shPanelTitle}>{t('sessions.layout.planTitle')}</span>
-            <InfoHint text={t('sessions.layout.planReadOnly')} label={t('common.infoHint')} />
+            <span className={css.hint}>{t('sessions.layout.planReadOnly')}</span>
           </div>
           <div className={css.statRow}>
             <Badge kind="info">{t('sessions.layout.summary', { move: String(plan.summary.move), quarantine: String(plan.summary.quarantine) })}</Badge>

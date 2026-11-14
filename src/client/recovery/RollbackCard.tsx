@@ -727,12 +727,13 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
       )}
 
       {/* 预览 / 回退（同一弹窗：先只读预览 + 三选一范围，执行后就地显示逐段结果） */}
+      {/* 「只读 / 零写入」常驻标题右侧（原 ⓘ 的位置）：这是「点了也不会改动磁盘」的唯一提示 */}
       <Modal open={target !== null} onClose={closePreview} title={t('rollback.preview')} wide busy={busy}>
         <Modal.Header
           title={t('rollback.preview.title')}
           onClose={closePreview}
           closeLabel={t('common.close')}
-          trailing={<InfoHint text={t('rollback.preview.hint')} label={t('common.infoHint')} />}
+          trailing={<span className={css.hint}>{t('rollback.preview.hint')}</span>}
         />
         <Modal.Body scroll>
         {previewLoading && <Spinner label={t('rollback.preview.loading')} />}

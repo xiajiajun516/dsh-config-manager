@@ -678,9 +678,9 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
                 <>
                   <div className={css.statRow}>
                     <span className={css.groupLabel}>{t('recovery.preview.title')}</span>
-                    {/* recovery.preview.hint 属「预览为什么只读 / 什么时候才真执行」（MOVE 类）：收进 ⓘ。
-                        危险动作的完整说明仍在确认弹窗（ConfirmDialog）里常驻。 */}
-                    <InfoHint text={t('recovery.preview.hint')} label={t('common.infoHint')} />
+                    {/* 「只读 / 零写入 / 确认后才执行」是不可逆边界，属于决策依据 ⇒ 常驻标题后缀，
+                        不藏进 ⓘ（2026-11-14 用户要求：能从标题读懂的信息不进 ⓘ）。 */}
+                    <span className={css.hint}>{t('recovery.preview.hint')}</span>
                   </div>
                   {previewView.snapshotVerdict !== null && (
                     <div className={css.kvRow}>

@@ -111,8 +111,6 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
         title={t('mode.pickerTitle')}
         closeLabel={t('common.close')}
         onClose={onClose}
-        // 弹窗级说明（哪些分区会被带走）：贴在标题右边，不单独成行
-        trailing={<InfoHint text={t('mode.sectionsHint')} label={t('common.infoHint')} />}
       />
       <Modal.Body scroll style={{ maxHeight: '66vh' }}>
         {catalog.length === 0 ? (

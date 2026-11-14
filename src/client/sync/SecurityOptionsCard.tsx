@@ -28,7 +28,7 @@ export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncl
     <Card>
       <span className={css.groupLabel}>{t('mode.security')}</span>
       {/* 说明性文案一律进 ⓘ（2026-10-12 用户要求：卡里只留勾选项与控件）。
-          「加密方式 + 密码存哪 + 自动同步跳过加密快照」两句合成同一颗 ⓘ。 */}
+          「加密方式 + 密码存哪 + 自动同步跳过加密快照」原先是两句拼接，2026-11-14 合成一个键。 */}
       <div className={css.controlRow}>
         <Checkbox
           checked={settings.encrypt}
@@ -36,7 +36,7 @@ export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncl
           label={<span className={css.categoryName}>{t('mode.encrypt')}</span>}
         />
         <InfoHint
-          text={t('mode.encryptHint') + ' ' + t('mode.encryptAutosyncNotice')}
+          text={t('mode.encryptHint')}
           label={t('common.infoHint')}
         />
       </div>

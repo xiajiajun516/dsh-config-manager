@@ -93,7 +93,11 @@ interface KeepPin {
  *  2026-11-14 用户要求「只把用户从名字读不出来的东西放进 ⓘ」：删 10 条「把控件名换句话」的说明
  *  （channel.perChannelHint / webdav.presetHint / webdav.usernameHint / cloud.providerHint(无 pin) /
  *  channel.openHint / mode.hint / import.conflicts.hint / myconfigs.update.zipHint /
- *  myconfigs.upload.form.nameHint / profiles.list.hint / about.feedbackHint）→ 83 → 67。 */
+ *  myconfigs.upload.form.nameHint / profiles.list.hint / about.feedbackHint）→ 83 → 67；
+ *  2026-11-14 第二轮（结构类）：「只读预览 · 零写入」四兄弟（recovery.preview.hint / rollback.preview.hint /
+ *  sessions.layout.planReadOnly / foreign.previewDryRun）改成标题后缀常驻；mode.sectionsHint 的「默认不同步」
+ *  写进分区徽章（mode.sectionPortable / DeviceSpecific / PlatformSpecific）；mode.encryptAutosyncNotice 并进
+ *  mode.encryptHint → 67 → 61。 */
 const MOVE_PINS: readonly MovePin[] = [
   // t1：common/
   { key: 'runs.retentionHint', file: 'src/client/common/RunsCenter.tsx', kind: '机制' },
@@ -104,7 +108,6 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'webdav.urlHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
   { key: 'mode.sessionsPickHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '机制' },
   { key: 'mode.sessionsLimitHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '输入规则' },
-  { key: 'mode.sectionsHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '机制' },
   // 2026-11-01 用户要求：删掉两处「保存/即时生效」ⓘ（弹窗底部与同步页分区行）——
   // 它们在解释用户无从选择的事，MOVE 台账随之退出 2 条。
   { key: 'autosync.description', file: 'src/client/sync/AutosyncCard.tsx', kind: '机制' },
@@ -134,7 +137,6 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'profiles.create.hint', file: 'src/client/environment/EnvironmentPanel.tsx', kind: '机制' },
   // t5：recovery/
   { key: 'sessions.desc', file: 'src/client/recovery/SessionHealthDialog.tsx', kind: '机制' },
-  { key: 'recovery.preview.hint', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
   // t7（2026-10-12 用户要求「所有描述都收进 ⓘ」）：页级 / 分区级副标题 + 卡片 / 字段说明。
   // 判定口径见 DESIGN.md §7（本次把原 KEEP-2 的**静态安全说明**与 KEEP-7 的**静态副标题**一并纳入 MOVE；
   // 动态校验错误 / 状态 / 空态 / 禁用原因 / 确认弹窗内的危险操作说明仍常驻）。
@@ -143,7 +145,6 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'section.description', file: 'src/client/market/MarketPanel.tsx', kind: '机制' },
   { key: 'history.subtitle', file: 'src/client/history/HistoryPanel.tsx', kind: '机制' },
   { key: 'rollback.desc', file: 'src/client/recovery/RollbackCard.tsx', kind: '机制' },
-  { key: 'rollback.preview.hint', file: 'src/client/recovery/RollbackCard.tsx', kind: '机制' },
   { key: 'import.select.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.consult.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.decryptArchive.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
@@ -152,9 +153,7 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'import.picker.hint', file: 'src/client/import/ImportWizardView.tsx', kind: '机制' },
   { key: 'foreign.source.hint', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
   { key: 'foreign.lossy.hint', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
-  { key: 'foreign.previewDryRun', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
   { key: 'mode.encryptHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
-  { key: 'mode.encryptAutosyncNotice', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '边界' },
   { key: 'mode.includeSecretsHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
   { key: 'mode.deletePluginsHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '边界' },
   { key: 'mode.passwordSavedHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
@@ -166,7 +165,6 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'recovery.safeMode.detail', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
   { key: 'sessions.repair.desc', file: 'src/client/recovery/SessionHealthDialog.tsx', kind: '机制' },
   { key: 'recovery.rescue.desc', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
-  { key: 'sessions.layout.planReadOnly', file: 'src/client/recovery/SessionLayoutSection.tsx', kind: '边界' },
   { key: 'recovery.incomplete.hint', file: 'src/client/recovery/IncompleteCopiesSection.tsx', kind: '机制' },
   { key: 'repoPicker.privateOnly', file: 'src/client/sync/SyncRepositoryPicker.tsx', kind: '输入规则' },
   { key: 'config.tokenHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
@@ -383,7 +381,7 @@ function parseInfoHintEntry(rel: string): { zh: string | undefined; en: string |
   return { zh: values[0], en: values[1], count: values.length };
 }
 
-test('t6-1 MOVE：67 个说明键都已收进 ⓘ（逐字复用原键）且不再有可见说明行', () => {
+test('t6-1 MOVE：61 个说明键都已收进 ⓘ（逐字复用原键）且不再有可见说明行', () => {
   const files = readClientSources();
   // 扫描范围自检：客户端源码至少覆盖 t6 涉及的面板目录
   const dirs = new Set(MOVE_PINS.map((p) => p.file.split('/').slice(0, 3).join('/')));
@@ -395,7 +393,7 @@ test('t6-1 MOVE：67 个说明键都已收进 ⓘ（逐字复用原键）且不�
   // 2026-11-01：导入选择页的「从其它 agent 导入」按钮与其 ⓘ 一并移除（首页已有直达入口）⇒ 79 降到 78。
   // 2026-11-14 用户要求「页面尽可能简洁」：删 `config.saveHint`（表单本就自动保存，手动按钮已删）
   // 与 `snapshots.selectHint`（恢复计划弹窗里「选择快照…」是死句，快照早已选定）⇒ 78 降到 77。
-  assert.ok(MOVE_PINS.length === 67, 'MOVE 清单长度应为 67（实际 ' + String(MOVE_PINS.length) + '）');
+  assert.ok(MOVE_PINS.length === 61, 'MOVE 清单长度应为 61（实际 ' + String(MOVE_PINS.length) + '）');
   assert.ok(
     MOVE_PINS.filter((p) => p.kind === '输入规则').length >= 5,
     '输入规则类 MOVE 至少 5 处（config.repoUrlHint / webdav.urlHint / mode.sessionsLimitHint / retention.keep*Hint / export.fileNameHint）',

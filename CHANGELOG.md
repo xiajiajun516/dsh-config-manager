@@ -31,6 +31,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 ### 🆕 新增 · Added
 
 - **写回补丁前先检查配置项的键名**：键名会被主程序读成数字、布尔或空（`007`、`True`、`~` 这类），或者干脆是空键名（会让主程序整份配置读不出来）时，这一项不再被写入，导入结果直接告诉你哪个键、改成加引号的写法；同一批里其它项照常导入，不会因为一个坏键全部回滚。（issue #137）
+- **手机端也能用配置管家（dsh-Go 原生插件）**：在 dsh-Go 1.0.16 及以上的「全部功能 → 配置管家」里就能看版本与同步健康、把备份导出到手机的 DSH-Go 下载目录、导入 ZIP（先试运行，冲突逐项裁决）、拉取并应用同步差异、预览并执行恢复，不必再打开网页版；加密备份、缺凭据的项和远程主机模式会明确让你到电脑端处理。
+  **Config Manager now lives in the dsh-Go app (native plugin)**: on dsh-Go 1.0.16 and newer, "All features → Config Manager" shows version and sync health, exports a backup into the phone's DSH-Go download folder, imports a ZIP (dry run first, conflicts decided item by item), pulls and applies sync differences, and previews then runs a restore without opening the web UI; encrypted backups, items missing credentials and remote-host mode tell you to finish those on the desktop.
+
   **Patch write-back now checks config key names before writing**: when a key would be read by the host as a number, a boolean or null (`007`, `True` or `~`, for instance), or when it is an empty key that makes the host fail to parse the whole file, that item is skipped instead of written and the import result names the key and the quoted form to use; the other items in the same import still apply, so one bad key never rolls everything back. (issue #137)
 
 ### 🔧 变更 · Changed
@@ -52,6 +55,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **确认弹窗的按钮次序统一为「取消在左、确认在右」**：以前删除/停止这类二次确认弹窗把确认放在左边，而其他弹窗是「取消 … 主操作」，两套次序并存容易点错；现在全站一致，初始焦点仍然落在取消上（误触保护不变）。
   **Confirm dialogs now put Cancel on the left and the primary action on the right**: destructive confirmations used to reverse that order compared with every other dialog; the whole product is consistent now, and focus still starts on Cancel so a stray Enter never fires the destructive action.
 
+- **「只读预览 · 零写入」直接写在标题后面**：恢复、回退、会话整理计划与外部导入预览这四处，不用先点开 ⓘ 才知道「现在这一步不会改动磁盘、要确认才执行」。
+  **"Read-only preview · zero writes" now sits right next to the heading**: on recovery, rewind, the session-layout plan and the foreign-import preview you no longer have to open an ⓘ to learn that this step writes nothing until you confirm.
+- **同步分区直接标出默认参与状态**：「可移植 · 默认同步」与「平台相关 / 设备相关 · 默认不同步」，勾选前就知道哪些分区要自己动手才会同步。
+  **Sync sections now state their default**: "Portable · synced by default" versus "Platform-dependent / Device-specific · off by default", so you can see which sections need a manual tick before you start ticking.
 ### 🗑️ 移除 · Removed
 
 - **同步通道配置弹窗去掉了「立即保存」按钮**：表单本来就是改完即存，按钮既改变不了结果也给不出新信息；现在关掉弹窗再进来，值还在，成功时标题行只闪过一枚「已保存」徽章。
