@@ -109,8 +109,8 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'config.repoUrlHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
   { key: 'github.description', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '机制' },
   { key: 'webdav.urlHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
-  { key: 'mode.sessionsPickHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '机制' },
-  { key: 'mode.sessionsLimitHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '输入规则' },
+  { key: 'mode.sessionsPickHint', file: 'src/client/sync/SyncSettingsDialog.tsx', kind: '机制' },
+  { key: 'mode.sessionsLimitHint', file: 'src/client/sync/SyncSettingsDialog.tsx', kind: '输入规则' },
   // 2026-11-01 用户要求：删掉两处「保存/即时生效」ⓘ（弹窗底部与同步页分区行）——
   // 它们在解释用户无从选择的事，MOVE 台账随之退出 2 条。
   { key: 'autosync.description', file: 'src/client/sync/AutosyncCard.tsx', kind: '机制' },
@@ -153,10 +153,10 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'import.picker.hint', file: 'src/client/import/ImportWizardView.tsx', kind: '机制' },
   { key: 'foreign.source.hint', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
   { key: 'foreign.lossy.hint', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
-  { key: 'mode.encryptHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
-  { key: 'mode.includeSecretsHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
-  { key: 'mode.deletePluginsHint', file: 'src/client/sync/SyncSectionPickerDialog.tsx', kind: '边界' },
-  { key: 'mode.decryptPasswordHint', file: 'src/client/sync/DecryptPasswordCard.tsx', kind: '机制' },
+  { key: 'mode.encryptHint', file: 'src/client/sync/SyncSecuritySection.tsx', kind: '机制' },
+  { key: 'mode.includeSecretsHint', file: 'src/client/sync/SyncSecuritySection.tsx', kind: '机制' },
+  { key: 'mode.deletePluginsHint', file: 'src/client/sync/SyncSettingsDialog.tsx', kind: '边界' },
+  { key: 'mode.decryptPasswordHint', file: 'src/client/sync/SyncSecuritySection.tsx', kind: '机制' },
   { key: 'export.encryptHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
   { key: 'export.includeSecretsHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
   { key: 'diskUsage.clean.hint', file: 'src/client/environment/maintenance/DiskUsageCard.tsx', kind: '边界' },
@@ -202,8 +202,7 @@ const KEEP_PINS: readonly KeepPin[] = [
   { key: 'backupFiles.empty', file: 'src/client/library/LibraryPanel.tsx', kind: '空态' },
   { key: 'runs.empty', file: 'src/client/common/RunsCenter.tsx', kind: '空态' },
   // ③状态 / 等待 / 计数
-  { key: 'mode.decryptPasswordSaved', file: 'src/client/sync/DecryptPasswordCard.tsx', kind: '状态' },
-  { key: 'syncflow.noSnapshots', file: 'src/client/sync/SyncPanel.tsx', kind: '状态' },
+  { key: 'mode.decryptPasswordSaved', file: 'src/client/sync/SyncSecuritySection.tsx', kind: '状态' },
   { key: 'history.corruptedCount', file: 'src/client/history/HistoryPanel.tsx', kind: '状态' },
   // v3：首页的「分区构成卡」已按 §7 移出（其等价合计在导出流程的「本次将导出」构成卡里，
   // 走 export.composition* 键）。本键随卡片删除，不再是任何界面的渲染点 —— 故从 KEEP 台账移除。

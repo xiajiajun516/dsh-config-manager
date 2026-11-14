@@ -141,11 +141,6 @@ export const zh = {
   // 阶段文案：一键同步先拉远端快照做只读合并预览（最慢的一步），必须有可见反馈
   'syncflow.checkingRemote': '正在检查远端变更…',
   'syncflow.syncFailed': '同步失败',
-  'syncflow.snapshotOption': '（{date} · {count} 分区）',
-  'syncflow.selectSnapshot': '选择历史快照',
-  'syncflow.refreshSnapshots': '刷新快照列表',
-  'syncflow.latestSnapshot': '最新快照',
-  'syncflow.noSnapshots': '远端暂无快照',
   'syncflow.confirmImport': '确认导入',
   'syncflow.cancel': '取消',
   'syncflow.adoptRemote': '采用远端',
@@ -207,8 +202,16 @@ export const zh = {
   'mode.pickerHint': '改动即时生效并保存（关闭弹窗即完成）。',
   'mode.pickerBack': '返回分区列表',
   'mode.pickerDone': '完成',
+  // 同步设置弹窗（2026-11-14 用户要求：分区 / 加密 / 解密三块收进一个弹窗，页面只留摘要行）
+  'mode.settingsTitle': '同步设置',
+  'mode.settingsOpen': '设置',
+  'mode.tabContent': '同步内容',
+  'mode.tabSecurity': '加密与密码',
+  // 摘要行徽章：push 前必须看见「这份快照加不加密码」
+  'mode.encryptOn': '加密已开',
+  'mode.encryptOff': '未加密',
   // 加密与密钥导出（手动推送；自动同步恒推普通快照、遇加密快照跳过）
-  'mode.security': '加密与密钥导出（安全选项）',
+  'mode.security': '加密与密钥导出',
   'mode.encrypt': '加密备份',
   'mode.encryptHint': '用密码加密同步快照（AES-256-GCM）。密码存在本机 DSH 凭据库（~/.dsh/.credentials.yaml）长期复用：不写进同步文件、日志或备份（除非同时勾选「导出密钥」）。自动同步没有密码，遇到加密快照会跳过并在同步历史提示。',
   'mode.password': '加密密码',
@@ -465,8 +468,6 @@ export const zh = {
   'probe.snapshotCount': '远端现有快照：{count} 份',
   // 「不支持自检」= 能力边界（不是故障）：中性结论一句，绝不显示「操作失败」
   'probe.unsupported': '该通道不提供连通性自检',
-  // ---- cloud-sync 借鉴项 ⑥：快照的推送方设备（旧快照没有该字段 → 不显示设备行）----
-  'syncflow.snapshotDevice': '由 {device} 推送',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -593,11 +594,6 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.syncing': 'Syncing…',
   'syncflow.checkingRemote': 'Checking remote changes…',
   'syncflow.syncFailed': 'Sync failed',
-  'syncflow.snapshotOption': '({date} · {count} sections)',
-  'syncflow.selectSnapshot': 'Select snapshot',
-  'syncflow.refreshSnapshots': 'Refresh snapshots',
-  'syncflow.latestSnapshot': 'Latest snapshot',
-  'syncflow.noSnapshots': 'No remote snapshots',
   'syncflow.confirmImport': 'Confirm import',
   'syncflow.cancel': 'Cancel',
   'syncflow.adoptRemote': 'Adopt remote',
@@ -659,8 +655,16 @@ export const en: Record<keyof typeof zh, string> = {
   'mode.pickerHint': 'Changes apply and are saved immediately (closing the dialog finishes the task).',
   'mode.pickerBack': 'Back to sections',
   'mode.pickerDone': 'Done',
+  // Sync settings dialog (2026-11-14: sections / encryption / decryption moved into one dialog; the page keeps one summary row)
+  'mode.settingsTitle': 'Sync Settings',
+  'mode.settingsOpen': 'Settings',
+  'mode.tabContent': 'Content',
+  'mode.tabSecurity': 'Encryption & passwords',
+  // Summary badge: whether this snapshot is encrypted must be visible before pushing
+  'mode.encryptOn': 'Encrypted',
+  'mode.encryptOff': 'Not encrypted',
   // Encryption & secret export (manual push only; auto sync always pushes plain snapshots and skips encrypted ones)
-  'mode.security': 'Encryption & Secret Export (Security Options)',
+  'mode.security': 'Encryption & Secret Export',
   'mode.encrypt': 'Encrypt backup',
   'mode.encryptHint': 'Encrypt the sync snapshot with a password (AES-256-GCM). The password is kept in the local DSH credential store (~/.dsh/.credentials.yaml) for reuse: it is never written to sync files, logs or backups (unless "Export secrets" is checked together with encryption). Auto sync has no password, so it skips encrypted snapshots and reports them in sync history.',
   'mode.password': 'Encryption password',
@@ -910,8 +914,6 @@ export const en: Record<keyof typeof zh, string> = {
   'probe.snapshotCount': 'Snapshots on the remote: {count}',
   // "Unsupported" is a capability boundary, not a failure: neutral wording, never "operation failed"
   'probe.unsupported': 'This channel does not offer a connectivity self-check',
-  // ---- cloud-sync borrowing ⑥: device that pushed each snapshot (old snapshots have no such field, so no device line is shown) ----
-  'syncflow.snapshotDevice': 'Pushed by {device}',
 };
 
 /** 字典键联合（注册处 compile-time 校验） */

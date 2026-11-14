@@ -1,34 +1,37 @@
 /**
- * t42 物理拆分（从 SyncSettingsView.tsx 拆出的渲染段，同领域目录平铺；v2 第 5 步主文件改名 SyncPanel.tsx）。
+ * 加密与密钥导出 + 解密密码（原来是两张独立的 Card：SecurityOptionsCard / DecryptPasswordCard）。
+ * 2026-11-14 用户要求：三块设置收进**一个**弹窗，页面只剩摘要行 —— 两张卡因此不再是卡，
+ * 而是弹窗里的两段（`.dialogSection` + 段间分隔线），由 SyncSettingsDialog 的第二页签承载。
  *
- * 约定：只接收「渲染所需的数据 + 回调」；React 状态、副作用与网络调用仍由
- * SyncPanel 持有（单一状态源）；可测纯逻辑在 src/ui/sync-settings-view.ts。
+ * 为什么写方向（加密密码）与读方向（解密密码）同页：它们服务同一份加密快照，一写一读；
+ * 但两段各有自己的标题与 ⓘ —— 分开表达「给远端加密」与「读远端的加密」，不混成一个密码。
+ *
+ * 约定同其余渲染段（t42）：只看渲染所需字段 + 回调；联动规则在 ui/sync-settings-view.ts 的
+ * encryptToggle / includeSecretsToggle。
  */
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
-import { Card, Checkbox } from '../common/ui.tsx'
+import { Badge, Button, Checkbox } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import type { ChannelSyncState } from './sync-view.ts'
 import type { SyncChannelSettingsPatch } from '../../ui/sync-settings-view.ts'
 import css from '../config-manager.module.css'
 
-/**
- * 加密与密钥导出（当前通道手动推送；仿「导出备份·自定义模式」安全选项）。
- * 只看渲染所需字段 + 回调；联动规则在 ui/sync-settings-view.ts 的 encryptToggle/includeSecretsToggle。
- */
-export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncludeSecrets, onPatchSettings, onPersistEncryptPassword }: {
+export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncludeSecrets, onPatchSettings, onPersistEncryptPassword, onPersistDecryptPassword, onClearSavedPassword }: {
   t: TranslateNS<'config-manager-sync'>
-  settings: Pick<ChannelSyncState, 'encrypt' | 'includeSecrets' | 'encryptPassword' | 'encryptPasswordConfirm' | 'encryptPasswordSaved'>
+  settings: Pick<ChannelSyncState, 'encrypt' | 'includeSecrets' | 'encryptPassword' | 'encryptPasswordConfirm' | 'encryptPasswordSaved' | 'decryptPassword' | 'decryptPasswordSaved'>
   onToggleEncrypt: (next: boolean) => void
   onToggleIncludeSecrets: (next: boolean) => void
   onPatchSettings: (patch: SyncChannelSettingsPatch) => void
   onPersistEncryptPassword: () => void
+  onPersistDecryptPassword: () => void
+  onClearSavedPassword: () => void
 }) {
   return (
-    <Card>
+    <div className={css.dialogSection}>
       <span className={css.groupLabel}>{t('mode.security')}</span>
       {/* 说明性文案一律进 ⓘ（2026-10-12 用户要求：卡里只留勾选项与控件）。
-          「加密方式 + 密码存哪 + 自动同步跳过加密快照」原先是两句拼接，2026-11-14 合成一个键。 */}
+          「加密方式 + 密码存哪 + 自动同步跳过加密快照」在 2026-11-14 合成一个键。 */}
       <div className={css.controlRow}>
         <Checkbox
           checked={settings.encrypt}
@@ -90,6 +93,30 @@ export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncl
         />
         <InfoHint text={t('mode.includeSecretsHint')} label={t('common.infoHint')} />
       </div>
-    </Card>
+      {/* 段间分隔：读方向（拉取加密快照）与写方向（给远端加密）各自成段，但同页 —— 它们
+          服务同一份加密快照，分开在两页会让用户以为要用两个密码。 */}
+      <div className={css.dialogSectionDivide} />
+      <div className={css.field}>
+        <span className={css.fieldLabel}>{t('mode.decryptPassword')} <InfoHint text={t('mode.decryptPasswordHint')} label={t('common.infoHint')} /></span>
+        <input aria-label={t('mode.decryptPassword')}
+          type="password"
+          className={css.input}
+          value={settings.decryptPassword}
+          autoComplete="off"
+          placeholder={settings.decryptPasswordSaved ? t('mode.decryptPasswordPlaceholder') : undefined}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => { onPatchSettings({ decryptPassword: e.target.value }) }}
+          onBlur={onPersistDecryptPassword}
+        />
+      </div>
+      {settings.decryptPasswordSaved && (
+        <div className={css.actionRow}>
+          <Badge kind="ok">{t('mode.decryptPasswordSaved')}</Badge>
+          {/* 危险语义：删除本机已保存的密码（不可逆，用户主动操作） */}
+          <Button size="sm" variant="danger" onClick={onClearSavedPassword}>
+            {t('mode.clearSavedPassword')}
+          </Button>
+        </div>
+      )}
+    </div>
   )
 }

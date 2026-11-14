@@ -44,11 +44,9 @@ import type { ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts'
 import type { SectionId } from '../../schema/types.ts'
-import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, SectionTitle } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
-import { Select } from '../common/Select.tsx'
-import { RefreshIcon } from '../common/Icon.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
 import { Modal } from '../common/Modal.tsx'
@@ -88,18 +86,15 @@ import { SyncChannelEntryCard } from './SyncChannelEntryCard.tsx'
 import { AddChannelCard } from './AddChannelCard.tsx'
 import { ChannelConfigDialog } from './ChannelConfigDialog.tsx'
 import { ChannelClearConfirmDialog } from './ChannelClearConfirmDialog.tsx'
-import { SyncSectionPickerDialog } from './SyncSectionPickerDialog.tsx'
+import { SyncSettingsDialog } from './SyncSettingsDialog.tsx'
 import type { SelectionSection } from '../../ui/selection-model.ts'
 import type { ExportPreviewResponse } from '../api.ts'
-import { SecurityOptionsCard } from './SecurityOptionsCard.tsx'
-import { DecryptPasswordCard } from './DecryptPasswordCard.tsx'
 import { AutosyncCard } from './AutosyncCard.tsx'
 import { WorkDirCard } from './WorkDirCard.tsx'
 import { Collapse } from '../common/Motion.tsx'
 import { SyncLogList } from './SyncLogList.tsx'
 import { UnreadableSnapshotsBanner } from './UnreadableSnapshotsBanner.tsx'
 import { SyncProbeRow } from './SyncProbeRow.tsx'
-import { deviceLabel } from './remote-device-view.ts'
 import { PushPreviewCard } from './PushPreviewCard.tsx'
 import { PushReportSections } from './PushReportSections.tsx'
 import { MergeModal } from './MergeModal.tsx'
@@ -346,8 +341,11 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const [mergeSeed, setMergeSeed] = useState<{ channel: SyncChannel; preview: MergePreviewResponse } | null>(null)
   /** 一键同步阶段（null = 空闲）：'preview' 拉远端快照预览、'sync' 差异确认/导入；只驱动文案 */
   const [syncPhase, setSyncPhase] = useState<'preview' | 'sync' | null>(null)
-  /** 同步分区选择弹窗开关（瞬态 UI：模式与勾选在弹窗内即时生效并持久化，关闭即完成） */
-  const [sectionPickerOpen, setSectionPickerOpen] = useState(false)
+  /**
+   * 同步设置弹窗开关（2026-11-14 用户要求：同步分区 / 加密与密钥导出 / 解密密码三块收进
+   * 一个弹窗，页面只剩一行摘要）。瞬态 UI：改动在弹窗内即时生效并持久化，关闭即完成。
+   */
+  const [settingsOpen, setSettingsOpen] = useState(false)
   /**
    * P0-3：会话单元清单（逐会话勾选的数据源）。
    *
@@ -380,20 +378,20 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
 
   /** 勾选会话分区 + 打开弹窗时补一次清单（清单未到货则先显示加载态）。 */
   useEffect(() => {
-    if (!sectionPickerOpen) return
+    if (!settingsOpen) return
     if (!needsSessionInventory(state.byChannel[state.channel].syncSections)) return
     void fetchSessionInventory()
     // 只在「弹窗打开」与「是否勾了会话」变化时触发；fetchSessionInventory 自身幂等
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sectionPickerOpen, state.byChannel[state.channel].syncSections])
+  }, [settingsOpen, state.byChannel[state.channel].syncSections])
 
   /**
-   * 打开同步分区弹窗：同样先切到该通道 —— 弹窗内的勾选/会话点名都写进**该通道**的切片。
-   * （§8 的关键修正：分区选择在通道内，不是全局一节。）
+   * 打开同步设置弹窗：同样先切到该通道 —— 弹窗内的勾选/会话点名/加密与密码都写进**该通道**的切片。
+   * （§8 的关键修正：这些设置属于通道，不是全局一节。）
    */
-  const openSectionPickerFor = (channel: SyncChannel): void => {
+  const openSyncSettingsFor = (channel: SyncChannel): void => {
     switchChannel(channel)
-    setSectionPickerOpen(true)
+    setSettingsOpen(true)
   }
 
   /** 会话点名清单（持久化；空数组 = 回到「最新 N 个」模式）。 */
@@ -1010,8 +1008,12 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
 
   /* ------------------------------------------------ 一键同步（方案 A） */
 
-  /** 一键同步：拉取 → 差异确认会话（先取消旧会话，再发起新会话）。 */
-  const runSync = async (snapshotId?: string): Promise<void> => {
+  /**
+   * 一键同步：拉取 → 差异确认会话（先取消旧会话，再发起新会话）。
+   * 2026-11-14：选择历史快照的下拉已移除，因此不再收 snapshotId —— 恒同步最新快照
+   * （要回到旧的某份快照，入口在产物库）。
+   */
+  const runSync = async (): Promise<void> => {
     // 清理旧的差异确认会话（避免残留临时 ZIP / 同 key 冲突）
     if (state.confirmSession !== null) {
       try { await api.cancel(state.confirmSession.syncSessionId) } catch { /* 尽力清理 */ }
@@ -1024,7 +1026,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         chState.decryptPassword !== '' ? { decryptPassword: chState.decryptPassword } : {}
       const session = await api.sync({
         ...payload(),
-        ...(snapshotId !== undefined && snapshotId !== '' ? { snapshotId } : {}),
         ...decrypt,
         // T1：预览阶段显式 `guide`（差异确认弹窗还没来得及出现，不能用缺省 abort 把用户挡在门外）；
         // 该分区的格式告警仍由分析与差异项如实呈现。阻断语义留在 apply 阶段。
@@ -1233,13 +1234,10 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         <Collapse open={ready && isChannelExpanded(channel)} id={channelContentId(channel)} className={css.syncChannelBody}>
         {ready && (
           <Card>
-            {/* 同步内容跟着通道卡走 —— autosync 与 sync-selection 都按通道独立，做成全局一节
-                会让用户以为两个通道共用一份选择（§8 的关键修正）。
-                2026-11-01：原为独立一张卡，卡内只有「9 selected」+ 一个 Choose…，右侧四百多像素
-                全空（app-screens §4.2 卡内死空间，白吃约 115px 把 Auto Sync 挤出画布）。改成本卡
-                内的选择行：它本来就是动作的前置条件（选哪些分区的改动才参与合并/推送）。 */}
-            {/* ⓘ 一律跟在**相关标题/操作的右边**（同一行）：单独成行会让卡片出现「孤零零一个图标」
-                的断行。标题内联沿用 AboutPanel / EnvironmentPanel 的既有写法（零新增样式）。 */}
+            {/* 摘要行（2026-11-14 用户要求：分区 / 加密 / 解密三块收进「同步设置」弹窗，
+                卡内只留一行）。留下的是 push 之前**必须看见**的两个判断依据：选了多少分区、
+                加密开没开 —— 不需要的说明文字一律不进这一行。设置仍按通道独立（§8），
+                点按钮前先 switchChannel，弹窗里的改动写进该通道的切片。 */}
             <div className={css.sectionPickerRow}>
               <span className={css.groupLabel}>{t('mode.title')}</span>
               <span className={css.categoryDesc}>
@@ -1247,11 +1245,16 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                   : state.catalog.length === 0 ? t('common.loading')
                     : t('mode.selectedCount', { n: String(cs.syncSections.length), total: String(state.catalog.length) })}
               </span>
-              {/* 按钮靠右成列（2026-11-01 用户要求：左描述、右按钮）。行内不再挂「已保存」ⓘ ——
-                  它在说一件用户无从选择的事（选完自然保存），与弹窗底那颗重复。 */}
-              <Button className={css.pickerBtn} onClick={() => { openSectionPickerFor(channel) }} disabled={busy}>
-                {t('mode.choose')}
-              </Button>
+              <Badge kind={cs.encrypt ? 'ok' : 'info'}>{cs.encrypt ? t('mode.encryptOn') : t('mode.encryptOff')}</Badge>
+              {/* 只读自检跟着这一行走：它服务的是「这条通道现在什么状态」。原挂在被删掉的快照行里，
+                  跟着下拉一起消失就是功能丢失，所以搬到这里（仍是最低频的诊断入口）。 */}
+              <span className={css.pickerAction}>
+                <SyncProbeRow t={t} api={api} presentation="icon" remoteReady={ready} busy={busy}
+                  body={buildSyncChannelBody({ ...formOf(state), channel })} />
+                <Button className={css.pickerBtn} onClick={() => { openSyncSettingsFor(channel) }} disabled={busy}>
+                  {t('mode.settingsOpen')}
+                </Button>
+              </span>
             </div>
             {cs.syncSections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
             {gistSessionsRiskKey(channel, cs.syncSections) !== null && <Banner kind="warn">{t(gistSessionsRiskKey(channel, cs.syncSections)!)}</Banner>}
@@ -1277,52 +1280,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             </div>
             {/* 同步在途的活动条：按钮 Spinner 只在按钮上，这条横条让「正在拉远端快照」在整张卡上可见 */}
             {syncPhase !== null && <SyncActivityBar phase={syncPhase} t={t} />}
-            {/* 选择历史快照（该通道的远端快照；缺省 = 最新）。
-                支持点击/展开即刷新，另有主动刷新按钮 —— 两个入口都保留（v1 行为不变）。 */}
-            <div className={css.snapshotPickerRow}>
-              <label className={css.field} style={{ flex: '1 1 auto', minWidth: 0 }}>
-                <span className={css.fieldLabel}>{t('syncflow.selectSnapshot')}</span>
-                <Select
-                  value={cs.selectedSnapshotId}
-                  disabled={busy}
-                  ariaLabel={t('syncflow.selectSnapshot')}
-                  onOpen={() => { void loadSnapshots(undefined, channel) }}
-                  onChange={(next) => {
-                    patchChannelOf(channel, { selectedSnapshotId: next })
-                    switchChannel(channel)
-                    void runSync(next === '' ? undefined : next)
-                  }}
-                  options={[
-                    { value: '', label: t('syncflow.latestSnapshot') },
-                    ...cs.snapshots.map((s) => ({
-                      value: s.id,
-                      label: s.id
-                        + t('syncflow.snapshotOption', { date: s.createdAt.slice(0, 10), count: String(s.sectionCount) })
-                        // ⑥ 设备身份：只有快照确实带 deviceName 时才追加（旧快照不显示占位空串）
-                        + (deviceLabel(s, (device) => t('syncflow.snapshotDevice', { device })) ?? ''),
-                    })),
-                  ]}
-                />
-              </label>
-              {/* 工具组（2026-11-01）：刷新与只读自检都是低频诊断动作、都只服务这一行，收成两枚 28px 图标
-                  按钮（与下拉同高、同组右对齐）。此前刷新是带图标的宽文字按钮，把下拉压到约 380px。 */}
-              <span className={css.pickerAction}>
-                <button type="button" className={css.iconBtn} onClick={() => { void loadSnapshots(undefined, channel, true) }}
-                  disabled={busy} aria-label={t('syncflow.refreshSnapshots')} title={t('syncflow.refreshSnapshots')}
-                  aria-busy={cs.loadingSnapshots === true || undefined}>
-                  {cs.loadingSnapshots === true ? <Spinner /> : <RefreshIcon size={16} />}
-                </button>
-                <SyncProbeRow t={t} api={api} presentation="icon" remoteReady={ready} busy={busy}
-                  body={buildSyncChannelBody({ ...formOf(state), channel })} />
-              </span>
-              {/* 空态 = 选快照这一行的状态，跟控件同排（徽章），不另占一行：
-                  此前它是 picker 下方单独一行的 hint，把下面整块内容整体顶低 4+10px。 */}
-              {cs.snapshots.length === 0 && cs.loadingSnapshots !== true && (
-                <span className={css.pickerAction}>
-                  <Badge kind="info">{t('syncflow.noSnapshots')}</Badge>
-                </span>
-              )}
-            </div>
+            {/* 2026-11-14 用户要求：选择历史快照的下拉与刷新按钮一并移除 —— 历史快照到产物库看。
+                没有「选哪一份」这个入口之后，同步恒用最新快照（runSync 不再收 snapshotId）。 */}
 
             {/* 自动同步行（按通道；文案与倒计时在卡内派生） */}
             <AutosyncCard
@@ -1336,29 +1295,9 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             />
           </Card>
         )}
-        {/* v3（P-IA-7 / §2.2-6）：加密与解密**属于这一条通道**，因此渲染在它自己的卡里。
-            此前这两张卡挂在页面级、绑定一个被「点某张卡的按钮」悄悄切换的隐式当前通道 ——
-            用户会以为四个通道共用一份加密设置。现在每张已配置的通道卡各自持有自己的凭据区，
-            所有 handler 都显式传 channel（不再读 state.channel）。 */}
-        {ready && (
-          <SecurityOptionsCard
-            t={t}
-            settings={cs}
-            onToggleEncrypt={(next) => { setEncrypt(channel, next) }}
-            onToggleIncludeSecrets={(next) => { setIncludeSecrets(channel, next) }}
-            onPatchSettings={(p) => { patchChannelOf(channel, p) }}
-            onPersistEncryptPassword={() => { void persistEncryptPassword(channel) }}
-          />
-        )}
-        {ready && (
-          <DecryptPasswordCard
-            t={t}
-            settings={cs}
-            onPatchSettings={(p) => { patchChannelOf(channel, p) }}
-            onPersistDecryptPassword={() => { void persistDecryptPassword(channel) }}
-            onClearSavedPassword={() => { clearSavedDecryptPassword(channel) }}
-          />
-        )}
+        {/* v3（P-IA-7 / §2.2-6）的教训保留：加密与解密**属于这一条通道**。
+            2026-11-14 起它们搬进「同步设置」弹窗（入口是上方摘要行的按钮），打开前先 switchChannel，
+            弹窗内每个 handler 都写该通道的切片 —— 仍然不会出现「四个通道共用一份加密设置」。 */}
         {/* issue #79：工作副本（git 专属；确认弹窗/宿主调用/回执全在 WorkDirCard.tsx） */}
         {ready && channel === 'git' && <WorkDirCard t={t} api={api} workDir={state.statusInfo?.workDir} busy={busy} onChanged={() => { void loadStatus() }} />}
         {/* issue #59：远端快照列表不完整时的常驻告知（push 报成功但列表为空时，这里是唯一线索）。
@@ -1428,9 +1367,11 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
              与页面级各渲染一次（重复表达），且页面级那张绑定的是隐式的「当前通道」。
              分区选择现在只存在于它所属的通道卡内（§2.2-6、不变量 §3-19）。 */}
 
-          {/* 同步分区弹窗（渲染段拆到 SyncSectionPickerDialog，t42） */}
-          <SyncSectionPickerDialog
-            open={sectionPickerOpen}
+          {/* 同步设置弹窗（渲染段拆到 SyncSettingsDialog / SyncSecuritySection）。
+              2026-11-14 用户要求：分区 / 加密与密钥导出 / 解密密码三块收进这一个弹窗，
+              页面只留一行摘要。内含两个页签：「同步内容」（分区 + 会话点名）与「加密与密码」。 */}
+          <SyncSettingsDialog
+            open={settingsOpen}
             t={t}
             cmT={cmT}
             uiT={uiT}
@@ -1447,7 +1388,14 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             onSessionsLimit={(value) => { setSessionsLimit(state.channel, value) }}
             onSessionsInclude={(ids) => { setSessionsInclude(state.channel, ids) }}
             onToggleDeletePlugins={(next) => { setDeletePlugins(state.channel, next) }}
-            onClose={() => { setSectionPickerOpen(false) }}
+            settings={chState}
+            onToggleEncrypt={(next) => { setEncrypt(state.channel, next) }}
+            onToggleIncludeSecrets={(next) => { setIncludeSecrets(state.channel, next) }}
+            onPatchSettings={(patchSettings) => { patchChannelOf(state.channel, patchSettings) }}
+            onPersistEncryptPassword={() => { void persistEncryptPassword(state.channel) }}
+            onPersistDecryptPassword={() => { void persistDecryptPassword(state.channel) }}
+            onClearSavedPassword={() => { clearSavedDecryptPassword(state.channel) }}
+            onClose={() => { setSettingsOpen(false) }}
           />
           {/* v3：页面级的加密/解密/快照列表卡已移入各自的通道卡（见 renderChannelCard）。 */}
           {/* 同步记录（只留操作日志）。2026-11-14 用户要求删掉原先那条「在产物库查看远端快照」

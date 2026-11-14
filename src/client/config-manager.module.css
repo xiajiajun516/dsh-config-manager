@@ -4817,36 +4817,17 @@ body {
   flex-direction: column;
 }
 
-/* 快照选择行（同步页）：下拉 + 「刷新快照列表」按钮强制同一行 ——
-   nowrap + 下拉列可收缩（minWidth:0）+ 按钮列 flex:none。
-   窄画布下宁可下拉变窄，也不让按钮换到下一行。 */
-.snapshotPickerRow {
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: nowrap;
-  gap: 8px;
-  margin-top: 10px;
-}
+/* 2026-11-14：快照选择行整套删除（用户要求移除「选择历史快照」下拉与刷新按钮，
+   历史快照到产物库看）—— 连同 .snapshotPickerRow 的三处规则与空态徽章一并移除。 */
 
-/* 下外边距归组件管理：空态提示存在时由它承担，否则由本行承担 —— 但**两者都承担时只有一份**。
-   真机反馈「选择历史快照与自动同步面板之间没有间距」：本行此前只有 margin-top，
-   下方紧贴下一张卡。现在给一个最小底部间距（与页面区块间距 10px 同档）。 */
-.snapshotPickerRow {
-  margin-bottom: 10px;
-}
-
-/* 该行内的字段标签归零底部外边距：.field 自带 margin-bottom:10px，
-   会让标签的 margin-box 比 select 低 10px，flex-end 对齐时按钮
-   被一并推低 10px（实测 select 底 1042 vs 按钮底 1052）→ 视觉上「不在一条线上」。 */
-.snapshotPickerRow .field {
-  margin-bottom: 0;
-}
-
+/* 行尾工具组（2026-11-14）：只读自检图标 + 「设置」按钮收成一组贴右 —— 与 .pickerBtn 的
+   margin-left:auto 二者选一个承担贴右：加在组上，组内按钮的 auto 自然为 0，不会把组撑开。 */
 .pickerAction {
   flex: none;
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 /* 导入日志面板 */
@@ -8359,3 +8340,50 @@ button.profileRowMain:hover {
 
 
 
+
+/* ── 同步设置弹窗（2026-11-14 用户要求：同步分区 / 加密与密钥导出 / 解密密码三块收进一个弹窗）
+   两页签的理由：12 个分区勾选已占满 720 画布首屏，安全设置若竖排在同一页会被挤出滚动区。
+   页签做成分段控件（整宽等分 + 选中换底色），不引入第二套视觉体系。 */
+.settingsTabs {
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  border-radius: var(--cm-r-3);
+  background: var(--dsw-alias-bg-layer-2);
+  margin-bottom: 12px;
+}
+.settingsTab,
+.settingsTabOn {
+  flex: 1 1 0;
+  height: 26px;
+  border: none;
+  border-radius: var(--cm-r-2);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: var(--cm-fs-sm);
+  cursor: pointer;
+}
+.settingsTab:hover {
+  color: var(--cm-text-1);
+}
+.settingsTabOn {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--cm-text-1);
+  font-weight: 500;
+}
+.settingsTab:focus-visible,
+.settingsTabOn:focus-visible {
+  outline: 2px solid var(--cm-accent);
+  outline-offset: -2px;
+}
+/* 弹窗内的一段（原来是独立 Card）：段内纵向节奏 8，段与段之间靠分隔线，不靠留白堆叠 */
+.dialogSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dialogSectionDivide {
+  height: 1px;
+  background: var(--dsw-alias-border-l1);
+  margin: 14px 0;
+}

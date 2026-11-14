@@ -56,9 +56,9 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
   const units: [string, string][] = [
     ['SyncChannelEntryCard', 'SyncChannelEntryCard.tsx'],
     ['ChannelConfigDialog', 'ChannelConfigDialog.tsx'],
-    ['SyncSectionPickerDialog', 'SyncSectionPickerDialog.tsx'],
-    ['SecurityOptionsCard', 'SecurityOptionsCard.tsx'],
-    ['DecryptPasswordCard', 'DecryptPasswordCard.tsx'],
+    // 2026-11-14 用户要求：分区 / 加密与密钥导出 / 解密密码三块收进一个弹窗（两页签），
+    // 三个旧文件（SyncSectionPickerDialog / SecurityOptionsCard / DecryptPasswordCard）合并为下面两个
+    ['SyncSettingsDialog', 'SyncSettingsDialog.tsx'],
     ['AutosyncCard', 'AutosyncCard.tsx'],
     // issue #79：工作副本卡（含确认弹窗 + 宿主调用 + 回执）自成文件，主文件只装配 —— 行数棘轮因此不必上调
     ['WorkDirCard', 'WorkDirCard.tsx'],
@@ -79,10 +79,18 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
     assert.match(unitSource, new RegExp('export function ' + name + '\\('), name + ' 必须在自己的文件里导出')
     assert.doesNotMatch(unitSource, /from '\.\/SyncPanel\.tsx'/, name + ' 不得反向 import 主文件')
   }
+  // 2026-11-14：安全段由**弹窗**装配（不是主文件），单独断言 —— 不把上面那条规则放宽成
+  // 「任一层 import 即可」，否则「弹窗不再渲染安全段」这种回退不会变红。
+  const dialogSource = readSource(fileURLToPath(new URL('./SyncSettingsDialog.tsx', import.meta.url)))
+  assert.match(dialogSource, /from '\.\/SyncSecuritySection\.tsx'/, 'SyncSecuritySection 必须从独立文件导入')
+  assert.match(dialogSource, /<SyncSecuritySection[\s/>]/, 'SyncSecuritySection 必须被弹窗渲染')
+  const securitySource = readSource(fileURLToPath(new URL('./SyncSecuritySection.tsx', import.meta.url)))
+  assert.match(securitySource, /export function SyncSecuritySection\(/, 'SyncSecuritySection 必须在自己的文件里导出')
+  assert.doesNotMatch(securitySource, /from '\.\/SyncPanel\.tsx'/, 'SyncSecuritySection 不得反向 import 主文件')
   // 已迁出的渲染不再出现在主文件（整文件级断言：搬出后必然为真，回退即变红）
   assert.doesNotMatch(viewSource, /WEBDAV_PRESETS\.map/, 'WebDAV 预设渲染必须只在 ChannelConfigDialog.tsx 里')
-  assert.doesNotMatch(viewSource, /syncSectionGroups\(/, '分组勾选渲染必须只在 SyncSectionPickerDialog.tsx 里')
-  assert.doesNotMatch(viewSource, /settings\.encryptPasswordConfirm/, '加密密码输入必须只在 SecurityOptionsCard.tsx 里')
+  assert.doesNotMatch(viewSource, /syncSectionGroups\(/, '分组勾选渲染必须只在 SyncSettingsDialog.tsx 里')
+  assert.doesNotMatch(viewSource, /settings\.encryptPasswordConfirm/, '加密密码输入必须只在 SyncSecuritySection.tsx 里')
   // 行数棘轮：主文件显著低于拆分前（1792 行 → 拆分后约 1300 行），回退合并会立刻变大
   const viewLines = viewSource.split('\n').length
   // v2 第 5 步把「当前通道」参数化并抽出 ChannelCard：行数仍须保持拆分后的量级。

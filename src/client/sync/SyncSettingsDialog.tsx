@@ -1,12 +1,15 @@
 /**
- * t42 物理拆分（从 SyncSettingsView.tsx 拆出的渲染段，同领域目录平铺；v2 第 5 步主文件改名 SyncPanel.tsx）。
+ * 同步设置弹窗（2026-11-14 用户要求：同步分区 / 加密与密钥导出 / 解密密码三块从通道卡
+ * 收进**一个**弹窗 —— 三块各自成卡会把一条通道撑成四张卡，整页读成清单。
  *
- * 约定：只接收「渲染所需的数据 + 回调」；React 状态、副作用与网络调用仍由
- * SyncPanel 持有（单一状态源）；可测纯逻辑在 src/ui/sync-settings-view.ts。
+ * 为什么是两页签而不是单页竖排：12 个分区勾选已经占满 720 画布的首屏，安全设置会被挤到
+ * 滚动区外 —— 用户点「设置」想改加密时必须先滚过所有分区。页签让每页首屏见底、高度稳定。
  *
- * P0-3：新增「逐会话勾选」视图 —— 同一个 Modal 内切换（**不嵌套第二个 Modal**：
- * 双 overlay 会与宿主遮罩互相打架，且关闭语义会变得含糊）。会话单元清单来自
- * /export-preview（与导出页同一份 listUnits 口径），选择模型复用 ContentPicker。
+ * 约定同其余渲染段（t42）：只接收「渲染所需的数据 + 回调」；React 状态、副作用与网络调用
+ * 仍在 SyncPanel（单一状态源），可测纯逻辑在 src/ui/sync-settings-view.ts。
+ *
+ * P0-3：逐会话勾选仍是**同一个 Modal 内的视图切换**（不嵌套第二个 Modal —— 双 overlay 会与
+ * 宿主遮罩互相打架，关闭语义也会变得含糊），会话清单复用 ContentPicker。
  */
 import { useEffect, useState } from 'react'
 import type { ChangeEvent } from 'react'
@@ -21,18 +24,22 @@ import type { SelectionSection } from '../../ui/selection-model.ts'
 import {
   initialSessionPicks, pickedSessionIds, sessionPickerSelection,
 } from '../../ui/sync-settings-view.ts'
+import type { SyncChannelSettingsPatch } from '../../ui/sync-settings-view.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import { DEFAULT_SYNC_SESSIONS_LIMIT, syncSectionGroups } from './sync-view.ts'
-import type { SyncSectionOption } from './sync-view.ts'
+import type { ChannelSyncState, SyncSectionOption } from './sync-view.ts'
+import { SyncSecuritySection } from './SyncSecuritySection.tsx'
 import css from '../config-manager.module.css'
 
+/** 弹窗内的两个页签：同步内容 / 加密与密码（写方向与读方向的密码同页、各有自己的标题）。 */
+type SyncSettingsTab = 'content' | 'security'
+
 /**
- * 同步分区选择弹窗（Radix Modal，与通道配置弹窗同一体系）：分组勾选 + 「最新 N 个会话」
- * + 逐会话点名。分区一律由用户手动勾选（没有模式分段）。改动**即时生效并持久化**
- * （与导出选择器一致的弹窗语义），因此底部只有「完成」—— 没有「取消」
- * （取消会让用户以为改动被丢弃）。
+ * 同步设置弹窗（Radix Modal，与通道配置弹窗同一体系）。
+ * 勾选与开关**即时生效并持久化**（与导出选择器一致的弹窗语义），因此底部只有「完成」——
+ * 没有「取消」（取消会让用户以为改动被丢弃）。
  */
-export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, deletePlugins, sessionNode, sessionPending, sessionFailed, onToggleSection, onSessionsLimit, onSessionsInclude, onToggleDeletePlugins, onClose }: {
+export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, deletePlugins, sessionNode, sessionPending, sessionFailed, settings, onToggleSection, onSessionsLimit, onSessionsInclude, onToggleDeletePlugins, onToggleEncrypt, onToggleIncludeSecrets, onPatchSettings, onPersistEncryptPassword, onPersistDecryptPassword, onClearSavedPassword, onClose }: {
   t: TranslateNS<'config-manager-sync'>
   /** ui 命名空间的翻译器（UiT）：分区描述与分组说明的**字典键**由它解析（英文界面零中文） */
   uiT: UiT
@@ -51,17 +58,30 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
   sessionNode: SelectionSection | undefined
   sessionPending: boolean
   sessionFailed: boolean
+  /** 加密与两个方向的密码（全部属于**这一条通道**；弹窗只读字段 + 回调） */
+  settings: Pick<ChannelSyncState, 'encrypt' | 'includeSecrets' | 'encryptPassword' | 'encryptPasswordConfirm' | 'encryptPasswordSaved' | 'decryptPassword' | 'decryptPasswordSaved'>
   onToggleSection: (id: SectionId, checked: boolean) => void
   onSessionsLimit: (value: number) => void
   /** 点名结果（空数组 = 回到「最新 N 个」模式） */
   onSessionsInclude: (ids: string[]) => void
   onToggleDeletePlugins: (next: boolean) => void
+  onToggleEncrypt: (next: boolean) => void
+  onToggleIncludeSecrets: (next: boolean) => void
+  onPatchSettings: (patch: SyncChannelSettingsPatch) => void
+  onPersistEncryptPassword: () => void
+  onPersistDecryptPassword: () => void
+  onClearSavedPassword: () => void
   onClose: () => void
 }) {
-  /** 弹窗内的两个视图：分区目录 / 会话逐项勾选（同一 Modal，不嵌套第二个遮罩） */
+  /** 页签（关闭即复位到「同步内容」= 用户的心智入口） */
+  const [tab, setTab] = useState<SyncSettingsTab>('content')
+  /** 内容页内的两个视图：分区目录 / 会话逐项勾选（同一 Modal，不嵌套第二个遮罩） */
   const [view, setView] = useState<'sections' | 'sessions'>('sections')
-  // 关闭即复位：下次打开总是回到分区目录（用户的心智入口）
-  useEffect(() => { if (!open) setView('sections') }, [open])
+  useEffect(() => {
+    if (open) return
+    setTab('content')
+    setView('sections')
+  }, [open])
 
   const sessionIds = (sessionNode?.units ?? []).map((u) => u.id)
   const sessionNodes: SelectionSection[] = sessionNode === undefined ? [] : [sessionNode]
@@ -106,14 +126,47 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={t('mode.pickerTitle')} wide>
+    <Modal open={open} onClose={onClose} title={t('mode.settingsTitle')} wide>
       <Modal.Header
-        title={t('mode.pickerTitle')}
+        title={t('mode.settingsTitle')}
         closeLabel={t('common.close')}
         onClose={onClose}
       />
       <Modal.Body scroll style={{ maxHeight: '66vh' }}>
-        {catalog.length === 0 ? (
+        {/* 页签：两个目标都一屏装得下，用分段而不是并列的两张卡 —— 卡片会让「当前在哪一页」
+            变成依靠位置判断，而分段控件的选中态本身就在回答这个问题。 */}
+        <div className={css.settingsTabs} role="tablist" aria-label={t('mode.settingsTitle')}>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'content'}
+            className={tab === 'content' ? css.settingsTabOn : css.settingsTab}
+            onClick={() => { setTab('content') }}
+          >
+            {t('mode.tabContent')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'security'}
+            className={tab === 'security' ? css.settingsTabOn : css.settingsTab}
+            onClick={() => { setTab('security') }}
+          >
+            {t('mode.tabSecurity')}
+          </button>
+        </div>
+        {tab === 'security' ? (
+          <SyncSecuritySection
+            t={t}
+            settings={settings}
+            onToggleEncrypt={onToggleEncrypt}
+            onToggleIncludeSecrets={onToggleIncludeSecrets}
+            onPatchSettings={onPatchSettings}
+            onPersistEncryptPassword={onPersistEncryptPassword}
+            onPersistDecryptPassword={onPersistDecryptPassword}
+            onClearSavedPassword={onClearSavedPassword}
+          />
+        ) : catalog.length === 0 ? (
           <Skeleton count={4} label={t('common.loading')} />
         ) : (
           /* 分组勾选目录：与「导出备份·自定义模式」同构（分组 Card + 名称/描述/徽章），
@@ -181,7 +234,7 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
                       )}
                       {/* issue 132：插件专属的「跟随远端删除」。放在 Checkbox **之外**（同 sessions
                           参数的理由：Checkbox 内部是 label，嵌进去点开关会连带切换分区勾选）。
-                          只在 plugins 已被勾选时出现 —— 没勾这个分区，这条开关没有任何作用对象。 */}
+                          只在 plugins 已被勾选时出现 —— 没勾这个分区，这条开关没有作用对象。 */}
                       {s.id === 'plugins' && sections.includes('plugins') && (
                         <div className={css.controlRow}>
                           <Checkbox
@@ -199,11 +252,10 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
             ))}
           </div>
         )}
-        {sections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
+        {tab === 'content' && sections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
       </Modal.Body>
       <Modal.Footer>
-        {/* 2026-11-01 用户要求：删掉「改动即时生效并保存（关闭弹窗即完成）」那颗 ⓘ ——
-            它在解释一件用户无从选择的事（勾了就走，没有保存按钮），占位置不改决定。 */}
+        {/* 改动即时生效（勾了就走，没有保存按钮）—— 底部只有「完成」，与导出选择器同语义。 */}
         <Button variant="primary" onClick={onClose}>{t('mode.pickerDone')}</Button>
       </Modal.Footer>
     </Modal>
