@@ -797,6 +797,10 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     因为标签文案随语言变化，按字数估算必然失准。
     **度量不可信（未量到 / avail≤0）→ 一律全部可见**：宁可横向溢出这种视觉瑕疵，
     也绝不因为量不出来就藏页签 —— 那是功能丢失，不是外观问题。
+    **分隔条不得裁剪**：`.navStrip` 不写 `overflow`（`.shellNav` 同样不写）—— 「更多 ▾」的弹层是它的
+    后代（absolute 留在原地，不 portal），祖先一裁剪菜单就只剩下沿一条，表现为「点开什么都不显示」
+    （2026-11-14 真机反馈，小视口下必现）。画布边界由 `.section` 的 `overflow: hidden` 兜住，
+    量测失败时的横向溢出也仍被它裁在插件画布内，宿主布局不会破。守卫：`nav-menu-clip-guard.test.ts`。
     `.navMore` 与 `.navTab` **共用同一批 CSS 规则**（分组选择器）：同处一个分段条，
     必须长得一模一样，分成两套写必然会漂移；且根节点必须 `flex: none`
     （`.selectRoot` 缺省可收缩，空间一紧就被压扁，`navLayout` 的算账就白算了）。
@@ -1397,7 +1401,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 | 活动（RunsCenter） | `.runsCenter` `.runsCardStack` `.runsProgressRow` `.runsProgressStatus` `.runsLockDesc` `.runsLogLine` | 卡片内元素零外边距；进度条与状态字同排；锁卡说明降级；日志尾部单行省略、末行主色 |
 | 迁移历史 | `.historyTightCard` `.historyControlRow` `.historyControlRowEnd` `.historySearch` `.historySearchInput` `.historyGroup` | 策略/过滤两卡压成两行；搜索框外壳化（描边在框上，focus-within 整框变色），不再内嵌滚动盒 |
 | 同步 | `.channelCompactRow` `.confirmMessage` `.addChannelCard` `.addChannelLabel` `.addChannelHint` `.channelPickList` `.channelPickRow` `.channelPickLabel` `.channelPickDesc` | 未配置通道单行矮态（覆盖 `.cardTitleRow` 的 baseline+8px）；2026-11-14 起页面只渲染已配置的通道卡，其余收进末尾的虚线「添加通道」卡（`AddChannelCard`：整宽 button + 选通道弹窗，行内两段文字），`.channelCompactRow` 只作为未配置通道的兜底形态保留 |
-| 同步·设置弹窗（2026-11-14） | `.settingsTabs` `.settingsTab` `.settingsTabOn` `.dialogSection` `.dialogSectionDivide` | 同步分区 / 加密与密钥导出 / 解密密码三块收进一个弹窗：页签是整宽等分的分段控件（选中换底色，不引第二套视觉体系）；弹窗内一段 = 原来的 Card（段内纵向节奏 8，段间靠 1px 分隔线而非留白堆叠）。快照行整套下线（`.snapshotPickerRow` 三处规则已删） |
+| 同步·设置弹窗（2026-11-14） | `.settingsTabs` `.settingsTab` `.settingsTabOn` `.dialogSection` `.dialogSectionDivide` | 同步分区 / 自动同步 / 加密与密钥导出 / 解密密码收进一个弹窗：页签是整宽等分的分段控件（选中换底色，不引第二套视觉体系）；弹窗内一段 = 原来的 Card（段内纵向节奏 8，段间靠 1px 分隔线而非留白堆叠）。自动同步段复用 `AutosyncCard`，其 `.syncSubBlock` 顶线在弹窗内归零（`.dialogSection > .syncSubBlock`）；`.snapshotPickerRow` 快照行按用户要求保留在通道卡内 |
 | 导入 | `.dropZone` `.dropZoneIcon` `.conflictBulk` | 选文件拖放区（虚线 `line-2` + `r-3`）；冲突项批量操作纵向成组 |
 | 市场 | `.marketView` `.marketListCard(Fill)` `.marketItem(List/Head/Main/Desc/Meta)` `.marketSearchBox` `.marketSearchInput` `.marketFilterMeta` `.marketRepoRow` `.marketLoginCard` `.marketLoginRow` `.marketUploadCard` `.marketMyListCard` `.marketMyListHead` `.marketMyItem*` `.myconfigsView` | 页签为作用域内独立胶囊（不动共享 `.modeTabs`）；筛选卡定高吃满剩余高度；条目「名称/说明/元信息」三段；我的配置限高内滚 |
 | 产物库·快照弹窗（D-02/D-05/D-06/D-07） | `.restorePlanCard` `.restorePlanStatBadge` `.inspectItem` `.inspectDot` `.inspectAdapter` `.inspectDesc` `.inspectItemsScroll` `.inspectSubGroup` `.inspectBadge` `.reportItem` `.reportItemPath` `.reportGroupTitle` `.confirmNote` `.confirmNoteIcon` | 分组卡片化（组头 30px 铺顶边、行 30px 表行 + 细分隔线）；摘要徽章 4px 方角细描边；条目「圆点 + 等宽 accent adapter + 描述」三段；「路径 + 原因」两段报告行；删除确认的基线注意句独立成 warn tint 盒 |

@@ -141,6 +141,14 @@ export const zh = {
   // 阶段文案：一键同步先拉远端快照做只读合并预览（最慢的一步），必须有可见反馈
   'syncflow.checkingRemote': '正在检查远端变更…',
   'syncflow.syncFailed': '同步失败',
+  // 快照行（2026-11-14 恢复：用户要求把「选择历史快照」下拉与刷新按钮放回页面）
+  'syncflow.snapshotOption': '（{date} · {count} 分区）',
+  'syncflow.selectSnapshot': '选择历史快照',
+  'syncflow.refreshSnapshots': '刷新快照列表',
+  'syncflow.latestSnapshot': '最新快照',
+  'syncflow.noSnapshots': '远端暂无快照',
+  // ⑥ 设备身份：只有快照确实带 deviceName 时才追加
+  'syncflow.snapshotDevice': '由 {device} 推送',
   'syncflow.confirmImport': '确认导入',
   'syncflow.cancel': '取消',
   'syncflow.adoptRemote': '采用远端',
@@ -206,6 +214,7 @@ export const zh = {
   'mode.settingsTitle': '同步设置',
   'mode.settingsOpen': '设置',
   'mode.tabContent': '同步内容',
+  'mode.tabAutosync': '自动同步',
   'mode.tabSecurity': '加密与密码',
   // 摘要行徽章：push 前必须看见「这份快照加不加密码」
   'mode.encryptOn': '加密已开',
@@ -594,6 +603,12 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.syncing': 'Syncing…',
   'syncflow.checkingRemote': 'Checking remote changes…',
   'syncflow.syncFailed': 'Sync failed',
+  'syncflow.snapshotOption': '({date} · {count} sections)',
+  'syncflow.selectSnapshot': 'Select snapshot',
+  'syncflow.refreshSnapshots': 'Refresh snapshots',
+  'syncflow.latestSnapshot': 'Latest snapshot',
+  'syncflow.noSnapshots': 'No remote snapshots',
+  'syncflow.snapshotDevice': 'Pushed by {device}',
   'syncflow.confirmImport': 'Confirm import',
   'syncflow.cancel': 'Cancel',
   'syncflow.adoptRemote': 'Adopt remote',
@@ -659,6 +674,7 @@ export const en: Record<keyof typeof zh, string> = {
   'mode.settingsTitle': 'Sync Settings',
   'mode.settingsOpen': 'Settings',
   'mode.tabContent': 'Content',
+  'mode.tabAutosync': 'Auto sync',
   'mode.tabSecurity': 'Encryption & passwords',
   // Summary badge: whether this snapshot is encrypted must be visible before pushing
   'mode.encryptOn': 'Encrypted',

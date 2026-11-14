@@ -2,8 +2,9 @@
  * 同步设置弹窗（2026-11-14 用户要求：同步分区 / 加密与密钥导出 / 解密密码三块从通道卡
  * 收进**一个**弹窗 —— 三块各自成卡会把一条通道撑成四张卡，整页读成清单。
  *
- * 为什么是两页签而不是单页竖排：12 个分区勾选已经占满 720 画布的首屏，安全设置会被挤到
- * 滚动区外 —— 用户点「设置」想改加密时必须先滚过所有分区。页签让每页首屏见底、高度稳定。
+ * 为什么是页签而不是单页竖排：12 个分区勾选已经占满 720 画布的首屏，安全设置与自动同步的
+ * 四项策略会被挤到滚动区外 —— 用户点「设置」想改加密时必须先滚过所有分区。页签让每页
+ * 首屏见底、高度稳定。2026-11-14 用户追加：卡内的「自动同步」表单也搬进来（第三页签）。
  *
  * 约定同其余渲染段（t42）：只接收「渲染所需的数据 + 回调」；React 状态、副作用与网络调用
  * 仍在 SyncPanel（单一状态源），可测纯逻辑在 src/ui/sync-settings-view.ts。
@@ -29,17 +30,19 @@ import type { UiT } from '../../ui/i18n.ts'
 import { DEFAULT_SYNC_SESSIONS_LIMIT, syncSectionGroups } from './sync-view.ts'
 import type { ChannelSyncState, SyncSectionOption } from './sync-view.ts'
 import { SyncSecuritySection } from './SyncSecuritySection.tsx'
+import { AutosyncCard } from './AutosyncCard.tsx'
+import type { AutosyncAutoApplyTier, AutosyncConflictPolicy, AutosyncInterval } from './sync-api.ts'
 import css from '../config-manager.module.css'
 
-/** 弹窗内的两个页签：同步内容 / 加密与密码（写方向与读方向的密码同页、各有自己的标题）。 */
-type SyncSettingsTab = 'content' | 'security'
+/** 弹窗内的三个页签：同步内容 / 自动同步 / 加密与密码（两个方向的密码同页、各有自己的标题）。 */
+type SyncSettingsTab = 'content' | 'autosync' | 'security'
 
 /**
  * 同步设置弹窗（Radix Modal，与通道配置弹窗同一体系）。
  * 勾选与开关**即时生效并持久化**（与导出选择器一致的弹窗语义），因此底部只有「完成」——
  * 没有「取消」（取消会让用户以为改动被丢弃）。
  */
-export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, deletePlugins, sessionNode, sessionPending, sessionFailed, settings, onToggleSection, onSessionsLimit, onSessionsInclude, onToggleDeletePlugins, onToggleEncrypt, onToggleIncludeSecrets, onPatchSettings, onPersistEncryptPassword, onPersistDecryptPassword, onClearSavedPassword, onClose }: {
+export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, deletePlugins, sessionNode, sessionPending, sessionFailed, busy, settings, onToggleSection, onSessionsLimit, onSessionsInclude, onToggleDeletePlugins, onToggleAutosync, onUpdateAutosyncInterval, onUpdateAutosyncOptions, onToggleEncrypt, onToggleIncludeSecrets, onPatchSettings, onPersistEncryptPassword, onPersistDecryptPassword, onClearSavedPassword, onClose }: {
   t: TranslateNS<'config-manager-sync'>
   /** ui 命名空间的翻译器（UiT）：分区描述与分组说明的**字典键**由它解析（英文界面零中文） */
   uiT: UiT
@@ -58,13 +61,19 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
   sessionNode: SelectionSection | undefined
   sessionPending: boolean
   sessionFailed: boolean
+  /** 通道忙碌（同步/推送在途）：自动同步的开关与下拉此时不可改，与页面上的口径一致 */
+  busy: boolean
   /** 加密与两个方向的密码（全部属于**这一条通道**；弹窗只读字段 + 回调） */
-  settings: Pick<ChannelSyncState, 'encrypt' | 'includeSecrets' | 'encryptPassword' | 'encryptPasswordConfirm' | 'encryptPasswordSaved' | 'decryptPassword' | 'decryptPasswordSaved'>
+  settings: Pick<ChannelSyncState, 'encrypt' | 'includeSecrets' | 'encryptPassword' | 'encryptPasswordConfirm' | 'encryptPasswordSaved' | 'decryptPassword' | 'decryptPasswordSaved' | 'autosync' | 'autosyncEnabled' | 'autosyncInterval'>
   onToggleSection: (id: SectionId, checked: boolean) => void
   onSessionsLimit: (value: number) => void
   /** 点名结果（空数组 = 回到「最新 N 个」模式） */
   onSessionsInclude: (ids: string[]) => void
   onToggleDeletePlugins: (next: boolean) => void
+  /** 自动同步（2026-11-14 从通道卡搬进本弹窗；文案与倒计时仍由 AutosyncCard 派生） */
+  onToggleAutosync: (enabled: boolean) => void
+  onUpdateAutosyncInterval: (interval: AutosyncInterval) => void
+  onUpdateAutosyncOptions: (patch: { realtime?: boolean; autoApplyTier?: AutosyncAutoApplyTier; conflictPolicy?: AutosyncConflictPolicy }) => void
   onToggleEncrypt: (next: boolean) => void
   onToggleIncludeSecrets: (next: boolean) => void
   onPatchSettings: (patch: SyncChannelSettingsPatch) => void
@@ -148,6 +157,15 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
           <button
             type="button"
             role="tab"
+            aria-selected={tab === 'autosync'}
+            className={tab === 'autosync' ? css.settingsTabOn : css.settingsTab}
+            onClick={() => { setTab('autosync') }}
+          >
+            {t('mode.tabAutosync')}
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={tab === 'security'}
             className={tab === 'security' ? css.settingsTabOn : css.settingsTab}
             onClick={() => { setTab('security') }}
@@ -155,7 +173,21 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
             {t('mode.tabSecurity')}
           </button>
         </div>
-        {tab === 'security' ? (
+        {tab === 'autosync' ? (
+          /* 自动同步（2026-11-14 用户要求从通道卡搬进来）：总开关 + 兜底间隔 + 三项策略 +
+             状态徽章与倒计时全部由 AutosyncCard 派生，本弹窗只提供外壳与页签。 */
+          <div className={css.dialogSection}>
+            <AutosyncCard
+              t={t}
+              uiT={uiT}
+              settings={settings}
+              busy={busy}
+              onToggleAutosync={onToggleAutosync}
+              onUpdateInterval={onUpdateAutosyncInterval}
+              onUpdateOptions={onUpdateAutosyncOptions}
+            />
+          </div>
+        ) : tab === 'security' ? (
           <SyncSecuritySection
             t={t}
             settings={settings}

@@ -204,6 +204,8 @@ const KEEP_PINS: readonly KeepPin[] = [
   // ③状态 / 等待 / 计数
   { key: 'mode.decryptPasswordSaved', file: 'src/client/sync/SyncSecuritySection.tsx', kind: '状态' },
   { key: 'history.corruptedCount', file: 'src/client/history/HistoryPanel.tsx', kind: '状态' },
+  // 2026-11-14：快照行恢复（用户要求放回下拉与刷新），空态徽章随之回到页面
+  { key: 'syncflow.noSnapshots', file: 'src/client/sync/SyncPanel.tsx', kind: '状态' },
   // v3：首页的「分区构成卡」已按 §7 移出（其等价合计在导出流程的「本次将导出」构成卡里，
   // 走 export.composition* 键）。本键随卡片删除，不再是任何界面的渲染点 —— 故从 KEEP 台账移除。
   { key: 'import.skipPending', file: 'src/client/import/ImportWizardView.tsx', kind: '状态' },

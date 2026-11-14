@@ -269,9 +269,11 @@ body {
   border: none;
   border-radius: var(--cm-r-3);
   background: var(--cm-hover);
-  /* 不横向滚动：放不下的项由 ui/nav-model.ts 移进「更多 ▾」，不会藏在视口外。
-     overflow: hidden 只是防极端情况（量测失败）撑破宿主布局，正常路径下从不触发。 */
-  overflow: hidden;
+  /* **不得裁剪（不写 overflow: hidden）**：「更多 ▾」的弹层是它的后代（留在原地的 absolute，
+     见 common/MoreMenu.tsx 契约①）—— 分隔条一裁剪，菜单就只剩分隔条下沿那一条，
+     用户看到的是「点开『更多』什么都不显示」（2026-11-14 真机反馈，小视口下必现）。
+     溢出兜底改由 .section 的 overflow: hidden 承担（画布右边界仍然兜得住宿主布局）；
+     放不下的页签本来由 ui/nav-model.ts 移进「更多 ▾」，正常路径下这里不会溢出。 */
 }
 
 /* v1 的 [data-overflow] 三条渐隐遮罩已随 nav-overflow.ts 一起删除 ——
@@ -922,7 +924,9 @@ body {
 
 /* 弹层：留白 4px 的紧凑面板（与触发器同宽起步，标签长时最宽 260px）。
    两种挂载（**都是 absolute**，差别只在「谁提供定位上下文」）：
-     · 留在原地（相对 .selectRoot）—— 导航条的 MoreMenu 用（贴顶展开，没有下方裁剪风险）；
+     · 留在原地（相对 .selectRoot）—— 导航条的 MoreMenu 用；
+       前提是**祖先链不得裁剪**：.navStrip / .shellNav 都不写 overflow（详见 .navStrip 的注释，
+       2026-11-14 因 .navStrip 的 overflow: hidden 把「更多」弹层切没了）；
      · portal 进弹层容器（相对容器绝对定位）—— Select 用（见 .selectMenuPortal）：
        弹窗内进弹窗卡片、否则进插件根容器；坐标由组件按「触发器 − 容器」的差值写入内联样式，
        容器自带 overflow 的场合（插件画布 .section）靠 placement 夹紧保证不越界 ⇒ 不裁剪也不飘。
@@ -4817,17 +4821,37 @@ body {
   flex-direction: column;
 }
 
-/* 2026-11-14：快照选择行整套删除（用户要求移除「选择历史快照」下拉与刷新按钮，
-   历史快照到产物库看）—— 连同 .snapshotPickerRow 的三处规则与空态徽章一并移除。 */
+/* 选择历史快照行（2026-11-14 恢复：用户要求把下拉与刷新按钮放回页面）。
+   该行 = 可伸缩的字段 + 右对齐工具组（刷新 / 只读自检）+ 空态徽章。 */
+.snapshotPickerRow {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin-top: 10px;
+}
 
-/* 行尾工具组（2026-11-14）：只读自检图标 + 「设置」按钮收成一组贴右 —— 与 .pickerBtn 的
-   margin-left:auto 二者选一个承担贴右：加在组上，组内按钮的 auto 自然为 0，不会把组撑开。 */
+/* 下外边距归组件管理：空态提示存在时由它承担，否则由本行承担 —— 但**两者都承担时只有一份**。
+   真机反馈「选择历史快照与自动同步面板之间没有间距」：本行此前只有 margin-top，
+   下方紧贴下一张卡。现在给一个最小底部间距（与页面区块间距 10px 同档）。 */
+.snapshotPickerRow {
+  margin-bottom: 10px;
+}
+
+/* 该行内的字段标签归零底部外边距：.field 自带 margin-bottom:10px，
+   会让标签的 margin-box 比 select 低 10px，flex-end 对齐时按钮
+   被一并推低 10px（实测 select 底 1042 vs 按钮底 1052）→ 视觉上「不在一条线上」。 */
+.snapshotPickerRow .field {
+  margin-bottom: 0;
+}
+
+/* 行尾工具组：刷新与只读自检都是低频诊断动作、都只服务这一行，收成两枚 28px 图标按钮
+   （与下拉同高、同组右对齐）。flex:none 保证下拉先被压缩，图标不被挤小。 */
 .pickerAction {
   flex: none;
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 /* 导入日志面板 */
@@ -8382,6 +8406,14 @@ button.profileRowMain:hover {
   flex-direction: column;
   gap: 8px;
 }
+/* 弹窗内的自动同步段：AutosyncCard 自带 0.5px 顶线与 10px 上内距（它是页面卡内的分节），
+   搬进弹窗后第一行就在页签下面 —— 顶线会变成一条无意义的横线，故在弹窗内归零。 */
+.dialogSection > .syncSubBlock {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
 .dialogSectionDivide {
   height: 1px;
   background: var(--dsw-alias-border-l1);

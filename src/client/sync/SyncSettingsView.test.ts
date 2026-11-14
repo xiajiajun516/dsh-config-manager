@@ -59,7 +59,6 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
     // 2026-11-14 用户要求：分区 / 加密与密钥导出 / 解密密码三块收进一个弹窗（两页签），
     // 三个旧文件（SyncSectionPickerDialog / SecurityOptionsCard / DecryptPasswordCard）合并为下面两个
     ['SyncSettingsDialog', 'SyncSettingsDialog.tsx'],
-    ['AutosyncCard', 'AutosyncCard.tsx'],
     // issue #79：工作副本卡（含确认弹窗 + 宿主调用 + 回执）自成文件，主文件只装配 —— 行数棘轮因此不必上调
     ['WorkDirCard', 'WorkDirCard.tsx'],
     // issue #91：推送预览卡（五条并列提示带：只读 / 首次基线 / 加密 / 含凭据 / 引擎告警）自成文件，
@@ -87,6 +86,11 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
   const securitySource = readSource(fileURLToPath(new URL('./SyncSecuritySection.tsx', import.meta.url)))
   assert.match(securitySource, /export function SyncSecuritySection\(/, 'SyncSecuritySection 必须在自己的文件里导出')
   assert.doesNotMatch(securitySource, /from '\.\/SyncPanel\.tsx'/, 'SyncSecuritySection 不得反向 import 主文件')
+  // 2026-11-14 用户要求：自动同步表单也从通道卡搬进弹窗 —— 与安全段同一条口径：
+  // 弹窗必须装配它，否则「搬回去」这种回退不会变红。
+  assert.match(dialogSource, /from '\.\/AutosyncCard\.tsx'/, 'AutosyncCard 必须从独立文件导入')
+  assert.match(dialogSource, /<AutosyncCard[\s/>]/, 'AutosyncCard 必须被弹窗渲染')
+  assert.doesNotMatch(viewSource, /<AutosyncCard[\s/>]/, '自动同步不得再渲染进通道卡（用户要求移到弹窗）')
   // 已迁出的渲染不再出现在主文件（整文件级断言：搬出后必然为真，回退即变红）
   assert.doesNotMatch(viewSource, /WEBDAV_PRESETS\.map/, 'WebDAV 预设渲染必须只在 ChannelConfigDialog.tsx 里')
   assert.doesNotMatch(viewSource, /syncSectionGroups\(/, '分组勾选渲染必须只在 SyncSettingsDialog.tsx 里')
