@@ -67,6 +67,8 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
     ['PushPreviewCard', 'PushPreviewCard.tsx'],
     // 一键同步的加载反馈：在途活动条是纯展示（无状态无调用），同样以「抽出去」守住棘轮
     ['SyncActivityBar', 'SyncActivityBar.tsx'],
+    // 2026-11-14：「添加通道」入口卡 + 选通道弹窗自成文件（同步页只留已配置的通道卡）
+    ['AddChannelCard', 'AddChannelCard.tsx'],
   ]
   for (const [name, file] of units) {
     // 主文件：必须 import 并渲染该单元

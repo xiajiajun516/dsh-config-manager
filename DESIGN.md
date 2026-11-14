@@ -1396,7 +1396,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 | --- | --- | --- |
 | 活动（RunsCenter） | `.runsCenter` `.runsCardStack` `.runsProgressRow` `.runsProgressStatus` `.runsLockDesc` `.runsLogLine` | 卡片内元素零外边距；进度条与状态字同排；锁卡说明降级；日志尾部单行省略、末行主色 |
 | 迁移历史 | `.historyTightCard` `.historyControlRow` `.historyControlRowEnd` `.historySearch` `.historySearchInput` `.historyGroup` | 策略/过滤两卡压成两行；搜索框外壳化（描边在框上，focus-within 整框变色），不再内嵌滚动盒 |
-| 同步 | `.channelCompactRow` `.confirmMessage` | 未配置通道单行矮态（覆盖 `.cardTitleRow` 的 baseline+8px） |
+| 同步 | `.channelCompactRow` `.confirmMessage` `.addChannelCard` `.addChannelLabel` `.addChannelHint` `.channelPickList` `.channelPickRow` `.channelPickLabel` `.channelPickDesc` | 未配置通道单行矮态（覆盖 `.cardTitleRow` 的 baseline+8px）；2026-11-14 起页面只渲染已配置的通道卡，其余收进末尾的虚线「添加通道」卡（`AddChannelCard`：整宽 button + 选通道弹窗，行内两段文字），`.channelCompactRow` 只作为未配置通道的兜底形态保留 |
 | 导入 | `.dropZone` `.dropZoneIcon` `.conflictBulk` | 选文件拖放区（虚线 `line-2` + `r-3`）；冲突项批量操作纵向成组 |
 | 市场 | `.marketView` `.marketListCard(Fill)` `.marketItem(List/Head/Main/Desc/Meta)` `.marketSearchBox` `.marketSearchInput` `.marketFilterMeta` `.marketRepoRow` `.marketLoginCard` `.marketLoginRow` `.marketUploadCard` `.marketMyListCard` `.marketMyListHead` `.marketMyItem*` `.myconfigsView` | 页签为作用域内独立胶囊（不动共享 `.modeTabs`）；筛选卡定高吃满剩余高度；条目「名称/说明/元信息」三段；我的配置限高内滚 |
 | 产物库·快照弹窗（D-02/D-05/D-06/D-07） | `.restorePlanCard` `.restorePlanStatBadge` `.inspectItem` `.inspectDot` `.inspectAdapter` `.inspectDesc` `.inspectItemsScroll` `.inspectSubGroup` `.inspectBadge` `.reportItem` `.reportItemPath` `.reportGroupTitle` `.confirmNote` `.confirmNoteIcon` | 分组卡片化（组头 30px 铺顶边、行 30px 表行 + 细分隔线）；摘要徽章 4px 方角细描边；条目「圆点 + 等宽 accent adapter + 描述」三段；「路径 + 原因」两段报告行；删除确认的基线注意句独立成 warn tint 盒 |

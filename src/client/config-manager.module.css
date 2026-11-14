@@ -8278,5 +8278,84 @@ button.profileRowMain:hover {
   margin-bottom: 0;
 }
 
+/* —— 2026-11-14「添加通道」入口卡（同步页只留已配置的通道卡，其余通道收进这里） ——
+   整宽按钮而不是 .card：它是动作入口，不是信息面板；虚线边框沿用 .empty 的「这里还空着」
+   语义，hover 才点亮强调色。 */
+.addChannelCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: var(--cm-r-3);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.addChannelCard:hover {
+  border-color: var(--cm-accent);
+  color: var(--cm-accent);
+}
+.addChannelCard:focus-visible {
+  outline: 2px solid var(--cm-accent);
+  outline-offset: 2px;
+}
+.addChannelLabel {
+  font-size: var(--cm-fs-base);
+  font-weight: 600;
+}
+/* 未配置通道名单：放不下就省略，绝不换行（换行会把虚线框撑成两块） */
+.addChannelHint {
+  margin-left: auto;
+  min-width: 0;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.channelPickList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 选通道弹窗里的行：整行可点，通道名在上一行、用途在下一行 */
+.channelPickRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--cm-r-3);
+  background: var(--dsw-alias-bg-layer-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.channelPickRow:hover {
+  border-color: var(--cm-accent);
+  background: var(--dsw-alias-bg-layer-1);
+}
+.channelPickRow:focus-visible {
+  outline: 2px solid var(--cm-accent);
+  outline-offset: 2px;
+}
+.channelPickLabel {
+  font-size: var(--cm-fs-base);
+  font-weight: 600;
+}
+.channelPickDesc {
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
 
 

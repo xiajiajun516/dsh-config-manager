@@ -37,8 +37,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 - **界面统一到新设计语言**：首页、产物库、同步、环境、恢复与各个弹窗改用同一套卡片、分隔线与按钮层级——关键动作更显眼，次要动作降为幽灵按钮，长列表在不撑长整页的前提下内滚。
   **Unified visual language**: Home, Library, Sync, Environment, Recovery and every dialog now share one card, divider and button hierarchy — primary actions stand out, secondary ones step back, and long lists scroll inside their own box.
-- **同步**：通道卡直接以通道名作标题，未配置的通道收成一行；同步记录可就地刷新，推送结果按分区显示条数；「新建私有仓库」从下拉选项提为独立按钮。
-  **Sync**: channel cards are titled by channel name, unconfigured channels collapse to one line, the history list refreshes in place, push results show per-section counts, and "create a private repository" is now its own button.
+- **同步**：通道卡直接以通道名作标题，页面只留已经配置好的通道；其余通道收进末尾那张「添加通道」卡，点开在弹窗里挑通道、再进配置。同步记录可就地刷新，推送结果按分区显示条数；「新建私有仓库」从下拉选项提为独立按钮。
+  **Sync**: channel cards are titled by channel name and only configured channels keep one; the rest wait behind an "Add channel" card at the end, which opens a dialog to pick a channel and configure it. The history list refreshes in place, push results show per-section counts, and "create a private repository" is now its own button.
 - **导入**：选文件改成拖放区；冲突项的批量操作收进一处；外部导入的分区名按界面语言显示，明细行可悬停看全文；兼容性提示收进 ⓘ。
   **Import**: file selection is a drop zone, conflict bulk actions sit together, foreign-import section names follow the UI language with full detail on hover, and the compatibility note moves into an ⓘ.
 - **市场**：页签与筛选条重排，条目分「名称 / 说明 / 元信息」三段；我的配置列表限高内滚，星标、作者与时间仍在一行可见。
@@ -51,6 +51,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **The "Legacy data" block on the Disk usage card is gone**: it only listed a few directories the plugin no longer reads (pre-migration checkpoints, for instance), which counted toward no total and could not be cleaned from there, so the block made the card look fragmented for no decision value.
 - **确认弹窗的按钮次序统一为「取消在左、确认在右」**：以前删除/停止这类二次确认弹窗把确认放在左边，而其他弹窗是「取消 … 主操作」，两套次序并存容易点错；现在全站一致，初始焦点仍然落在取消上（误触保护不变）。
   **Confirm dialogs now put Cancel on the left and the primary action on the right**: destructive confirmations used to reverse that order compared with every other dialog; the whole product is consistent now, and focus still starts on Cancel so a stray Enter never fires the destructive action.
+
+### 🗑️ 移除 · Removed
+
+- **同步页不再有「在产物库查看远端快照」那一行**：远端快照本来就在产物库的来源页签里，多一条指路按钮只是给同步页加噪音。
+  **The "view remote snapshots in Library" line is gone from Sync**: remote snapshots already live under the Library source tabs, so the pointer only added noise to the sync page.
 
 ### 🔐 安全 · Security
 
