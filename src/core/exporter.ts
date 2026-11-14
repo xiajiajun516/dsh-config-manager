@@ -20,6 +20,7 @@ import { isSensitiveHomeRel } from '../utils/paths.ts';
 import { writeZip } from '../utils/zip.ts';
 import { formatDateOnly } from '../utils/time.ts';
 import { msgOf } from './messages.ts';
+import { sanitizeSectionData } from './section-sanitize.ts';
 import { engineMsg } from './messages-core.ts';
 import { declareBundledSessionsInWorkspaces, normalizeSessionLimit, sessionIdKey } from './session-select.ts';
 // issue #45 连带匹配的第二判据：工作区 path 的 cwd 目录键（DSH 的 sessionIds 覆盖率很低，见 coupleSessionWorkspaces）
@@ -349,7 +350,9 @@ export class Exporter {
       //    只做**文本级扫描 + 告警**，绝不改写/剥离内容（见 scanFileSectionText）。
       let sanitized = section.data;
       if (!isFileSection(adapter.id)) {
-        const scanned = this.scanner.scanAndRedact(section.data);
+        // issue #136 C：脱敏 + 归属标注走唯一入口（与同步侧五个出口同一份字节）。
+        // 归属信息随载荷走（plugins 的 patch 行 `redactedPaths`），报告统计仍用全量命中。
+        const scanned = sanitizeSectionData(adapter, this.scanner, section.data);
         redactedHits.push(...scanned.hits);
         sanitized = scanned.sanitized;
       } else {

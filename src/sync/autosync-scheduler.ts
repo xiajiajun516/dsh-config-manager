@@ -126,6 +126,13 @@ export interface AutosyncRunResult {
    * 「从来没配」在界面上长得一模一样，用户会反复重填同一个被拒地址。
    */
   configIssue?: string;
+  /**
+   * issue #136：本轮下行**实际产生的告警**（例：patch 行里被脱敏剥空的叶子已保留本机值、
+   * 叶级未裁决冲突被扣下）。非空 = 有内容没落地，终态不得再报成「成功且零告警」。
+   */
+  warnings?: string[];
+  /** issue #136：本轮被保留待裁决的叶级冲突所在分区（与 warnings 同源，供界面定位）。 */
+  heldSections?: SectionId[];
 }
 
 /**
@@ -701,6 +708,12 @@ export class AutoSyncScheduler {
        * 真机现场「推本机配置当备份」这条链路被远端冲突连续阻塞，用户却只看到 skipped/conflict。
        */
       let conflictedSections: SectionId[] = [];
+      //
+      // issue #136：Phase B 的「成功但没全写进去」必须能被看见 —— 旧实现只看 applyReport.ok，
+      // ok 时把 warnings / 待裁决项整包丢掉，于是「patch 行被剥空→守卫保留本机」与
+      // 「叶级冲突被扣下」都表现为一轮干净的成功。
+      let downlinkWarnings: string[] = [];
+      let heldLeafSections: SectionId[] = [];
 
       // Phase A: pull 合并（下载）—— 仅当远端有新快照才拉取（§3.2）。
       if (remoteNew) {
@@ -761,6 +774,8 @@ export class AutoSyncScheduler {
                 })).result as import('./sync-engine.ts').ApplyReport
               : await rawApply();
             appliedSections = applyReport.applied as SectionId[];
+            downlinkWarnings = applyReport.warnings;
+            heldLeafSections = [...new Set(applyReport.review.map((r) => r.sectionId as SectionId))];
             if (!applyReport.ok) {
               const error = applyReport.warnings.join('; ') || engineMsg('sync.autosyncApplyMergeFailed');
               const result: AutosyncRunResult = {
@@ -813,12 +828,18 @@ export class AutoSyncScheduler {
             // 绝不记 failed（那会累加连续失败计数并对用户发通知，把「需要用『检查远程合并』处理」
             // 谎报成「同步坏了」）；错误摘要保留引擎给出的说明（用户能看见到底为什么没推上去）。
             const message = pushReport.message ?? engineMsg('sync.autosyncPushFailed');
+            // issue #136：下行自身的告警/待裁决与「推送被冲突挡下」合并进同一条记录，
+            // 不因上行受阻就把下行的事实抹掉。
+            const blockedConflicted = [...new Set([...conflictedSections, ...heldLeafSections])];
+            const blockedDegraded = downlinkWarnings.length > 0 || heldLeafSections.length > 0;
             const conflictResult: AutosyncRunResult = {
-              status: conflictedSections.length > 0 ? 'partial' : 'skipped',
+              status: blockedConflicted.length > 0 || blockedDegraded ? 'partial' : 'skipped',
               direction: appliedSections.length ? 'both' : 'push',
               skipReason: 'conflict', error: message, historyId,
               appliedSections,
-              ...(conflictedSections.length > 0 ? { conflictedSections } : {}),
+              ...(blockedConflicted.length > 0 ? { conflictedSections: blockedConflicted } : {}),
+              ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
+              ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
               consecutiveFailures: 0,
               ...forcedMark,
             };
@@ -826,7 +847,9 @@ export class AutoSyncScheduler {
               direction: appliedSections.length ? 'both' : 'push', status: conflictResult.status,
               skipReason: 'conflict', error: message,
               appliedSections,
-              ...(conflictedSections.length > 0 ? { conflictedSections } : {}),
+              ...(blockedConflicted.length > 0 ? { conflictedSections: blockedConflicted } : {}),
+              ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
+              ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
               createdAt: nowIso, failureCountAtRun: 0,
               ...forcedMark,
             });
@@ -871,21 +894,38 @@ export class AutoSyncScheduler {
           // 如实记一条 skipReason，让历史与首页能说清「这次推上去之前先修好了基线」，
           // 而不是让用户以为又发生了一次莫名冲突。冲突原因优先（真有冲突时更该被看见）。
           const adoptedReason = pushReport.adoptedBase !== undefined ? ('baseline-adopted' as const) : undefined;
+          // issue #136：下行有告警 / 有待裁决叶级项 → 终态只能是 partial。
+          // 「推送成功」不能替下行的未完成背书：用户会从 success 得出「两端一样了」，而实际上
+          // 有些叶子被有意扣下（保留本机 / 等待裁决）。
+          // 两类降级必须分开说：只有「叶级冲突被扣下」才是冲突待裁决；
+          // 纯告警（插件没装上、undo 有残留等）与冲突无关，套上 'conflict' 会让
+          // 界面上出现「跳过原因：冲突」「另有 N 个分区待确认」，而 conflictedSections 是空的。
+          const heldDegraded = heldLeafSections.length > 0;
+          const degraded = downlinkWarnings.length > 0 || heldDegraded;
+          const finalPartial = partial || degraded;
+          const finalSkipReason = skipReason
+            ?? (heldDegraded ? ('conflict' as const) : degraded ? ('warning' as const) : undefined);
+          // 扣下的叶级冲突所在分区也要出现在「待处理分区」里（与分区级冲突合并去重）
+          const finalConflicted = [...new Set([...reportedConflicted, ...heldLeafSections])];
           const result: AutosyncRunResult = {
-            status: partial ? 'partial' : 'success',
+            status: finalPartial ? 'partial' : 'success',
             direction: appliedSections.length ? 'both' : 'push',
             appliedSections, pushedSnapshotId: pushReport.snapshotId, historyId,
-            ...(skipReason !== undefined || adoptedReason !== undefined ? { skipReason: skipReason ?? adoptedReason } : {}),
-            ...(reportedConflicted.length > 0 ? { conflictedSections: reportedConflicted } : {}),
+            ...(finalSkipReason !== undefined || adoptedReason !== undefined ? { skipReason: finalSkipReason ?? adoptedReason } : {}),
+            ...(finalConflicted.length > 0 ? { conflictedSections: finalConflicted } : {}),
+            ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
+            ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
             consecutiveFailures: 0,
             ...forcedMark,
           };
           await this.appendHistory(channel, {
             direction: appliedSections.length ? 'both' : 'push',
-            status: partial ? 'partial' : 'success',
+            status: finalPartial ? 'partial' : 'success',
             appliedSections, pushedSnapshotId: pushReport.snapshotId,
-            ...(skipReason !== undefined || adoptedReason !== undefined ? { skipReason: skipReason ?? adoptedReason } : {}),
-            ...(reportedConflicted.length > 0 ? { conflictedSections: reportedConflicted } : {}),
+            ...(finalSkipReason !== undefined || adoptedReason !== undefined ? { skipReason: finalSkipReason ?? adoptedReason } : {}),
+            ...(finalConflicted.length > 0 ? { conflictedSections: finalConflicted } : {}),
+            ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
+            ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
             createdAt: nowIso, failureCountAtRun: 0,
             ...forcedMark,
           });
@@ -911,13 +951,19 @@ export class AutoSyncScheduler {
 
       // 本轮下行被冲突挡下、且没有可上行内容（startup 变体 / 本地无改动）→ 如实 skipped/conflict。
       if (conflictedSections.length > 0) {
+        // issue #136：被扣下的叶级冲突也算「待处理分区」（与分区级冲突同列）。
+        const skipConflicted = [...new Set([...conflictedSections, ...heldLeafSections])];
         const conflictResult: AutosyncRunResult = {
           status: 'skipped', direction: 'pull', skipReason: 'conflict',
-          conflictedSections, historyId, consecutiveFailures: 0,
+          conflictedSections: skipConflicted, historyId, consecutiveFailures: 0,
+          ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
+          ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
         };
         await this.appendHistory(channel, {
           direction: 'pull', status: 'skipped', skipReason: 'conflict',
-          conflictedSections, createdAt: nowIso, failureCountAtRun: 0,
+          conflictedSections: skipConflicted, createdAt: nowIso, failureCountAtRun: 0,
+          ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
+          ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
         });
         await this.recordPendingMerge(engine, conflictedSections);
         await this.writeFinalConfig(cfg, conflictResult, nowIso, historyId, channel);
@@ -925,16 +971,26 @@ export class AutoSyncScheduler {
       }
 
       // startup 变体 / 仅远端合并：只做 pull 合并（不上传），或远端无新生且本地无改动（已在上方 upToDate 短路上）。
+      // issue #136：纯下行的告警/待裁决同样算「没全做完」—— 终态不得写成 success。
+      const degraded = downlinkWarnings.length > 0 || heldLeafSections.length > 0;
+      const pulledConflicted = [...new Set([...deferredSections, ...heldLeafSections])];
+      const pullSkipReason = !degraded && appliedSections.length === 0
+        ? ('unchanged' as const)
+        : degraded ? ('conflict' as const) : undefined;
       const result: AutosyncRunResult = {
-        status: 'success', direction: 'pull', appliedSections,
-        ...(appliedSections.length === 0 ? { skipReason: 'unchanged' as const } : {}),
-        ...(deferredSections.length > 0 ? { conflictedSections: deferredSections } : {}),
+        status: degraded ? 'partial' : 'success', direction: 'pull', appliedSections,
+        ...(pullSkipReason !== undefined ? { skipReason: pullSkipReason } : {}),
+        ...(pulledConflicted.length > 0 ? { conflictedSections: pulledConflicted } : {}),
+        ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
+        ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
         historyId, consecutiveFailures: 0,
       };
       await this.appendHistory(channel, {
-        direction: 'pull', status: 'success', appliedSections,
-        ...(appliedSections.length === 0 ? { skipReason: 'unchanged' as const } : {}),
-        ...(deferredSections.length > 0 ? { conflictedSections: deferredSections } : {}),
+        direction: 'pull', status: degraded ? 'partial' : 'success', appliedSections,
+        ...(pullSkipReason !== undefined ? { skipReason: pullSkipReason } : {}),
+        ...(pulledConflicted.length > 0 ? { conflictedSections: pulledConflicted } : {}),
+        ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
+        ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
         createdAt: nowIso, failureCountAtRun: 0,
       });
       await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);

@@ -680,6 +680,8 @@ THROW 备份 schema v2（高于当前 1，需升级插件），无法导入（�
 
 ### 3.4 各分区载荷的可选字段（字段级语义）
 
+> **可选字段的兼容规则**：下表除标「必需」者外一律可选，属于 §8.3 的「保持 `version: 1`、只新增可选字段」加法演进——第三方 exporter 可以不带，第三方 importer **必须忽略不认识的字段**，且字段缺省时按该行写明的「缺省语义」回落到旧行为。**缺省不得被解读成「已知为空」**：例如 `plugins.patch[].redactedPaths` 缺省的含义是「脱敏位置未知」，而不是「没有脱敏」。
+
 | 分区 | 字段 | 必需 | 语义 | 取证 |
 |---|---|---|---|---|
 | `settings`/`ui` namespace 记录 | `value` | 必需 | 该 namespace 的值（已脱敏） | `src/schema/types.ts` 的 `interface NamespaceRecord` |
@@ -695,6 +697,7 @@ THROW 备份 schema v2（高于当前 1，需升级插件），无法导入（�
 | | `fiberPhase` | 可选 | 运行时相位标记 | `src/schema/types.ts` 的 `PluginEntry.fiberPhase` |
 | | `bundlesOnly` | 可选 | `true` = 该层只在 `dsh.profile.bundles` 里声明，**`dependencies` 与 profile 的 `node_modules` 里都没有它** ⇒ 包由 DSH 从**自己的安装位置**解析（与 `boot-safety.ts` / `RESCUE_KEEP_BUNDLE_PREFIXES` 同口径）。**导入端对这类条目只把名字声明进目标机的 `dsh.profile.bundles`（该写入进入导入前快照，可回滚），绝不走 npm 安装通道**——按裸包名 `dsh plugin add` 会拿到 `dist-tags.latest` 的副本，与 host 版本线脱节（issue #95：host `0.2.1-rc.2` + 包 `0.2.1-alpha.2` 的隔离组契约对不上 → `session-controller` 一直 pending → 新建会话 service-unavailable）。缺省（旧包）= 按 `spec` / `version` 形状推断（`isBundlesOnlyEntry`） | `src/schema/types.ts` 的 `PluginEntry.bundlesOnly`、`src/core/plugin-cli.ts` 的 `isBundlesOnlyEntry` / `mergeBundleDeclaration`、`src/adapters/plugins.ts` 的 `declareHostBundle` |
 | `plugins.patch[]` | `file`/`lineId`/`raw` | 必需 | patch 行；**`raw` 原样写回目标**（未知子字段在此被保留）。`raw` 是**普通 JSON**：DSH 的 `!!js` 表达式在包内的形态为 `{__jsExpr: "<源码文本>"}`（与 DSH 的 `JSON_SCHEMA` + `tag:yaml.org,2002:js` 方言逐字同形，写回时必须还原成 `!!js`）。**读端必须按同一方言解析源文件**：`cordis.patch.yml` 是 DSH 的专用方言，用缺省 YAML schema 读带 `!!js` 的文件会直接抛 unknown tag —— 若把它当成「这一层没有 patch 行」，整层配置会从包里凭空消失（issue #75）。`file` = 该行所在 patch **层**，取值 = **相对 `$DSH_HOME` 的 POSIX 路径**（`cordis.patch.yml` = 用户层，`profiles/<name>/cordis.patch.yml` = 档案层），与 `mcp`/`prompts` 的 `sourceFile` 同口径；导入侧写回**同语义层**（档案层 → 目标机当前档案），无法识别或缺失的值按用户层处理 | `src/schema/types.ts` 的 `interface PatchLine`、`src/adapters/plugins.ts:185-186`（导出两层）、`src/adapters/plugins.ts:508`（计划项带层）、`src/adapters/plugins.ts:661-664`（写回原层） |
+| `plugins.patch[]` | `redactedPaths` | 可选（导出端仅在命中时写） | **导出侧附加的脱敏位置**：本行内被 `scanAndRedact` 剥空的叶子在本行对象内的**相对路径**（如 `raw.config.apiKey`；数组下标写作 `a[0].b`），**只给路径、绝不给值**。导入侧据此区分「备份里被剥空」与「用户主动清空」：命中路径上「导入值为空串/缺失」且「本机同一叶子非空」时，**未经该行显式确认**则保留本机值、该叶子不写入，报告给出含**patch 行 id 与字段路径**（不含值）的 warning；只有**该计划项**的显式「使用备份配置」（`conflict.resolution = 'useImported'` 且 `conflict.decidedBy === 'item'`；缺省来源一律按**未确认**处理，默认拒绝清空）才允许清空；由**分区级**裁决换算出来的 `useImported`（合并落地把「该分区已裁决」逐项注入，标 `decidedBy: 'section'`）**不算**对本行的确认——它只决定分区是否应用，该行其余字段照常写入、被剥空的叶子仍保留本机值并告警。**缺省（旧包）= 位置未知**，走保守分支：导入为空 + 本机同叶子非空即保护（绝不假定空值＝用户主动清空）；远端**真实非空新值照常写入**（声明路径上远端非空即不保护）；路径无法解析时宁可放过不拦。字段存在时必须是**字符串数组**、元素为非空字符串，否则 `validateSectionData`/adapter 校验报错；**空数组等价于缺省**（＝本行没有剥空位置，按上面的保守分支处理），不视为形状错误 | `src/schema/types.ts` 的 `PatchLine.redactedPaths`、`src/adapters/plugins.ts` 的 `annotateRedactions`（命中归行）、`src/core/patch-secret-guard.ts`（守卫判定）、`src/adapters/plugins.ts` 的 `applyItem`（写回前守卫 + warning） |
 | `plugins.pnpmWorkspace` | `string \| null` | 可选 | `pnpm-workspace.yaml` 原文 | `src/schema/types.ts` 的 `PluginsSection.pnpmWorkspace` |
 | `plugins.localTarballs` | `LocalPluginTarball[]` | 可选 | 本地源插件 tarball（base64）。**市场通道两端拒绝**；仅本地备份合法 | `src/schema/types.ts:131-157`、`src/market/security.ts` |
 | `plugins.patchFiles` | `{relativePath: string, base64: string}[]` | 可选 | `pnpmWorkspace.patchedDependencies` 引用的 `patches/**` 文件，`relativePath` 相对 **profile 目录**。**市场通道两端拒绝**；仅本地备份合法 | `src/schema/types.ts:158-171`、`src/market/security.ts`、`src/market/prepare.ts` |
@@ -907,7 +910,7 @@ if (!isFileSection(adapter.id)) {
 | 它是什么 | 本次导出中被脱敏/命中的**字符串叶值条数**——结构化分区取 `scanned.hits.length` 累加，**文件类分区取 `scanFileSectionText` 的命中累加**（G-09 已修复，两类都计入） | `src/core/exporter.ts`（`const redactedHits: SensitiveHit[] = []`）、`src/core/exporter.ts`（`redactedHits.push(...scanned.hits)`）、`src/core/exporter.ts`（`redactedHits.push(...fileHits)`）、`src/core/exporter.ts`（`redactedHits: redactedHits.length`） |
 | 累积粒度 | **一次导出一个总数**，不是每分区一个数（分区级只有 `included[].counts`，与 redaction 无关） | `src/core/exporter.ts` |
 | 中间量 `SensitiveHit[]` | `{path: string, field: string}`——**只有位置，没有值**（`src/core/types.ts`）；该数组**在导出函数返回前就丢掉了**，只有 `.length` 进入报告 | `src/core/exporter.ts` 的 `Exporter.export` |
-| 它**不是**什么 | **不是**被剥离的值本身，**不是**路径清单（清单只存在于内存中间量），**不是** manifest 字段。**注意**：自 G-09 修复后它**包含文件类分区的命中**，但那些命中**不伴随内容剥离**（只告警）——所以「`redactedHits > 0` ⇒ 秘密已被剥离」**只对结构化分区成立** | 同上；文件类分支见 `src/core/exporter.ts` |
+| 它**不是**什么 | **不是**被剥离的值本身，**不是** manifest 字段；它**本身不是**路径清单（清单只存在于内存中间量）。**唯一的外泄面**是 `plugins` 分区：patch 行内被剥空的叶子位置会以该行可选字段 `redactedPaths` 随载荷进 bundle（§3.4，只有行内相对路径、仍无值），用于导入侧区分「被脱敏剥空」与「用户主动清空」——其余分区没有任何字段能反推命中位置。**注意**：自 G-09 修复后它**包含文件类分区的命中**，但那些命中**不伴随内容剥离**（只告警）——所以「`redactedHits > 0` ⇒ 秘密已被剥离」**只对结构化分区成立** | 同上；文件类分支见 `src/core/exporter.ts` |
 
 #### 5.3.1b 计入与不计入的四个边界（决定计数大小）
 
@@ -941,7 +944,7 @@ if (!isFileSection(adapter.id)) {
 | 导出报告本身也**不落盘**：`ExportReport` 只作为返回值/内存状态流转（UI run store），不在任何持久化白名单里 | `src/client/api.ts`（返回值类型）、`src/ui/export-flow.ts`（内存字段）、`src/client/run-store.ts`（内存 run 结果） |
 | 同步通道的快照元信息也**没有**它：`ManifestSummary` 只有 `schemaVersion/dshVersion/platform/sectionIds/containsSecrets/encrypted/transport` | `src/sync/transport.ts:9-21` |
 
-> **结论（S-4）**：`redactedHits` **不是 bundle 格式的一部分**。它是**导出侧（producer）自省报告**的一个数字，**不写进 bundle、不由 importer 读取、不参与任何版本协商或完整性校验**。第三方 exporter **可以**产生它（用于自己的 UI/日志），第三方 importer **无需**消费它，也**不能**从 bundle 里推出它——bundle 里没有任何字段能反推「导出时脱敏了几个字段」。
+> **结论（S-4）**：`redactedHits` **不是 bundle 格式的一部分**。它是**导出侧（producer）自省报告**的一个数字，**不写进 bundle、不由 importer 读取、不参与任何版本协商或完整性校验**。第三方 exporter **可以**产生它（用于自己的 UI/日志），第三方 importer **无需**消费它，也**不能**从 bundle 里推出它——bundle 里没有任何字段能反推「导出时脱敏了几个字段」或命中总数（`plugins.patch[].redactedPaths` 只暴露**该分区 patch 行内**的被剥空位置，见 §3.4；它不是计数，也不是全量命中清单）。
 
 #### 5.3.4 第三方实现应如何产生与消费它
 
@@ -1104,7 +1107,7 @@ unsupportedSections= ["keybindings"]                                        ← 
 | `prompts` | ❌ 否 | 写回走两条路径，都重建：Create → `buildPromptLine`（只写 `id/name/config.systemPrompt.persona` 或 `config.planMode.sections`）；Update → `mergePromptIntoLine`（只改 `persona` / `sections[].text`，其余取自**目标行**） | `src/adapters/prompts.ts:114-120`（`buildPromptLine`）、`src/adapters/prompts.ts:92-111`（`mergePromptIntoLine`）、`src/adapters/prompts.ts:202-232`（`applyItem`） |
 | `workspaces` | ✅ **是**（条目级未知字段原样落到目标记录） | `applyItem` 直接把 `data.workspaces.find(...)` 的**整个记录对象**交给 `ctx.target.workspace.writeRecord(rec)`，无字段过滤 | `src/adapters/workspaces.ts:67-77` |
 | `credentialsStatus` | ❌ 否（**该分区根本不写条目字段**） | `analyzeImport` 恒返回 `[]`；`applyItem` 只做 `credentials.set(ref, value)`，`value` 来自 `secretInputs` / `decryptedCredentials`，**从不读分区载荷里的条目字段** | `src/adapters/credentials.ts:105-118`、`src/core/analyzer.ts` 的 `executeImportPlan`（凭据写入路径；`ensureMissingSecrets` 只读 `ref` 与 `configured`） |
-| `plugins.patch[].raw` | ✅ **是**（原样写回） | `applyPatchChanges(resolveWriteLayer(pl.file, ctx.target.profile), [{ lineId: ref, raw: pl.raw, action }])`，不做字段过滤 | `src/adapters/plugins.ts:661-664` |
+| `plugins.patch[].raw` | ✅ **是**（原样写回） | `applyPatchChanges(resolveWriteLayer(pl.file, ctx.target.profile), [{ lineId: ref, raw: pl.raw, action }])`，不做字段过滤。**唯一例外是脱敏剥空的叶子**：命中 `redactedPaths`（旧包缺省则按「导入为空 + 本机非空」保守判定）且本机同叶子非空的，写回守卫保留本机值并出 warning，见 §3.4 | `src/adapters/plugins.ts:661-664`、`src/core/patch-secret-guard.ts` |
 | 文件类 8 个（`skills` / `agentPresets` / `agentInstructions` / `pluginFiles` / `sessions` / `self` / `pluginData` / `pluginAssets`） | ⛔ **不适用**（无 JSON 载荷可注入） | ZIP 内没有这些分区的 JSON 文件；导入侧按前缀扫描真实条目**就地重建** `{version:1, files}`，任何「注入到 JSON 里的未知字段」根本没有承载位置 | `src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（各文件类条目的 `payload.filePrefix`）、`src/core/analyzer.ts` 的 `extractSections`（文件类分区就地重建 `{version: 1, files}`）、`src/core/exporter.ts` |
 
 **§7.3 实测命令与输出（S-3，可复现）**

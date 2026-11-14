@@ -673,7 +673,21 @@ export type GlobalConflictStrategy = 'merge' | 'replace' | 'skipExisting';
  */
 export type SessionFormatDisposition = 'abort' | 'skip' | 'guide';
 
-export interface ConflictDecision { itemId: string; resolution: ItemResolution; }
+export interface ConflictDecision {
+  itemId: string;
+  resolution: ItemResolution;
+  /**
+   * 这条裁决是**谁**下的（issue #136 A）：
+   * - `'item'`：用户对该计划项逐项决策（`decisions.resolutions[id]`，含导入页的逐行确认）——
+   *   适配器可把它当作「我确实要这一行按导入值写」的确认。
+   * - `'section'`：由**分区级**裁决换算而来（合并落地 `planMergeApply` 的 second pass 把
+   *   「该分区已裁决」逐项注入成 `useImported`）。分区级裁决决定「分区是否应用」，
+   *   不构成对某一行值的确认，写回守卫不得据此清空本机明文。
+   * - 缺省：未标注来源。写回守卫按**未确认**处理（默认拒绝清空）—— 忘了标注只会少清空，
+   *   不会误清空；确认必须显式写明来源。
+   */
+  decidedBy?: 'item' | 'section';
+}
 
 export interface PathMapping {
   oldPrefix: string;
@@ -1229,6 +1243,18 @@ export interface ConfigAdapter<TSection = unknown> {
   /** 读取当前 DSH 该类别配置 → 导出数据（无秘密值）。
    *  实现方应尊重 `options.includeItems?.[this.id]`（条目级选择，见 adapters/units.ts）。 */
   export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<TSection>>;
+
+  /**
+   * 可选：脱敏**归属标注**（issue #136 C）—— 把 SecretScanner 的命中路径归属回具体载荷单元。
+   *
+   * 调用点只有一个：`sanitizeSectionData()`（`src/core/section-sanitize.ts`），纯函数语义
+   * （不改入参、不读盘）；只做「标注」，绝不把值写回去（脱敏仍是扫描器的职责）。
+   *
+   * plugins 分区用它把 `patch[i].raw.x` 的命中写进第 i 行的 `redactedPaths`：目标机据此区分
+   * 「被剥空」与「用户写空」，写回层才能精确保护本机明文（`src/core/patch-secret-guard.ts`）。
+   * 未实现 = 载荷不含归属信息，写回侧走保守分支。
+   */
+  annotateRedactions?(sanitized: unknown, hits: SensitiveHit[]): unknown;
 
   /**
    * 可选：**只读预览**（`/export-preview` 用）。

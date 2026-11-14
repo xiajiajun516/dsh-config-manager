@@ -1030,7 +1030,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
               ...item,
               kind: 'Update' as const,
               severity: 'info' as const,
-              conflict: { itemId: c?.itemId ?? item.id, resolution: 'useImported' as const },
+              conflict: { itemId: c?.itemId ?? item.id, resolution: 'useImported' as const, decidedBy: 'item' as const },
             } as PlanItem]
           }
           return [item]

@@ -84,6 +84,7 @@
 - **索引条件写**：远端改过即中止、绝不覆盖别人；gist 例外 = 不做条件头（PATCH 回 400），改写后复核、冲突报 `index-conflict`。
 - **快照不进机器专属路径**（导出剥 store/cache、写回保留本机）；S3 授权头逐字序列化；祖先副本只落密文。
 - **「本地有改动」与导出载荷必须同一份字节**：`hasLocalChanges` 比 `hashSection(export())` ⇒ 比对里剔掉的易变字段必须同时从载荷剔除，否则每轮轮询都真推一次；身份字节只有 `src/adapters/file-collection.ts` 的 `comparableContent()` 一处。
+- **脱敏剥空的叶子不覆盖本机明文**：patch 行带 `redactedPaths`（缺省=未知→保守）；导入为空且本机非空、又未逐行确认时保留本机并告警（给行 id 与路径、不含值）；合并不得用全局 `replace` 兜底未裁决叶级 Conflict，留下的进 `review`，终态不得「成功且零告警」（判据 → `docs/evidence/sync-channel.md`）。
 - **会话管理五条**：远端保留接 GFS（刚 push 恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；墓碑不删本机数据。
 - **git 通道只碰同步内容**：clone 走 partial+sparse（sparse 面 = `SYNC_ROOT_DIRS`，与 `ADOPT_ROOT_ALLOW` 同源），老 git 回落全量；`--filter` 只给 promisor 副本。
 - **git 通道 `latest/` 是派生视图**：与快照同一次 commit、只写不读（`list`/`download`/合并/保留/冲突都不认）、按 `createdAt` 不回退、删快照时同提交移除、加密不写且告警；必须同进 `ADOPT_ROOT_ALLOW` 与 `syncDirs()`，存量 cone 由 `ensureSparseConeCoversLatest` 补齐（→ `docs/contracts/sync-channel-v1.md` §1.1）。

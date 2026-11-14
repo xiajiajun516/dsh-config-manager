@@ -757,6 +757,10 @@ class MockImporter {
   warnings: string[] = [];
   /** 审计 P0-23：executeImportPlan 收到的 snapshotBinding（undefined = 调用方未透传绑定）。 */
   receivedBinding: unknown = undefined;
+  /** issue #136 B：createImportPlan 收到的决策（断言「落地层不再一律 replace」）。 */
+  receivedDecisions: unknown = undefined;
+  /** executeImportPlan 收到的计划（断言未裁决 Conflict 原样留在计划里）。 */
+  receivedPlan: unknown = undefined;
   /**
    * 审计 P0-23：失败时是否模拟「引擎已就地回滚」的上报 —— 即 analyzer.ts:711-725 的真实行为：
    * rollbackOnError 触发整体回滚 → 经 binding.recordRollback 上报 → 再正常返回 ok:false。
@@ -784,9 +788,13 @@ class MockImporter {
     snapshotId: null,
   });
   async analyzeImport(_zipPath: string): Promise<unknown> { return await this.analyzeImpl(); }
-  async createImportPlan(_zipPath: string, _decisions: unknown): Promise<unknown> { return await this.createPlanImpl(); }
+  async createImportPlan(_zipPath: string, _decisions: unknown): Promise<unknown> {
+    this.receivedDecisions = _decisions;
+    return await this.createPlanImpl();
+  }
   async executeImportPlan(_zipPath: string, _plan: unknown, _opts: unknown): Promise<unknown> {
     this.executeCalls += 1;
+    this.receivedPlan = _plan;
     const binding = (_opts as {
       snapshotBinding?: { recordRollback?: (r: { full: boolean; failed: readonly string[] }) => Promise<void> };
     } | undefined)?.snapshotBinding;
@@ -894,6 +902,140 @@ test('applyMergePlan: 失败路径 → 整体回滚 + enqueueItems + ApplyReport
     // recordBaseline 不应在失败路径调用：sync-state.lastSnapshotId 应仍为空
     const state = await loadSyncState(tmp);
     assert.equal(state.lastSnapshotId, '', '失败时不应 recordBaseline');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('#136 B：叶级未裁决 Conflict 不再被 replace 兜底 —— 计划用 merge 生成、冲突项原样留下并进报告', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-apply-held-'));
+  const localDir = path.join(tmp, 'snapshots');
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    // 计划里同时有「可应用的项」与「叶级未裁决 Conflict」：后者是 #136 的核心
+    mock.createPlanImpl = async () => ({
+      items: [
+        {
+          id: 'patch:line-a',
+          kind: 'Conflict',
+          adapter: 'plugins',
+          description: 'patch 行 line-a 与本机不同',
+          severity: 'warning',
+          target: { adapter: 'plugins', ref: 'line-a' },
+        },
+        {
+          id: 'settings:general',
+          kind: 'Update',
+          adapter: 'settings',
+          description: 'settings general',
+          severity: 'info',
+        },
+      ],
+      globalStrategy: 'merge',
+      pathMappings: [],
+      missingSecrets: [],
+      needsRestart: false,
+      estimatedActions: { plugins: 1, settings: 1 } as Record<string, number>,
+    });
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, localSnapshotsDir: localDir, mockImporter: mock,
+    });
+    const apply: SyncApplyPlan = {
+      autoApply: [{
+        id: 'settings',
+        decision: 'useRemote',
+        conflicts: [],
+        merged: { version: 1, namespaces: { general: { value: { theme: 'light' }, revision: 5, secrets: [] } } },
+      }],
+      review: [],
+      skipped: [],
+    };
+
+    const report = await engine.applyMergePlan(apply);
+
+    // 1) 落地层不再用 replace 把未裁决项翻成 Update
+    const decisions = mock.receivedDecisions as { strategy?: string; resolutions?: Record<string, string> };
+    assert.equal(decisions.strategy, 'merge', 'createImportPlan 必须收到 merge（replace 会把叶级冲突静默落盘）');
+    assert.deepEqual(decisions.resolutions, {}, '不替用户做裁决：resolutions 必须为空');
+    // 2) 未裁决项原样留在计划里（analyzer 的 planItemWritesTarget 才会拦下不写）
+    const plan = mock.receivedPlan as { items: { id: string; kind: string }[] };
+    assert.equal(plan.items.find((i) => i.id === 'patch:line-a')?.kind, 'Conflict', '未裁决项不得被改写 kind');
+    // 3) 报告必须列出待裁决项（可列出的 review 面），且带分区与项 id、不带值
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.applied, ['settings']);
+    assert.equal(report.review.length, 1, `未裁决项必须进报告 review，实际=${JSON.stringify(report.review)}`);
+    assert.equal(report.review[0]?.id, 'patch:line-a');
+    assert.equal(report.review[0]?.sectionId, 'plugins');
+    assert.equal(report.review[0]?.kind, 'key');
+    // 4) 同时有可见 warning：不能「成功且零告警」
+    assert.equal(report.warnings.length, 1, `叶级冲突必须有 warning，实际=${JSON.stringify(report.warnings)}`);
+    assert.ok(report.warnings[0]?.includes('叶级冲突'), `warning 应说清是叶级未裁决: ${report.warnings[0]}`);
+    assert.ok(report.warnings[0]?.includes('plugins'), `warning 应带分区名: ${report.warnings[0]}`);
+    assert.ok(!report.warnings[0]?.includes('sk-'), 'warning 绝不能带值');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('#136 A：分区级裁决注入的 useImported 必须标 decidedBy:section —— 否则被当成人对该行的确认', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-apply-section-'));
+  const localDir = path.join(tmp, 'snapshots');
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    let plans = 0;
+    // 第一趟（探测）返回叶级 Conflict；第二趟（带分区级 resolutions）返回裁决结果 Update
+    mock.createPlanImpl = async () => {
+      plans += 1;
+      const conflict = plans === 1;
+      return {
+        items: [{
+          id: 'patch:imagegen',
+          kind: conflict ? 'Conflict' : 'Update',
+          adapter: 'plugins',
+          description: 'patch 行 imagegen 与本机不同',
+          severity: conflict ? 'warning' : 'info',
+          target: { adapter: 'plugins', ref: 'imagegen' },
+          ...(conflict ? {} : { conflict: { itemId: 'patch:imagegen', resolution: 'useImported' } }),
+        }],
+        globalStrategy: 'merge',
+        pathMappings: [],
+        missingSecrets: [],
+        needsRestart: false,
+        estimatedActions: { plugins: 1 } as Record<string, number>,
+      };
+    };
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, localSnapshotsDir: localDir, mockImporter: mock,
+    });
+    const apply: SyncApplyPlan = {
+      autoApply: [{
+        id: 'plugins',
+        decision: 'useRemote',
+        conflicts: [],
+        merged: { version: 1, plugins: [], patch: [{ file: 'cordis.patch.yml', lineId: 'imagegen', raw: { id: 'imagegen' } }] } as never,
+      }],
+      review: [],
+      skipped: [],
+    };
+
+    const report = await engine.applyMergePlan(apply);
+
+    assert.equal(report.ok, true);
+    assert.equal(plans, 2, 'plugins 已被分区级裁决覆盖 → 必须补第二趟带 resolutions 的计划');
+    const plan = mock.receivedPlan as {
+      items: { id: string; kind: string; conflict?: { resolution?: string; decidedBy?: string } }[];
+    };
+    const item = plan.items.find((i) => i.id === 'patch:imagegen');
+    assert.equal(item?.kind, 'Update');
+    assert.equal(item?.conflict?.resolution, 'useImported');
+    assert.equal(item?.conflict?.decidedBy, 'section', '分区级裁决必须标明来源，写回守卫才会保留本机明文');
+    assert.deepEqual(report.review, [], '分区级裁决已覆盖的项不算待裁决');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

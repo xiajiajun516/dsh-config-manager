@@ -114,6 +114,9 @@ export function skipReasonKey(reason: string | undefined): SyncKey | null {
     // 0.4.1：推送前收养了本机自己推的远端快照（上次推送在写基线前被打断）—— 结果仍是 success，
     // 这条原因只是把「基线是被修好的」讲明白。
     case 'baseline-adopted': return 'history.autosyncReasonBaselineAdopted';
+    // issue #136：下行有告警（内容没全落地）但没有叶级冲突 —— 与「冲突待裁决」必须分开说，
+    // 否则界面把插件安装失败之类的事情也说成冲突，且待确认分区计数被虚增。
+    case 'warning': return 'history.autosyncReasonWarning';
     // 未知原因：没有字典键（调用方决定回退策略）
     default: return null;
   }

@@ -26,6 +26,7 @@ import { findPatchKeyHazards } from '../utils/patch-yaml.ts';
 import { patchKeyHazardMessage } from './patch-key-guard.ts';
 import { PLUGIN_PATCH_REF_PREFIX, PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
 import { readEffectivePatchLines, resolveWriteLayer, USER_PATCH_FILE } from '../core/patch-layers.ts';
+import { applyPatchSecretGuard } from '../core/patch-secret-guard.ts';
 import { stripMcpEntries } from './mcp.ts';
 import {
   parsePnpmPatchedDependencies, restorePnpmMachinePaths, sanitizePnpmWorkspacePatches, stripPnpmMachinePaths,
@@ -33,7 +34,7 @@ import {
 import type { LocalPluginTarball, PatchLine, PluginEntry, PluginsSection, PnpmPatchFile } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
-  ImportContext, PlanItem, PluginAreaRef, SectionPreview, ValidationResult,
+  ImportContext, PlanItem, PluginAreaRef, SectionPreview, SensitiveHit, ValidationResult,
 } from '../core/types.ts';
 import { BUILTIN_PLUGIN_DATA_SOURCES, areasForSection } from '../core/plugin-data-registry.ts';
 import type { PluginDataSource } from '../core/plugin-data-registry.ts';
@@ -281,6 +282,33 @@ async function measureLocalSources(plugins: PluginEntry[], ctx: HostContext): Pr
   }
   return sizes;
 }
+/**
+ * issue #136 A：读目标机**当前生效**的 patch 行原文（写回守卫的「本机现值」）。
+ *
+ * 口径与 analyzeImport 判定 Skip/Conflict 时逐字相同（readEffectivePatchLines + lineId 匹配），
+ * 这样「计划阶段看到的现值」与「写回阶段比对的现值」不会分叉。
+ *
+ * 读失败**不得**降级成「没有本机行」：那等于跳过守卫、静默覆盖本机明文（#136 的复现条件），
+ * 而且连一条告警都不会有。失败必须显式上抛给 applyItem，由它对这一行返回非致命失败。
+ */
+async function readLocalPatchRaw(
+  ctx: ImportContext,
+  lineId: string,
+): Promise<{ ok: true; raw: unknown } | { ok: false; reason: string }> {
+  try {
+    const { lines, failures } = await readEffectivePatchLines(ctx.target.patchFile, ctx.target.profile);
+    // 有层读不出来 → 无法证明「本机这一行现在是什么 / 到底有没有」。
+    // readEffectivePatchLines 把层读失败收进 failures（不抛错），此前的实现只 catch 抛错、
+    // 于是「有层读不出来」被当成「本机没有这一行」放行 —— 守卫被绕过且零告警（#136 的复现条件）。
+    // 这里宁可跳过这一行并说明原因，也不按「无本机值」写入。
+    if (failures.length > 0) {
+      return { ok: false, reason: failures.map((f) => `${f.file}: ${f.reason}`).join('; ') };
+    }
+    return { ok: true, raw: lines.find((l) => l.lineId === lineId)?.raw };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 /**
  * 由分区载荷派生单元清单（纯函数、零 I/O）。
@@ -372,6 +400,46 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
 
   async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<PluginsSection>> {
     return this.collect(ctx, options, true);
+  }
+  /**
+   * issue #136 C：脱敏**归属标注** —— 把 SecretScanner 的命中路径归属回具体 patch 行。
+   *
+   * 为什么必须做：导出侧把命中字段名/值形状的字符串叶子替换成空串（占位符），语义是「需补录」。
+   * 目标机只看到空串，无法区分「被剥空」与「用户主动写空」——于是合并/导入落地时照抄空串，
+   * 静默抹掉本机同一行里用户手写的明文（行是整行写回的，行内没有粒度）。
+   *
+   * 归属规则：命中路径 `patch[i].<内部路径>` → 第 i 行的 `redactedPaths`（行内相对，原样保留
+   * 扫描器语法，如 `raw.mcp.args.token`）；未命中的行不写该字段（缺省 = 未知，写回侧走保守分支）。
+   *
+   * 纯函数：不改入参；命中不落在 patch 行上（plugins / pnpmWorkspace / localTarballs 等）→ 原样返回。
+   */
+  annotateRedactions(sanitized: unknown, hits: SensitiveHit[]): unknown {
+    if (hits.length === 0) return sanitized;
+    if (sanitized === null || typeof sanitized !== 'object') return sanitized;
+    const section = sanitized as PluginsSection;
+    if (!Array.isArray(section.patch) || section.patch.length === 0) return sanitized;
+    const byLine = new Map<number, Set<string>>();
+    for (const hit of hits) {
+      const m = /^patch\[(\d+)\]\.(.+)$/.exec(hit.path);
+      if (m === null) continue;
+      const index = Number(m[1]);
+      if (!Number.isInteger(index) || index < 0 || index >= section.patch.length) continue;
+      let paths = byLine.get(index);
+      if (paths === undefined) {
+        paths = new Set<string>();
+        byLine.set(index, paths);
+      }
+      const rel = m[2];
+      if (rel === undefined || rel === '') continue;
+      paths.add(rel);
+    }
+    if (byLine.size === 0) return sanitized;
+    const patch = section.patch.map((line, i) => {
+      const paths = byLine.get(i);
+      if (paths === undefined) return line;
+      return { ...line, redactedPaths: [...paths].sort() };
+    });
+    return { ...section, patch };
   }
 
   /**
@@ -1094,11 +1162,48 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     const data = ctx.sections.get('plugins') as PluginsSection | undefined;
     const pl = data?.patch.find((p) => p.lineId === ref);
     if (!pl) return { ok: false, message: msg('adapter.patchMissing', { ref }) };
+    // issue #136 A：写回层守卫 —— 「被脱敏剥空」的叶子不得覆盖本机非空明文。
+    //
+    // 为什么在写回层做（而不是只靠导出侧标注）：协同场景里对方的载荷来自更早版本、第三方工具或
+    // 手工改过，`redactedPaths` 可能缺失；写回是最后一道能同时看见「本机现值」与「将被写下的值」
+    // 的地方，也唯一能区分「被剥空」与「用户主动写空」（显式逐行 useImported 才放行清空）。
+    // 守卫只在 Update/Conflict 上生效；Create 没有本机行可保（新行原样写入）。
+    // 本机现值读不出来 → 无法证明这次写入不会覆盖明文，这一行**拒绝写**。
+    // 非致命（warning）：一行读不出来不该拖垮其余分区，也不该把整笔导入回滚。
+    const localRead = item.kind === 'Create'
+      ? ({ ok: true as const, raw: undefined })
+      : await readLocalPatchRaw(ctx, ref);
+    if (!localRead.ok) {
+      return {
+        ok: false,
+        warning: true,
+        message: msg('adapter.patchLocalReadFailed', { ref: item.id, reason: localRead.reason }),
+      };
+    }
+    const guard = applyPatchSecretGuard({
+      importedRaw: pl.raw,
+      localRaw: localRead.raw,
+      redactedPaths: pl.redactedPaths,
+      // 显式逐行确认 = 用户对本行选了 useImported（全局 replace 策略不算确认）
+      // #136 A：只有**逐项**确认才算「我要这一行按导入值写」。判定必须是**白名单**：
+      // 分区级裁决（decidedBy: 'section'，由合并落地 planMergeApply 注入）只决定分区是否应用，
+      // 不构成对本行的确认；来源缺省（未来新增的注入路径忘了标注）一律按「未确认」处理 ——
+      // 默认放行等于给同类漏洞留后门；翻转成默认拒绝后，忘标注只会少清空、不会误清空。
+      confirmed: item.conflict?.resolution === 'useImported' && item.conflict?.decidedBy === 'item',
+    });
     // 层身份按**语义**映射到目标机：来源是别的 profile 层时不能照抄名字（目标机未必有那个
     // profile，宿主门面会拒绝），一律落到目标机当前 profile 层（与计划项 target.file 同口径）。
     await ctx.target.patchFile.applyPatchChanges(resolveWriteLayer(pl.file, ctx.target.profile), [
-      { lineId: ref, raw: pl.raw, action: item.kind === 'Create' ? 'insert' : 'update' },
+      { lineId: ref, raw: guard.raw, action: item.kind === 'Create' ? 'insert' : 'update' },
     ]);
+    if (guard.kept.length > 0) {
+      // 告警只报行 id 与字段路径，绝不带值（值本身就是密钥）
+      // 报告面用**计划项 id**（`patch:<lineId>`）而不是裸 lineId：报告与计划项要能逐条对上
+      return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchSecretsKept', { ref: item.id, paths: guard.kept.join(', ') }) };
+    }
+    if (guard.cleared.length > 0) {
+      return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchSecretsCleared', { ref: item.id, paths: guard.cleared.join(', ') }) };
+    }
     return { ok: true, needsRestart: true, message: msg('adapter.patchWritten', { ref }) };
   }
 
@@ -1134,6 +1239,23 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
           const pl = raw as unknown;
           if (pl === null || typeof pl !== 'object') {
             issues.push({ path: `patch[${i}]`, message: msg('adapter.validate.recordObject', { subject: 'patch line' }), severity: 'error' });
+            continue;
+          }
+          // issue #136 C：脱敏归属路径（可选；存在时必须是字符串数组、元素非空，写回守卫按它精确比对）。
+          // **空数组合法**：语义就是「本行没有剥空位置」，守卫按缺省（保守分支）处理。
+          // 不把空数组当形状错误 —— 第三方 exporter 写出 `[]` 时拦下整包导入，代价远大于收益，
+          // 而且凝死一个「字段在但内容空」与「字段缺省」不等价的契约，纯属自找兼容债。
+          const redactedPaths = (pl as { redactedPaths?: unknown }).redactedPaths;
+          if (redactedPaths !== undefined) {
+            if (!Array.isArray(redactedPaths)) {
+              issues.push({ path: `patch[${i}].redactedPaths`, message: msg('adapter.validate.array', { subject: 'patch[].redactedPaths' }), severity: 'error' });
+            } else {
+              for (const [j, p] of redactedPaths.entries()) {
+                if (typeof p !== 'string' || p === '') {
+                  issues.push({ path: `patch[${i}].redactedPaths[${j}]`, message: msg('adapter.validate.string', { subject: 'patch[].redactedPaths[]' }), severity: 'error' });
+                }
+              }
+            }
           }
         }
       }

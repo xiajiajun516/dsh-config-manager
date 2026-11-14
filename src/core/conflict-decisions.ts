@@ -21,7 +21,8 @@ export function applyItemResolution(item: PlanItem, decisions: ImportDecisions, 
     return { ...item, kind: 'Skip', severity: 'info', detail: `${item.detail ?? ''}${msg('import.conflictKeepCurrent')}` };
   }
   if (resolution === 'useImported') {
-    return { ...item, kind: 'Update', severity: 'info', conflict: { itemId: item.id, resolution } };
+    // decidedBy: 'item' —— 来源是用户对该计划项的逐项决策（写回守卫据此允许清空被剥空叶子）
+    return { ...item, kind: 'Update', severity: 'info', conflict: { itemId: item.id, resolution, decidedBy: 'item' } };
   }
   // review / 未决策：按全局策略兜底
   if (decisions.strategy === 'skipExisting') {

@@ -276,6 +276,8 @@ test('issue #79：skipReasonKey —— 新旧码都映射到字典键，未知�
   assert.equal(skipReasonKey('mutation-lock-stale'), 'history.autosyncReasonLockStale');
   assert.equal(skipReasonKey('mutation-lock-unavailable'), 'history.autosyncReasonLockUnavailable');
   assert.equal(skipReasonKey('mutation-safe-mode'), 'history.autosyncReasonSafeMode');
+  // issue #136：下行告警 ≠ 冲突 —— 两类降级各说各的，不能共用「冲突」文案
+  assert.equal(skipReasonKey('warning'), 'history.autosyncReasonWarning');
   assert.equal(skipReasonKey('future-code-from-newer-host'), null, '未知码不猜');
   assert.equal(skipReasonKey(undefined), null);
 });

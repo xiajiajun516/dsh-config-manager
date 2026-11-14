@@ -176,7 +176,22 @@ export interface PluginEntry {
   fiberPhase?: string;
 }
 
-export interface PatchLine { file: string; lineId: string; raw: unknown; }
+export interface PatchLine {
+  file: string;
+  lineId: string;
+  raw: unknown;
+  /**
+   * 本行 `raw` 里**被脱敏剥空**的叶子路径（行内相对，如 `raw.mcp.args.token`），issue #136 C。
+   *
+   * 语义：这些路径上的值**不是**用户在源机写空，而是导出侧 SecretScanner 剥掉的（占位符 = 空串），
+   * 目标机不得据此覆盖本机同叶子的非空值。写回侧据此精确保护（见
+   * `src/core/patch-secret-guard.ts`）。
+   *
+   * 兼容：字段只增不改。**缺省 = 未知**（老快照没有这个信息）→ 写回侧走保守分支
+   * （导入空 + 本机非空即保留本机），绝不假定「空值一定来自用户主动清空」。
+   */
+  redactedPaths?: string[];
+}
 
 /**
  * 本地源插件的打包产物（T1）。
