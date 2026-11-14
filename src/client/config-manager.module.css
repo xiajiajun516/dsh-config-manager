@@ -1639,16 +1639,24 @@ body {
   height: 12px;
   border-radius: 999px;
   background-color: var(--cm-line-2);
+  /* 位移与拉伸一律走 transform。left / width 是布局属性：逐帧改它们会触发重排 + 重绘
+     整块卡片，主线程一忙合成器就掉帧 —— 这是初版动画「不流畅」的直接原因。 */
+  transform: translateX(0) scaleX(1) scaleY(1);
+  transform-origin: 50% 50%;
   transition: background-color var(--cm-motion-fast) ease;
 }
 
+/* 落点也只改 transform：left 恒为 2px，16px 的位移交给 translateX —— 轨道内宽 30、
+   圆点 12、左右内缩各 2，正好 16px 行程。 */
 .switchInput:checked + .switchTrack .switchKnob {
-  left: 18px;
+  transform: translateX(16px) scaleX(1) scaleY(1);
   background-color: var(--cm-text-on-accent);
 }
 
 .switchTrackAnimated .switchKnob {
-  animation-duration: 320ms;
+  animation-duration: 300ms;
+  /* 动画期间提成合成层：之后每帧只改 transform，不再逐帧重排版（仅这几枚开关，代价可忽略） */
+  will-change: transform;
 }
 
 .switchInput:checked + .switchTrackAnimated .switchKnob {
@@ -1659,37 +1667,44 @@ body {
   animation-name: switchKnobOff;
 }
 
+/* 三段式：位移与拉伸同时起跑 → 中段最宽（1.58 倍 ≈ 19px 的胶囊）→ 末段收圆并轻压一下落地。
+   几何约束（保证圆点绝不越出轨道 2…30 的可用区间）：
+     中段 中心 8+8=16、半宽 6×1.58=9.5 ⇒ 6.5…25.5；
+     末段 中心 8+15.2=23.2、半宽 6.6 ⇒ 16.6…29.8，只收不放。 */
 @keyframes switchKnobOn {
   0% {
-    left: 2px;
-    width: 12px;
+    transform: translateX(0) scaleX(1) scaleY(1);
+    animation-timing-function: cubic-bezier(0.22, 0.75, 0.24, 1);
+  }
+  52% {
+    transform: translateX(8px) scaleX(1.58) scaleY(1);
+    animation-timing-function: cubic-bezier(0.32, 0.5, 0.3, 1);
+  }
+  82% {
+    transform: translateX(15.2px) scaleX(1.1) scaleY(0.94);
     animation-timing-function: var(--cm-motion-ease-out);
   }
-  42% {
-    left: 2px;
-    width: 20px;
-    animation-timing-function: linear(0, 0.42 22%, 0.78 44%, 1.06 68%, 1.01 86%, 1);
-  }
   100% {
-    left: 18px;
-    width: 12px;
+    transform: translateX(16px) scaleX(1) scaleY(1);
   }
 }
 
+/* 关方向是开方向的镜像：末段 中心 8.8、半宽 6.6 ⇒ 2.2…15.4，同样不越界。 */
 @keyframes switchKnobOff {
   0% {
-    left: 18px;
-    width: 12px;
+    transform: translateX(16px) scaleX(1) scaleY(1);
+    animation-timing-function: cubic-bezier(0.22, 0.75, 0.24, 1);
+  }
+  52% {
+    transform: translateX(8px) scaleX(1.58) scaleY(1);
+    animation-timing-function: cubic-bezier(0.32, 0.5, 0.3, 1);
+  }
+  82% {
+    transform: translateX(0.8px) scaleX(1.1) scaleY(0.94);
     animation-timing-function: var(--cm-motion-ease-out);
   }
-  42% {
-    left: 10px;
-    width: 20px;
-    animation-timing-function: linear(0, 0.42 22%, 0.78 44%, 1.06 68%, 1.01 86%, 1);
-  }
   100% {
-    left: 2px;
-    width: 12px;
+    transform: translateX(0) scaleX(1) scaleY(1);
   }
 }
 
@@ -1697,6 +1712,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .switchTrackAnimated .switchKnob {
     animation: none;
+    will-change: auto;
   }
   .switchTrack,
   .switchKnob {
