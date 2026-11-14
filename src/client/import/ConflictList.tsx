@@ -98,8 +98,8 @@ export function ConflictList({ collector, t, onChanged }: ConflictListProps) {
       {unresolved > 0 && <Banner kind="warn">{t('import.conflicts.unresolved', { count: String(unresolved) })}</Banner>}
 
       {/* 批量决策按钮（无冲突项时禁用；均为次操作——覆盖性决策不诱导，逐项选边为主）。
-          纵向各占一行（W3 R-7）：两条文案都长，横向 wrap 会把「全部使用备份配置」挤到第二行右侧，
-          读起来像同组的次级选项；各自独占一行、左对齐才看得出是两条并列的整批决策。 */}
+          同一行左对齐、不换行（设计稿 T-02c ④；用户 2026-11-14 明确要求）：两条整批决策是并列的
+          同一档动作，横排成一组；折行会让第二条变成视觉上的次级项。 */}
       <div className={css.conflictBulk}>
         <Button
           variant="ghost"

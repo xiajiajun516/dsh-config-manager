@@ -4528,14 +4528,20 @@ body {
   margin-bottom: 10px;
 }
 
-/* 批量决策按钮纵向排列（W3 R-7）：两条文案都长，横向 .actionRow 会把第二条挤到右侧、
-   读成同组次级项；各自独占一行、左对齐，压在冲突清单之上。 */
+/* 批量决策同一行（设计稿 T-02c ④：两枚 ghost 左对齐、间距 8）。W3 曾改纵排，
+   用户 2026-11-14 明确要求回到同一行：两条整批决策是并列的同一档动作，横排读起来是一组。
+   禁止换行——第二条被折到下一行左侧会被读成同组的次级项；子项不收缩，宁可整行右溢。 */
 .conflictBulk {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 10px;
+}
+
+.conflictBulk > * {
+  flex: none;
 }
 
 .conflictItem {
