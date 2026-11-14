@@ -59,8 +59,8 @@ export function ConsultCard({ report, t, title }: ConsultCardProps) {
         </Banner>
       )}
 
-      {/* 将应用摘要 */}
-      <div className={css.consultSection}>
+      {/* 将应用摘要（稿 D-03:144：本节自成一栏，底边与维度明细分隔） */}
+      <div className={css.consultSection + ' ' + css.consultWillApply}>
         <div className={css.groupLabel}>{t('consult.willApply')}</div>
         <div className={css.statRow}>
           {view.willApply.sections.length > 0 && (
@@ -81,12 +81,13 @@ export function ConsultCard({ report, t, title }: ConsultCardProps) {
       {/* 维度明细（限高内滚） */}
       <div className={css.consultSection}>
         <div className={css.groupLabel}>{t('consult.dimensions')}</div>
-        <div className={css.consultScroll}>
+        <div className={css.consultScroll + ' ' + css.consultDimensionScroll}>
           {view.dimensions.map((d) => (
             <div key={d.id} className={css.consultDimension}>
-              <div className={css.statRow}>
-                <Badge kind={d.badgeKind}>{d.label}</Badge>
-                <Badge kind="info">{d.score}</Badge>
+              {/* 稿 D-03:161-200：维度名是纯文本（不再做成徽章），分数单独一枚按分数档位上色的徽章 */}
+              <div className={css.consultDimensionRow}>
+                <span className={css.consultDimensionName}>{d.label}</span>
+                <Badge kind={d.scoreKind}>{d.score}</Badge>
               </div>
               {d.issues.length > 0 && (
                 <ul className={css.reportList}>

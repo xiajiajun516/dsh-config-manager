@@ -39,7 +39,7 @@ export function BackupInspectView({ result, t }: BackupInspectViewProps) {
         <div className={css.groupLabel}>{t('backupFiles.inspectSections')}</div>
         <div className={css.statRow}>
           {sections.map((s) => (
-            <Badge key={s.section} kind="info">{s.section}: {s.count}</Badge>
+            <Badge key={s.section} kind="info" className={css.inspectBadge}>{s.section}: {s.count}</Badge>
           ))}
         </div>
       </div>
@@ -48,12 +48,13 @@ export function BackupInspectView({ result, t }: BackupInspectViewProps) {
       <div className={css.inspectGroup}>
         <div className={css.groupLabel}>{t('backupFiles.inspectDiff')}</div>
         <div className={css.statRow}>
-          {summary.willChange > 0 && <Badge kind="info">{t('import.preview.willChange', { count: String(summary.willChange) })}</Badge>}
-          {summary.unchanged > 0 && <Badge kind="ok">{t('import.preview.unchanged', { count: String(summary.unchanged) })}</Badge>}
-          {summary.conflicts > 0 && <Badge kind="error">{t('import.preview.conflicts', { count: String(summary.conflicts) })}</Badge>}
-          {summary.secretsNeeded > 0 && <Badge kind="warn">{t('import.preview.secrets', { count: String(summary.secretsNeeded) })}</Badge>}
-          {summary.pathMappingsNeeded > 0 && <Badge kind="warn">{t('import.preview.paths', { count: String(summary.pathMappingsNeeded) })}</Badge>}
-          {summary.needsRestart && <Badge kind="warn">{t('report.needsRestart')}</Badge>}
+          {/* 徽章统一叠屏私有的 .inspectBadge：只加同色 15% 细描边（稿 D-05:142-159），本体的四态色不动 */}
+          {summary.willChange > 0 && <Badge kind="info" className={css.inspectBadge}>{t('import.preview.willChange', { count: String(summary.willChange) })}</Badge>}
+          {summary.unchanged > 0 && <Badge kind="ok" className={css.inspectBadge}>{t('import.preview.unchanged', { count: String(summary.unchanged) })}</Badge>}
+          {summary.conflicts > 0 && <Badge kind="error" className={css.inspectBadge}>{t('import.preview.conflicts', { count: String(summary.conflicts) })}</Badge>}
+          {summary.secretsNeeded > 0 && <Badge kind="warn" className={css.inspectBadge}>{t('import.preview.secrets', { count: String(summary.secretsNeeded) })}</Badge>}
+          {summary.pathMappingsNeeded > 0 && <Badge kind="warn" className={css.inspectBadge}>{t('import.preview.paths', { count: String(summary.pathMappingsNeeded) })}</Badge>}
+          {summary.needsRestart && <Badge kind="warn" className={css.inspectBadge}>{t('report.needsRestart')}</Badge>}
         </div>
       </div>
 
@@ -62,19 +63,22 @@ export function BackupInspectView({ result, t }: BackupInspectViewProps) {
         <div className={css.inspectGroup}>
           <div className={css.groupLabel}>{t('backupFiles.inspectItems')}</div>
           {groups.map((group) => (
-            <div key={group.key} className={css.inspectGroup}>
+            <div key={group.key} className={css.inspectSubGroup}>
               <div className={css.groupHeader}>
                 <span className={css.groupLabel}>{t(groupLabelKey(group.key))}</span>
-                <Badge kind={group.kind}>{String(group.items.length)}</Badge>
+                <Badge kind={group.kind} className={css.inspectBadge}>{String(group.items.length)}</Badge>
               </div>
-              <div className={css.reportScroll}>
+              <div className={css.reportScroll + ' ' + css.inspectItemsScroll}>
                 <ul className={css.reportList}>
                   {group.items.map((item) => (
-                    <li key={item.id}>
-                      {/* 逐项不再重复 kind：分组标题已按 kind 命名，裸枚举值（Create/Skip…）没有第二种说法。
-                          前导 {' '} 是 plan-text-redaction 逐字锚点的一部分，别删（见该表 snapshot-inspect-description）。
-                          差异查看的计划项文本由宿主拼装 → 渲染前过 redact（安全自查） */}
-                      {' '}{item.adapter}: {redact(item.description)}
+                    /* 条目三段（稿 D-05:170-181）：圆点 + 等宽彩色 adapter + 描述。
+                       逐项不再重复 kind：分组标题已按 kind 命名，裸枚举值（Create/Skip…）没有第二种说法。
+                       描述由宿主拼装 → 渲染前过 redact；plan-text-redaction 的 snapshot-inspect-description
+                       在同一次提交里同步改成这里的锚点（见该表）。 */
+                    <li key={item.id} className={css.inspectItem}>
+                      <span className={css.inspectDot} aria-hidden="true" />
+                      <span className={css.mono + ' ' + css.inspectAdapter}>{item.adapter}:</span>
+                      <span className={css.inspectDesc}>{redact(item.description)}</span>
                     </li>
                   ))}
                 </ul>

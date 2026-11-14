@@ -197,6 +197,8 @@ export interface BadgeProps {
   children: ReactNode
   /** 悬停提示（可选） */
   title?: string
+  /** 屏幕私有修饰类（可选）：只叠加形态（描边/方角），不替换四态语义色 */
+  className?: string
 }
 
 /**
@@ -207,13 +209,14 @@ export interface BadgeProps {
  * 拿不到原生包（老宿主）时回落本仓库的 `.badge[data-kind]` —— 两条路径的语义由**同一张表**给出。
  * 原生 Tag 没有 title 入参：需要悬停提示时套一层 inline-flex 的 wrapper，不改变布局。
  */
-export function Badge({ kind = 'info', children, title }: BadgeProps) {
+export function Badge({ kind = 'info', children, title, className }: BadgeProps) {
   const DshTag = hostTag()
   if (DshTag !== null) {
-    const tag = <DshTag tone={badgeTone(kind)}>{children}</DshTag>
+    // className 透传给宿主 Tag（见 host-primitives 的 DshTagProps）：屏私有修饰类在两分支都生效
+    const tag = <DshTag tone={badgeTone(kind)} className={className}>{children}</DshTag>
     return title === undefined ? tag : <span className={css.badgeHost} title={title}>{tag}</span>
   }
-  return <span className={css.badge} data-kind={kind} title={title}>{children}</span>
+  return <span className={className === undefined ? css.badge : `${css.badge} ${className}`} data-kind={kind} title={title}>{children}</span>
 }
 
 /* ---------------- Chip ---------------- */
@@ -222,6 +225,8 @@ export interface ChipProps {
   children: ReactNode
   /** 悬停提示（可选） */
   title?: string
+  /** 屏幕私有修饰类（可选）：只叠加形态，不改中性色 */
+  className?: string
 }
 
 /**
@@ -235,8 +240,8 @@ export interface ChipProps {
  * 盒模型由 `.chip` 与 `.badge` 逐字对齐保证（同高 19px / 同药丸圆角 / 同 11px 字号），
  * 差别只在色调 —— 同屏混排时它们读起来是「同一套小片子的两种用法」。
  */
-export function Chip({ children, title }: ChipProps) {
-  return <span className={css.chip} title={title}>{children}</span>
+export function Chip({ children, title, className }: ChipProps) {
+  return <span className={className === undefined ? css.chip : `${css.chip} ${className}`} title={title}>{children}</span>
 }
 
 /* ---------------- Banner ---------------- */

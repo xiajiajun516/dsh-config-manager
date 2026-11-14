@@ -24,7 +24,10 @@ export interface ConsultDimensionView {
   label: string;
   score: number;
   verdict: HealthVerdict;
+  /** 维度名徽章的 kind（按 verdict，历史上用于整枚徽章着色） */
   badgeKind: ConsultBadgeKind;
+  /** 分数徽章的 kind（按分数档位派生 —— 稿上分数用绿/橙分色，与文字 verdict 无关） */
+  scoreKind: ConsultBadgeKind;
   issues: { severity: 'info' | 'warning' | 'error'; message: string }[];
 }
 
@@ -140,6 +143,19 @@ export function consultDimensionLabel(id: ConsultDimensionId, t: UiT): string {
   }
 }
 
+/**
+ * 维度分数 → 徽章 kind（稿 D-03:161-200 的分色口径，纯函数）：
+ * ≥90 ok（绿）/ ≥70 warn（橙）/ 其余 error（红）。
+ *
+ * 为什么分数不再借用 verdict 的 kind：同一维度可能 verdict=warning 而分数 92（绿），
+ * 稿上颜色跟的是**分数**，把 verdict 色套到分数上会出现「92 分却标橙」的自相矛盾。
+ */
+export function consultScoreBadgeKind(score: number): ConsultBadgeKind {
+  if (score >= 90) return 'ok'
+  if (score >= 70) return 'warn'
+  return 'error'
+}
+
 /** 把 ConsultReport 转成视图数据（纯函数） */
 export function consultView(report: ConsultReport, t: UiT): ConsultView {
   const dimensions: ConsultDimensionView[] = report.dimensions.map((d) => ({
@@ -148,6 +164,7 @@ export function consultView(report: ConsultReport, t: UiT): ConsultView {
     score: d.score,
     verdict: d.verdict,
     badgeKind: consultVerdictBadgeKind(d.verdict),
+    scoreKind: consultScoreBadgeKind(d.score),
     issues: d.issues.map((i) => ({ severity: i.severity, message: i.message })),
   }));
 

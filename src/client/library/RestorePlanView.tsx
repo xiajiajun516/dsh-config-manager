@@ -176,12 +176,14 @@ export function RestorePlanView({ api, t, snapshotId, plan, changeSummary }: Res
   return (
     <div className={css.restorePlan}>
       <div className={css.statRow}>
-        {stats.changed > 0 && <Badge kind="info">{t('snapshots.plan.changed', { count: String(stats.changed) })}</Badge>}
-        {stats.added > 0 && <Badge kind="ok">{t('snapshots.plan.added', { count: String(stats.added) })}</Badge>}
-        {stats.deleted > 0 && <Badge kind="error">{t('snapshots.plan.deleted', { count: String(stats.deleted) })}</Badge>}
-        {stats.plugins > 0 && <Badge kind="warn">{t('snapshots.plan.plugins', { count: String(stats.plugins) })}</Badge>}
-        {stats.hints > 0 && <Badge kind="warn">{t('snapshots.plan.hints', { count: String(stats.hints) })}</Badge>}
-        {stats.skips > 0 && <Badge kind="info">{t('snapshots.plan.skips', { count: String(stats.skips) })}</Badge>}
+        {/* 摘要徽章：稿上是 4px 方角 + 同色细描边。只叠屏私有修饰类（.restorePlanStatBadge），
+            .badge 本体的药丸形态是全站基线，不在这里改。 */}
+        {stats.changed > 0 && <Badge kind="info" className={css.restorePlanStatBadge}>{t('snapshots.plan.changed', { count: String(stats.changed) })}</Badge>}
+        {stats.added > 0 && <Badge kind="ok" className={css.restorePlanStatBadge}>{t('snapshots.plan.added', { count: String(stats.added) })}</Badge>}
+        {stats.deleted > 0 && <Badge kind="error" className={css.restorePlanStatBadge}>{t('snapshots.plan.deleted', { count: String(stats.deleted) })}</Badge>}
+        {stats.plugins > 0 && <Badge kind="warn" className={css.restorePlanStatBadge}>{t('snapshots.plan.plugins', { count: String(stats.plugins) })}</Badge>}
+        {stats.hints > 0 && <Badge kind="warn" className={css.restorePlanStatBadge}>{t('snapshots.plan.hints', { count: String(stats.hints) })}</Badge>}
+        {stats.skips > 0 && <Badge kind="info" className={css.restorePlanStatBadge}>{t('snapshots.plan.skips', { count: String(stats.skips) })}</Badge>}
         {(stats.addedLines > 0 || stats.removedLines > 0) && (
           <span className={css.diffStatTotal}>
             <span className={css.diffStatAdd}>+{stats.addedLines}</span>
@@ -206,7 +208,9 @@ export function RestorePlanView({ api, t, snapshotId, plan, changeSummary }: Res
           }
         })()
         return (
-          <div key={group.key} className={css.inspectGroup}>
+          // 分组卡片化：每组一张描边卡（.restorePlanCard 私有），30px 组头由 .restorePlanGroupHead 提供；
+          // 不用 :has 修圆角 —— 组头背景直接铺到卡片顶边，overflow: hidden 负责裁切。
+          <div key={group.key} className={css.restorePlanCard}>
             <div className={css.restorePlanGroupHead}>
               {collapsible ? (
                 <button type="button" className={css.diffGroupToggle} aria-expanded={skipsOpen} onClick={() => { setSkipsOpen(!skipsOpen) }}>
@@ -216,7 +220,8 @@ export function RestorePlanView({ api, t, snapshotId, plan, changeSummary }: Res
               ) : (
                 <span className={css.groupLabel}>{t(groupLabelKey)}</span>
               )}
-              <Badge kind="info">{String(group.rows.length)}</Badge>
+              {/* 组头计数是「分类」不是「状态」：用中性 Chip（与跳过行的灰片同语义），不再借 info 蓝 */}
+              <Chip>{String(group.rows.length)}</Chip>
               {group.counted > 0 && (
                 <span className={css.diffStatTotal}>
                   <span className={css.diffStatAdd}>+{group.added}</span>

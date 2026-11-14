@@ -170,10 +170,12 @@ const RENDER_POINTS: RenderPoint[] = [
   {
     id: 'snapshot-inspect-description',
     // UI v2：该视图搬到 library/ 供产物库与备份页共用（同一次提交里改登记表，绝不漏）
+    // W7（D-05 #1）：条目拆成「圆点 + 等宽 adapter + 描述」三段，前导 {' '} 随之消失 ——
+    // 锚点改成描述那一段自己的容差位（安全边界不变：仍是同一个 redact 包住宿主文本）。
     file: 'src/client/library/BackupInspectView.tsx',
-    redacted: R("{' '}{item.adapter}: {redact(item.description)}"),
-    bare: R("{' '}{item.adapter}: {item.description}"),
-    why: '备份差异查看的计划项描述',
+    redacted: R('<span className={css.inspectDesc}>{redact(item.description)}</span>'),
+    bare: R('<span className={css.inspectDesc}>{item.description}</span>'),
+    why: '备份差异查看的计划项描述（D-05 三段条目的描述段）',
   },
   /* ---------------- 同步差异确认 ---------------- */
   {

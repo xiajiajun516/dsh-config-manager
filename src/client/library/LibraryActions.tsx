@@ -23,7 +23,8 @@ import type { ConfigManagerApi, BackupInspectResult } from '../api.ts'
 import type { SyncApi } from '../sync/sync-api.ts'
 import { formatDateTimeFull } from '../sync/history-model.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Banner, Button, Empty, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Empty, Spinner } from '../common/ui.tsx'
+import { Icon } from '../common/Icon.tsx'
 import { Skeleton, SkeletonList, SkeletonTable } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
@@ -436,16 +437,36 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
           closeLabel={t('common.close')}
           onClose={() => { setPull(null) }}
           closeDisabled={pull?.phase === 'running'}
+          trailing={pull?.phase === 'running'
+            ? <Badge kind="info" className={css.pullBadge}>{t('library.pullBadge')}</Badge>
+            : undefined}
         />
         <Modal.Body scroll>
           {pull !== null && (
             <>
-              <div className={css.hint}>{fileNameOf(pull.row)}</div>
+              {/* 稿 D-04:215-226：左侧 Spinner + 主文案，右侧文件名（等宽、省略）。
+                  文件名不是「说明文字」：它是这次操作唯一能区分对象的标识，必须与状态同排可见。 */}
+              <div className={css.pullMeta}>
+                <span className={css.pullStatus}>
+                  {pull.phase === 'running' && (
+                    <>
+                      <Spinner label={pullProgressLabel(pull.mode, t)} />
+                      <span>{pullProgressLabel(pull.mode, t)}</span>
+                    </>
+                  )}
+                </span>
+                <span className={css.pullName} title={fileNameOf(pull.row)}>{fileNameOf(pull.row)}</span>
+              </div>
+              {/* 不定态进度条：宿主不回报分区级进度（/sync/pull 是一次 RPC），
+                  所以只表达「在动」，不编造百分比（稿上的 12/18 与 68% 无数据来源）。 */}
               {pull.phase === 'running' && (
-                <div className={css.statRow}>
-                  <Spinner label={pullProgressLabel(pull.mode, t)} />
-                  <span>{pullProgressLabel(pull.mode, t)}</span>
-                </div>
+                <span
+                  className={css.progressTrack + ' ' + css.pullTrack}
+                  role="progressbar"
+                  aria-valuetext={pullProgressLabel(pull.mode, t)}
+                >
+                  <span className={css.progressBar + ' ' + css.progressIndeterminate + ' ' + css.pullBar} />
+                </span>
               )}
               {pull.phase === 'failed' && pull.error !== null && <Banner kind="error">{pull.error}</Banner>}
             </>
@@ -526,7 +547,6 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
             ? t('backupFiles.deleteConfirm', { name: fileNameOf(confirmDelete) })
             : confirmDelete.kind === 'remote-snapshot'
               ? t('library.remoteDeleteConfirm', { time: timeText(confirmDelete) })
-                + (confirmDelete.badges.includes('current') ? ' ' + t('library.remoteDeleteBaseline') : '')
               : t('snapshots.deleteConfirm', { time: confirmDelete.title.kind === 'time' ? confirmDelete.title.iso : '' })}
         confirmLabel={confirmDelete === null ? t('snapshots.delete')
           : confirmDelete.kind === 'backup-file' ? t('backupFiles.delete')
@@ -536,7 +556,16 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
         danger
         onConfirm={doDelete}
         onCancel={() => { setConfirmDelete(null) }}
-      />
+      >
+        {/* 「命中当前基线」不是附注，而是会给用户带来后果的一句事实（稿 D-07:214-219）：
+            从 message 里拆出来做成警告盒，正文只留「删什么、为什么不可恢复」。 */}
+        {confirmDelete !== null && confirmDelete.kind === 'remote-snapshot' && confirmDelete.badges.includes('current') && (
+          <div className={css.confirmNote}>
+            <span className={css.confirmNoteIcon} aria-hidden="true"><Icon name="warn" size={14} /></span>
+            <span>{t('library.remoteDeleteBaseline')}</span>
+          </div>
+        )}
+      </ConfirmDialog>
 
       {/* 查看与对比（只读，零写入） */}
       <Modal open={inspect !== null} onClose={() => { setInspect(null) }} title={t('backupFiles.inspect')} wide>
@@ -559,7 +588,7 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
               {reportLine(t('snapshots.restored'), report.restored, t)}
               {reportLine(t('snapshots.removedPlugins'), report.removedPlugins, t)}
               {reportLine(t('snapshots.manualHints'), report.manualHints, t, true)}
-              {reportLine(t('snapshots.failed'), report.failed.map((f) => `${f.item}: ${f.reason}`), t, true)}
+              {reportLine(t('snapshots.failed'), report.failed.map((f) => ({ path: f.item, text: f.reason })), t, true)}
               {reportLine(t('snapshots.skipped'), report.skipped, t)}
             </>
           )}
@@ -676,16 +705,29 @@ function runStorePatchImport(row: ArtifactRow): void {
 function runStoreWatch(): void { runStore.watchRunning('restore', 500) }
 function runStoreStopWatch(): void { runStore.stopRunWatch('restore') }
 
-function reportLine(title: string, items: string[], t: TranslateNS<'config-manager'>, warn = false) {
+/** 报告条目：纯文本，或「路径 + 原因」两段（路径等宽，原因沿用行字色） */
+type ReportLineItem = string | { path: string; text: string }
+
+function reportLine(title: string, items: ReportLineItem[], t: TranslateNS<'config-manager'>, warn = false) {
   if (items.length === 0) return null
   return (
     <div className={css.inspectGroup} key={title}>
       <div className={css.groupHeader}>
-        <strong className={warn ? css.warnText : undefined}>{title}{t('common.parens', { text: String(items.length) })}</strong>
+        {/* 组标题用正文档字号 + 600（.reportGroupTitle）：裸 <strong> 在 11px 小节头里比条目还小 */}
+        <strong className={warn ? `${css.reportGroupTitle} ${css.warnText}` : css.reportGroupTitle}>{title}{t('common.parens', { text: String(items.length) })}</strong>
       </div>
       <div className={css.reportScroll}>
         <ul className={css.reportList}>
-          {items.map((item, i) => <li key={`${title}-${i}`}>{item}</li>)}
+          {items.map((item, i) => (
+            <li key={`${title}-${i}`} className={css.reportItem}>
+              {typeof item === 'string' ? item : (
+                <>
+                  <span className={css.reportItemPath}>{item.path}:</span>
+                  <span>{item.text}</span>
+                </>
+              )}
+            </li>
+          ))}
         </ul>
       </div>
     </div>

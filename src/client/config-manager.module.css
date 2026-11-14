@@ -5188,14 +5188,18 @@ body {
   flex-direction: column;
 }
 
+/* 行是卡片里的「表行」：30px 定高 + 左右 10px + 半透明细分隔线，最后一行贴卡片圆角（由卡片 overflow 裁）。
+   可展开行（button）与静态行（div）必须同一定义，否则同一组里两种行会错位。 */
 .restorePlanRow,
 .restorePlanRowStatic {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 4px 6px;
-  border-radius: var(--cm-r-2);
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 50%, transparent);
 }
 
 .restorePlanRow {
@@ -5249,14 +5253,35 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* 分组头（标题 + 计数徽章 + 行数合计）：必须严格一行。
+/* 分组卡片：每组一张描边卡（30px 组头 + 行表）。私有类 —— .inspectGroup 仍由
+   备份差异查看与恢复报告共用，那边不加卡片化。 */
+.restorePlanCard {
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--cm-r-3);
+  overflow: hidden;
+  /* 行多时卡片自己内滚（限高由外层 Body 决定）；槽位固定，滚动条出现时不挤动行内容 */
+  scrollbar-gutter: stable;
+}
+
+/* 分组头（标题 + 计数 + 行数合计）：必须严格一行、30px 定高、铺满卡片顶边。
    .groupLabel 自身是 display:block + margin-bottom:8px 的卡内小节头，直接塞进
    .statRow 会被下外边距顶得与徽章/行数不在同一视觉行 —— 这里显式复位。 */
 .restorePlanGroupHead {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 4px;
+  height: 30px;
+  padding: 0 10px;
+  margin: 0;
+  background: var(--dsw-alias-bg-layer-2);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* 摘要徽章：4px 方角 + 同色 15% 细描边（稿 D-02:124-137）。
+   描边用 currentColor 派生 —— 颜色仍由 .badge[data-kind] 的四态色决定，这里只改形状。 */
+.restorePlanStatBadge {
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
 }
 
 .restorePlanGroupHead .groupLabel {
@@ -7900,6 +7925,224 @@ button.profileRowMain:hover {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--cm-sp-2);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   W7「产物库 P-02」六弹窗 + D-14b —— 视觉稿落地（.stitch-refactor/out/D-0*.html）
+   ---------------------------------------------------------------------------
+   全部是**屏私有**修饰类：共享原语（.hint / .groupLabel / .actionRow / .statRow /
+   .reportList / .reportScroll / .ghostButton / .inspectGroup / .card / .dialogCard /
+   .dialogWide / .badge / .chip / .diffTable）本体一处未改，需要不同形态时叠加在下面。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* —— D-03 迁移前咨询 —— */
+
+/* 建议依据：每条一行、行首一枚 3px 圆点（稿 D-03:123-141）。
+   圆点用伪元素而不是字符「•」：字符会参与基线对齐，行首缩进随字号漂移。 */
+.reasonLine::before {
+  content: '';
+  flex: none;
+  align-self: center;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+/* 「将应用」自成一栏：与下方维度明细之间用底边分隔（稿 D-03:144） */
+.consultWillApply {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* 维度行：左名右分（稿 D-03:161-200） */
+.consultDimensionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.consultDimensionName {
+  min-width: 0;
+  font-size: var(--cm-fs-table);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 维度明细不再用共享的限高滚框（.consultScroll 的描边/圆角/底色/380px 限高属别的屏），
+   这里只保留滚动能力本身 —— 与 .reportView .reportScroll 同一条思路。 */
+.consultDimensionScroll {
+  max-height: none;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+/* —— D-04 拉取 / 下载 —— */
+
+/* 文件名 + 右侧等宽小字（稿 D-04:229 一带） */
+.pullMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 选择器工具条末尾的「已选 N / M」：靠右（稿 D-14b:107 右侧 gap 12） */
+.pickerToolbarCount {
+  margin-left: auto;
+}
+
+.pullStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--cm-fs-table);
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 标题右侧「同步中」徽章（稿 D-04:203）：4px 方角 + 同色 20% 描边，底色仍由 .badge[data-kind=info] 给 */
+.pullBadge {
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+}
+
+.pullName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 不定态进度条：复用 .progressTrack / .progressIndeterminate（与一键同步活动条同一实现），
+   只把轨道压到稿上的 4px / 药丸圆角。不定态是**状态**而非装饰：reduced-motion 下保留
+   （见 §15 与 .progressIndeterminate 注释），不做减弱分支。 */
+.pullTrack {
+  display: block;
+  height: 4px;
+  margin-top: 10px;
+  border-radius: var(--cm-r-pill);
+}
+
+.pullBar {
+  border-radius: var(--cm-r-pill);
+}
+
+/* —— D-05 备份内容查看 —— */
+
+/* 条目 = 圆点 + 等宽彩色 adapter + 描述（稿 D-05:170-181） */
+.inspectItem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 22px;
+}
+
+.inspectDot {
+  flex: none;
+  align-self: center;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.inspectAdapter {
+  flex: none;
+  color: var(--cm-accent);
+}
+
+.inspectDesc {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 条目区不再套共享限高滚框（.reportScroll 的描边/圆角/底色/380px 限高），只留滚动 */
+.inspectItemsScroll {
+  max-height: none;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+/* 子分组之间 14px（稿 D-05:164；共享 .inspectGroup 仍是 10px） */
+.inspectSubGroup {
+  margin-bottom: 14px;
+}
+
+/* 徽章：同色 15% 细描边（稿 D-05:142-159）。形状之外一律不动 —— 四态色仍由 .badge/dsh Tag 给。 */
+.inspectBadge {
+  border: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+}
+
+/* —— D-06 恢复报告 —— */
+
+/* 条目行：圆点 + 正文（稿 D-06:123-126） */
+.reportItem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  line-height: 1.5;
+}
+
+.reportItem::before {
+  content: '';
+  flex: none;
+  align-self: center;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+/* 失败项的路径段（等宽 + 主文字色），原因段沿用列表的字色 */
+.reportItemPath {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 组标题：正文档字号 + 600（裸 <strong> 在 11px 小节头里太小） */
+.reportGroupTitle {
+  font-size: var(--cm-fs-base);
+  font-weight: 600;
+}
+
+/* —— D-07 删除确认里的「当前基线」注意盒（稿 D-07:214-219） —— */
+.confirmNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--cm-warn) 35%, transparent);
+  border-radius: var(--cm-r-2);
+  background: color-mix(in srgb, var(--cm-warn) 12%, transparent);
+  font-size: var(--cm-fs-meta);
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.confirmNoteIcon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--cm-warn);
 }
 
 /* —— W2 同步屏（P-03）：未配置通道卡收成单行矮态 ——

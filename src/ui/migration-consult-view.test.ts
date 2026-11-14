@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { makeUiT } from './i18n.ts';
 import {
   consultView, consultVerdictBadgeKind, consultRecommendationBadgeKind,
-  consultDimensionLabel, consultRecommendationLabel,
+  consultDimensionLabel, consultRecommendationLabel, consultScoreBadgeKind,
   dedupeConsultReasons, consultReasonGroups,
 } from './migration-consult-view.ts';
 import type { ConsultReport } from '../core/migration-consult.ts';
@@ -82,6 +82,25 @@ test('consult-view: verdict/recommendation badge kind 映射', () => {
   assert.equal(consultRecommendationLabel('proceed', t), '建议：可继续');
   assert.equal(consultRecommendationLabel('review', t), '建议：需人工确认');
   assert.equal(consultRecommendationLabel('block', t), '建议：阻止执行');
+});
+
+test('consult-view: 维度分数配色按分数值派生（不跟 verdict 走）', () => {
+  // 稿 D-03:161-200：92/100/95 绿、82/74/60 橙 —— 分数 92 配 needs-attention 的 verdict 时
+  // 若沿用 badgeKind 会出现「92 分标橙」，所以按值分档。
+  assert.equal(consultScoreBadgeKind(100), 'ok');
+  assert.equal(consultScoreBadgeKind(90), 'ok');
+  assert.equal(consultScoreBadgeKind(89), 'warn');
+  assert.equal(consultScoreBadgeKind(70), 'warn');
+  assert.equal(consultScoreBadgeKind(69), 'error');
+  assert.equal(consultScoreBadgeKind(0), 'error');
+
+  const view = consultView(makeReport({
+    dimensions: [{ id: 'compatibility', score: 92, verdict: 'needs-attention', issues: [] }],
+  }), t);
+  const dim = view.dimensions[0];
+  assert.ok(dim !== undefined);
+  assert.equal(dim.badgeKind, 'warn');
+  assert.equal(dim.scoreKind, 'ok');
 });
 
 /* ---------------- 建议依据：去重与分组 ---------------- */

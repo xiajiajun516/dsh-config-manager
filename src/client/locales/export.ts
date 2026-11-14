@@ -89,6 +89,8 @@ export const zh = {
   // 「下载」是另一条路：同样先拉取落地，但不进向导，而是交给浏览器下载到「下载」目录。
   'library.downloadTitle': '下载远端快照',
   'library.downloading': '正在拉取并下载…',
+  // 拉取/下载进行中的标题徽章（W7 D-04；zh 逐字照稿 .stitch-refactor/out/D-04.html:203）
+  'library.pullBadge': '同步中',
 
   'import.consult.unavailable': '暂时无法生成咨询报告（不影响继续导入）。',
   'import.picker.title': '选择要导入的内容',
@@ -177,6 +179,7 @@ export const en: Record<keyof typeof zh, string> = {
   'library.pulling': 'Pulling and importing…',
   'library.downloadTitle': 'Download remote snapshot',
   'library.downloading': 'Pulling and downloading…',
+  'library.pullBadge': 'Syncing',
 
   'import.consult.unavailable': 'The consultation report is unavailable right now (importing can still continue).',
   'import.picker.title': 'Choose what to import',

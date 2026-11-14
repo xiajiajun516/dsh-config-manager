@@ -591,6 +591,11 @@ export function ContentPicker({
         {/* 会话 ↔ 工作区联动属「机制怎么工作」（MOVE 类）：只在这种配对确实存在时给出 ⓘ，
             不再用一整行常驻说明占掉选择器首屏。 */}
         {hasLinkedPairs && <InfoHint text={t('picker.sessionWorkspaceLinked')} t={t} />}
+        {/* 工具条常驻「已选 N / M」（稿 D-14b:114）：与分区行同一字典键、同一 .pickerCount 盒模型，
+            合计仍在页脚（分区/单元/体积）—— 这里只回答「我勾了多少」。 */}
+        <span className={css.pickerCount + ' ' + css.pickerToolbarCount}>
+          {t('picker.selectedOf', { selected: String(summary.units), total: String(summary.totalUnits) })}
+        </span>
       </div>
 
       {loading && <Skeleton count={3} label={t('picker.loading')} />}
