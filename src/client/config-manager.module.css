@@ -1535,20 +1535,17 @@ body {
 }
 
 /* —— 弹性开关（2026-11-14 用户要求）——
-   拨动时圆点先横向拉长成胶囊、前缘到位后后缘追上，收尾轻微回弹成圆。
+   拨动时圆点从一端滑到另一端，弹簧缓动收尾（cubic-bezier 过冲约 0.4px），行进中不做变形。
 
-   为什么用 keyframes 而不是 transition：transition 只在两端值之间插值，而「飞行中变宽、
-   到位再收回圆」需要中间帧；动画名在 on/off 之间切换会重新起跑，所以来回拨都能重放。
+   为什么是 transition 不是 keyframes：浏览器在 click 那一刻就把 input.checked 翻好了，
+   React 的提交要晚一帧 —— keyframes 只能从 0% 重播，于是「先瞬移到终点、再倒回起点重跑」，
+   就是用户实测到的「圆点左右横跳」；而且 52% 那帧把位移钉在 8px、只放大 scaleX，
+   约 100ms 位移不前进，观感就是「中途停顿」。transition 没有起点重播，晚一帧同样从当前
+   位置插值，中途反向也只是从当前位置改道。实测对照见 .tmp/switch-probe.html：同一份 CSS 下
+   keyframes 版首帧 16 → 0.9 → 1.9 … 且 8px 处停 6 帧；transition 版 0 → 1.4 → … 单调到 16。
 
-   几何：轨道 32×18（1px 边框 + 2px 内缩，内宽 30），圆点 12×12。关键帧里始终
-   left + width ≤ 30，圆点绝不越出胶囊：
-     · 开：后缘（left）钉在 2、宽度涨到 20（前缘先冲到 22），随后 left 追到 18、宽度收回 12。
-     · 关：前缘（right）钉在 30、宽度涨到 20（后缘先退到 10），随后 right 收到 14、宽度收回 12。
-   收尾用 linear() 弹簧曲线（进度 >1 再落回）：圆点会轻微过冲约 1px —— 就是「回弹」本身。
-   仓库已有同款用法（--cm-press-spring），不引第二套缓动体系。
-
-   首帧不播：Switch 组件在第一次 onChange 之后才挂 .switchTrackAnimated，否则弹窗每次
-   打开都会看到圆点从另一侧滑过来。 */
+   几何：轨道 32×18（1px 边框 + 2px 内缩，内宽 30），圆点 12×12，行程 16px；
+   轨道 overflow: hidden 把弹簧过冲裁在胶囊内（撞边挤压，不是出界）。 */
 .switchRoot {
   position: relative;
   display: inline-flex;
@@ -1605,6 +1602,8 @@ body {
   width: 32px;
   height: 18px;
   flex: none;
+  /* 弹簧过冲被胶囊裁掉：圆点撞到端点时被压出一点扁边，而不是露到轨道外 */
+  overflow: hidden;
   border: 1px solid var(--cm-line-2);
   border-radius: 999px;
   background-color: var(--cm-input-bg);
@@ -1639,81 +1638,20 @@ body {
   height: 12px;
   border-radius: 999px;
   background-color: var(--cm-line-2);
-  /* 位移与拉伸一律走 transform。left / width 是布局属性：逐帧改它们会触发重排 + 重绘
-     整块卡片，主线程一忙合成器就掉帧 —— 这是初版动画「不流畅」的直接原因。 */
-  transform: translateX(0) scaleX(1) scaleY(1);
-  transform-origin: 50% 50%;
-  transition: background-color var(--cm-motion-fast) ease;
+  transform: translateX(0);
+  /* 只动 transform（布局属性逐帧改会重排整块卡片）；弹簧曲线负责「落到位还带一点弹」 */
+  transition:
+    transform 240ms cubic-bezier(0.34, 1.28, 0.6, 1),
+    background-color 140ms ease;
 }
 
-/* 落点也只改 transform：left 恒为 2px，16px 的位移交给 translateX —— 轨道内宽 30、
-   圆点 12、左右内缩各 2，正好 16px 行程。 */
 .switchInput:checked + .switchTrack .switchKnob {
-  transform: translateX(16px) scaleX(1) scaleY(1);
+  transform: translateX(16px);
   background-color: var(--cm-text-on-accent);
-}
-
-.switchTrackAnimated .switchKnob {
-  animation-duration: 300ms;
-  /* 动画期间提成合成层：之后每帧只改 transform，不再逐帧重排版（仅这几枚开关，代价可忽略） */
-  will-change: transform;
-}
-
-.switchInput:checked + .switchTrackAnimated .switchKnob {
-  animation-name: switchKnobOn;
-}
-
-.switchInput:not(:checked) + .switchTrackAnimated .switchKnob {
-  animation-name: switchKnobOff;
-}
-
-/* 三段式：位移与拉伸同时起跑 → 中段最宽（1.58 倍 ≈ 19px 的胶囊）→ 末段收圆并轻压一下落地。
-   几何约束（保证圆点绝不越出轨道 2…30 的可用区间）：
-     中段 中心 8+8=16、半宽 6×1.58=9.5 ⇒ 6.5…25.5；
-     末段 中心 8+15.2=23.2、半宽 6.6 ⇒ 16.6…29.8，只收不放。 */
-@keyframes switchKnobOn {
-  0% {
-    transform: translateX(0) scaleX(1) scaleY(1);
-    animation-timing-function: cubic-bezier(0.22, 0.75, 0.24, 1);
-  }
-  52% {
-    transform: translateX(8px) scaleX(1.58) scaleY(1);
-    animation-timing-function: cubic-bezier(0.32, 0.5, 0.3, 1);
-  }
-  82% {
-    transform: translateX(15.2px) scaleX(1.1) scaleY(0.94);
-    animation-timing-function: var(--cm-motion-ease-out);
-  }
-  100% {
-    transform: translateX(16px) scaleX(1) scaleY(1);
-  }
-}
-
-/* 关方向是开方向的镜像：末段 中心 8.8、半宽 6.6 ⇒ 2.2…15.4，同样不越界。 */
-@keyframes switchKnobOff {
-  0% {
-    transform: translateX(16px) scaleX(1) scaleY(1);
-    animation-timing-function: cubic-bezier(0.22, 0.75, 0.24, 1);
-  }
-  52% {
-    transform: translateX(8px) scaleX(1.58) scaleY(1);
-    animation-timing-function: cubic-bezier(0.32, 0.5, 0.3, 1);
-  }
-  82% {
-    transform: translateX(0.8px) scaleX(1.1) scaleY(0.94);
-    animation-timing-function: var(--cm-motion-ease-out);
-  }
-  100% {
-    transform: translateX(0) scaleX(1) scaleY(1);
-  }
 }
 
 /* 减弱动效：开关只留瞬时切换（状态信息不丢，滑动与回弹都是装饰）。 */
 @media (prefers-reduced-motion: reduce) {
-  .switchTrackAnimated .switchKnob {
-    animation: none;
-    will-change: auto;
-  }
   .switchTrack,
   .switchKnob {
     transition: none;

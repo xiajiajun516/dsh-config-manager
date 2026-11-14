@@ -10,7 +10,6 @@
  *   - StatusDot（状态栏/行内状态点）
  *   - Segmented（页内子视图分段切换）
  */
-import { useState } from 'react'
 import type { ChangeEvent, CSSProperties, ReactNode } from 'react'
 import { ExpandChevron } from './Icon.tsx'
 import { badgeTone, type BadgeKind } from '../../ui/badge-tone.ts'
@@ -458,8 +457,9 @@ export interface SwitchProps {
  * 放在同级 span 里，输入框本身 opacity:0 —— 于是它还能接键盘焦点与原生切换逻辑。
  */
 export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) {
-  /** 首次交互才播动画：挂载那一下不该看到圆点从另一侧滑进来（弹窗每次打开都会挂载） */
-  const [animated, setAnimated] = useState(false)
+  // 动画由 CSS transition 驱动（不上 keyframes）：浏览器在 click 当帧就翻好了 input.checked，
+  // 而 React 的提交晚一帧，keyframes 只会从 0% 重播 ⇒ 圆点先瞬移到终点再倒回来（横跳）。
+  // transition 没有起点重播，晚一帧、中途反向都从当前位置插值；挂载首帧也不会播动画。
   return (
     <label className={disabled === true ? `${css.switchRoot} ${css.switchRootDisabled}` : css.switchRoot}>
       <input
@@ -471,11 +471,10 @@ export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) 
         disabled={disabled}
         aria-label={label}
         onChange={(event: ChangeEvent<HTMLInputElement>) => {
-          setAnimated(true)
           onChange(event.target.checked)
         }}
       />
-      <span className={animated ? `${css.switchTrack} ${css.switchTrackAnimated}` : css.switchTrack} aria-hidden="true">
+      <span className={css.switchTrack} aria-hidden="true">
         <span className={css.switchKnob} />
       </span>
     </label>
