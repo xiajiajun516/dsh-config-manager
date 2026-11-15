@@ -699,6 +699,12 @@ deviceId 不同；34 条快照历史里 `plugins/plugins.json` 被反复压小�
 - 调度器顺序：`heldUp`（本轮分区级冲突 ∪ 叶级扣下）必须在 `push()` **之前**落盘 —— 引擎推送成功时只在
   **已有记录**上保留 `since`，推送后再写会按 `lastMergedRemoteSnapshotId` 重算、抹掉首次时间；`pendingRecorded`
   守卫同时避免冲突分支再写一次。
+- `conflictPolicy='local'` 的 force 判据必须包含磁盘存量（issue #146 F9，2026-11-15 审查发现）：只按本轮
+  `conflicted.length` 判定时，存量待裁决 + 本轮远端无变化 ⇒ `conflicted=0` ⇒ 不 force，同时 `heldUp=[]` 让引擎从磁盘
+  扣下 ⇒ 既不推也不报错，永远「成功空转」，用户切了「本机优先」却对存量无效。判据改为「本轮冲突 + 磁盘
+  `pendingMerge.sections` 条数」，只在策略为 local 时读一次盘（读失败按 0，退回只扣不推）；首轮 / 远端有新快照
+  仍降级 ask。消解存量时台账落 `conflict-kept-local` + `partial` + 点名分区，用户能看出「本机覆盖了谁」。
+  守卫：`src/sync/autosync-scheduler.test.ts`（纯判定三条 + 端到端一条：只剩存量也 force、跳过码与告警齐全）。
 - 读盘失败不得抹掉待裁决：`pendingMergeAfterPush()` 读不到返回 `undefined`（`recordBaseline` 只在 `null` 时删字段）；
   返回 `null` 等于静默丢弃待裁决记录。
 - 界面/工具面：`skipped:'all-conflicted'` 一律渲染成「未推送任何分区」，绝不显示成「已推送」（`sync-view.ts` 的

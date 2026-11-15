@@ -290,6 +290,10 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
 
   `force:true` 恒不扣（强推 = 用户明确覆盖）；`skipped:'all-conflicted'` 在自动同步台账里必须落成
   「成功但跳过 + 原因」，不得记成 `success`/`direction:'push'`。
+- **`conflictPolicy='local'` 的触发条件是「本轮冲突 ∪ 磁盘 `pendingMerge.sections`」**：local 是用户的长期决定，
+  只对本轮新冲突生效会让存量待裁决永远等一个不会再来的「本轮冲突」——既不推也不报错地空转（issue #146 F9）。
+  存量被 force 消解时台账记 `skipReason='conflict-kept-local'` 并列出被覆盖的分区（`conflictedSections`），
+  状态 `partial`（覆盖了远端就不是干净的成功）。首轮 / 远端有新快照两道高危闸不变：即使有存量也降级 `ask`（`forced=true`）。
 
 ### 7.4 push 前置：远端推进检测与 `force`
 

@@ -32,7 +32,7 @@
  *    → engine.applyMergePlan(autoApply) 写入本地
  *  - Phase C: 完整双向 → engine.push() 上传。两处策略：
  *    ① 无冲突且推送被远端推进挡下 → skipped/partial + skipReason='conflict'（等人工）；
- *    ② conflictPolicy='local'（**只有用户显式选过才生效**；缺省 ask）且本轮有冲突 → **不写本地**，
+ *    ② conflictPolicy='local'（**只有用户显式选过才生效**；缺省 ask）且本轮有冲突**或仍有待裁决存量** → **不写本地**，
  *       改 engine.push({force:true}) 把本机版本推成新的远端最新（被覆盖的远端旧版本仍在远端历史快照里
  *       可回滚），状态记 partial + skipReason='conflict-kept-local'（绝不谎报 success）；
  *       SYN-05：首轮 / 远端有新快照时即使选了 local 也降级 ask 并记 forced=true（见
@@ -65,6 +65,7 @@ import type { AutosyncConfig, AutosyncInterval } from './autosync-config.ts';
 import { readSyncConfigFor, isGitConfig, isWebDavConfig, isS3Config, isGistConfig, SYNC_CHANNELS } from './sync-config.ts';
 import type { SyncConfig, SyncConfigIssue, SyncTransportType } from './sync-config.ts';
 import { readSyncHistory, appendAutosyncEntry, markAutosyncNotified } from './sync-history.ts';
+import { loadSyncState } from './sync-state.ts';
 import { repeatHistorySignature } from './autosync-repeat.ts';
 import { classifyMergePlan } from './risk.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
@@ -143,7 +144,10 @@ export interface AutosyncRunResult {
  *  - **首轮**（从未跑过）或**远端有新快照**：即使显式选了 'local' 也强制降级 ask（forcedAsk）——
  *    这两个时刻正是「远端最新改动只在历史快照里」的事故现场，静默覆盖等于替用户丢数据；
  *    降级记 forced，界面才能说清「这次没按你的 local 走」；
- *  - 只有「显式 local + 非高危时刻 + 真有冲突」才 force。
+ *  - 只有「显式 local + 非高危时刻 + 真有冲突」才 force；
+ *  - 「真有冲突」= **本轮新判出的冲突** ∪ **磁盘上仍在等裁决的分区**（`held`，issue #146 F9）：
+ *    local 是用户的**长期决定**，不能只对本轮新冲突生效 —— 否则上一轮攒下的待裁决永远等不到结论，
+ *    每轮都「不推也不报错」地空转（用户明明选了「本机优先」）。只读条数、不读内容，判定仍是纯函数。
  *
  * 纯函数（无状态、无 I/O）：调度层与单测共用同一份判定，避免两处各写一遍阈值。
  */
@@ -152,12 +156,15 @@ export function resolveConflictPushPolicy(args: {
   firstRun: boolean;
   remoteNew: boolean;
   conflicted: number;
+  /** 磁盘上仍在等裁决的分区数（缺省 0 = 只看本轮冲突；读不到状态也按 0 处理，绝不因此 force）。 */
+  held?: number;
 }): { policy: AutosyncConflictPolicy; force: boolean; forcedAsk: boolean } {
   const configured = args.configuredPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY;
   // forcedAsk 只描述「用户选了 local，但本轮被降级」——缺省 ask 不算被强制（那不是用户的决定被推翻）。
   const forcedAsk = configured === 'local' && (args.firstRun || args.remoteNew);
   const policy: AutosyncConflictPolicy = forcedAsk ? 'ask' : configured;
-  return { policy, force: policy === 'local' && args.conflicted > 0, forcedAsk };
+  const outstanding = args.conflicted + (args.held ?? 0);
+  return { policy, force: policy === 'local' && outstanding > 0, forcedAsk };
 }
 
 /**
@@ -250,6 +257,12 @@ export interface AutoSyncSchedulerOptions {
   makeWatcher?: (opts: WatcherFactoryOptions) => SyncWatcher;
   /** 触发合并窗口（ms）：连续保存/连续远端探测只跑一轮。缺省 3000。 */
   minTriggerGapMs?: number;
+  /**
+   * 读磁盘上仍在等裁决的分区（issue #146 F9）。缺省读 `<syncDir>/sync-state.json` 的 pendingMerge，
+   * 与 SyncEngine 的 stateDir 同源（装配处两处都是 syncDir）；测试注入内存实现，免碰真实文件。
+   * 读失败 → 空数组（判定退回「只看本轮冲突」的老口径），绝不因为读不到状态就 force。
+   */
+  readPendingMerge?: () => Promise<readonly SectionId[]>;
 }
 
 export class AutoSyncScheduler {
@@ -295,6 +308,7 @@ export class AutoSyncScheduler {
   private readonly profile: string | undefined;
   private readonly makeWatcher: ((opts: WatcherFactoryOptions) => SyncWatcher) | undefined;
   private readonly minTriggerGapMs: number;
+  private readonly readPendingMerge: () => Promise<readonly SectionId[]>;
   /** SEC-03：已 warn 过的「地址被拒」成因（键 = 通道 + 成因文本），进程内去重。 */
   private readonly reportedConfigIssues = new Set<string>();
   private stopped = false;
@@ -330,6 +344,13 @@ export class AutoSyncScheduler {
     this.profile = opts.profile;
     this.makeWatcher = opts.makeWatcher ?? defaultMakeWatcher;
     this.minTriggerGapMs = opts.minTriggerGapMs ?? 3000;
+    this.readPendingMerge = opts.readPendingMerge ?? (async () => {
+      try {
+        return (await loadSyncState(this.syncDir)).pendingMerge?.sections ?? [];
+      } catch {
+        return [];
+      }
+    });
   }
 
   /**
@@ -807,11 +828,16 @@ export class AutoSyncScheduler {
            * SYN-05：首轮 / 远端有新快照时即使显式选了 local 也强制降级 ask（forced=true 进结果与
            * 历史），绝不在这两个高危时刻替用户覆盖远端最新。
            */
+          // issue #146（F9）：local 是用户的长期决定 —— 存量待裁决必须能被它消解，否则上一轮攒下的
+          // 分区永远等不到结论（每轮"既不推也不报错"地空转）。只在策略是 local 时读一次磁盘，
+          // 读失败按 0 处理（退回老口径：只扣不推 + 由下面的 all-conflicted 如实上报）。
+          const heldFromState = cfg.conflictPolicy === 'local' ? await this.readPendingMerge() : [];
           const pushDecision = resolveConflictPushPolicy({
             ...(cfg.conflictPolicy !== undefined ? { configuredPolicy: cfg.conflictPolicy } : {}),
             firstRun,
             remoteNew,
             conflicted: conflictedSections.length,
+            held: heldFromState.length,
           });
           const forcePush = pushDecision.force;
           const forcedMark = pushDecision.forcedAsk ? { forced: true as const } : {};
@@ -890,8 +916,13 @@ export class AutoSyncScheduler {
           // 也绝不因为它报成 failed：网络与凭据都是好的，只是远端有内容要用户确认）。
           // conflictPolicy='local' 时冲突已被「本机覆盖远端」消解，但远端那一版确实被盖掉了 →
           // 同样记 partial，skipReason 换成 conflict-kept-local（界面据此说清「本机已覆盖远端」）。
-          const keptLocal = forcePush && conflictedSections.length > 0;
-          const partial = conflictedSections.length > 0;
+          // force 消解的对象 = 本轮冲突 ∪ 磁盘存量（F9）：只覆盖本轮会让台账把「覆盖了远端」这件事
+          // 说成一次普通成功 —— 用户从来看不出自己那句「本机优先」到底动过哪些分区。
+          const keptLocalSections = forcePush
+            ? [...new Set([...conflictedSections, ...heldFromState])]
+            : [];
+          const keptLocal = keptLocalSections.length > 0;
+          const partial = keptLocal || conflictedSections.length > 0;
           // issue #146（follow-up）：引擎把「冲突未裁决 ⇒ 本轮一个分区都没上行」回成 skipped:'all-conflicted'。
           // 以前这里只看 ok/conflict，于是整轮被记成「上传·成功」—— 用户从此看不出有分区被扣下，
           // #146 的「显示成已推送」在自动同步路径原地复发。全扣下与部分扣下都必须落到台账。
@@ -905,7 +936,7 @@ export class AutoSyncScheduler {
                 ? ('all-conflicted' as const)
                 : undefined;
           const reportedConflicted = keptLocal
-            ? conflictedSections
+            ? keptLocalSections
             : partial
               ? conflictedSections
               : deferredSections;

@@ -69,6 +69,8 @@ function makeScheduler(opts: {
   /** 2026-11-07 事故护栏：注入检测结论（缺省走真实检测，需要真引擎） */
   detectRemoteNew?: (engine: SyncEngine, listed?: readonly SyncSnapshotMeta[]) => Promise<boolean>;
   detectLocalChange?: (engine: SyncEngine) => Promise<boolean>;
+  /** issue #146 F9：磁盘上仍在等裁决的分区（缺省空 ⇒ 判定只看本轮冲突，且不碰真实 sync-state）。 */
+  pendingMerge?: readonly SectionId[];
 }) {
   const runs = new RunRegistry();
   const entries: AutosyncHistoryEntry[] = [...opts.history];
@@ -88,6 +90,7 @@ function makeScheduler(opts: {
     ...(opts.mutationLock !== undefined ? { mutationLock: opts.mutationLock } : {}),
     ...(opts.detectRemoteNew !== undefined ? { detectRemoteNew: opts.detectRemoteNew } : {}),
     ...(opts.detectLocalChange !== undefined ? { detectLocalChange: opts.detectLocalChange } : {}),
+    readPendingMerge: async () => opts.pendingMerge ?? [],
     // 测试不用真实定时器：不调 start()
   });
   return { scheduler, runs, getConfig: () => config, getEntries: () => entries };
@@ -461,6 +464,66 @@ test('SYN-05：非首轮 + 远端无新快照 + 显式 local → 尊重用户选
   assert.equal(decision.policy, 'local');
   assert.equal(decision.force, true);
   assert.equal(decision.forcedAsk, false);
+});
+
+test('SYN-05（#146 F9）：显式 local 且本轮无新冲突，但磁盘上还有待裁决 → 照样 force', () => {
+  const decision = resolveConflictPushPolicy({
+    configuredPolicy: 'local', firstRun: false, remoteNew: false, conflicted: 0, held: 3,
+  });
+  assert.equal(decision.force, true, 'local 是长期决定：存量待裁决不能永远等一个不会再来的「本轮冲突」');
+  assert.equal(decision.forcedAsk, false);
+});
+
+test('SYN-05（#146 F9）：存量待裁决也过不了「首轮 / 远端有新快照」两道高危闸', () => {
+  for (const args of [
+    { firstRun: true, remoteNew: false },
+    { firstRun: false, remoteNew: true },
+  ]) {
+    const decision = resolveConflictPushPolicy({
+      configuredPolicy: 'local', conflicted: 0, held: 3, ...args,
+    });
+    assert.equal(decision.force, false, '高危时刻绝不因存量就覆盖远端最新');
+    assert.equal(decision.forcedAsk, true, '降级必须留痕');
+  }
+});
+
+test('SYN-05（#146 F9）：ask 策略不因存量待裁决而 force（只有显式 local 才覆盖远端）', () => {
+  const decision = resolveConflictPushPolicy({
+    configuredPolicy: 'ask', firstRun: false, remoteNew: false, conflicted: 0, held: 3,
+  });
+  assert.equal(decision.force, false);
+  assert.equal(decision.forcedAsk, false);
+});
+
+test('SYN-05（#146 F9）：显式 local + 只剩磁盘存量 → 真的推上去，并逐条记「本机已覆盖远端」', async () => {
+  const cfg: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0,
+    conflictPolicy: 'local', lastRunAt: '2026-11-01T10:00:00.000Z',
+  };
+  const pushCalls: Array<{ force?: boolean; skipSections?: readonly SectionId[] } | undefined> = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async (opts?: { force?: boolean; skipSections?: readonly SectionId[] }) => {
+      pushCalls.push(opts);
+      return { ok: true, snapshotId: 'snap-up', sections: ['plugins' as SectionId], warnings: [] };
+    },
+  };
+  const { scheduler, getEntries, getConfig } = makeScheduler({
+    cfg, engine, history: [], pendingMerge: ['plugins'],
+  });
+  const result = await scheduler.runOnce('git');
+  assert.equal(pushCalls.length, 1, '存量待裁决不能把这一轮变成「什么都不做」');
+  assert.equal(pushCalls[0]?.force, true, '用户的 local 必须真的消解存量');
+  assert.deepEqual(pushCalls[0]?.skipSections, [], 'force = 整段覆盖：不再扣任何分区');
+  assert.equal(result.status, 'partial', '覆盖了远端就不能报成干净的成功');
+  assert.equal(result.skipReason, 'conflict-kept-local');
+  assert.deepEqual(result.conflictedSections, ['plugins'], '台账必须点名被「本机优先」消解的分区');
+  assert.equal(getConfig().lastRunSkipReason, 'conflict-kept-local');
+  assert.ok(
+    getEntries().some((e) => e.skipReason === 'conflict-kept-local' && e.status === 'partial'),
+    '历史同样留痕（界面按码取字典）',
+  );
 });
 
 test('issue #79 + conflictPolicy=ask：冲突只挡下行，绝不强推覆盖远端（partial + skipped 码 conflict）', async () => {
