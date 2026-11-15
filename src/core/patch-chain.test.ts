@@ -54,10 +54,30 @@ test('#144 链索引：读不出来的层只进 failures，不贡献 id 也不�
   assert.deepEqual([...patchChainIndex(read).keys()], ['x']);
 });
 
-test('#144 readPatchChainIndex：门面没实现该能力 → null（判定退化为两层，绝不阻断写入）', async () => {
-  assert.equal(await readPatchChainIndex({}), null);
-  const index = await readPatchChainIndex({
+test('#144 readPatchChainIndex：门面没实现该能力 → index 为 null（判定退化为两层，绝不阻断写入）', async () => {
+  assert.deepEqual(await readPatchChainIndex({}), { index: null, failures: [] });
+  const read = await readPatchChainIndex({
     readPatchChain: async () => ({ sources: [{ file: BUNDLE, doc: [{ insert: [{ id: 'y' }] }] }], failures: [] }),
   });
-  assert.deepEqual(index?.get('y'), { id: 'y', layers: [BUNDLE], insertLayers: [BUNDLE] });
+  assert.deepEqual(read.index?.get('y'), { id: 'y', layers: [BUNDLE], insertLayers: [BUNDLE] });
+});
+
+test('#144 readPatchChainIndex：读链抛错 → 退化为两层并登记失败（不把异常抛给导入）', async () => {
+  const read = await readPatchChainIndex({
+    readPatchChain: async () => { throw new Error('manifest unreadable') },
+  });
+  assert.equal(read.index, null);
+  assert.equal(read.failures.length, 1);
+  assert.match(read.failures[0]?.reason ?? '', /manifest unreadable/);
+});
+
+test('#144 readPatchChainIndex：读不出来的层随结果上报（判据缺口必须可见）', async () => {
+  const read = await readPatchChainIndex({
+    readPatchChain: async () => ({
+      sources: [{ file: HOME, doc: [{ id: 'x' }] }],
+      failures: [{ file: 'bundles:gone', reason: 'package not installed in this profile' }],
+    }),
+  });
+  assert.deepEqual([...read.index?.keys() ?? []], ['x']);
+  assert.equal(read.failures[0]?.file, 'bundles:gone');
 });

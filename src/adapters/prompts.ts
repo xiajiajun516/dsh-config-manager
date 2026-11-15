@@ -235,10 +235,16 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
       const raw = buildPromptLine(ref, prompt);
       // issue #71：备份里记了来源层就落「同语义层」（来源 profile 层 → 目标机当前 profile 层，
       // 跨机器照抄 profile 名会被宿主门面拒绝）；旧备份包无该字段 → 落 home 层（与改造前一致）
-      await ctx.target.patchFile.applyPatchChanges(resolveWriteLayer(prompt.sourceFile, ctx.target.profile), [
+      const created = await ctx.target.patchFile.applyPatchChanges(resolveWriteLayer(prompt.sourceFile, ctx.target.profile), [
         { lineId: ref, raw, action: 'insert' },
       ]);
-      return { ok: true, needsRestart: true, message: msg('adapter.promptCreated', { name: prompt.name, ref }) };
+      // issue #144：降级成覆盖行时必须报出来（落盘形状变了，不能显示成「新增成功」）
+      const createdDowngraded = created.downgraded.length > 0;
+      return {
+        ok: true, warning: createdDowngraded, needsRestart: true,
+        message: msg('adapter.promptCreated', { name: prompt.name, ref })
+          + (createdDowngraded ? ' ' + msg('adapter.patchLineDowngraded', { ids: created.downgraded.join(', ') }) : ''),
+      };
     }
     // Update / Conflict(useImported)：合并进目标行 config
     // issue #71：先定位原行所在层（两层都没有 → home 层），再读该层的原行合并 —— 绝不把
@@ -248,10 +254,15 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
     const line = lines.find((l) => l.lineId === ref);
     if (!line) return { ok: false, message: msg('adapter.patchLineMissing', { ref }) };
     const newRaw = mergePromptIntoLine(line.raw, prompt);
-    await ctx.target.patchFile.applyPatchChanges(file, [
+    const written = await ctx.target.patchFile.applyPatchChanges(file, [
       { lineId: ref, raw: newRaw, action: 'update' },
     ]);
-    return { ok: true, needsRestart: true, message: msg('adapter.promptWritten', { name: prompt.name, ref }) };
+    const writtenDowngraded = written.downgraded.length > 0;
+    return {
+      ok: true, warning: writtenDowngraded, needsRestart: true,
+      message: msg('adapter.promptWritten', { name: prompt.name, ref })
+        + (writtenDowngraded ? ' ' + msg('adapter.patchLineDowngraded', { ids: written.downgraded.join(', ') }) : ''),
+    };
   }
 
   async validate(data: PromptsExportSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {

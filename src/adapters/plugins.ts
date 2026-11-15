@@ -944,7 +944,20 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     // issue #144：**还有第三层**——bundle 层。它由插件包自己的 `dsh.bundle.patch` 提供，
     // 不在两个 patch 文件里；只看这两层会把 bundle 已有的 id 判成「本机没有」而写出第二条
     // insert，宿主 compose 后插件保存配置必然报 overridden by a home patch or command-line overlay。
-    const chain = await readPatchChainIndex(ctx.target.patchFile);
+    const chainRead = await readPatchChainIndex(ctx.target.patchFile);
+    const chain = chainRead.index;
+    // 判据不完整（有层读不出来）必须可见：否则「退回两层」等于把「未知」渲染成「确知没有」，
+    // 用户看到一份 Create 计划、写出重复 insert，日志里零线索（issue #144 的根因就是这样被藏住的）。
+    if (chainRead.failures.length > 0) {
+      items.push({
+        id: 'patch-chain:partial', kind: 'Warning', adapter: 'plugins', severity: 'warning',
+        description: msg('adapter.patchChainPartial', {
+          count: String(chainRead.failures.length),
+          files: chainRead.failures.map((f) => f.file).join(', '),
+        }),
+        detail: chainRead.failures.map((f) => `${f.file}: ${f.reason}`).join('; '),
+      });
+    }
     for (const pl of data.patch) {
       if (isManagedElsewhere(pl.raw)) continue;
       const id = `patch:${pl.lineId}`;
@@ -952,6 +965,19 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       // 层身份随计划项走：applyItem 按 pl.file 写回，导入前快照按 target.file 记原行，
       // 两者必须是同一层，否则回滚会把另一层改坏（issue #71）。
       const layer = resolveWriteLayer(pl.file, ctx.target.profile);
+      // issue #144 存量：本机这一层和别的层**都以 insert 提供**同一个 id（0.9.0 写坏的机器）。
+      // 内容相同也走不了「无变化」—— 两份新增本身就是要修的东西；这里只提示，不自动删行。
+      const entry = chain?.get(pl.lineId);
+      const peerInserts = entry === undefined ? [] : entry.insertLayers.filter((l) => l !== layer);
+      if (tl && entry !== undefined && entry.insertLayers.includes(layer) && peerInserts.length > 0) {
+        items.push({
+          id, kind: 'Warning', adapter: 'plugins', severity: 'warning',
+          description: msg('adapter.patchLineDuplicateInsert', { lineId: pl.lineId }),
+          detail: msg('adapter.patchLineDuplicateInsertDetail', { layers: peerInserts.join(', ') }),
+          target: { adapter: 'plugins', ref: pl.lineId, file: layer },
+        });
+        continue;
+      }
       // 与目标一致 ⇒ 一个字节都不会写，键名风险不归我们管（见下方守卫）；先判 Skip 以免误报。
       if (tl && isDeepStrictEqual(tl.raw, pl.raw)) {
         items.push({ id, kind: 'Skip', adapter: 'plugins', description: msg('adapter.patchLineSame', { lineId: pl.lineId }), severity: 'info' });
@@ -1215,18 +1241,22 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     const outcome = await ctx.target.patchFile.applyPatchChanges(resolveWriteLayer(pl.file, ctx.target.profile), [
       { lineId: ref, raw: guard.raw, action: item.kind === 'Create' ? 'insert' : 'update' },
     ]);
-    // issue #144 兜底：门面发现该 id 已被别的层提供、把 insert 降级成覆盖行 → 告诉用户实际写了哪种形状
+    // 一次写入可能同时命中多件事（被降级 + 保留/清空了密钥字段），**必须并列报**：
+    // 早退会让 #136 A 的安全告警静默消失，用户以为导入已经覆盖了密钥值。
+    const notes: string[] = [];
     if (outcome.downgraded.length > 0) {
-      return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchLineDowngraded', { ids: outcome.downgraded.join(', ') }) };
+      // issue #144 兜底：门面发现该 id 已被别的层提供、把 insert 降级成覆盖行 → 说明实际写了哪种形状
+      notes.push(msg('adapter.patchLineDowngraded', { ids: outcome.downgraded.join(', ') }));
     }
+    // 告警只报行 id 与字段路径，绝不带值（值本身就是密钥）
+    // 报告面用**计划项 id**（`patch:<lineId>`）而不是裸 lineId：报告与计划项要能逐条对上
     if (guard.kept.length > 0) {
-      // 告警只报行 id 与字段路径，绝不带值（值本身就是密钥）
-      // 报告面用**计划项 id**（`patch:<lineId>`）而不是裸 lineId：报告与计划项要能逐条对上
-      return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchSecretsKept', { ref: item.id, paths: guard.kept.join(', ') }) };
+      notes.push(msg('adapter.patchSecretsKept', { ref: item.id, paths: guard.kept.join(', ') }));
     }
     if (guard.cleared.length > 0) {
-      return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchSecretsCleared', { ref: item.id, paths: guard.cleared.join(', ') }) };
+      notes.push(msg('adapter.patchSecretsCleared', { ref: item.id, paths: guard.cleared.join(', ') }));
     }
+    if (notes.length > 0) return { ok: true, warning: true, needsRestart: true, message: notes.join(msg('adapter.patchNotesJoin')) };
     return { ok: true, needsRestart: true, message: msg('adapter.patchWritten', { ref }) };
   }
 

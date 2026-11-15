@@ -1190,3 +1190,77 @@ test('#144 readPatchChain：bundle 层按声明读到，缺失的 bundle 只登�
     cleanup()
   }
 })
+
+test('#144 顶层覆盖行的 name 与 bundle 成员对齐（不一致宿主会整行 name mismatch 跳过）', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    // 快照来自另一台机器：裸名；bundle 成员是 scoped 名
+    await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'remote-ssh', raw: { id: 'remote-ssh', name: 'dsh-remote-ssh', config: { port: 2222 } }, action: 'insert' },
+    ])
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.ok(text.includes("@zhangfengshun/dsh-remote-ssh"), 'name 必须校正成链上既有条目的 name: ' + text)
+    assert.equal(text.includes("name: dsh-remote-ssh"), false, '不得保留来源机的裸名: ' + text)
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 存量修复：本层残留的 insert 成员 + bundle 也提供 ⇒ 写 update 时搬到顶层（不再两条新增）', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    // 0.9.0 写坏的样子：本层已经是 insert 成员（bundle 也 insert 同一 id）
+    mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
+    writeFileSync(join(home, PROFILE_LAYER), [
+      '- insert:',
+      '    - id: remote-ssh',
+      '      name: "@zhangfengshun/dsh-remote-ssh"',
+      '',
+    ].join('\n'), 'utf8')
+    const outcome = await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'remote-ssh', raw: { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { port: 2222 } }, action: 'update' },
+    ])
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.equal(text.includes('- insert:'), false, '同 id 仍有两条新增 ⇒ 必须搬到顶层: ' + text)
+    assert.match(text, /^- id: '?remote-ssh'?$/m, '顶层覆盖行才是宿主认的形状: ' + text)
+    assert.deepEqual(outcome.downgraded, [], 'action 本来就是 update，不算降级')
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 链有读不出来的层 ⇒ 孤儿守卫不作终审（fail-open，避免永久拒写）', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    // missing-bundle 读不到：某个看不见的层可能就是 ghost 的提供者
+    writeFileSync(join(home, 'profiles', 'web', 'package.json'),
+      JSON.stringify({ name: 'web-profile', dsh: { profile: { bundles: ['demo-bundle', 'missing-bundle'] } } }), 'utf8')
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'ghost', raw: { id: 'ghost', config: { a: 1 } }, action: 'update' },
+    ])
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.match(text, /^- id: '?ghost'?$/m, '链不完整时按 fail-open 写入: ' + text)
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 写盘后链缓存失效：立刻读到的链包含刚写的行', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    await facade.readPatchChain() // 预热缓存（此时 profile 层为空）
+    await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'remote-ssh', raw: { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { port: 2222 } }, action: 'insert' },
+    ])
+    const chain = await facade.readPatchChain()
+    const profileLayer = chain.sources.find((s) => s.file === PROFILE_LAYER)
+    assert.ok(JSON.stringify(profileLayer?.doc ?? null).includes('remote-ssh'), '写后必须重读，不能拿写前快照: ' + JSON.stringify(chain.sources))
+  } finally {
+    cleanup()
+  }
+})
+

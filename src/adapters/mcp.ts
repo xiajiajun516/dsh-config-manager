@@ -490,10 +490,17 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
     const file = item.kind === 'Create'
       ? resolveWriteLayer(server.sourceFile, ctx.target.profile)
       : await locatePatchLineLayer(ctx.target.patchFile, ctx.target.profile, ref);
-    await ctx.target.patchFile.applyPatchChanges(file, [
+    const outcome = await ctx.target.patchFile.applyPatchChanges(file, [
       { lineId: ref, raw, action: item.kind === 'Create' ? 'insert' : 'update' },
     ]);
-    return { ok: true, needsRestart: true, message: msg('adapter.mcpWritten', { serverName }) };
+    // issue #144：门面会把「该 id 已由别的层提供」的 insert 降级成覆盖行 —— 写入者必须报出来，
+    // 否则落盘形状变了而报告显示一切照旧（out-of-scope 的是「为 mcp 单独设计形状」，不是静默）。
+    const downgraded = outcome.downgraded.length > 0;
+    return {
+      ok: true, warning: downgraded, needsRestart: true,
+      message: msg('adapter.mcpWritten', { serverName })
+        + (downgraded ? ' ' + msg('adapter.patchLineDowngraded', { ids: outcome.downgraded.join(', ') }) : ''),
+    };
   }
 
   /**

@@ -20,6 +20,14 @@ export interface PatchLineChange {
   lineId: string;
   raw: unknown;
   action: 'insert' | 'update' | 'remove';
+  /**
+   * 强制这一行落在**顶层**（覆盖行），即使本层还留着同名 insert 成员（issue #144 的存量修复）。
+   *
+   * 不变①的例外，只在调用方**知道该 id 已被别的层提供**时置位：此时本层的旧 insert 成员与
+   * 别处的 insert 是两条新增抢同一个 id（宿主 compose 后取到没有 config 的那份，插件保存配置
+   * 必然报 overridden）。光把 action 改成 update 不够 —— 归属按原文档决定，insert 成员会原地留下。
+   */
+  forceTopLevel?: boolean;
 }
 
 export interface PatchDocumentPlan {
@@ -149,8 +157,11 @@ export function planPatchDocument(doc: unknown, changes: readonly PatchLineChang
       continue;
     }
     const previous = state.get(change.lineId);
-    // 归属只由**原文档**决定：更新一条既有 insert 成员不会把它搬到顶层；新增才按动作分流
-    const inInsert = previous !== undefined ? previous.inInsert : change.action === 'insert';
+    // 归属默认由**原文档**决定：更新一条既有 insert 成员不会把它搬到顶层；新增才按动作分流。
+    // forceTopLevel 是唯一例外（#144 存量：本层旧 insert 成员 + 别层也 insert 同一 id）。
+    const inInsert = change.forceTopLevel === true
+      ? false
+      : previous !== undefined ? previous.inInsert : change.action === 'insert';
     state.set(change.lineId, { raw: change.raw, inInsert });
   }
 

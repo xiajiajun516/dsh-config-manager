@@ -18,8 +18,9 @@
  *     否则宿主 `patch: name mismatch … skipping` 整行跳过）；
  *   - 链上不存在 ⇒ 只能写 `- insert:` 成员（顶层行会被 `patch: entry not found` 丢弃）。
  *
- * 本模块只做**纯计算**（core 层零依赖、不碰 YAML / IO）：各层文档由宿主门面读好交进来，
- * 三个消费点（导入判定、写后自检、跨层覆盖守卫）共用同一份索引。
+ * 本模块只做**纯计算**（core 层零依赖、不碰 YAML / IO）：各层文档由宿主门面读好交进来。
+ * 三个消费点共用同一份索引 —— 导入判定（计划项 Create / Update）、写前降级（insert → 覆盖行）、
+ * 覆盖行孤儿守卫（整链没人提供该 id ⇒ 拒写）。
  */
 import { patchDocumentEntries } from './patch-document.ts';
 
@@ -33,22 +34,28 @@ export interface PatchChainSource {
   doc: unknown;
 }
 
+/** 读不出来的层（fail-open：判定只做加强，但缺口必须能上报，不能静默变成「确知没有」）。 */
+export interface PatchChainFailure {
+  file: string;
+  reason: string;
+}
+
 /** 门面读到的整条链（宿主合并序）与读失败的层。 */
 export interface PatchChainRead {
   /** 宿主合并序：bundle 层在前，然后 profile 层、home 层 */
   sources: PatchChainSource[];
-  /** 读不出来 / 解析不了的层（fail-open：判定只做加强，绝不据此拒绝写入） */
-  failures: { file: string; reason: string }[];
+  /** 读不出来 / 解析不了的层 */
+  failures: PatchChainFailure[];
 }
 
 /** 链上某个 id 的合流结果。 */
 export interface PatchChainEntry {
   id: string;
-  /** 条目声明的 name（写顶层覆盖行时必须与之一致，否则宿主整行跳过） */
+  /** 条目声明的 name（写顶层覆盖行时必须与之一致，否则宿主整行跳过；`alignOverrideNames` 用它校正） */
   name?: string;
   /** 提供该 id 的层（按合并序去重） */
   layers: string[];
-  /** 其中**以 `- insert:` 成员形式**提供该 id 的层 */
+  /** 其中**以 `- insert:` 成员形式**提供该 id 的层（>=2 就是「两条新增抢同一 id」的坏状态） */
   insertLayers: string[];
 }
 
@@ -95,10 +102,49 @@ export function providedByOtherLayers(
   return out;
 }
 
-/** 读整条链并折成索引；门面没实现该能力（老宿主 / 测试替身）→ `null`（判定退化为两层）。 */
+/**
+ * 把待写的**顶层行**里的 `name` 校正成链上既有条目的 name（issue #144 的验收标准之一）。
+ *
+ * 为什么必须校正：宿主对覆盖行做 `name === target.name` 校验，不一致就
+ * `patch: name mismatch … skipping` 把整行丢掉 —— 快照来自另一台机器（裸名）而目标机由
+ * bundle 提供（scoped 名）时，导入会报「成功」但一个字节都没生效，原报错照旧。
+ * `insert` 块成员不动（那是新增，name 由来源决定）。
+ */
+export function alignOverrideNames(
+  items: readonly unknown[],
+  index: Map<string, PatchChainEntry>,
+): unknown[] {
+  return items.map((item) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return item;
+    const obj = item as Record<string, unknown>;
+    if ('insert' in obj) return item;
+    const id = obj['id'];
+    if (typeof id !== 'string' || id === '') return item;
+    const wanted = index.get(id)?.name;
+    if (wanted === undefined || obj['name'] === wanted) return item;
+    return { ...obj, name: wanted };
+  });
+}
+
+/** 读整条链的结果：索引 + 读不出来的层（后者供报告面提示「判据不完整」）。 */
+export interface PatchChainIndexRead {
+  /** 门面没实现该能力（老宿主 / 测试替身）→ `null`（判定退化为两层） */
+  index: Map<string, PatchChainEntry> | null;
+  failures: PatchChainFailure[];
+}
+
+/**
+ * 读整条链并折成索引。门面没实现 `readPatchChain`、或读链本身抛错 → `index: null`
+ * （判定退化为两层 patch 文件，绝不因为链读失败阻断写入）。
+ */
 export async function readPatchChainIndex(
   patchFile: { readPatchChain?: () => Promise<PatchChainRead> },
-): Promise<Map<string, PatchChainEntry> | null> {
-  if (patchFile.readPatchChain === undefined) return null;
-  return patchChainIndex(await patchFile.readPatchChain());
+): Promise<PatchChainIndexRead> {
+  if (patchFile.readPatchChain === undefined) return { index: null, failures: [] };
+  try {
+    const read = await patchFile.readPatchChain();
+    return { index: patchChainIndex(read), failures: read.failures };
+  } catch (err) {
+    return { index: null, failures: [{ file: 'patch-chain', reason: err instanceof Error ? err.message : String(err) }] };
+  }
 }

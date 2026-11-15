@@ -226,6 +226,8 @@ export class MemPatch implements PatchFileFacade {
   chain: PatchChainRead | null = null;
   /** 记录每次写入的动作，供「已存在的 id 必须走 update」这类断言使用。 */
   actions: { file: string; lineId: string; action: 'insert' | 'update' | 'remove' }[] = [];
+  /** 注入「门面把 insert 降级成覆盖行」的结果（issue #144 兜底路径），默认不降级。 */
+  downgrade: string[] = [];
 
   async readPatchChain(): Promise<PatchChainRead> {
     return this.chain ?? { sources: [], failures: [] };
@@ -241,7 +243,7 @@ export class MemPatch implements PatchFileFacade {
       if (c.action === 'remove') bucket.delete(c.lineId);
       else bucket.set(c.lineId, { lineId: c.lineId, raw: c.raw });
     }
-    return { downgraded: [] };
+    return { downgraded: this.downgrade };
   }
 }
 

@@ -233,7 +233,8 @@ test('接线守卫：patch 门面与 boot-safety 的 YAML 解析都必须走本�
   assert.ok(chainIo.includes('return loadPatchDocument(text)'), 'applyPatchChanges 的既有文件必须用方言载入');
   assert.ok(chainIo.includes("loadPatchDocument(await fs.readFile(resolve(homeDir, file), 'utf8'))"), '生效链各层必须用方言载入');
   assert.equal(chainIo.includes('yaml.load('), false, '生效链读取不得用裸 yaml.load');
-  assert.match(index, /\+ dumpPatchDocument\((out|plan\.items)\)/, '写回 patch 文件必须用方言（yaml.dump 会把 {__jsExpr} 写成普通 map）');
+  // 变量名随 #144 的 name 校正改动（out → items），守卫只钉「必须经 dumpPatchDocument 写回」
+  assert.match(index, /\+ dumpPatchDocument\(\w+(\.\w+)?\)/, '写回 patch 文件必须用方言（yaml.dump 会把 {__jsExpr} 写成普通 map）');
   assert.match(
     index,
     /parseYaml:\s*\(text\)\s*=>\s*loadPatchDocument\(text\)/,

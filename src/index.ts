@@ -98,13 +98,12 @@ import { PLUGIN_NPM_PACKAGE } from './core/update-check.ts'
 import { planSelfUpdate, runSelfUpdate, type SelfUpdateOutcome } from './core/self-update.ts'
 import { createAdapters } from './adapters/index.ts'
 import { describePatchDocument, describePatchLayoutDrift, planPatchDocument, unprovidedTopLevelIds } from './core/patch-document.ts'
-import type { PatchChainRead, PatchWriteOutcome } from './core/patch-chain.ts'
+import { alignOverrideNames, patchChainIndex, type PatchChainRead, type PatchWriteOutcome } from './core/patch-chain.ts'
 import {
   PatchChainCache,
   downgradeProvidedInserts,
   readExistingPatchDocument,
   readPatchChainFromProfile,
-  readPatchDocQuietly,
 } from './utils/patch-chain-read.ts'
 import { isPatchLayerRel, profilePatchRel, readEffectivePatchLines, USER_PATCH_FILE } from './core/patch-layers.ts'
 import { createLocalPluginPackHook } from './core/local-plugin-host.ts'
@@ -1624,6 +1623,9 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
   }
 }
 
+/** 生效链缓存时长（#144）：一次导入逐行写 patch，逐行重读 30+ 个 bundle 纯属浪费；写盘即 invalidate。 */
+const PATCH_CHAIN_CACHE_MS = 2000
+
 /**
  * Patch-file facade：patch 的**两层**都在 home 根内 ——
  *   - 用户（home）层：`$DSH_HOME/cordis.patch.yml`
@@ -1637,11 +1639,6 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
  * YAML 侧一律走 `utils/patch-yaml.ts` 的 **DSH 方言**（issue #75）：`!!js` 必须能读写往返，
  * 且原文件解析不了时**拒绝覆盖**（读不出来 ≠ 空文档）。
  */
-/**
- * 生效链缓存时长（issue #144）：一次导入会逐行写 patch（每行一次 applyPatchChanges），
- * 逐行重读 30+ 个 bundle patch 纯属浪费；bundle 清单本身只在装/卸插件时变，2 s 足够覆盖一次导入。
- */
-const PATCH_CHAIN_CACHE_MS = 2000
 
 export class DshPatchFileFacade implements PatchFileFacade {
   private readonly homeDir: string
@@ -1729,8 +1726,8 @@ export class DshPatchFileFacade implements PatchFileFacade {
   ): Promise<PatchWriteOutcome> {
     const p = this.patchPath(file)
 
-    // 0. 生效链兜底（#144）：id 已被别的层（bundle 最典型）提供时再写 insert，就是两条「新增」
-    //    抢同一个 id ⇒ 插件保存配置必报 overridden。这里统一降级成顶层覆盖行（含 mcp/prompts/激活行）。
+    // 0. 生效链兜底（#144）：id 已被别层（bundle 最典型）提供时再写 insert = 两条「新增」抢同一 id
+    //    ⇒ 插件保存配置必报 overridden。统一降级成顶层覆盖行（含 mcp/prompts/激活行）。
     const chain = await this.readPatchChainQuietly()
     const { effective, downgraded } = downgradeProvidedInserts(chain, file, changes)
 
@@ -1742,30 +1739,31 @@ export class DshPatchFileFacade implements PatchFileFacade {
       throw new Error(this.msg('host.patchRefuseClobber', { file, reason: describePatchYamlError(err) }), { cause: err })
     }
 
-    // 2. 经 core/patch-document.ts 重建（issue #133）：两种形状在宿主侧**不等价** —— 顶层行只覆盖、
-    //    查不到 id 就整行丢弃；只有 `- insert:` 块成员才新增，所以不能把所有行都写成顶层。
+    // 2. 经 core/patch-document.ts 重建（#133）：顶层行只覆盖、查不到 id 就整行丢弃，只有 insert 成员才新增。
     const plan = planPatchDocument(doc, effective)
+    // 2b. 顶层行的 name 必须与既有条目逐字一致（#144）：不一致宿主 `patch: name mismatch … skipping` 整行丢弃。
+    const items = chain === null ? plan.items : alignOverrideNames(plan.items, patchChainIndex(chain))
     const text = '# rewritten by dsh-config-manager import (original comments not preserved)\n'
-      + dumpPatchDocument(plan.items)
+      + dumpPatchDocument(items)
 
-    // 3. 写盘前结构自检：把刚序列化的文本重新解析，两组 id 必须与计划逐项一致（零写入失败）——
-    //    序列化器或方言改动把 insert 块压平 / 吞掉时在这里停住，而不是静默退化成一堆覆盖行。
+    // 3. 写盘前结构自检：重新解析刚序列化的文本，两组 id 必须与计划逐项一致（序列化退化即零写入）。
     const drift = describePatchLayoutDrift(plan, describePatchDocument(loadPatchDocument(text)))
     if (drift !== null) {
       throw new Error(this.msg('host.patchSemanticDrift', { file, detail: drift }))
     }
 
-    // 4. 覆盖行孤儿守卫（#133 起、#144 改判到整条链）：顶层行只做覆盖，宿主查不到该 id 就整行
-    //    丢弃 ⇒ 只拒绝「任何一层都没提供这个 id」。读不出来的层不进判据（fail-open）。
-    const guardDocs = chain !== null
-      ? chain.sources.map((source) => source.doc)
-      : [await readPatchDocQuietly(this.homeDir, file === USER_PATCH_FILE ? profilePatchRel(this.profile) : USER_PATCH_FILE)]
-    const orphans = unprovidedTopLevelIds([...guardDocs, doc], plan.topLevelIds)
-    if (orphans.length > 0) {
-      throw new Error(this.msg('host.patchRefuseUnknownId', { file, ids: orphans.join(', ') }))
+    // 4. 覆盖行孤儿守卫（#133 起、#144 改判到整条链）：只拒绝「任何一层都没提供这个 id」的顶层行；
+    //    且只在**整链可信**（零失败层）时拒绝 —— 缺口层可能恰好提供该 id，拒绝 = 用户永久卡死。
+    const chainTrusted = chain !== null && chain.failures.length === 0
+    if (chainTrusted) {
+      const orphans = unprovidedTopLevelIds([...chain.sources.map((source) => source.doc), doc], plan.topLevelIds)
+      if (orphans.length > 0) {
+        throw new Error(this.msg('host.patchRefuseUnknownId', { file, ids: orphans.join(', ') }))
+      }
     }
-
     await atomicWriteFile(p, text)
+    // 盘面变了：销毁链缓存，否则同一批次里「刚写下的行」对后续判定不可见
+    this.chainCache.invalidate()
     return { downgraded }
   }
 
