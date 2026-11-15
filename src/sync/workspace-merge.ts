@@ -33,11 +33,17 @@ export interface GranularMergeOutcome {
 }
 
 /**
- * 钩子可读的合并上下文：目前只有 plugins 需要 —— 「跟随远端删除插件」是用户开关，
- * 关着时钩子必须**不参与**（交给通用路径 = 与未引入 #132 前逐字一致），否则会静默丢掉本机条目。
+ * 钩子可读的合并上下文（只放「用户开关」与「本进程事实」，不放会让钩子做出猜测的东西）。
+ *
+ * issue #145 起两者分工固定：
+ *  - 合并**恒参与**（开关不再决定钩子是否介入，否则 patch 行这类与卸载无关的改动永远合不进去）；
+ *  - `deletePlugins` 只管「远端删了、本机未改的条目要不要真的删掉」；
+ *  - `selfPluginName` 让 plugins 钩子排除自身（自身条目永不删、不报冲突）。
  */
 export interface GranularMergeHooks {
   deletePlugins?: boolean;
+  /** 本插件的包名（空串 / 缺省 = 不知道，不排除任何条目）。 */
+  selfPluginName?: string;
 }
 
 /** 记录级合并钩子签名（`merge.ts` 按分区 id 调用；返回 undefined = 不参与，走通用路径）。 */

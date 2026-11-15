@@ -1590,7 +1590,7 @@ export class SyncEngine {
         if (portableIds.has(id as SectionId)) ancestorPortable[id as SectionId] = data as SectionData;
       }
     }
-    const plan = mergeSections(localSections, remotePortable, ancestorPortable, { deletePlugins: this.deletePlugins });
+    const plan = mergeSections(localSections, remotePortable, ancestorPortable, { deletePlugins: this.deletePlugins, selfPluginName: this.selfPluginName });
     // 结果**经返回值**交给调用方（previewMerge / applyMergeResolutions 都用这一份，不会二次下载）；
     // 这里只留两个进程内备忘：祖先可用性（预览要如实说明「为什么全是冲突」）与三方输入
     // （applyMergeResolutions 要把分区级裁决落回**整分区**数据）。

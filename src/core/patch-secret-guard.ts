@@ -42,7 +42,7 @@ export interface PatchSecretGuardResult {
 }
 
 /** 解析扫描器路径语法（`a.b[0].c`）→ 路径段；语法不认识返回 null（宁可放过，不误判）。 */
-function parsePath(path: string): Segment[] | null {
+export function parsePath(path: string): Segment[] | null {
   const segs: Segment[] = [];
   let rest = path;
   while (rest !== '') {

@@ -35,6 +35,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **插件同步不再「有改动就整段冲突」**：默认配置下，本机新装了插件、远端删掉了另一个，两边现在按插件名逐条合并（patch 行按文件+行号、本地打包按包名、patch 文件按路径），不会再因为「插件列表这一整块两侧都动过」被判成冲突；被脱敏备份剥空的密钥字段也不再让同一条 patch 行看起来两边都改过；「跟随远端删除」开关只决定删不删，关着时照常合并、本机插件一个不丢，删除项则在报告里逐条提示。（issue #145）
+  **Plugin sync no longer conflicts as one block whenever both sides change**: with default settings, installing a plugin locally while the remote deletes another now merges entry by entry (plugins by name, patch lines by file + line id, local tarballs by package name, patch files by path) instead of treating the whole plugins section as one conflicting array; secret fields stripped by a redacted backup no longer make the same patch line look modified on both sides; and the follow-remote-deletions switch now only decides whether to delete — while it is off, merging still happens, no local plugin is dropped, and any deletion candidate is reported item by item. (issue #145)
 - **命令行的 `--json` 输出、跨命令参数与非交互安全护栏更可靠**：`sessions repair` 启用 `--json` 时标准输出只保留合法 JSON（包括 `--fix --json` 与非会话目录跳过提示，人类提示均改走标准错误）；各子命令与帮助页统一 `--data-dir` 与 `--data-root` 支持，子命令参数错误直接给出对应 `--help` 下一步提示；无终端交互环境下运行 `reinstall`（未加 `--yes`）时不再挂起等待输入，而是直接提示预览或确认后拒绝退出，`--dry-run` 仍可零等待预览计划。
   **Cleaner CLI `--json` output, flag parity, and non-TTY safety**: `sessions repair --json` now keeps stdout strictly valid JSON (routing human notices and skip logs to stderr even with `--fix`); `--data-dir` and `--data-root` options and help text stay consistent across commands while invalid subcommand flags point directly to `dcm <command> --help`; `reinstall` now refuses cleanly without hanging in non-interactive shells unless `--yes` is passed while keeping `--dry-run` non-blocking.
 
