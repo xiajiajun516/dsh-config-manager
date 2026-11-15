@@ -19,7 +19,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { SyncEngine } from './sync-engine.ts';
-import { onceLoad, pendingMergeAfterPush, resolveHeldSections } from './push-skip.ts';
+import { pendingMergeAfterPush, resolveHeldSections } from './push-skip.ts';
+import { memoAsync } from '../utils/async-once.ts';
 import { sectionMeta } from '../schema/section-registry.ts';
 import { loadSyncState, saveSyncState } from './sync-state.ts';
 import type { SectionId } from '../schema/types.ts';
@@ -160,9 +161,10 @@ test('#146 全扣下：不上传、不新建快照、不改基线、不动待裁
     assert.equal(report.skipped, 'all-conflicted', '必须显式区分「什么都没推」与「推成功」');
     assert.equal(report.snapshotId, '', '没有新快照就不能给一个 id');
     assert.deepEqual(report.sections, []);
-    // 文案点名被扣分区，且只给 displayName —— 绝不把裸分区 id 甩给用户
-    assert.ok((report.message ?? '').includes(sectionMeta('plugins').displayName), '文案要说明是哪些分区被冲突扣下');
-    assert.equal((report.message ?? '').includes('plugins'), false, '文案不得出现裸分区 id');
+    // 文案点名被扣分区：用裸分区 id（与其它引擎消息同口径，见 sync.skipNonPortable）——
+    // 反过来把英文 displayName 塞进中文句子才是错的那一面。
+    assert.ok((report.message ?? '').includes('plugins'), '文案要说明是哪些分区被冲突扣下');
+    assert.equal((report.message ?? '').includes(sectionMeta('plugins').displayName), false, '中文文案不得夹英文 displayName');
 
     assert.equal(transport.calls.includes('upload'), false, '全扣下绝不能上传');
     assert.equal(transport.metas.length, 1, '远端快照数不变');
@@ -220,8 +222,8 @@ test('#146 预览与 push 同口径：扣下分区不出现在预览里；全扣
     assert.deepEqual(allHeld.sections, []);
     assert.equal(
       allHeld.message,
-      zhMsg('sync.pushAllConflicted', { sections: all.map((id) => sectionMeta(id).displayName).join(', ') }),
-      '全被冲突扣下必须有独立文案（点名被扣分区，用 displayName）',
+      zhMsg('sync.pushAllConflicted', { sections: all.join(', ') }),
+      '全被冲突扣下必须有独立文案（点名被扣分区，裸 id 与其它引擎消息同口径）',
     );
 
     // 对照组：不是冲突扣下，而是「没有任何可同步分区」
@@ -299,9 +301,9 @@ test('#146 待裁决按「推上去的分区」剔除：不在候选里的分区
   assert.deepEqual([...set], ['plugins', 'sessions'], '空数组 = 仍按磁盘待裁决扣');
 });
 
-test('onceLoad：同一轮只读一次 sync-state（扣下集合与推送后待裁决必须看同一份）', async () => {
+test('memoAsync：同一轮只读一次 sync-state（扣下集合与推送后待裁决必须看同一份）', async () => {
   let reads = 0;
-  const load = onceLoad(async () => {
+  const load = memoAsync(async () => {
     reads += 1;
     return { pendingMerge: { sections: ['plugins'] as SectionId[], since: '2026-11-14T00:00:00.000Z' } };
   });
@@ -309,5 +311,16 @@ test('onceLoad：同一轮只读一次 sync-state（扣下集合与推送后待�
   const second = await load();
   assert.equal(reads, 1, '两次取用只触发一次磁盘读');
   assert.equal(first, second, '两处看到的必须是同一份状态对象');
+});
+
+test('memoAsync：失败也被记忆化（同一轮不重试 ⇒ 两处看到同一份「读不到」）', async () => {
+  let reads = 0;
+  const load = memoAsync(async () => {
+    reads += 1;
+    throw new Error('state unreadable');
+  });
+  await assert.rejects(load);
+  await assert.rejects(load);
+  assert.equal(reads, 1, 'reject 必须被记住：重试就会看到另一份状态（两条路径各读一次）');
 });
 

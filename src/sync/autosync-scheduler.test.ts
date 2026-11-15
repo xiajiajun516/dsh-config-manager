@@ -611,6 +611,41 @@ test('runOnce: 完整双向 → 无冲突合并写本地 + push', async () => {
   assert.ok(getEntries().some((e) => e.status === 'success' && e.direction === 'both'), '写入双向成功历史');
 });
 
+test('#146（follow-up）：引擎回 skipped:all-conflicted → 台账不得记成「上传·成功」', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const heldPush = async (): Promise<Partial<import('./sync-engine.ts').SyncPushReport>> => ({
+    ok: true, snapshotId: '', sections: [] as never,
+    skipped: 'all-conflicted',
+    warnings: ['待裁决冲突未处理：plugins'],
+    message: '待裁决冲突未处理：plugins',
+  });
+  // ① 下行有落地、上行一个分区都没推 → partial，原因写 all-conflicted，引擎告警必须上屏
+  const engine1 = {
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
+    applyMergePlan: async () => ({ ok: true, applied: ['settings'], restoreId: 'r1', rolledBack: false, review: [], warnings: [] }),
+    push: heldPush as never,
+  };
+  const a = makeScheduler({ cfg, engine: engine1, history: [] });
+  const partial = await a.scheduler.runOnce('git');
+  assert.equal(partial.status, 'partial', '被扣下不是成功：用户会从 success 得出「两端一样了」');
+  assert.equal(partial.skipReason, 'all-conflicted');
+  assert.equal(partial.pushedSnapshotId, undefined, '没推任何东西就不许带快照 id');
+  assert.ok((partial.warnings ?? []).includes('待裁决冲突未处理：plugins'), '扣下说明必须进结果（绝不静默少推）');
+  const entry1 = a.getEntries().at(-1);
+  assert.equal(entry1?.skipReason, 'all-conflicted', '历史条目同样要带原因，界面才说得清');
+  assert.ok((entry1?.warnings ?? []).length > 0, '历史条目也要留告警');
+
+  // ② 下行也没落地（applied 为空）→ 「成功但跳过」，与失败的区分必须保留
+  const engine2 = {
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
+    applyMergePlan: async () => ({ ok: true, applied: [], restoreId: 'r1', rolledBack: false, review: [], warnings: [] }),
+    push: heldPush as never,
+  };
+  const b = makeScheduler({ cfg, engine: engine2, history: [] });
+  const skipped = await b.scheduler.runOnce('git');
+  assert.equal(skipped.status, 'skipped', '一个分区都没上行 = 成功但跳过（不是 failed，也不是 success）');
+  assert.equal(skipped.skipReason, 'all-conflicted');
+});
 test('runOnce: startup 变体 → 只做 pull 合并，不上传', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
   const pushCalls: string[] = [];

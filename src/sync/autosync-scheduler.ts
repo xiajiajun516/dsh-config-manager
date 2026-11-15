@@ -892,11 +892,18 @@ export class AutoSyncScheduler {
           // 同样记 partial，skipReason 换成 conflict-kept-local（界面据此说清「本机已覆盖远端」）。
           const keptLocal = forcePush && conflictedSections.length > 0;
           const partial = conflictedSections.length > 0;
+          // issue #146（follow-up）：引擎把「冲突未裁决 ⇒ 本轮一个分区都没上行」回成 skipped:'all-conflicted'。
+          // 以前这里只看 ok/conflict，于是整轮被记成「上传·成功」—— 用户从此看不出有分区被扣下，
+          // #146 的「显示成已推送」在自动同步路径原地复发。全扣下与部分扣下都必须落到台账。
+          const allConflicted = pushReport.skipped === 'all-conflicted';
+          const pushWarnings = pushReport.warnings ?? [];
           const skipReason = keptLocal
             ? ('conflict-kept-local' as const)
             : partial
               ? ('conflict' as const)
-              : undefined;
+              : allConflicted
+                ? ('all-conflicted' as const)
+                : undefined;
           const reportedConflicted = keptLocal
             ? conflictedSections
             : partial
@@ -913,33 +920,41 @@ export class AutoSyncScheduler {
           // 纯告警（插件没装上、undo 有残留等）与冲突无关，套上 'conflict' 会让
           // 界面上出现「跳过原因：冲突」「另有 N 个分区待确认」，而 conflictedSections 是空的。
           const heldDegraded = heldLeafSections.length > 0;
+          // 引擎告警（分区导出失败 / 非 portable 跳过 / 扣下说明）同样要上屏：静默少推比失败更糟。
+          const allWarnings = [...downlinkWarnings, ...pushWarnings];
+          // 引擎 push 回传的告警（provider namespace 未配置、目录为空…）是常规事实噪声，只上屏不降级；
+          // 状态降级只认「有分区被扣下」与下行冲突 —— 否则每轮都变成 partial，用户就学不会 partial 的含义。
           const degraded = downlinkWarnings.length > 0 || heldDegraded;
-          const finalPartial = partial || degraded;
+          const finalPartial = partial || degraded || allConflicted;
+          // 一个分区都没上行 = 「成功但跳过」，不是「成功」也不是「失败」（#146 验收口径②）。
+          const finalStatus = allConflicted && appliedSections.length === 0
+            ? ('skipped' as const)
+            : finalPartial ? ('partial' as const) : ('success' as const);
           const finalSkipReason = skipReason
             ?? (heldDegraded ? ('conflict' as const) : degraded ? ('warning' as const) : undefined);
           // 扣下的叶级冲突所在分区也要出现在「待处理分区」里（与分区级冲突合并去重）
           const finalConflicted = [...new Set([...reportedConflicted, ...heldLeafSections])];
           const result: AutosyncRunResult = {
-            status: finalPartial ? 'partial' : 'success',
+            status: finalStatus,
             direction: appliedSections.length ? 'both' : 'push',
             appliedSections, historyId,
             // issue #146：全扣下时 snapshotId 为空 —— 绝不写空 id（界面会当成「推了某份快照」）。
             ...(pushReport.snapshotId !== '' ? { pushedSnapshotId: pushReport.snapshotId } : {}),
             ...(finalSkipReason !== undefined || adoptedReason !== undefined ? { skipReason: finalSkipReason ?? adoptedReason } : {}),
             ...(finalConflicted.length > 0 ? { conflictedSections: finalConflicted } : {}),
-            ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
+            ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
             ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
             consecutiveFailures: 0,
             ...forcedMark,
           };
           await this.appendHistory(channel, {
             direction: appliedSections.length ? 'both' : 'push',
-            status: finalPartial ? 'partial' : 'success',
+            status: finalStatus,
             appliedSections,
             ...(pushReport.snapshotId !== '' ? { pushedSnapshotId: pushReport.snapshotId } : {}),
             ...(finalSkipReason !== undefined || adoptedReason !== undefined ? { skipReason: finalSkipReason ?? adoptedReason } : {}),
             ...(finalConflicted.length > 0 ? { conflictedSections: finalConflicted } : {}),
-            ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
+            ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
             ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
             createdAt: nowIso, failureCountAtRun: 0,
             ...forcedMark,

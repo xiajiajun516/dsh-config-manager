@@ -279,6 +279,17 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
   `skipped:'all-conflicted'` 是**成功但什么都没做**，界面不得显示成「已推送」。
   预览与 push 同口径：`previewPush()` 全被扣下时返回 `{ ok:true, skipped:'all-conflicted', sections:[] }`
   （`ok:false` 只留给「没有任何可同步分区」），两种空目标文案不同。
+  「同口径」只在**同一份 `opts`** 下成立；跨入口的差异全部来自调用方传没传 `skipSections`，四个生产入口：
+
+  | 入口 | 传参 | 与磁盘待裁决的关系 |
+  |---|---|---|
+  | 自动同步 Phase C（`autosync-scheduler.ts`） | 本轮 `heldUp` 分区 | 显式点名 ∪ 磁盘 |
+  | GUI 立即推送（`routes/sync.ts` 的 push） | `[]` | 读磁盘：没裁决过的分区一律不上行 |
+  | GUI 预览（`routes/sync.ts` 的 previewPush） | `[]` | 与上面的实推同集合 |
+  | agent `config_sync_push`（`core/model-tools.ts`） | `[]` | 同上（模型不掌握待裁决，不能替用户裁决） |
+
+  `force:true` 恒不扣（强推 = 用户明确覆盖）；`skipped:'all-conflicted'` 在自动同步台账里必须落成
+  「成功但跳过 + 原因」，不得记成 `success`/`direction:'push'`。
 
 ### 7.4 push 前置：远端推进检测与 `force`
 

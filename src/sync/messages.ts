@@ -17,8 +17,6 @@
  */
 import { engineMsg as engineMsgOf, registerMessageCatalog } from '../core/engine-locale.ts';
 import type { MsgFunc } from '../core/msg-types.ts';
-import { isSectionId, sectionMeta } from '../schema/section-registry.ts';
-import type { SectionId } from '../schema/types.ts';
 
 export const zh = {
   // ---------- 快照 / 祖先 ----------
@@ -189,11 +187,3 @@ registerMessageCatalog({ id: 'sync-domain', zh, en });
 /** 本域活翻译器（与 core 的 engineMsg 同一实现；导入本模块即完成目录注册）。 */
 export const engineMsg: MsgFunc = engineMsgOf;
 
-/**
- * 分区 id → 人类可读名（引擎消息只给 displayName，绝不把裸 id 交给用户）。
- * 唯一来源是 `sectionMeta().displayName`（schema 层注释明确它是「报告文本/日志/消息」用名，
- * 与 client `section.<id>` 的 en 值逐字一致）；未注册的 id 原样回显，绝不抛错。
- */
-export function sectionNamesOf(ids: readonly SectionId[]): string {
-  return ids.map((id) => (isSectionId(id) ? sectionMeta(id).displayName : id)).join(', ');
-}

@@ -66,7 +66,7 @@ import { formPatchFromStatus, markDirty, resetDirty } from './config-dirty.ts'
 import { clearedChannelFormFields, prepareClear, shouldDiscardSaveResult } from './config-clear-guard.ts'
 import {
   channelMapOf, channelStateMap, computeGithubLoginView, computeSyncButtons, defaultChannelSyncState,
-  githubPollMessage, isClientChannel, pushReportView, readStoredChannel, sectionCountsOf,
+  githubPollMessage, isClientChannel, pushPreviewBlocked, pushReportView, readStoredChannel, sectionCountsOf,
   gistSessionsRiskKey,
   initialSyncSections, normalizeSessionsLimit, syncSectionOptions, writeStoredChannel, SYNC_CHANNEL_ORDER,
 } from './sync-view.ts'
@@ -1491,6 +1491,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               <Button
                 variant="primary"
                 loading={state.busy === 'push'}
+                disabled={state.busy === 'push' || pushPreviewBlocked(state.pushPreview.preview, forcePush)}
                 onClick={() => { void runPush() }}
               >
                 {t('syncflow.pushConfirm')}

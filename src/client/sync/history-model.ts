@@ -101,6 +101,8 @@ export function skipReasonKey(reason: string | undefined): SyncKey | null {
     // issue #79：状态行新增两类（无变化 / 已是最新）——此前会落到 default 渲染裸码
     case 'upToDate': return 'history.autosyncReasonUpToDate';
     case 'unchanged': return 'history.autosyncReasonUnchanged';
+    // issue #146：全被冲突扣下 = 「成功但跳过」，必须有独立文案（落到 default 会渲染裸码 'all-conflicted'）。
+    case 'all-conflicted': return 'history.autosyncReasonAllConflicted';
     // issue：宿主此前把分类锁判定（LOCKED/STALE/UNKNOWN/SAFE MODE）一律落成 'mutation-locked'，
     // 客户端只能写一句「被占用或残留」——真机上 locks 目录是空的，这句把排查方向带偏（用户实测反馈）。
     // 现在宿主按 lockSkipToken() 分档发 token，一类一个文案 + 一个处置方向；旧 token 仍认。

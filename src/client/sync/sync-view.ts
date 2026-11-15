@@ -664,6 +664,11 @@ export interface PushPreviewView {
   changedCount: number;
   /** 远端现有快照数（0 = 首次推送创建首个基线） */
   remoteSnapshotCount: number;
+  /**
+   * 本轮没有可推送的分区（全被未裁决冲突扣下，issue #146）。
+   * 此分支下 remoteSnapshotCount 恒为 0（引擎早退，根本没去列远端）——**不能**把它当「首次基线」渲染。
+   */
+  allConflicted: boolean;
   /** 加密快照提示（基线不可比） */
   encryptedHint: string;
   /** issue #38：本次推送将带上真实凭据值的提示（未带凭据时为空串） */
@@ -678,12 +683,21 @@ export interface PushPreviewView {
   error: string | null;
 }
 
+/**
+ * 「确认推送」能不能点：全被未裁决冲突扣下时这一下推不动任何东西（引擎回 `skipped:'all-conflicted'`）；
+ * 用户显式勾 force（就算一样也新建）时扣下语义整体不生效，按钮必须放行。
+ */
+export function pushPreviewBlocked(preview: Pick<SyncPushPreview, 'skipped'> | null, force: boolean): boolean {
+  return preview?.skipped === 'all-conflicted' && !force;
+}
+
 /** push 预览 → 渲染模型（P0-②）：列分区 + 变更计数 + 远端基线提示。 */
 export function pushPreviewView(preview: SyncPushPreview | null, t: UiT): PushPreviewView | null {
   if (preview === null) return null;
   if (!preview.ok) {
     return {
       ok: false, rows: [], changedCount: 0, remoteSnapshotCount: preview.remoteSnapshotCount,
+      allConflicted: false,
       encryptedHint: '', credentialsHint: '', hint: '', headline: '',
       error: preview.message ?? t('sync.pushFailed'),
     };
@@ -692,6 +706,7 @@ export function pushPreviewView(preview: SyncPushPreview | null, t: UiT): PushPr
     // issue #146：全被冲突扣下不是错误（与 push 同口径 ok:true）—— 说「没得推」而不是「将推送 0 个分区」
     return {
       ok: true, rows: [], changedCount: 0, remoteSnapshotCount: preview.remoteSnapshotCount,
+      allConflicted: true,
       encryptedHint: '', credentialsHint: '', hint: preview.message ?? '',
       headline: t('sync.pushAllConflicted'), error: null,
     };
@@ -703,6 +718,7 @@ export function pushPreviewView(preview: SyncPushPreview | null, t: UiT): PushPr
     rows,
     changedCount,
     remoteSnapshotCount: preview.remoteSnapshotCount,
+    allConflicted: false,
     encryptedHint: preview.encrypted ? t('sync.pushPreviewEncrypted') : '',
     credentialsHint: preview.credentialsIncluded ? t('sync.pushPreviewCredentials') : '',
     hint: preview.message ?? '',

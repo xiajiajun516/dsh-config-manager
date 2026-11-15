@@ -579,6 +579,9 @@ export function createModelTools(deps: ModelToolsDeps) {
         ...(sections === undefined ? {} : { sections }),
         ...(encrypt ? { encrypt: true, includeSecrets: false, password: password ?? '' } : {}),
         ...(input.force === true ? { force: true } : {}),
+        // 空数组 = 连磁盘待裁决一起扣（issue #146）：agent 的手动推送与 GUI 同口径，
+        // 否则「跑一次 push 工具」就能把用户挂着未裁决的分区整块覆盖掉。
+        skipSections: [],
       })
       const report = await runWithMutationLock(deps.host.mutationLock, { op: 'model-sync-push', isBlocked: () => deps.host.safeModeIsBlocked?.() ?? false }, async (lockCtx) => {
         if (deps.host.phase3Recovery !== undefined && lockCtx !== null) {

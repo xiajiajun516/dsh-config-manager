@@ -30,7 +30,8 @@ export function PushPreviewCard({ preview, t, uiT, sectionName }: {
   return (
     <div>
       <Banner kind="info">{view.headline}</Banner>
-      {view.remoteSnapshotCount === 0 && (
+      {/* all-conflicted 时引擎早退、根本没列远端（remoteSnapshotCount 恒 0）—— 当成「首次基线」会骗人 */}
+      {view.remoteSnapshotCount === 0 && !view.allConflicted && (
         <Banner kind="warn">{t('syncflow.pushFirstBaseline')}</Banner>
       )}
       {view.encryptedHint !== '' && <Banner kind="warn">{view.encryptedHint}</Banner>}

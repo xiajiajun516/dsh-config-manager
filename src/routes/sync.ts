@@ -495,6 +495,9 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
                 ...(sections === undefined ? {} : { sections }),
                 ...sessionsOpt,
                 ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets } : {}),
+                // 空数组 = 连磁盘上的历史待裁决一起扣下（issue #146：预览与实推必须同口径，
+                // 否则「没得推」的预览会漏掉「其实还挂着冲突」这一事实）。
+                skipSections: [],
               }),
               ROUTE_TIMEOUT_MS,
               msg('host.syncPushTimeout'),
@@ -506,6 +509,9 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
                 ...sessionsOpt,
                 ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets, password: effectiveEncryptPassword ?? '' } : {}),
                 ...(force ? { force: true } : {}),
+                // 手动推送同样扣下仍在等裁决的分区（issue #146）：本机没合完就整分区上行，
+                // 正是「远端 30 个插件被压回 26 个」的成因。force 时引擎自己短路，不受影响。
+                skipSections: [],
               }),
               ROUTE_TIMEOUT_MS,
               msg('host.syncPushTimeout'),

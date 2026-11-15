@@ -686,13 +686,16 @@ deviceId 不同；34 条快照历史里 `plugins/plugins.json` 被反复压小�
   `pushTargets()` 只按 `sections` 挑分区，于是冲突分区每轮照旧导出本机版本上行，把远端那份覆盖成更小的一份。
 - 判据：「仍在等裁决」的唯一事实源是 `pendingMerge.sections`（不是本轮 merge 结果，也不是基线 hash）。
   推送目标 = 全量 −（调用方点名 ∪ 磁盘 `pendingMerge.sections`），实现只有一处：
-  `src/sync/push-skip.ts` 的 `resolveSkipSections()`；`force` 不扣（强推就是明确覆盖），`skipSections` **不传**才不扣
+  `src/sync/push-skip.ts` 的 `resolveHeldSections()`；`force` 不扣（强推就是明确覆盖），`skipSections` **不传**才不扣
   （手动推送照旧）—— 传空数组也照样按磁盘待裁决扣：自动同步本轮没判出新冲突时同样要传，否则别的分区一有改动
   就把上一轮的待裁决推上去（这条是 2026-11-15 代码审查发现并补的）。
 - 全扣下必须零副作用：`{ ok:true, snapshotId:'', sections:[], skipped:'all-conflicted' }` —— 不 upload、不建目录、
   不改基线、不动 `pendingMerge`；且必须放在 `resolvePushBase()` **之后**：远端已推进时仍要如实报 `conflict:true`，
   不能被「全扣下」吞成「成功」。
 - 部分扣下：基线只记已推分区；`pendingMerge.sections` 只剔除已推分区，`since` 原样保留（同一批待裁决保留首次时间）。
+- `pendingMerge.sections` 写入取**并集**（同一远端快照上）：每轮上报的只是「本轮查出来的那部分」冲突，替换语义会
+  让上一轮的分区凭空消失，下一轮该分区若判无冲突就整分区上行 —— 正是本轮事故的成因链（2026-11-15 审查补充）。
+  剔除只发生在「真推上去了」（`pendingMergeAfterPush` 按已推分区剔 / 全裁决完时置 `null`）。
 - 调度器顺序：`heldUp`（本轮分区级冲突 ∪ 叶级扣下）必须在 `push()` **之前**落盘 —— 引擎推送成功时只在
   **已有记录**上保留 `since`，推送后再写会按 `lastMergedRemoteSnapshotId` 重算、抹掉首次时间；`pendingRecorded`
   守卫同时避免冲突分支再写一次。
@@ -700,5 +703,5 @@ deviceId 不同；34 条快照历史里 `plugins/plugins.json` 被反复压小�
   返回 `null` 等于静默丢弃待裁决记录。
 - 界面/工具面：`skipped:'all-conflicted'` 一律渲染成「未推送任何分区」，绝不显示成「已推送」（`sync-view.ts` 的
   headline 不插值 `sections`——该分支恒为空数组）。
-- 守卫：`src/sync/push-skip.test.ts` 8 条（缺省不扣 / 部分扣下 / 全扣下零副作用 / 未点名仍扣 / force 不扣 /
+- 守卫：`src/sync/push-skip.test.ts`（缺省不扣 / 部分扣下 / 全扣下零副作用 / 未点名仍扣 / force 不扣 /
   预览同口径 / 读失败只扣点名且保留待裁决）。

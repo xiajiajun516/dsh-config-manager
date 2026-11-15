@@ -8,22 +8,15 @@
  * 但推送侧原本没有任何过滤，于是「本机版本」照样被导出并覆盖远端 —— plugins 被 30 → 28 → 26 一路压小。
  *
  * 三条不变量：
- *  1. 过滤只在一处发生（`resolvePushTargets`），push 与 previewPush 共用 ⇒ 预览必等于实际；
+ *  1. 过滤只在一处发生（`resolvePushTargets`），push 与 previewPush 共用同一出口 ⇒ **同一份 opts 下**
+ *     预览必等于实际。跨入口的口径差只可能来自「调用方传没传 skipSections」（`undefined` = 手动不扣磁盘，
+ *     空数组 = 连磁盘待裁决一起扣），契约 §7.3 有调用方对照表 —— 别再把它读成无条件不变量；
  *  2. `force: true` 不扣任何分区（强推 = 用户明确要「用本机覆盖远端」）；
  *  3. 全被扣下 ⇒ 一个分区都不上行，基线与待裁决都不动（引擎返回 `skipped:'all-conflicted'`）。
  */
 import type { ConfigAdapter } from '../core/types.ts'
 import type { SectionId } from '../schema/types.ts'
 import type { PendingMerge } from './sync-state.ts'
-
-/**
- * 把「读一次 sync-state」的记忆化收在一处：push 要同一份状态两次（扣下集合 + 推送后待裁决），
- * 一次磁盘读就够，且两处必须看到**同一份**状态（否则「扣下的」与「剔除的」不是同一批）。
- */
-export function onceLoad<T>(fn: () => Promise<T>): () => Promise<T> {
-  let pending: Promise<T> | undefined
-  return () => (pending ??= fn())
-}
 
 /**
  * 本轮推送目标：真正上行的分区 + 被扣下（held）的分区 —— 两者互斥、合起来 = 全部候选。
@@ -58,14 +51,14 @@ export async function resolveHeldSections(
 }
 
 /**
- * 计算本轮推送目标并扣掉 `skip` 里的分区（**唯一过滤点**）。
+ * 计算本轮推送目标并扣掉 `held` 里的分区（**唯一过滤点**）。
  * 未指定 sections = portable 全量 + 本次放行的可选分区；未知 id 交给 `onSkipNonPortable` 告警。
  */
 export function resolvePushTargets(
   portable: readonly ConfigAdapter[],
   optIn: readonly ConfigAdapter[],
   sections: readonly SectionId[] | undefined,
-  skip: ReadonlySet<SectionId> | undefined,
+  held: ReadonlySet<SectionId> | undefined,
   onSkipNonPortable: (id: SectionId) => void,
 ): PushTargets {
   const all: ConfigAdapter[] = []
@@ -80,10 +73,10 @@ export function resolvePushTargets(
       else all.push(adapter)
     }
   }
-  if (skip === undefined || skip.size === 0) return { targets: all, held: [] }
+  if (held === undefined || held.size === 0) return { targets: all, held: [] }
   return {
-    targets: all.filter((a) => !skip.has(a.id)),
-    held: all.filter((a) => skip.has(a.id)).map((a) => a.id),
+    targets: all.filter((a) => !held.has(a.id)),
+    held: all.filter((a) => held.has(a.id)).map((a) => a.id),
   }
 }
 
