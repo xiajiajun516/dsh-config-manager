@@ -277,6 +277,8 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
   留下的待裁决会在别的分区有改动时被推上去）。`force` 不扣。同一集合也用于 `previewPush()`（预览 = 实际）。
   推送成功后 `pendingMerge` 只剔除**真正推上去**的分区（不在候选里的分区记录保留）。
   `skipped:'all-conflicted'` 是**成功但什么都没做**，界面不得显示成「已推送」。
+  预览与 push 同口径：`previewPush()` 全被扣下时返回 `{ ok:true, skipped:'all-conflicted', sections:[] }`
+  （`ok:false` 只留给「没有任何可同步分区」），两种空目标文案不同。
 
 ### 7.4 push 前置：远端推进检测与 `force`
 

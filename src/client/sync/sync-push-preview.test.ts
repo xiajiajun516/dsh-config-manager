@@ -72,6 +72,15 @@ test('pushPreviewView: 含凭据推送 → 显式提示「本次含真实凭据�
   assert.equal(withoutSecrets.credentialsHint, '', '不含凭据时不显示该提示');
 });
 
+test('pushPreviewView: 全被冲突扣下 → 不显示「将推送 0 个分区」（issue #146，与 push 同口径）', () => {
+  const view = pushPreviewView(okPreview({ sections: [], skipped: 'all-conflicted', message: '没有可推送的分区' }), t);
+  assert.ok(view !== null && view.ok, '全扣下不是错误');
+  assert.deepEqual(view.rows, []);
+  assert.equal(view.headline, zhUiT('sync.pushAllConflicted'), '横幅说的是「没得推」，不是「推送 0 个」');
+  assert.equal(view.hint, '没有可推送的分区', '引擎说明照常上屏');
+  assert.equal(view.error, null);
+});
+
 test('pushPreviewView: null 预览 → null（无弹窗内容）', () => {
   assert.equal(pushPreviewView(null, t), null);
 });

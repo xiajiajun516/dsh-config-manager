@@ -688,6 +688,14 @@ export function pushPreviewView(preview: SyncPushPreview | null, t: UiT): PushPr
       error: preview.message ?? t('sync.pushFailed'),
     };
   }
+  if (preview.skipped === 'all-conflicted') {
+    // issue #146：全被冲突扣下不是错误（与 push 同口径 ok:true）—— 说「没得推」而不是「将推送 0 个分区」
+    return {
+      ok: true, rows: [], changedCount: 0, remoteSnapshotCount: preview.remoteSnapshotCount,
+      encryptedHint: '', credentialsHint: '', hint: preview.message ?? '',
+      headline: t('sync.pushAllConflicted'), error: null,
+    };
+  }
   const rows = preview.sections.map((s) => ({ section: s.section, count: s.count, changed: s.changed }));
   const changedCount = preview.sections.filter((s) => s.changed).length;
   return {

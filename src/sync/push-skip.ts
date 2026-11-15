@@ -16,20 +16,32 @@ import type { ConfigAdapter } from '../core/types.ts'
 import type { SectionId } from '../schema/types.ts'
 import type { PendingMerge } from './sync-state.ts'
 
-/** 本轮推送目标：真正上行的分区 + 被扣下的分区（两者互斥、合起来 = 全部候选）。 */
+/**
+ * 把「读一次 sync-state」的记忆化收在一处：push 要同一份状态两次（扣下集合 + 推送后待裁决），
+ * 一次磁盘读就够，且两处必须看到**同一份**状态（否则「扣下的」与「剔除的」不是同一批）。
+ */
+export function onceLoad<T>(fn: () => Promise<T>): () => Promise<T> {
+  let pending: Promise<T> | undefined
+  return () => (pending ??= fn())
+}
+
+/**
+ * 本轮推送目标：真正上行的分区 + 被扣下（held）的分区 —— 两者互斥、合起来 = 全部候选。
+ * 词汇统一：`held` = 仍在等裁决、本轮必须扣下的分区（对应引擎选项 `skipSections` 的入参语义）。
+ */
 export interface PushTargets {
   targets: ConfigAdapter[]
   held: SectionId[]
 }
 
 /**
- * 本轮要扣下的分区集合 = 调用方点名的分区 ∪ 磁盘上**仍在等裁决**的分区（`force` 时不扣：强推就是明确覆盖远端）。
+ * 本轮要扣下（held）的分区集合 = 调用方点名的分区 ∪ 磁盘上**仍在等裁决**的分区（`force` 时不扣：强推就是明确覆盖远端）。
  * 触发条件是「调用方传了 `skipSections`」而不是「传了非空数组」：自动同步本轮没判出新冲突时也必须
  * 传空数组 —— 磁盘上上一轮留下的待裁决照样要扣下（否则任何一轮别的分区有改动就把它推上去，#146 复发）。
  * 不传（`undefined`）= 手动推送：照旧不受历史待裁决影响。
  * 读不到状态 ⇒ 只扣点名的分区（不猜），但绝不因此放行点名要扣的那些。
  */
-export async function resolveSkipSections(
+export async function resolveHeldSections(
   opts: { force?: boolean; skipSections?: readonly SectionId[] },
   load?: () => Promise<{ pendingMerge?: PendingMerge }>,
 ): Promise<ReadonlySet<SectionId>> {

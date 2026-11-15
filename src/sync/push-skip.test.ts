@@ -19,7 +19,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { SyncEngine } from './sync-engine.ts';
-import { pendingMergeAfterPush, resolveSkipSections } from './push-skip.ts';
+import { onceLoad, pendingMergeAfterPush, resolveHeldSections } from './push-skip.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
 import { loadSyncState, saveSyncState } from './sync-state.ts';
 import type { SectionId } from '../schema/types.ts';
 import { computeSnapshotMeta } from './transport.ts';
@@ -159,7 +160,9 @@ test('#146 全扣下：不上传、不新建快照、不改基线、不动待裁
     assert.equal(report.skipped, 'all-conflicted', '必须显式区分「什么都没推」与「推成功」');
     assert.equal(report.snapshotId, '', '没有新快照就不能给一个 id');
     assert.deepEqual(report.sections, []);
-    assert.ok((report.message ?? '').includes('plugins'), '文案要说明是哪些分区被冲突扣下');
+    // 文案点名被扣分区，且只给 displayName —— 绝不把裸分区 id 甩给用户
+    assert.ok((report.message ?? '').includes(sectionMeta('plugins').displayName), '文案要说明是哪些分区被冲突扣下');
+    assert.equal((report.message ?? '').includes('plugins'), false, '文案不得出现裸分区 id');
 
     assert.equal(transport.calls.includes('upload'), false, '全扣下绝不能上传');
     assert.equal(transport.metas.length, 1, '远端快照数不变');
@@ -211,12 +214,14 @@ test('#146 预览与 push 同口径：扣下分区不出现在预览里；全扣
 
     const all = (await engine.previewPush({})).sections.map((s) => s.section);
     const allHeld = await engine.previewPush({ skipSections: all });
-    assert.equal(allHeld.ok, false, '全被冲突扣下时预览没有可推内容');
+    // issue #146：预览与 push 同口径 —— 全扣下不是错误（push 回 ok:true + skipped），预览同样不报错
+    assert.equal(allHeld.ok, true, '全扣下不是错误：与 push 同口径回 ok:true');
+    assert.equal(allHeld.skipped, 'all-conflicted', '预览也要能区分「全扣下」与「没有可同步分区」');
     assert.deepEqual(allHeld.sections, []);
     assert.equal(
       allHeld.message,
-      zhMsg('sync.pushAllConflicted', { sections: all.join(', ') }),
-      '全被冲突扣下必须有独立文案（点名被扣分区）',
+      zhMsg('sync.pushAllConflicted', { sections: all.map((id) => sectionMeta(id).displayName).join(', ') }),
+      '全被冲突扣下必须有独立文案（点名被扣分区，用 displayName）',
     );
 
     // 对照组：不是冲突扣下，而是「没有任何可同步分区」
@@ -251,10 +256,10 @@ test('#146 读不到状态时只扣点名分区，且绝不抹掉待裁决', asy
   const boom = async (): Promise<{ pendingMerge?: { remoteSnapshotId: string; sections: SectionId[]; since: string } }> => {
     throw new Error('state unreadable');
   };
-  const held = await resolveSkipSections({ skipSections: ['plugins'] }, boom);
+  const held = await resolveHeldSections({ skipSections: ['plugins'] }, boom);
   assert.deepEqual([...held], ['plugins'], '读失败只扣点名分区（不猜）');
-  assert.equal((await resolveSkipSections({}, boom)).size, 0, '没点名分区 ⇒ 不扣（手动推送照旧）');
-  assert.equal((await resolveSkipSections({ force: true, skipSections: ['plugins'] }, boom)).size, 0, 'force 不扣');
+  assert.equal((await resolveHeldSections({}, boom)).size, 0, '没点名分区 ⇒ 不扣（手动推送照旧）');
+  assert.equal((await resolveHeldSections({ force: true, skipSections: ['plugins'] }, boom)).size, 0, 'force 不扣');
   assert.equal(
     await pendingMergeAfterPush(boom, ['plugins']),
     undefined,
@@ -290,7 +295,19 @@ test('#146 待裁决按「推上去的分区」剔除：不在候选里的分区
   assert.deepEqual(kept?.sections, ['sessions'], 'sessions 本轮没推上去（不在候选）⇒ 记录不得被剔除');
   assert.equal(kept?.since, '2026-11-14T00:00:00.000Z');
   assert.equal(await pendingMergeAfterPush(async () => state, ['plugins', 'sessions']), null, '全推上去才清空');
-  const set = await resolveSkipSections({ skipSections: [] }, async () => state);
+  const set = await resolveHeldSections({ skipSections: [] }, async () => state);
   assert.deepEqual([...set], ['plugins', 'sessions'], '空数组 = 仍按磁盘待裁决扣');
+});
+
+test('onceLoad：同一轮只读一次 sync-state（扣下集合与推送后待裁决必须看同一份）', async () => {
+  let reads = 0;
+  const load = onceLoad(async () => {
+    reads += 1;
+    return { pendingMerge: { sections: ['plugins'] as SectionId[], since: '2026-11-14T00:00:00.000Z' } };
+  });
+  const first = await load();
+  const second = await load();
+  assert.equal(reads, 1, '两次取用只触发一次磁盘读');
+  assert.equal(first, second, '两处看到的必须是同一份状态对象');
 });
 
