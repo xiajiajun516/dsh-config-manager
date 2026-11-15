@@ -55,18 +55,51 @@ export function redactedUnion(lines: readonly (PatchLine | undefined)[]): string
 }
 
 /**
+ * 路径解析缓存：路径串来自载荷（不可信、可能每行都不同），所以按条数封顶、满即整体清空
+ * —— 命中率靠「多数同步轮次里路径集合稳定」，不靠无限增长。纯函数，缓存不改结果。
+ */
+const PARSE_CACHE_LIMIT = 512;
+const parsedPaths = new Map<string, readonly Segment[] | null>();
+
+function segmentsOf(path: string): readonly Segment[] | null {
+  if (parsedPaths.has(path)) return parsedPaths.get(path) ?? null;
+  const segs = parsePath(path);
+  if (parsedPaths.size >= PARSE_CACHE_LIMIT) parsedPaths.clear();
+  parsedPaths.set(path, segs);
+  return segs;
+}
+
+/** 一次合并里三侧共用的身份上下文：并集路径只解析一次。 */
+export interface PatchIdentityContext {
+  /** 已解析的路径段（`raw` 前缀已剥掉，可直接作用在 `line.raw` 上）。 */
+  readonly segments: readonly (readonly Segment[])[];
+}
+
+/** 为同一键的三侧行准备上下文；由 `mergeKeyedList` 的 `identityContextOf` 每键调一次。 */
+export function patchIdentityContext(peers: readonly (PatchLine | undefined)[]): PatchIdentityContext {
+  const segments: (readonly Segment[])[] = [];
+  for (const path of redactedUnion(peers)) {
+    const segs = segmentsOf(path);
+    if (segs === null) continue;
+    // 载荷路径相对整行对象（`{ file, lineId, raw }`），行内相对只需 `raw` 之后的部分。
+    segments.push(segs[0] === 'raw' ? segs.slice(1) : segs);
+  }
+  return { segments };
+}
+
+/**
  * 一行的内容身份：file + lineId + 归一化后的 raw。
  *
  * 归一化只抹「三侧里有人声明过被剥空」的叶子 → 声明过的空串与明文视为同一内容；
  * 两侧真写了不同的值（都不在声明里）仍然不同 —— 那才是需要人裁决的改动。
  */
-export function patchLineIdentity(line: PatchLine, peers: readonly PatchLine[]): string {
+export function patchLineIdentity(
+  line: PatchLine,
+  peers: readonly PatchLine[],
+  context?: PatchIdentityContext,
+): string {
+  const segments = context?.segments ?? patchIdentityContext([line, ...peers]).segments;
   let normalized: unknown = line.raw;
-  for (const path of redactedUnion([line, ...peers])) {
-    const segs = parsePath(path);
-    if (segs === null) continue;
-    // 载荷路径相对整行对象（`{ file, lineId, raw }`），行内相对只需 `raw` 之后的部分。
-    normalized = blankAt(normalized, segs[0] === 'raw' ? segs.slice(1) : segs);
-  }
+  for (const segs of segments) normalized = blankAt(normalized, segs);
   return [line.file ?? '', line.lineId ?? '', stableJson(normalized)].join('\u0000');
 }

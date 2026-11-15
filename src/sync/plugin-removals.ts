@@ -31,7 +31,8 @@ import type { MergeConflict } from './merge.ts';
 import type { GranularMergeHooks, GranularMergeOutcome } from './workspace-merge.ts';
 import { isBundlesOnlyEntry } from '../core/plugin-cli.ts';
 import { mergeKeyedList } from './merge-keyed.ts';
-import { patchLineIdentity } from './patch-line-identity.ts';
+import { patchIdentityContext, patchLineIdentity } from './patch-line-identity.ts';
+import type { PatchIdentityContext } from './patch-line-identity.ts';
 import { mergeJsonValues } from './text-merge.ts';
 
 /** 一条「该卸载」的结论（version = 祖先/本机一致的版本，用于报告与回滚重装目标）。 */
@@ -201,7 +202,9 @@ export function mergePluginsSection(
     spec: {
       keyOf: patchLineKey,
       // 身份按三侧 redactedPaths 并集归一化：本机被剥空、远端明文的同一行算「没改过」（门②）。
-      identityOf: (line, peers) => patchLineIdentity(line, peers),
+      // 并集路径每键只解析一次（上下文），三侧各自比较时复用 —— 行多时不再逐次重解析。
+      identityContextOf: (peers) => patchIdentityContext(peers),
+      identityOf: (line, peers, context) => patchLineIdentity(line, peers, context as PatchIdentityContext | undefined),
       // 冲突路径带 lineId：同一文件里两行各自冲突时必须能分辨（复审 P2）。
       pathOf: (key) => {
         const [file = '', lineId = ''] = key.split(PATCH_KEY_SEP);

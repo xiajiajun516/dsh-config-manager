@@ -32,7 +32,12 @@ export interface KeyedMergeSpec<T> {
    * 内容身份（相等 = 这一侧没改过它）。peers 是同一键上出现过的三侧原值，供「按需归一化」用
    * —— patch 行要按三侧 redactedPaths 并集把被剥空的叶子归零后再比（issue #145 门②）。
    */
-  identityOf(item: T, peers: readonly T[]): string;
+  identityOf(item: T, peers: readonly T[], context?: unknown): string;
+  /**
+   * 一次算好同一键上三侧共用的身份上下文（如 patch 行的 redactedPaths 并集），
+   * 由 identityOf 第三参取用 —— 每个键只算一次，不再每条目重算（性能，2026-11-15）。
+   */
+  identityContextOf?(peers: readonly T[]): unknown;
   /** 冲突路径（给人看的定位，如 `plugins.alpha`）。 */
   pathOf(key: string): string;
   /** 本机未改、远端删了：true = 跟随删除；false = 保留本机（不报冲突、不计合并点）。 */
@@ -107,7 +112,17 @@ export function mergeKeyedList<T>(args: {
     const r = remoteIndex.get(key);
     const a = ancestorIndex.get(key);
     const peers = [l, r, a].filter((item): item is T => item !== undefined);
-    const identity = (item: T | undefined): string => (item === undefined ? '' : spec.identityOf(item, peers));
+    // 同一键的并集/路径解析只做一次；同一条目在一轮合并里被问到多次也只算一次。
+    const context = spec.identityContextOf?.(peers);
+    const identities = new Map<T, string>();
+    const identity = (item: T | undefined): string => {
+      if (item === undefined) return '';
+      const cached = identities.get(item);
+      if (cached !== undefined || identities.has(item)) return cached ?? '';
+      const value = spec.identityOf(item, peers, context);
+      identities.set(item, value);
+      return value;
+    };
     const conflict = (reason: KeyedConflictReason): void => {
       conflicts.push({ path: spec.pathOf(key), kind: 'key', reason, autoMergeAttempted: false, local: l ?? null, remote: r ?? null, ancestor: a ?? null });
     };

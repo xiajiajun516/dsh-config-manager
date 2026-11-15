@@ -133,3 +133,35 @@ test('mergeKeyedList: keepLocal 只在本机独有时不计合并点（复审 P2
   const res = mergeKeyedList({ local: [item('self', '1')], remote: [], ancestor: undefined, spec: keep });
   assert.equal(res.mergePoints, 0);
 });
+
+test('mergeKeyedList: 身份上下文每键只算一次，并交给该键各条目的 identityOf 复用（性能，2026-11-15）', () => {
+  const seen: unknown[] = [];
+  let contextCalls = 0;
+  let identityCalls = 0;
+  const cached = {
+    keyOf: (i: Item) => i.key,
+    identityContextOf: (peers: readonly Item[]) => {
+      contextCalls += 1;
+      return peers.map((p) => p.value).join(',');
+    },
+    identityOf: (i: Item, _peers: readonly Item[], ctx?: unknown) => {
+      identityCalls += 1;
+      seen.push(ctx);
+      return i.value;
+    },
+    pathOf: (key: string) => `items.${key}`,
+    followDelete: true,
+  };
+  const res = mergeKeyedList({
+    local: [item('a', '1'), item('b', '2')],
+    remote: [item('a', '9'), item('b', '2')],
+    ancestor: [item('a', '0'), item('b', '2')],
+    spec: cached,
+  });
+  assert.equal(contextCalls, 2, '两个键 → 只算两次上下文');
+  assert.equal(new Set(seen).size, 2, '同一键上的各条目拿到同一个上下文实例');
+  assert.ok(identityCalls <= 6, '每条目最多问一次身份，实际 ' + identityCalls);
+  assert.equal(res.conflicts.length, 1, '缓存不改变结论：a 两侧都改 → 冲突');
+  assert.equal(res.conflicts[0]!.path, 'items.a');
+});
+

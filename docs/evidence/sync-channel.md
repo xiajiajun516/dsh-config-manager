@@ -612,7 +612,8 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 - **开关只管插件清单**：`patch` / `localTarballs` / `patchFiles` 的 `followDelete` 恒 `false`；`deletePlugins` 的语义是「远端删了插件」，不是「远端删了 MCP 配置」。
 - **畸形形状退回通用路径**：`KeyedMergeResult.malformed`（同键重复 / 空键 / 非对象条目）任一命中 → `mergePluginsSection` 返回 `undefined`，绝不「留一条丢一条」。
 - **可维护性**：patch 冲突路径带行号 `patch.<file>#<lineId>`（同文件两行可分辨）；合并基底改 `{ ...r, ...l }`（远端独有的将来字段不被本机形状吞掉）；`keepLocal` 命中只在本机与远端确实不同时计合并点；删掉无人读取的 `keptAgainstDelete`（信息已由 `planPluginRemovals` 的 `switch-off` 项承担）。
-- 守卫：`node --test src/sync/merge-keyed.test.ts src/sync/plugin-removals.test.ts` → 46 pass / 0 fail；`node --test src/sync/*.test.ts tests/sync-merge/*.test.ts` → 694 pass。
+- **身份计算不逐条重算**：`mergeKeyedList` 增 `identityContextOf(peers)`（每键算一次，patch 用它把三侧 `redactedPaths` 并集解析成路径段）＋ 按键内条目 memo；`src/sync/patch-line-identity.ts` 的路径解析带 512 条封顶缓存（路径串来自载荷 ⇒ 满即整体清空，不随行数增长）。同一脚本（`.tmp/bench-identity2.ts`，未提交，500 行三侧）：改动前 2.61 ms/轮 → 1.32 ms/轮（带上下文）、1.54 ms/轮（走完整 `mergeKeyedList`）。缓存只改「算几次」不改「算出什么」：`src/sync/patch-line-identity.test.ts` 钉住带/不带上下文与冷/热缓存结果逐字相等、入参 `raw` 不被改写、非法路径仍放过。
+- 守卫：`node --test src/sync/merge-keyed.test.ts src/sync/plugin-removals.test.ts src/sync/patch-line-identity.test.ts` → 53 pass / 0 fail；`node --test src/sync/*.test.ts tests/sync-merge/*.test.ts` → 694 pass（2026-11-15 复审时数）。
 
 ## 脱敏剥空的 patch 行值会静默覆盖本机明文（issue #136，2026-11-13 修复）
 
