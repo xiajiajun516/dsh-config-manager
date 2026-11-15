@@ -61,22 +61,54 @@ function blockMembers(value: unknown): Record<string, unknown>[] | null {
   return insert.filter((entry): entry is Record<string, unknown> => entry !== null && typeof entry === 'object');
 }
 
-/** 读出文档里的 insert 成员 id 与顶层行 id（自检与测试共用；不判重、保持文档顺序）。 */
-export function describePatchDocument(doc: unknown): { insertIds: string[]; topLevelIds: string[] } {
-  const insertIds: string[] = [];
-  const topLevelIds: string[] = [];
-  if (!Array.isArray(doc)) return { insertIds, topLevelIds };
+/**
+ * 文档里的一条条目：id、它声明的 name、以及出现在 insert 块里还是顶层。
+ *
+ * 为什么把 name 一起读出来：写**顶层覆盖行**时宿主会校验 `name === target.name`，不一致就
+ * `patch: name mismatch … skipping` 整行跳过（issue #144 的条目都来自 bundle 层，name 在那边）。
+ */
+export interface PatchDocumentEntry {
+  id: string;
+  /** 条目里声明的 name（没写就没有；覆盖行不写 name 也合法） */
+  name?: string;
+  /** true = `- insert:` 块成员（新增）；false = 顶层行（覆盖） */
+  inInsert: boolean;
+}
+
+/** 读出文档里的全部条目（不判重、保持文档顺序）。 */
+export function patchDocumentEntries(doc: unknown): PatchDocumentEntry[] {
+  const entries: PatchDocumentEntry[] = [];
+  if (!Array.isArray(doc)) return entries;
   for (const item of doc) {
     const members = blockMembers(item);
     if (members !== null) {
       for (const member of members) {
         const id = entryId(member);
-        if (id !== null) insertIds.push(id);
+        if (id === null) continue;
+        const name = member['name'];
+        entries.push(typeof name === 'string'
+          ? { id, name, inInsert: true }
+          : { id, inInsert: true });
       }
       continue;
     }
     const id = entryId(item);
-    if (id !== null) topLevelIds.push(id);
+    if (id === null) continue;
+    const name = (item as Record<string, unknown>)['name'];
+    entries.push(typeof name === 'string'
+      ? { id, name, inInsert: false }
+      : { id, inInsert: false });
+  }
+  return entries;
+}
+
+/** 读出文档里的 insert 成员 id 与顶层行 id（自检与测试共用；不判重、保持文档顺序）。 */
+export function describePatchDocument(doc: unknown): { insertIds: string[]; topLevelIds: string[] } {
+  const insertIds: string[] = [];
+  const topLevelIds: string[] = [];
+  for (const entry of patchDocumentEntries(doc)) {
+    if (entry.inInsert) insertIds.push(entry.id);
+    else topLevelIds.push(entry.id);
   }
   return { insertIds, topLevelIds };
 }
@@ -182,13 +214,21 @@ export function describePatchLayoutDrift(
     + '; got ' + fmt('insert', observed.insertIds) + ' ' + fmt('top-level', observed.topLevelIds);
 }
 /**
- * 跨层提升检查（issue #133）：`topLevelIds` 里哪些是**另一层文档**的 `- insert:` 成员。
+ * 覆盖行孤儿检查（issue #133 起、issue #144 改判到「整条生效链」口径）。
  *
- * 命中就意味着「把新增改写成覆盖」——目标作用域里那条通常不存在，宿主会 `not found` 丢弃。
- * `otherDoc` 读不到或解析不了时调用方传 `undefined`，本函数返回空（守卫只做加强）。
+ * 宿主对顶层行只做**覆盖**：`entryMap` 查不到该 id ⇒ `patch: entry %C not found` 整行丢弃。
+ * 所以真正值得拒绝的只有一种：**任何一层都没有提供这个 id**。旧判据反过来拒绝「别的层用
+ * `- insert:` 提供过它」—— 那恰恰是条目已经存在、覆盖**合法**的情形，#144 里 bundle 层提供的
+ * 6 个 id 正是被这条旧判据误拒的（写进去就是重复条目）。
+ *
+ * `docs` = 判定依据的层文档（生效链 + 本文件写入前的文档；读不出来的层由调用方自行丢弃 ——
+ * 守卫只做加强，绝不因为兄弟层损坏而永久阻塞写入）。
  */
-export function promotedTopLevelIds(otherDoc: unknown, topLevelIds: readonly string[]): string[] {
+export function unprovidedTopLevelIds(docs: readonly unknown[], topLevelIds: readonly string[]): string[] {
   if (topLevelIds.length === 0) return [];
-  const insertMembers = new Set(describePatchDocument(otherDoc).insertIds);
-  return topLevelIds.filter((id) => insertMembers.has(id));
+  const provided = new Set<string>();
+  for (const doc of docs) {
+    for (const entry of patchDocumentEntries(doc)) provided.add(entry.id);
+  }
+  return topLevelIds.filter((id) => !provided.has(id));
 }

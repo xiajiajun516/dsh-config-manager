@@ -225,9 +225,14 @@ test('#135 已知缺口：键名不受 forceQuotes 保护（数值样式键名�
 test('接线守卫：patch 门面与 boot-safety 的 YAML 解析都必须走本方言', () => {
   const root = fileURLToPath(new URL('../../', import.meta.url));
   const index = fs.readFileSync(root + 'src/index.ts', 'utf8');
+  // #144 起「读既有 patch 文件」与「读整条生效链」下沉到 utils/patch-chain-read.ts（src/index.ts 触体量棘轮），
+  // 方言接线随之搬家：两处载入都必须是 loadPatchDocument。
+  const chainIo = fs.readFileSync(root + 'src/utils/patch-chain-read.ts', 'utf8');
 
   assert.ok(index.includes('doc = loadPatchDocument(text)'), 'readPatchLines 必须用方言载入');
-  assert.ok(index.includes('doc = loadPatchDocument(existing)'), 'applyPatchChanges 必须用方言载入既有文件');
+  assert.ok(chainIo.includes('return loadPatchDocument(text)'), 'applyPatchChanges 的既有文件必须用方言载入');
+  assert.ok(chainIo.includes("loadPatchDocument(await fs.readFile(resolve(homeDir, file), 'utf8'))"), '生效链各层必须用方言载入');
+  assert.equal(chainIo.includes('yaml.load('), false, '生效链读取不得用裸 yaml.load');
   assert.match(index, /\+ dumpPatchDocument\((out|plan\.items)\)/, '写回 patch 文件必须用方言（yaml.dump 会把 {__jsExpr} 写成普通 map）');
   assert.match(
     index,

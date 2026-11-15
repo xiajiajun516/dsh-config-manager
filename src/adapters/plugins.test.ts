@@ -1240,3 +1240,51 @@ test('#136/C validate：redactedPaths 空数组合法（＝无剥空位置，守
   );
   assert.equal(okSection.valid, true, `合法形状应通过: ${JSON.stringify(okSection.issues)}`);
 });
+
+/* ------------------- issue #144：跨层判据（bundle 层已提供 ⇒ 只能覆盖，不再新增） ------------------- */
+
+const BUNDLE_LAYER = 'bundles:demo-bundle/cordis.patch.yml';
+
+test('issue #144：bundle 层已提供该 id ⇒ patch 计划项是 Update（覆盖），不是 Create（新增）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.patchFile.lines.set('remote-ssh', {
+    lineId: 'remote-ssh',
+    raw: { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { host: 'example' } },
+  });
+  const adapter = new PluginsAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const sections = new Map([['plugins', exported.data]]);
+
+  const dst = makeContext('linux', '/home/bob');
+  dst.patchFile.chain = {
+    sources: [{ file: BUNDLE_LAYER, doc: [{ insert: [{ id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh' }] }] }],
+    failures: [],
+  };
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  const item = items.find((i) => i.id === 'patch:remote-ssh');
+  assert.equal(item?.kind, 'Update', '已由 bundle 层提供 → 只能写覆盖行（写成 insert 就是重复条目）');
+  assert.equal(item?.target?.ref, 'remote-ssh');
+  assert.ok(String(item?.detail).includes(BUNDLE_LAYER), `detail 要说清是哪一层提供的: ${item?.detail}`);
+
+  const r = await adapter.applyItem(item!, makeImportContext(dst, sections));
+  assert.equal(r.ok, true);
+  assert.equal(dst.patchFile.actions.at(-1)?.action, 'update', '落盘动作必须是 update（insert = 第二条新增）');
+});
+
+test('issue #144：链上没人提供该 id ⇒ 计划项仍是 Create（新增语义不变）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.patchFile.lines.set('brand-new', { lineId: 'brand-new', raw: { id: 'brand-new', name: 'pkg-new' } });
+  const adapter = new PluginsAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const sections = new Map([['plugins', exported.data]]);
+
+  const dst = makeContext('linux', '/home/bob');
+  dst.patchFile.chain = { sources: [{ file: BUNDLE_LAYER, doc: [{ insert: [{ id: 'other', name: 'pkg-other' }] }] }], failures: [] };
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  const item = items.find((i) => i.id === 'patch:brand-new');
+  assert.equal(item?.kind, 'Create');
+
+  const r = await adapter.applyItem(item!, makeImportContext(dst, sections));
+  assert.equal(r.ok, true);
+  assert.equal(dst.patchFile.actions.at(-1)?.action, 'insert');
+});

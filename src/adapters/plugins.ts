@@ -26,6 +26,7 @@ import { findPatchKeyHazards } from '../utils/patch-yaml.ts';
 import { patchKeyHazardMessage } from './patch-key-guard.ts';
 import { PLUGIN_PATCH_REF_PREFIX, PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
 import { readEffectivePatchLines, resolveWriteLayer, USER_PATCH_FILE } from '../core/patch-layers.ts';
+import { providedByOtherLayers, readPatchChainIndex } from '../core/patch-chain.ts';
 import { applyPatchSecretGuard } from '../core/patch-secret-guard.ts';
 import { stripMcpEntries } from './mcp.ts';
 import {
@@ -939,7 +940,11 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     // 用户 patch 行：lineId 唯一键；存在且同 → Skip；存在不同 → Conflict；不存在 → Create。
     // mcp-client 行与 systemPrompt/planMode 行由 mcp/prompts adapter 管理，此处跳过（避免重复写入覆盖）。
     // issue #71：目标行同样跨两层（否则 profile 层已有的行会被误判成 Create → 导入后出现重复行）
-    const targetLines = (await readEffectivePatchLines(ctx.target.patchFile, ctx.target.profile)).lines;
+    const targetLines = (await readEffectivePatchLines(ctx.target.patchFile, ctx.target.profile)).lines
+    // issue #144：**还有第三层**——bundle 层。它由插件包自己的 `dsh.bundle.patch` 提供，
+    // 不在两个 patch 文件里；只看这两层会把 bundle 已有的 id 判成「本机没有」而写出第二条
+    // insert，宿主 compose 后插件保存配置必然报 overridden by a home patch or command-line overlay。
+    const chain = await readPatchChainIndex(ctx.target.patchFile);
     for (const pl of data.patch) {
       if (isManagedElsewhere(pl.raw)) continue;
       const id = `patch:${pl.lineId}`;
@@ -963,11 +968,25 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
         continue;
       }
       if (!tl) {
-        items.push({
-          id, kind: 'Create', adapter: 'plugins',
-          description: msg('adapter.patchLineCreate', { lineId: pl.lineId }), severity: 'info',
-          target: { adapter: 'plugins', ref: pl.lineId, file: layer },
-        });
+        // issue #144：本机两个 patch 层没有这一行，但**别的层**（bundle 层最常见）已经提供该 id
+        // ⇒ 这不是「新建」，而是对既有条目的覆盖。写成 insert 就是第二条新增；顶层覆盖行才是
+        // 宿主认可的形状（ConfigEditor 自己也是这么写的）。
+        const elsewhere = chain === null ? undefined : providedByOtherLayers(chain, layer).get(pl.lineId)
+        if (elsewhere !== undefined) {
+          items.push({
+            id, kind: 'Update', adapter: 'plugins',
+            description: msg('adapter.patchLineOverride', { lineId: pl.lineId }),
+            detail: msg('adapter.patchLineOverrideDetail', { layers: elsewhere.layers.join(', ') }),
+            severity: 'info',
+            target: { adapter: 'plugins', ref: pl.lineId, file: layer },
+          });
+        } else {
+          items.push({
+            id, kind: 'Create', adapter: 'plugins',
+            description: msg('adapter.patchLineCreate', { lineId: pl.lineId }), severity: 'info',
+            target: { adapter: 'plugins', ref: pl.lineId, file: layer },
+          });
+        }
       } else {
         items.push({
           id, kind: 'Conflict', adapter: 'plugins',
@@ -1193,9 +1212,13 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     });
     // 层身份按**语义**映射到目标机：来源是别的 profile 层时不能照抄名字（目标机未必有那个
     // profile，宿主门面会拒绝），一律落到目标机当前 profile 层（与计划项 target.file 同口径）。
-    await ctx.target.patchFile.applyPatchChanges(resolveWriteLayer(pl.file, ctx.target.profile), [
+    const outcome = await ctx.target.patchFile.applyPatchChanges(resolveWriteLayer(pl.file, ctx.target.profile), [
       { lineId: ref, raw: guard.raw, action: item.kind === 'Create' ? 'insert' : 'update' },
     ]);
+    // issue #144 兜底：门面发现该 id 已被别的层提供、把 insert 降级成覆盖行 → 告诉用户实际写了哪种形状
+    if (outcome.downgraded.length > 0) {
+      return { ok: true, warning: true, needsRestart: true, message: msg('adapter.patchLineDowngraded', { ids: outcome.downgraded.join(', ') }) };
+    }
     if (guard.kept.length > 0) {
       // 告警只报行 id 与字段路径，绝不带值（值本身就是密钥）
       // 报告面用**计划项 id**（`patch:<lineId>`）而不是裸 lineId：报告与计划项要能逐条对上

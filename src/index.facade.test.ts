@@ -53,12 +53,13 @@ class MemPatchFile implements PatchFileFacade {
     const bucket = this.byFile.get(file);
     return bucket === undefined ? [] : [...bucket.values()];
   }
-  async applyPatchChanges(file: string, changes: PatchChange[]): Promise<void> {
+  async applyPatchChanges(file: string, changes: PatchChange[]): Promise<{ downgraded: string[] }> {
     const bucket = this.bucket(file);
     for (const c of changes) {
       if (c.action === 'remove') bucket.delete(c.lineId);
       else bucket.set(c.lineId, { lineId: c.lineId, raw: c.raw });
     }
+    return { downgraded: [] };
   }
 }
 
@@ -1062,7 +1063,7 @@ test('#133 applyPatchChanges：新 id 走 insert 动作时落进 insert 块（�
   }
 })
 
-test('#133 跨层提升：把另一层的 insert 成员写成顶层行必须拒写（文件不动）', async () => {
+test('#133/#144 跨层覆盖：链上已提供（profile 层 insert）的 id 写成顶层行是合法覆盖', async () => {
   const { home, cleanup } = patchHome()
   try {
     mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
@@ -1071,12 +1072,36 @@ test('#133 跨层提升：把另一层的 insert 成员写成顶层行必须拒�
     const before = readFileSync(profileLayer, 'utf8')
     const facade = new DshPatchFileFacade(home, 'web', zhMsg)
 
-    // 用户层此时不存在：写一条与 profile 层 insert 成员同 id 的顶层行 = 跨层语义翻转
+    // 条目已由 profile 层的 insert 提供 ⇒ 顶层行是**覆盖**（宿主认可的形状），不是新增；
+    // issue #144 之前这条被旧判据误拒（判据只问「是不是别的层 insert 过它」，没说清 legal 覆盖）。
+    const outcome = await facade.applyPatchChanges(USER_PATCH_FILE, [
+      { lineId: 'mcp-a', raw: { id: 'mcp-a', name: 'dsh-mcp-client', disabled: true }, action: 'update' },
+    ])
+    assert.deepEqual(outcome.downgraded, [])
+    const text = readFileSync(join(home, USER_PATCH_FILE), 'utf8')
+    assert.match(text, /^- id: '?mcp-a'?$/m, '已存在的 id 只能写顶层覆盖行: ' + text)
+    assert.equal(text.includes('- insert:'), false, '覆盖行不是新增，本层不得插第二份')
+    assert.equal(readFileSync(profileLayer, 'utf8'), before, '另一层当然也不许动')
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 孤儿守卫：整条链都没人提供的 id 写成顶层行必须拒写（文件不动）', async () => {
+  const { home, cleanup } = patchHome()
+  try {
+    mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
+    writeFileSync(join(home, 'profiles', 'web', 'cordis.patch.yml'), INSERT_BLOCK_YAML.replace('- id: llm-pi-ai\n  name: "@deepseek-ai/dsh-llm-pi-ai"\n', ''), 'utf8')
+    const profileLayer = join(home, 'profiles', 'web', 'cordis.patch.yml')
+    const before = readFileSync(profileLayer, 'utf8')
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+
+    // 宿主对顶层行只做覆盖：entryMap 查不到 ⇒ patch: entry "ghost" not found 整行丢弃
     const err = await facade
-      .applyPatchChanges(USER_PATCH_FILE, [{ lineId: 'mcp-a', raw: { id: 'mcp-a', name: 'dsh-mcp-client' }, action: 'update' }])
+      .applyPatchChanges(USER_PATCH_FILE, [{ lineId: 'ghost', raw: { id: 'ghost', config: { x: 1 } }, action: 'update' }])
       .then(() => null, (e: unknown) => e as Error)
-    assert.ok(err !== null, '跨层提升必须拒写')
-    assert.match(String(err.message), /mcp-a/)
+    assert.ok(err !== null, '没人提供的顶层行必须拒写')
+    assert.match(String(err.message), /ghost/)
     assert.equal(existsSync(join(home, USER_PATCH_FILE)), false, '拒写 = 用户层文件一个字节都没写')
     assert.equal(readFileSync(profileLayer, 'utf8'), before, '另一层当然也不许动')
   } finally {
@@ -1084,3 +1109,84 @@ test('#133 跨层提升：把另一层的 insert 成员写成顶层行必须拒�
   }
 })
 
+/* --------------------- issue #144：bundle 层已提供的 id 只能写覆盖行 --------------------- */
+
+/** 真机形态的 bundle 层：`profiles/<p>/package.json` 声明 bundle，包内 `dsh.bundle.patch` 指向 patch 文件。 */
+function bundlePatchHome(): { home: string; cleanup: () => void } {
+  const { home, cleanup } = patchHome()
+  const profileDir = join(home, 'profiles', 'web')
+  const pkgDir = join(profileDir, 'node_modules', 'demo-bundle')
+  mkdirSync(pkgDir, { recursive: true })
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({ name: 'web-profile', dsh: { profile: { bundles: ['demo-bundle'] } } }), 'utf8')
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'demo-bundle', dsh: { bundle: { patch: 'cordis.patch.yml' } } }), 'utf8')
+  writeFileSync(join(pkgDir, 'cordis.patch.yml'), [
+    '- insert:',
+    '    - id: remote-ssh',
+    '      name: "@zhangfengshun/dsh-remote-ssh"',
+    '',
+  ].join('\n'), 'utf8')
+  return { home, cleanup }
+}
+
+const PROFILE_LAYER = 'profiles/web/cordis.patch.yml'
+
+test('#144 applyPatchChanges：bundle 层已提供的 id 要求 insert 时降级成顶层覆盖行', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    const outcome = await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'remote-ssh', raw: { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { port: 2222 } }, action: 'insert' },
+    ])
+    assert.deepEqual(outcome.downgraded, ['remote-ssh'], '已由 bundle 层提供 → 必须降级，绝不写第二条 insert')
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.equal(text.includes('- insert:'), false, '本层不得再新增一份同 id: ' + text)
+    assert.match(text, /^- id: '?remote-ssh'?$/m, '必须是顶层覆盖行: ' + text)
+    const lines = await facade.readPatchLines(PROFILE_LAYER)
+    assert.equal(lines.length, 1)
+    assert.deepEqual((lines[0]?.raw as { config?: unknown } | undefined)?.config, { port: 2222 })
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 applyPatchChanges：同一个 id 重复写仍只有一行（幂等，不会越写越多）', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    const raw = { id: 'remote-ssh', name: '@zhangfengshun/dsh-remote-ssh', config: { port: 2222 } }
+    await facade.applyPatchChanges(PROFILE_LAYER, [{ lineId: 'remote-ssh', raw, action: 'insert' }])
+    await facade.applyPatchChanges(PROFILE_LAYER, [{ lineId: 'remote-ssh', raw, action: 'insert' }])
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.equal(text.match(/^- id:/gm)?.length, 1, '同 id 只能留一行（重复 = 宿主 compose 后 config 变数组）: ' + text)
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 applyPatchChanges：链上没人提供的 id 仍走 insert（新增语义不变）', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    const facade = new DshPatchFileFacade(home, 'web', zhMsg)
+    const outcome = await facade.applyPatchChanges(PROFILE_LAYER, [
+      { lineId: 'brand-new', raw: { id: 'brand-new', name: 'pkg-new' }, action: 'insert' },
+    ])
+    assert.deepEqual(outcome.downgraded, [])
+    const text = readFileSync(join(home, PROFILE_LAYER), 'utf8')
+    assert.ok(text.includes('- insert:'), '新 id 只能靠 insert 新增（顶层行会被 not found 丢弃）: ' + text)
+    assert.equal(/^- id: '?brand-new'?$/m.test(text), false)
+  } finally {
+    cleanup()
+  }
+})
+
+test('#144 readPatchChain：bundle 层按声明读到，缺失的 bundle 只登记 failures', async () => {
+  const { home, cleanup } = bundlePatchHome()
+  try {
+    writeFileSync(join(home, 'profiles', 'web', 'package.json'), JSON.stringify({ name: 'web-profile', dsh: { profile: { bundles: ['demo-bundle', 'missing-bundle'] } } }), 'utf8')
+    const chain = await new DshPatchFileFacade(home, 'web', zhMsg).readPatchChain()
+    assert.deepEqual(chain.sources.map((s) => s.file), ['bundles:demo-bundle/cordis.patch.yml', PROFILE_LAYER, USER_PATCH_FILE])
+    assert.deepEqual(chain.failures.map((f) => f.file), ['bundles:missing-bundle'])
+  } finally {
+    cleanup()
+  }
+})

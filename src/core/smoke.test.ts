@@ -130,11 +130,12 @@ class MemWorkspace implements WorkspaceFacade {
 class MemPatch implements PatchFileFacade {
   lines = new Map<string, { lineId: string; raw: unknown }>();
   async readPatchLines(): Promise<{ lineId: string; raw: unknown }[]> { return [...this.lines.values()]; }
-  async applyPatchChanges(_file: string, changes: { lineId: string; raw: unknown; action: 'insert' | 'update' | 'remove' }[]): Promise<void> {
+  async applyPatchChanges(_file: string, changes: { lineId: string; raw: unknown; action: 'insert' | 'update' | 'remove' }[]): Promise<{ downgraded: string[] }> {
     for (const c of changes) {
       if (c.action === 'remove') this.lines.delete(c.lineId);
       else this.lines.set(c.lineId, { lineId: c.lineId, raw: c.raw });
     }
+    return { downgraded: [] };
   }
 }
 

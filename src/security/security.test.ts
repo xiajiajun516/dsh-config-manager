@@ -211,7 +211,7 @@ class MemWorkspace implements WorkspaceFacade {
 
 class MemPatch implements PatchFileFacade {
   async readPatchLines() { return []; }
-  async applyPatchChanges() {}
+  async applyPatchChanges() { return { downgraded: [] } }
 }
 
 class MemSnapshotStore implements SnapshotStore {

@@ -62,7 +62,7 @@ test('readEffectivePatchLines：单层读失败不阻塞另一层，失败如实
       if (file === USER_PATCH_FILE) return [{ lineId: 'a', raw: { id: 'a' } }];
       throw new Error('读取失败示例');
     },
-    async applyPatchChanges() {},
+    async applyPatchChanges() { return { downgraded: [] } },
   };
   const read = await readEffectivePatchLines(patchFile, 'tauri');
   assert.equal(read.lines.length, 1, '坏的那层不能拖垮好的一层');

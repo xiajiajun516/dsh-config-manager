@@ -97,7 +97,15 @@ import { ImportUserSkippedError, type ConfigAdapter, type CredentialsFacade, typ
 import { PLUGIN_NPM_PACKAGE } from './core/update-check.ts'
 import { planSelfUpdate, runSelfUpdate, type SelfUpdateOutcome } from './core/self-update.ts'
 import { createAdapters } from './adapters/index.ts'
-import { describePatchDocument, describePatchLayoutDrift, planPatchDocument, promotedTopLevelIds } from './core/patch-document.ts'
+import { describePatchDocument, describePatchLayoutDrift, planPatchDocument, unprovidedTopLevelIds } from './core/patch-document.ts'
+import type { PatchChainRead, PatchWriteOutcome } from './core/patch-chain.ts'
+import {
+  PatchChainCache,
+  downgradeProvidedInserts,
+  readExistingPatchDocument,
+  readPatchChainFromProfile,
+  readPatchDocQuietly,
+} from './utils/patch-chain-read.ts'
 import { isPatchLayerRel, profilePatchRel, readEffectivePatchLines, USER_PATCH_FILE } from './core/patch-layers.ts'
 import { createLocalPluginPackHook } from './core/local-plugin-host.ts'
 import { ENCRYPTED_CONTAINER_CODE, createEncryptionProvider, readContainerKind, encryptArchive } from './security/index.ts'
@@ -184,7 +192,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-export const PLUGIN_VERSION = '0.9.1'
+export const PLUGIN_VERSION = '0.9.2'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -1629,6 +1637,12 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
  * YAML 侧一律走 `utils/patch-yaml.ts` 的 **DSH 方言**（issue #75）：`!!js` 必须能读写往返，
  * 且原文件解析不了时**拒绝覆盖**（读不出来 ≠ 空文档）。
  */
+/**
+ * 生效链缓存时长（issue #144）：一次导入会逐行写 patch（每行一次 applyPatchChanges），
+ * 逐行重读 30+ 个 bundle patch 纯属浪费；bundle 清单本身只在装/卸插件时变，2 s 足够覆盖一次导入。
+ */
+const PATCH_CHAIN_CACHE_MS = 2000
+
 export class DshPatchFileFacade implements PatchFileFacade {
   private readonly homeDir: string
   private readonly profile: string
@@ -1712,72 +1726,66 @@ export class DshPatchFileFacade implements PatchFileFacade {
   async applyPatchChanges(
     file: string,
     changes: { lineId: string; raw: unknown; action: 'insert' | 'update' | 'remove' }[],
-  ): Promise<void> {
+  ): Promise<PatchWriteOutcome> {
     const p = this.patchPath(file)
 
-    // 1. Load the current document (the ordered table itself is built by planPatchDocument).
-    //
-    // 读不出来的既有内容**绝不能当作空文档**（issue #75 的数据丢失点）：重建后的文件只包含
-    // 本次写入的行，等于把用户手写的其余行整段删掉。三种情况分开处理：
-    //   - 真不存在（ENOENT）→ 空文档（首次创建，既有语义）；
-    //   - 存在但读不到（EACCES/EBUSY/…）→ 抛错，不改写；
-    //   - 存在但解析不了（含未知方言 / YAML 本身有错）→ 抛错，不改写。
-    let existing: string | null = null
-    try {
-      existing = await fs.readFile(p, 'utf8')
-    } catch (err) {
-      if (!isENOENT(err)) {
-        throw new Error(this.msg('host.patchRefuseClobber', { file, reason: describePatchYamlError(err) }), { cause: err })
-      }
-    }
+    // 0. 生效链兜底（#144）：id 已被别的层（bundle 最典型）提供时再写 insert，就是两条「新增」
+    //    抢同一个 id ⇒ 插件保存配置必报 overridden。这里统一降级成顶层覆盖行（含 mcp/prompts/激活行）。
+    const chain = await this.readPatchChainQuietly()
+    const { effective, downgraded } = downgradeProvidedInserts(chain, file, changes)
+
+    // 1. 读既有文档：只有真不存在才算空文档；读不到 / 解析不了一律抛错（#75：当空文档 = 删行）。
     let doc: unknown
-    if (existing !== null && existing.trim() !== '') {
-      try {
-        doc = loadPatchDocument(existing)
-      } catch (err) {
-        throw new Error(this.msg('host.patchRefuseClobber', { file, reason: describePatchYamlError(err) }), { cause: err })
-      }
+    try {
+      doc = await readExistingPatchDocument(p)
+    } catch (err) {
+      throw new Error(this.msg('host.patchRefuseClobber', { file, reason: describePatchYamlError(err) }), { cause: err })
     }
 
-    // 2. Rebuild through core/patch-document.ts (issue #133): the two shapes are **not**
-    //    equivalent on the host side. A top-level `- id: X` row *overrides* entry X and is
-    //    dropped with `patch: entry "X" not found` when X does not exist; only an
-    //    `- insert:` block member *adds* entries. Emitting every row top-level therefore
-    //    turned one update into "every insert-only entry (MCP servers, most notably) is
-    //    gone after restart".
-    const plan = planPatchDocument(doc, changes)
+    // 2. 经 core/patch-document.ts 重建（issue #133）：两种形状在宿主侧**不等价** —— 顶层行只覆盖、
+    //    查不到 id 就整行丢弃；只有 `- insert:` 块成员才新增，所以不能把所有行都写成顶层。
+    const plan = planPatchDocument(doc, effective)
     const text = '# rewritten by dsh-config-manager import (original comments not preserved)\n'
       + dumpPatchDocument(plan.items)
 
-    // 3. Post-write structure self-check, before anything touches the disk: re-parse the
-    //    text we just serialized and require both id sets to match the plan item by item.
-    //    A serializer or dialect change that flattens or swallows insert blocks stops here
-    //    (zero write) instead of silently degrading every patch row to an override.
+    // 3. 写盘前结构自检：把刚序列化的文本重新解析，两组 id 必须与计划逐项一致（零写入失败）——
+    //    序列化器或方言改动把 insert 块压平 / 吞掉时在这里停住，而不是静默退化成一堆覆盖行。
     const drift = describePatchLayoutDrift(plan, describePatchDocument(loadPatchDocument(text)))
     if (drift !== null) {
       throw new Error(this.msg('host.patchSemanticDrift', { file, detail: drift }))
     }
 
-    // 4. 跨层提升守卫（issue #133）：待写的顶层 id 若是**另一层**的 insert 成员，写下去就从
-    //    「新增」变成「覆盖」（宿主查不到则丢弃）。对侧读不出来/解析不了只跳过守卫 —— 读护栏
-    //    已在各自层报错，损坏的兄弟文件不该永久阻塞本层写入。
-    const other = file === USER_PATCH_FILE ? profilePatchRel(this.profile) : USER_PATCH_FILE
-    const promoted = promotedTopLevelIds(await this.readPatchDocQuietly(other), plan.topLevelIds)
-    if (promoted.length > 0) {
-      throw new Error(this.msg('host.patchRefusePromote', { file, ids: promoted.join(', ') }))
+    // 4. 覆盖行孤儿守卫（#133 起、#144 改判到整条链）：顶层行只做覆盖，宿主查不到该 id 就整行
+    //    丢弃 ⇒ 只拒绝「任何一层都没提供这个 id」。读不出来的层不进判据（fail-open）。
+    const guardDocs = chain !== null
+      ? chain.sources.map((source) => source.doc)
+      : [await readPatchDocQuietly(this.homeDir, file === USER_PATCH_FILE ? profilePatchRel(this.profile) : USER_PATCH_FILE)]
+    const orphans = unprovidedTopLevelIds([...guardDocs, doc], plan.topLevelIds)
+    if (orphans.length > 0) {
+      throw new Error(this.msg('host.patchRefuseUnknownId', { file, ids: orphans.join(', ') }))
     }
 
     await atomicWriteFile(p, text)
+    return { downgraded }
   }
 
-  /** 读另一层并解析；读不到/解析不了 → undefined（跨层守卫 fail-open，见 promotedTopLevelIds）。 */
-  private async readPatchDocQuietly(file: string): Promise<unknown> {
+  /** 生效链缓存（见 `utils/patch-chain-read.ts`）：一次导入逐行写 patch，不必逐行重读 30+ 个 bundle。 */
+  private readonly chainCache = new PatchChainCache(PATCH_CHAIN_CACHE_MS)
+
+  /** 读整条生效 patch 链（issue #144）：bundle 层 → profile 层 → home 层，宿主合并序。 */
+  async readPatchChain(): Promise<PatchChainRead> {
+    return this.chainCache.get(() => readPatchChainFromProfile(this.homeDir, this.profile))
+  }
+
+  /** 读链失败（profile 清单整体不可读等）→ `null`：判定退化为两层，绝不阻断写入。 */
+  private async readPatchChainQuietly(): Promise<PatchChainRead | null> {
     try {
-      return loadPatchDocument(await fs.readFile(resolve(this.homeDir, file), 'utf8'))
+      return await this.readPatchChain()
     } catch {
-      return undefined
+      return null
     }
   }
+
 }
 
 /** File facade over $DSH_HOME, confined to the home root. */

@@ -7,6 +7,7 @@ import { createLogger, type Logger } from '../utils/logger.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import { zhMsg } from '../core/messages.ts';
 import { USER_PATCH_FILE } from '../core/patch-layers.ts';
+import type { PatchChainRead } from '../core/patch-chain.ts';
 import type {
   CredentialsFacade, FileSystemFacade, HostContext, ImportContext, NamespaceInfo,
   PatchFileFacade, PluginInfo, PluginsFacade, SettingsFacade, Snapshot,
@@ -221,15 +222,26 @@ export class MemPatch implements PatchFileFacade {
     return bucket === undefined ? [] : [...bucket.values()];
   }
 
+  /** issue #144：生效 patch 链（bundle 层 + profile 层 + home 层）。默认空链 = 判据不加强。 */
+  chain: PatchChainRead | null = null;
+  /** 记录每次写入的动作，供「已存在的 id 必须走 update」这类断言使用。 */
+  actions: { file: string; lineId: string; action: 'insert' | 'update' | 'remove' }[] = [];
+
+  async readPatchChain(): Promise<PatchChainRead> {
+    return this.chain ?? { sources: [], failures: [] };
+  }
+
   async applyPatchChanges(
     file: string,
     changes: { lineId: string; raw: unknown; action: 'insert' | 'update' | 'remove' }[],
-  ): Promise<void> {
+  ): Promise<{ downgraded: string[] }> {
     const bucket = this.bucket(file);
     for (const c of changes) {
+      this.actions.push({ file, lineId: c.lineId, action: c.action });
       if (c.action === 'remove') bucket.delete(c.lineId);
       else bucket.set(c.lineId, { lineId: c.lineId, raw: c.raw });
     }
+    return { downgraded: [] };
   }
 }
 

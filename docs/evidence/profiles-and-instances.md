@@ -107,3 +107,13 @@
 - **修复落点（2026-11-11，两提交）**：写回不再摊平 —— `src/core/patch-document.ts` 只按原文档的归属重排（insert 成员留在块里、`update` 不改归属），`applyPatchChanges` 落盘前做结构自检（`describePatchLayoutDrift`）与跨层提升守卫（`promotedTopLevelIds`），任一不过即零写入报码。MCP 写回同时补齐 `config.transport` 与 scoped 行名 `@deepseek-ai/dsh-mcp-client`，因此**不再依赖宿主对裸名的归一化**（上面那条未验证项对本插件已不构成风险）。
 
 
+
+## 生效 patch 链里的「id 是否已存在」按整条链判定（#144，2026-11-15 实现落地）
+
+- **宿主侧两套定位规则（真源码核实，asar 内嵌）**：写前校验 = `flatten(composeEntries([patches])).find(row => row.id === id)?.config`（**首个**同 id 行）；宿主自己写回 = `findLastIndex(id === entry.id && !item.has('insert'))`（**最后一个非 insert 行**）。两者对不上 ⇒ 链上有重复行时「校验拒绝」与「写入成功」能同时出现，报错文案 `Configuration for "<id>" is overridden by a home patch or command-line overlay` 把原因说反（真实原因是有重复行，不是被 home 层盖住）。
+- **宿主合并序（dsh-app-boot）**：`dsh.profile.bundles` 顺序 → 各 bundle 的 `dsh.bundle.patch`（字符串或**有序**字符串数组，逐项按声明顺序）→ `profiles/<p>/cordis.patch.yml` → `cordis.patch.yml` → overlays。⇒「这个 id 存在吗」是全链事实，只看两个 patch 文件会把 bundle 已提供的 id 当成「本机没有」。
+- **合法形状**：链上已存在 ⇒ 只能写**顶层覆盖行**（`- id: X` 带 `config`；写了 `name` 就必须与既有条目逐字一致，否则宿主 `patch: name mismatch … skipping` 整行跳过）；链上不存在 ⇒ 只能写 `- insert:` 成员（顶层行被 `patch: entry "X" not found` 丢弃）。
+- **插件侧单一口径**：`src/core/patch-chain.ts` 的 `patchChainIndex` / `providedByOtherLayers` / `readPatchChainIndex` 是唯一判据；门面 `DshPatchFileFacade.readPatchChain()` 读 bundle 层（`profiles/<p>/package.json` 的 `dsh.profile.bundles` → `profiles/<p>/node_modules/<name>` 与 `<home>/node_modules/<name>` 的 `dsh.bundle.patch`），读不到的层只进 `failures`（fail-open，绝不因装坏的 bundle 拒绝写入），另有 2 s 缓存（一次导入逐行写 patch，不必逐行重读 30+ 个 bundle patch）。
+- **三处消费点**：导入判定（`adapters/plugins.ts`：已提供 ⇒ 计划项 `Update` + 注明提供层，否则 `Create`）、写后兜底（`applyPatchChanges`：`insert` 且已被别层提供 ⇒ 降级成 `update` 并回报 `downgraded`，覆盖 mcp / prompts / 插件激活行）、孤儿守卫（`unprovidedTopLevelIds`：只拒绝「整条链都没人提供」的顶层行，#133 的旧判据反过来拒绝合法覆盖）。
+- **单测钉住**：`src/core/patch-chain.test.ts`（合流 / 排除本层 / fail-open / 门面缺能力）、`src/core/patch-document.test.ts`（`patchDocumentEntries` 与 `unprovidedTopLevelIds`）、`src/index.facade.test.ts`（bundle 层已提供 ⇒ insert 降级成覆盖行、重复写仍只有一行、没人提供仍走 insert、链读取按声明序 + 缺失 bundle 进 failures）、`src/adapters/plugins.test.ts`（`Update` vs `Create` 与落盘 `action`）。
+- **本机未复现**（触发条件是跨机组合，不是本机缺陷）：报错机 `~/.dsh/profiles/{desktop,web}` 扫描 —— desktop 32 bundles / 29 个提供 id / profile 行 19，web 14 / 11 / 11，与 bundle 层重复的 `insert` 行均为 0。要复现需「源机把该 id 写成 profile 平铺行（于是被导出）＋ 目标机该 id 只由 bundle 提供」。
