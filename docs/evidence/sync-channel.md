@@ -676,7 +676,9 @@ deviceId 不同；34 条快照历史里 `plugins/plugins.json` 被反复压小�
   `pushTargets()` 只按 `sections` 挑分区，于是冲突分区每轮照旧导出本机版本上行，把远端那份覆盖成更小的一份。
 - 判据：「仍在等裁决」的唯一事实源是 `pendingMerge.sections`（不是本轮 merge 结果，也不是基线 hash）。
   推送目标 = 全量 −（调用方点名 ∪ 磁盘 `pendingMerge.sections`），实现只有一处：
-  `src/sync/push-skip.ts` 的 `resolveSkipSections()`；`force` 不扣（强推就是明确覆盖），`skipSections` 缺省/空不扣（手动推送照旧）。
+  `src/sync/push-skip.ts` 的 `resolveSkipSections()`；`force` 不扣（强推就是明确覆盖），`skipSections` **不传**才不扣
+  （手动推送照旧）—— 传空数组也照样按磁盘待裁决扣：自动同步本轮没判出新冲突时同样要传，否则别的分区一有改动
+  就把上一轮的待裁决推上去（这条是 2026-11-15 代码审查发现并补的）。
 - 全扣下必须零副作用：`{ ok:true, snapshotId:'', sections:[], skipped:'all-conflicted' }` —— 不 upload、不建目录、
   不改基线、不动 `pendingMerge`；且必须放在 `resolvePushBase()` **之后**：远端已推进时仍要如实报 `conflict:true`，
   不能被「全扣下」吞成「成功」。

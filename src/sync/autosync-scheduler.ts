@@ -825,7 +825,8 @@ export class AutoSyncScheduler {
           // Phase C: 完整双向 → engine.push() 上传。P0-A：外部 push 包 intent journal。
           const rawPush = async () => engine.push({
             ...(forcePush ? { force: true } : {}),
-            ...(heldUp.length > 0 ? { skipSections: heldUp } : {}),
+            // 空数组也传：本轮没判出新冲突时，磁盘上上一轮留下的待裁决仍要扣下（issue #146）。
+            skipSections: heldUp,
           });
           const pushReport = (this.phase3Recovery !== undefined && this.lockCtxForJournal !== null)
             ? (await this.phase3Recovery.runExternalIntent({

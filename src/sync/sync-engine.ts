@@ -883,7 +883,6 @@ export class SyncEngine {
       warnings.push(message);
       return { ok: true, snapshotId: '', sections: [], warnings, message, skipped: 'all-conflicted' };
     }
-    const pendingAfterPush = held.length === 0 ? null : await pendingMergeAfterPush(() => loadSyncState(this.stateDir, this.fsx, this.msg), held);
     const plainSections: Partial<Record<SectionId, SectionData>> = {};
     for (const adapter of targets) {
       let section: ExportSection;
@@ -934,6 +933,8 @@ export class SyncEngine {
       warnings.push(this.msg('sync.sessionTombstonesInherited', { count: String(bookkeeping.inherited) }));
     }
 
+    // issue #146：待裁决只剔除**真正推上去**的分区（导出失败/不在候选里的分区一律保留）。
+    const pendingAfterPush = await pendingMergeAfterPush(() => loadSyncState(this.stateDir, this.fsx, this.msg), Object.keys(plainSections) as SectionId[]);
     // issue #140：内容没变就**不新建快照**（不 upload、不建目录、不裁剪），只收养远端最新指针。
     // 判据只有一处实现（content-diff.ts）：远端最新快照实际携带的分区哈希 vs 本次导出。
     // - force:true = 用户明确要求「就算一样也新建」（覆盖语义），跳过本判定；

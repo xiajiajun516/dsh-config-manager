@@ -262,3 +262,35 @@ test('#146 读不到状态时只扣点名分区，且绝不抹掉待裁决', asy
   );
 });
 
+
+test('#146 本轮没判出新冲突也要扣下磁盘上的待裁决（skipSections 传空数组）', async () => {
+  await withTmp(async (tmp) => {
+    const { transport, engine } = setup(tmp);
+    const first = await engine.push({ snapshotId: 'snap-1' });
+    assert.equal(first.ok, true, '先建基线：' + JSON.stringify(first.warnings));
+    await seedPendingMerge(tmp, ['plugins'], '2026-11-14T00:00:00.000Z');
+
+    const report = await engine.push({ snapshotId: 'snap-2', skipSections: [] });
+    assert.equal(report.ok, true, 'push 必须成功：' + JSON.stringify(report.warnings));
+    assert.equal(report.sections.includes('plugins'), false, '上一轮留下的待裁决分区绝不上行');
+    assert.ok(report.sections.includes('settings'), '其余分区照推');
+    const uploaded = transport.snapshots.get('snap-2');
+    assert.ok(uploaded !== undefined);
+    assert.equal('plugins' in uploaded.sections, false);
+
+    const state = await loadSyncState(tmp);
+    assert.deepEqual(state.pendingMerge?.sections, ['plugins'], '待裁决仍挂着');
+    assert.equal(state.pendingMerge?.since, '2026-11-14T00:00:00.000Z', 'since 原样保留');
+  });
+});
+
+test('#146 待裁决按「推上去的分区」剔除：不在候选里的分区记录必须留下', async () => {
+  const state = { pendingMerge: { remoteSnapshotId: 'r1', sections: ['plugins', 'sessions'] as SectionId[], since: '2026-11-14T00:00:00.000Z' } };
+  const kept = await pendingMergeAfterPush(async () => state, ['plugins']);
+  assert.deepEqual(kept?.sections, ['sessions'], 'sessions 本轮没推上去（不在候选）⇒ 记录不得被剔除');
+  assert.equal(kept?.since, '2026-11-14T00:00:00.000Z');
+  assert.equal(await pendingMergeAfterPush(async () => state, ['plugins', 'sessions']), null, '全推上去才清空');
+  const set = await resolveSkipSections({ skipSections: [] }, async () => state);
+  assert.deepEqual([...set], ['plugins', 'sessions'], '空数组 = 仍按磁盘待裁决扣');
+});
+
