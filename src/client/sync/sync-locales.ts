@@ -336,6 +336,8 @@ export const zh = {
   'toast.pushDone': '推送完成',
   // issue #140：内容与远端最新快照一致 ⇒ 什么都没上传
   'toast.pushSkipped': '内容未变化，已跳过',
+  // issue 146：目标分区全被未裁决冲突扣下 ⇒ 一个分区都没推
+  'toast.pushAllConflicted': '未推送任何分区：还有分区待冲突裁决',
   'toast.syncStartFailed': '从远端合并失败',
   'toast.autosyncUpdateFailed': '自动同步设置更新失败',
   'toast.autosyncUpdated': '自动同步设置已更新',
@@ -807,6 +809,7 @@ export const en: Record<keyof typeof zh, string> = {
   'toast.pushFailed': 'Push failed',
   'toast.pushDone': 'Push completed',
   'toast.pushSkipped': 'No content changes — skipped',
+  'toast.pushAllConflicted': 'Nothing pushed: sections still await conflict resolution',
   'toast.syncStartFailed': 'Merge from remote failed',
   'toast.autosyncUpdateFailed': 'Failed to update auto-sync settings',
   'toast.autosyncUpdated': 'Auto-sync settings updated',

@@ -815,8 +815,18 @@ export class AutoSyncScheduler {
           });
           const forcePush = pushDecision.force;
           const forcedMark = pushDecision.forcedAsk ? { forced: true as const } : {};
+          // issue #146：本轮**仍未裁决**的分区（分区级冲突 + 下行被扣下的叶级冲突）绝不上行。
+          // 冲突分区在 Phase B 被有意跳过（绝不写本地），但推送侧原本照样导出本机版本 ——
+          // 真机事故里 plugins 就这样被 30 → 28 → 26 一路压小。force = 用户明确「用本机覆盖远端」，不扣。
+          const heldUp = forcePush ? [] : [...new Set([...conflictedSections, ...heldLeafSections])];
+          // 先落盘待裁决：引擎推送成功时只在**已有记录**上保留 since，本轮首次判出的冲突要靠这里写下来。
+          const pendingRecorded = heldUp.length > 0;
+          if (pendingRecorded) await this.recordPendingMerge(engine, heldUp);
           // Phase C: 完整双向 → engine.push() 上传。P0-A：外部 push 包 intent journal。
-          const rawPush = async () => engine.push(forcePush ? { force: true } : {});
+          const rawPush = async () => engine.push({
+            ...(forcePush ? { force: true } : {}),
+            ...(heldUp.length > 0 ? { skipSections: heldUp } : {}),
+          });
           const pushReport = (this.phase3Recovery !== undefined && this.lockCtxForJournal !== null)
             ? (await this.phase3Recovery.runExternalIntent({
                 operationType: 'autosync-push', lockCtx: this.lockCtxForJournal,
@@ -853,8 +863,9 @@ export class AutoSyncScheduler {
               createdAt: nowIso, failureCountAtRun: 0,
               ...forcedMark,
             });
-            // 冲突分区落成待裁决（P2）：首页与同步页据此给出裁决入口。
-            await this.recordPendingMerge(engine, conflictedSections);
+            // 冲突分区落成待裁决（P2）：首页与同步页据此给出裁决入口。推送前已写过就不再写一次
+            // （重复写会按 lastMergedRemoteSnapshotId 重算 since，抹掉首次判出冲突的时间）。
+            if (!pendingRecorded) await this.recordPendingMerge(engine, conflictedSections);
             await this.writeFinalConfig(cfg, conflictResult, nowIso, historyId, channel);
             return conflictResult;
           }
@@ -910,7 +921,9 @@ export class AutoSyncScheduler {
           const result: AutosyncRunResult = {
             status: finalPartial ? 'partial' : 'success',
             direction: appliedSections.length ? 'both' : 'push',
-            appliedSections, pushedSnapshotId: pushReport.snapshotId, historyId,
+            appliedSections, historyId,
+            // issue #146：全扣下时 snapshotId 为空 —— 绝不写空 id（界面会当成「推了某份快照」）。
+            ...(pushReport.snapshotId !== '' ? { pushedSnapshotId: pushReport.snapshotId } : {}),
             ...(finalSkipReason !== undefined || adoptedReason !== undefined ? { skipReason: finalSkipReason ?? adoptedReason } : {}),
             ...(finalConflicted.length > 0 ? { conflictedSections: finalConflicted } : {}),
             ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
@@ -921,7 +934,8 @@ export class AutoSyncScheduler {
           await this.appendHistory(channel, {
             direction: appliedSections.length ? 'both' : 'push',
             status: finalPartial ? 'partial' : 'success',
-            appliedSections, pushedSnapshotId: pushReport.snapshotId,
+            appliedSections,
+            ...(pushReport.snapshotId !== '' ? { pushedSnapshotId: pushReport.snapshotId } : {}),
             ...(finalSkipReason !== undefined || adoptedReason !== undefined ? { skipReason: finalSkipReason ?? adoptedReason } : {}),
             ...(finalConflicted.length > 0 ? { conflictedSections: finalConflicted } : {}),
             ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),

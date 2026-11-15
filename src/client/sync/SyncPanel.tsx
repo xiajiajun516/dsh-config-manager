@@ -913,7 +913,14 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         patchChannel({ encryptPassword: '', encryptPasswordConfirm: '' })
         // M-19：推送终局回执（结果弹窗关闭后不再有任何痕迹）。
         // issue 140：没新建快照时必须说「已跳过」，不能报「已推送」。
-        toast.ok(report.skipped === 'unchanged' ? t('toast.pushSkipped') : t('toast.pushDone'))
+        // issue 146：全被冲突扣下同样不是「推送完成」，必须换文案（否则用户以为远端已更新）
+        toast.ok(
+          report.skipped === 'unchanged'
+            ? t('toast.pushSkipped')
+            : report.skipped === 'all-conflicted'
+              ? t('toast.pushAllConflicted')
+              : t('toast.pushDone'),
+        )
         void loadSnapshots()
       } else {
         // 失败保留结果弹窗（K-15，含告警明细）；同时给出不依赖弹窗的回执

@@ -88,6 +88,7 @@
 - **会话管理五条**：远端保留接 GFS（刚 push 恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；墓碑不删本机数据。
 - **git 通道只碰同步内容**：clone 走 partial+sparse（sparse 面 = `SYNC_ROOT_DIRS`，与 `ADOPT_ROOT_ALLOW` 同源），老 git 回落全量；`--filter` 只给 promisor 副本。
 - **git 通道 `latest/` 是派生视图**：与快照同一次 commit、只写不读（`list`/`download`/合并/保留/冲突都不认）、按 `createdAt` 不回退、删快照时同提交移除、加密不写且告警；必须同进 `ADOPT_ROOT_ALLOW` 与 `syncDirs()`，存量 cone 由 `ensureSparseConeCoversLatest` 补齐（→ `docs/contracts/sync-channel-v1.md` §1.1）。
+- **未裁决冲突的分区绝不上行**：推送目标 = 全量 −（调用方点名 ∪ `pendingMerge.sections`），`force` 不扣；全扣下 = `ok:true`+`snapshotId:''`+`skipped:'all-conflicted'`，零远端写入零基线变化（证据 → `docs/evidence/sync-channel.md`）。
 - **git 网络命令有界**：稳态靠 `ls-remote` 短路（远端 sha 与本地跟踪引用相同**且** HEAD 已合并才跳过）；网络子命令恒带低速上限；超时 kill 整棵进程树、宽限到点强制收尾（证据 → `docs/evidence/sync-channel.md`）。
 
 ### 备份 / 恢复 / 回滚点

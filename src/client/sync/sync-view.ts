@@ -634,6 +634,16 @@ export function pushReportView(
       warnings: report.warnings,
     };
   }
+  // issue 146：目标分区全被未裁决冲突扣下 ⇒ 一个分区都没推（不是「已推送」）。
+  if (report.skipped === 'all-conflicted') {
+    return {
+      kind: 'skipped',
+      headline: t('sync.pushAllConflicted'),
+      sections: report.sections,
+      counts: countsBySection,
+      warnings: report.warnings,
+    };
+  }
   return {
     kind: 'ok',
     headline: t('sync.pushOk', { id: report.snapshotId }),

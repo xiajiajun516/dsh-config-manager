@@ -262,6 +262,8 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
 | apply/合并**失败**（含整体回滚） | **不动** | 失败不是「部分成功」 |
 | apply/合并成功但**仍有未裁决冲突**（或用户 `action='skip'`） | **不动**，并写 `pendingMerge` | 未裁决冲突下一轮必须重新出现，绝不静默丢一侧改动 |
 | 全部裁决完且应用成功 | → 本次远端快照 id，清空 `pendingMerge` | |
+| push 有分区仍在等裁决（`skipSections` 扣下） | **只记已推分区**，被扣分区保持原 hash | 被扣分区不算「已同步」，下一轮照旧需要裁决 |
+| push 全部分区都在等裁决 | **不动** | 返回 `{ ok:true, snapshotId:'', sections:[], skipped:'all-conflicted' }`：零远端写入、零基线变化、`pendingMerge` 原样（`since` 保留） |
 
 - **基线以「实际落地的本地导出」为准**（不是 merged 载荷）：适配器写回时可能自增
   revision 这类派生字段（真机 settings 即如此），拿 merged 载荷记基线会让下一轮把「只有派生字段不同」
@@ -270,6 +272,9 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
 - `ancestor` 目录（本地祖先副本）是**可缺失**的：加密快照不发明文副本、副本会被裁剪 —— 缺失时退化为
   两方合并（所有双侧差异呈现为 `conflict`），**绝不上抛成整轮失败**。
 - `pendingMerge` 记录 `{ remoteSnapshotId, sections, since }`（同一远端快照上的连续待裁决保留首次时间）。
+- **推送目标必须减去待裁决分区**：`skipSections` 缺省/空 = 不扣（手动推送照旧），`force` 不扣；
+  非空时实际扣下 = 点名分区 ∪ 磁盘上 `pendingMerge.sections`（`src/sync/push-skip.ts`）。同一集合也用于
+  `previewPush()`（预览 = 实际）。`skipped:'all-conflicted'` 是**成功但什么都没做**，界面不得显示成「已推送」。
 
 ### 7.4 push 前置：远端推进检测与 `force`
 

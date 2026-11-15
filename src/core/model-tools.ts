@@ -605,7 +605,10 @@ export function createModelTools(deps: ModelToolsDeps) {
         // 不透传的话模型会把「ok:true + snapshotId」读成「又推了一份新快照」。
         ...(report.skipped === 'unchanged'
           ? { skipped: 'unchanged' as const, adoptedSnapshotId: report.adoptedSnapshotId ?? report.snapshotId }
-          : {}),
+          // issue #146：目标分区全被未裁决冲突扣下 ⇒ 一个分区都没推，绝不读成「推成功」
+          : report.skipped === 'all-conflicted'
+            ? { skipped: 'all-conflicted' as const }
+            : {}),
         ...(report.message === undefined ? {} : { message: report.message }),
         ...(encrypt ? { passwordSource: stored === undefined ? 'argument' : 'stored' } : {}),
       }

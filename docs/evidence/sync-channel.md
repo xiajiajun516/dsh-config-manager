@@ -666,3 +666,27 @@ $ node --test "tests/conformance/*.test.ts"             -> # pass 18  # fail 0
 2. **P1**：同一种冲突连着出现**只留一条**历史。签名 = 通道 + status + direction + skipReason + 排序后的 conflictedSections/appliedSections + error（`src/sync/autosync-repeat.ts` 的 `repeatHistorySignature()`）；`success`/`failed` 与带 `pushedSnapshotId`/`pulledSnapshotId` 的轮次**恒返回 null**（真推进必须逐条留痕，空轮逐条记录是 2026-11-09 就定下的可见性）。去重时仍刷新 `lastRunAt/lastRunStatus/lastRunSkipCount` 与 `lastRunHistoryId`（保留上一条真实 id）。守卫：连续三轮同一冲突 → `getEntries().length === 1`，换一句 error → 2；成功/失败轮照旧逐条。
 3. **P2**：冲突也落盘。`SyncEngine.recordPendingMerge()`（实现下沉到 `src/sync/pending-merge.ts`，只做纯状态写入：不构造 `SyncApplyPlan`、不碰本机配置、不动祖先副本）取 `lastMergedRemoteSnapshotId`，远端 id 未知或分区为空 → 不写（没有远端 id 的待裁决会每轮重置 `since`，界面永远说不清挂了多久）；推送成功侧 `recordBaseline` 带 `pendingMerge: null` 收口。`/sync/status` 只回 `{ sections, since }`，**绝不回 `remoteSnapshotId`**；首页「待裁决」行整行是 `<button>`，点击经 `src/client/sync/merge-request.ts` 的一次性信号跳到同步页并拉起 `runSyncSmart()`（信号不进 run-store：否则要进持久化白名单、旧存档迁移与刷新重放都会出问题）。
 4. **口径**：只做 P1 不做 P2 = 安静地卡住（历史不再刷，但用户依然无处可点）；只做 P2 不做 P1 = 入口有了，历史仍被同一句话占满。
+
+## 未裁决冲突的分区被自动推送一路压小（issue #146，2026-11-15 真机 + 本地复现）
+
+现场：git 通道 + autosync（interval 60m / realtime true / remoteCheckMs 300000 / conflictPolicy `ask`），两台机
+deviceId 不同；34 条快照历史里 `plugins/plugins.json` 被反复压小（30 → 28 → 26），且没有任何一步报错。
+
+- 成因是两处叠加：下行侧 #145 已修的门控只保证「冲突分区不写本地」；**推送侧不认待裁决** ——
+  `pushTargets()` 只按 `sections` 挑分区，于是冲突分区每轮照旧导出本机版本上行，把远端那份覆盖成更小的一份。
+- 判据：「仍在等裁决」的唯一事实源是 `pendingMerge.sections`（不是本轮 merge 结果，也不是基线 hash）。
+  推送目标 = 全量 −（调用方点名 ∪ 磁盘 `pendingMerge.sections`），实现只有一处：
+  `src/sync/push-skip.ts` 的 `resolveSkipSections()`；`force` 不扣（强推就是明确覆盖），`skipSections` 缺省/空不扣（手动推送照旧）。
+- 全扣下必须零副作用：`{ ok:true, snapshotId:'', sections:[], skipped:'all-conflicted' }` —— 不 upload、不建目录、
+  不改基线、不动 `pendingMerge`；且必须放在 `resolvePushBase()` **之后**：远端已推进时仍要如实报 `conflict:true`，
+  不能被「全扣下」吞成「成功」。
+- 部分扣下：基线只记已推分区；`pendingMerge.sections` 只剔除已推分区，`since` 原样保留（同一批待裁决保留首次时间）。
+- 调度器顺序：`heldUp`（本轮分区级冲突 ∪ 叶级扣下）必须在 `push()` **之前**落盘 —— 引擎推送成功时只在
+  **已有记录**上保留 `since`，推送后再写会按 `lastMergedRemoteSnapshotId` 重算、抹掉首次时间；`pendingRecorded`
+  守卫同时避免冲突分支再写一次。
+- 读盘失败不得抹掉待裁决：`pendingMergeAfterPush()` 读不到返回 `undefined`（`recordBaseline` 只在 `null` 时删字段）；
+  返回 `null` 等于静默丢弃待裁决记录。
+- 界面/工具面：`skipped:'all-conflicted'` 一律渲染成「未推送任何分区」，绝不显示成「已推送」（`sync-view.ts` 的
+  headline 不插值 `sections`——该分支恒为空数组）。
+- 守卫：`src/sync/push-skip.test.ts` 8 条（缺省不扣 / 部分扣下 / 全扣下零副作用 / 未点名仍扣 / force 不扣 /
+  预览同口径 / 读失败只扣点名且保留待裁决）。
