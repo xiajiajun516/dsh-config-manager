@@ -189,6 +189,9 @@ export function mergePluginsSection(
       followDelete,
       // 自身条目永不删、永不报冲突：删了等于把正在跑的宿主插件卸掉。
       keepLocal: (p) => selfName !== '' && p.name === selfName,
+      // 版本/来源听远端（本机没改过它才走这条分支），启停是本机 UI 态 —— 恒留本机，
+      // 否则远端升一次版本就把用户在本机关掉的插件改回启用（复审 P0-2）。
+      compose: (local, remote) => ({ ...remote, enabled: local.enabled }),
     },
   });
   const patch = mergeKeyedList<PatchLine>({
@@ -199,8 +202,14 @@ export function mergePluginsSection(
       keyOf: patchLineKey,
       // 身份按三侧 redactedPaths 并集归一化：本机被剥空、远端明文的同一行算「没改过」（门②）。
       identityOf: (line, peers) => patchLineIdentity(line, peers),
-      pathOf: (key) => `patch.${key.split(PATCH_KEY_SEP)[0] ?? ''}`,
-      followDelete,
+      // 冲突路径带 lineId：同一文件里两行各自冲突时必须能分辨（复审 P2）。
+      pathOf: (key) => {
+        const [file = '', lineId = ''] = key.split(PATCH_KEY_SEP);
+        return `patch.${file}#${lineId}`;
+      },
+      // 外壳列表**不跟随删除**：deletePlugins 的语义是「远端删了插件」，不是「远端删了 MCP 配置」
+      // —— 跟着删会把本机还在用的 patch 行 / tarball 一起丢掉（复审 P1-1）。
+      followDelete: false,
     },
   });
   const tarballs = mergeKeyedList<LocalPluginTarball>({
@@ -211,7 +220,7 @@ export function mergePluginsSection(
       keyOf: (t) => (typeof t.packageName === 'string' ? t.packageName : ''),
       identityOf: (t) => tarballIdentity(t),
       pathOf: (key) => `localTarballs.${key}`,
-      followDelete,
+      followDelete: false, // 同上：开关只管插件清单（复审 P1-1）
     },
   });
   const files = mergeKeyedList<PnpmPatchFile>({
@@ -222,9 +231,13 @@ export function mergePluginsSection(
       keyOf: (f) => (typeof f.relativePath === 'string' ? f.relativePath : ''),
       identityOf: (f) => patchFileIdentity(f),
       pathOf: (key) => `patchFiles.${key}`,
-      followDelete,
+      followDelete: false, // 同上：开关只管插件清单（复审 P1-1）
     },
   });
+
+  // 形状不支持按键合并（同键重复 / 非对象条目 / 无身份键）：交回通用路径，
+  // 绝不在这里「留一条丢一条」（复审 P1-2）。
+  if (plugins.malformed || patch.malformed || tarballs.malformed || files.malformed) return undefined;
 
   const conflicts: MergeConflict[] = [
     ...plugins.conflicts,
@@ -235,9 +248,12 @@ export function mergePluginsSection(
   let mergePoints = plugins.mergePoints + patch.mergePoints + tarballs.mergePoints + files.mergePoints;
 
   // pnpm-workspace 原文：标量/对象三方。两侧都改且不同 → overlap（不猜用哪一份）。
-  const wsLocal = l.pnpmWorkspace ?? undefined;
-  const wsRemote = r.pnpmWorkspace ?? undefined;
-  const wsAncestor = a?.pnpmWorkspace ?? undefined;
+  // null 与「没有这个键」在语义上是同一件事（adapter 没有 patch 组时导出 null），
+  // 但三方合并之后必须按**原始形态**写回：本机原本带这个键就继续写 null，不能抹成缺键（复审 P0-1）。
+  const wsCarried = 'pnpmWorkspace' in l || 'pnpmWorkspace' in r;
+  const wsLocal = l.pnpmWorkspace ?? null;
+  const wsRemote = r.pnpmWorkspace ?? null;
+  const wsAncestor = a?.pnpmWorkspace ?? null;
   const ws = mergeJsonValues(wsAncestor, wsLocal, wsRemote, 'pnpmWorkspace');
   const wsMerged = ws.ok ? (ws.merged as string | null | undefined) : undefined;
   if (!ws.ok) {
@@ -258,7 +274,8 @@ export function mergePluginsSection(
 
   if (conflicts.length > 0) return { merged: l as SectionData, conflicts, mergePoints };
 
-  const next: Record<string, unknown> = { ...l };
+  // 以远端为底再盖本机：远端独有的未知/将来字段被采纳，而不是被本机形状悄悄吞掉（复审 P2）。
+  const next: PluginsSection & Record<string, unknown> = { ...r, ...l };
   next.plugins = plugins.merged;
   next.patch = patch.merged;
   // 可选字段只在「本机或合并结果里确实有」时写回：不擅自在载荷里新增空字段。
@@ -266,7 +283,9 @@ export function mergePluginsSection(
   else delete next.localTarballs;
   if (l.patchFiles !== undefined || files.merged.length > 0) next.patchFiles = files.merged;
   else delete next.patchFiles;
-  if (wsMerged === undefined || wsMerged === null) delete next.pnpmWorkspace;
+  // 只有「两侧都没带这个键、合并也没产出值」才删键；否则原样写回（含 null）。
+  // 把 null 抹成缺键会让合并结果与两侧都不等 ⇒ 每轮都判「已合并」，永不收敛（复审 P0-1）。
+  if (wsMerged === undefined || (wsMerged === null && !wsCarried)) delete next.pnpmWorkspace;
   else next.pnpmWorkspace = wsMerged;
-  return { merged: next as unknown as SectionData, conflicts: [], mergePoints };
+  return { merged: next as SectionData, conflicts: [], mergePoints };
 }

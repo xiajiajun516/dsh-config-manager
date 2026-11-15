@@ -30,6 +30,7 @@ export interface GranularMergeOutcome {
   conflicts: MergeConflict[];
   /** 自动并入的变更点（口径 = 用户能感知的「两侧各自的改动都保住了」处数） */
   mergePoints: number;
+  /** 远端删了、但按开关保留在本机的条目键（`plugins.<name>` / `patch.<file>#<lineId>` …） */
 }
 
 /**

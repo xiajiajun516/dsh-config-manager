@@ -240,7 +240,7 @@ test('mergePluginsSection: 自身插件远端删了也保留、两侧改不同�
   assert.equal(((changed!.merged as PluginsSection).plugins[0]!).version, '0.9.2');
 });
 
-test('mergePluginsSection: patch 行按 file+lineId 配对 —— 同一行两侧都改 → both-modified（路径带文件名）', () => {
+test('mergePluginsSection: patch 行按 file+lineId 配对 —— 同一行两侧都改 → both-modified（路径带文件名+行号）', () => {
   const res = mergePluginsSection(
     section([], { patch: [line('cfg.yml', 'l1', { timeout: 10 })] }),
     section([], { patch: [line('cfg.yml', 'l1', { timeout: 20 })] }),
@@ -249,7 +249,7 @@ test('mergePluginsSection: patch 行按 file+lineId 配对 —— 同一行两�
   );
   assert.equal(res?.conflicts.length, 1);
   assert.equal(res?.conflicts[0]!.reason, 'both-modified');
-  assert.equal(res?.conflicts[0]!.path, 'patch.cfg.yml');
+  assert.equal(res?.conflicts[0]!.path, 'patch.cfg.yml#l1', '同文件多行要能分辨');
 });
 
 test('mergePluginsSection: 同 lineId 不同文件不撞键（两行都保留）', () => {
@@ -325,6 +325,55 @@ test('mergePluginsSection: pnpmWorkspace 单侧改动取该侧，两侧都改 �
   assert.equal(both?.conflicts.length, 1);
   assert.equal(both?.conflicts[0]!.path, 'pnpmWorkspace');
   assert.equal(both?.conflicts[0]!.reason, 'overlap');
+});
+
+test('mergePluginsSection: 三侧 pnpmWorkspace 都是 null → 原样保留（不抹成缺键，复审 P0-1）', () => {
+  const res = mergePluginsSection(section([], { pnpmWorkspace: null }), section([], { pnpmWorkspace: null }), section([], { pnpmWorkspace: null }), ON);
+  assert.deepEqual(res?.conflicts, []);
+  assert.ok('pnpmWorkspace' in (res!.merged as PluginsSection), 'null 是合法值，删掉会让合并结果与两侧都不等 ⇒ 每轮假合并');
+  assert.equal((res!.merged as PluginsSection).pnpmWorkspace, null);
+  assert.equal(res?.mergePoints, 0);
+});
+
+test('mergePluginsSection: 本机关掉插件、远端升版本 → 版本听远端，启停留本机（复审 P0-2）', () => {
+  const res = mergePluginsSection(
+    section([entry('alpha', '1.2.0', { enabled: false })]),
+    section([entry('alpha', '1.3.0')]),
+    section([entry('alpha', '1.2.0')]),
+    ON,
+  );
+  assert.deepEqual(res?.conflicts, []);
+  const merged = (res!.merged as PluginsSection).plugins[0]!;
+  assert.equal(merged.version, '1.3.0');
+  assert.equal(merged.enabled, false, '本机停用是用户意图，不能被远端版本覆盖');
+});
+
+test('mergePluginsSection: 开关打开时远端删 patch 行也不跟删（开关只管插件，复审 P1-1）', () => {
+  const kept = line('cfg.yml', 'l1', { a: 1 });
+  const res = mergePluginsSection(section([], { patch: [kept] }), section([]), section([], { patch: [kept] }), ON);
+  assert.deepEqual(res?.conflicts, []);
+  assert.deepEqual((res!.merged as PluginsSection).patch.map((p) => p.lineId), ['l1']);
+});
+
+test('mergePluginsSection: patch 行重复 file+lineId → 整轮交回通用路径（不静默吞条目，复审 P1-2）', () => {
+  const dup = [line('cfg.yml', 'l1', { a: 1 }), line('cfg.yml', 'l1', { a: 2 })];
+  assert.equal(mergePluginsSection(section([], { patch: dup }), section([], { patch: dup }), undefined, ON), undefined);
+});
+
+test('mergePluginsSection: patch 冲突路径带 lineId（同文件两行能分辨，复审 P2）', () => {
+  const res = mergePluginsSection(
+    section([], { patch: [line('cfg.yml', 'l7', { a: 2 })] }),
+    section([], { patch: [line('cfg.yml', 'l7', { a: 3 })] }),
+    section([], { patch: [line('cfg.yml', 'l7', { a: 1 })] }),
+    ON,
+  );
+  assert.equal(res?.conflicts[0]!.path, 'patch.cfg.yml#l7');
+});
+
+test('mergePluginsSection: 远端独有的未知字段被采纳（不被本机形状吞掉，复审 P2）', () => {
+  const remote = { ...section([]), pluginsMeta: { scanned: true } } as unknown as PluginsSection;
+  const res = mergePluginsSection(section([]), remote, undefined, ON);
+  assert.deepEqual((res!.merged as unknown as { pluginsMeta: unknown }).pluginsMeta, { scanned: true });
 });
 
 test('mergePluginsSection: 形状不认识 → undefined（畸形数据交通用路径的形状闸门）', () => {

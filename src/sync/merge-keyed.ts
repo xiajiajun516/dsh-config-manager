@@ -35,10 +35,16 @@ export interface KeyedMergeSpec<T> {
   identityOf(item: T, peers: readonly T[]): string;
   /** 冲突路径（给人看的定位，如 `plugins.alpha`）。 */
   pathOf(key: string): string;
-  /** 本机未改、远端删了：true = 跟随删除；false = 保留本机并记进 keptAgainstDelete。 */
+  /** 本机未改、远端删了：true = 跟随删除；false = 保留本机（不报冲突、不计合并点）。 */
   followDelete: boolean;
   /** 永远以本机为准的条目（本插件自己这类「删了会坏事」的东西）：不删、不报冲突。 */
   keepLocal?(item: T): boolean;
+  /**
+   * 采纳远端那一侧时怎么合成（缺省 = 直接取远端对象）。
+   * 只有「本机没改、远端改了」这一条分支会调它；用途是把**本机态字段**（如插件启停）留在本机，
+   * 其余字段听远端 —— 否则远端升一次版本就会把本机停用改回启用（issue #145 复审 P0-2）。
+   */
+  compose?(l: T, r: T): T;
 }
 
 export interface KeyedMergeResult<T> {
@@ -46,18 +52,30 @@ export interface KeyedMergeResult<T> {
   conflicts: MergeConflict[];
   /** 自动并入的变更点（「两侧各自的改动都保住了」处数） */
   mergePoints: number;
-  /** 远端删了、但因 followDelete=false 留下的键（供报告说明「开关关着所以保留」） */
-  keptAgainstDelete: string[];
+  /**
+   * 输入形状不支持按键合并（同键重复 / 没有身份键 / 非对象条目）：此时 merged 恒空，
+   * 调用方**必须**退回通用路径 —— 绝不在这里「留一条丢一条」（复审 P1-2）。
+   */
+  malformed: boolean;
 }
 
-function indexByKey<T>(list: readonly T[] | undefined, keyOf: (item: T) => string): Map<string, T> {
+interface KeyedIndex<T> {
+  index: Map<string, T>;
+  /** 同键重复 / 空键 / 非对象条目：任一出现就不许按键合并 */
+  malformed: boolean;
+}
+
+function indexByKey<T>(list: readonly T[] | undefined, keyOf: (item: T) => string): KeyedIndex<T> {
   const index = new Map<string, T>();
+  let malformed = false;
   for (const item of list ?? []) {
-    if (item === null || typeof item !== 'object') continue;
+    if (item === null || typeof item !== 'object') { malformed = true; continue; }
     const key = keyOf(item);
-    if (key !== '') index.set(key, item);
+    if (key === '') { malformed = true; continue; }
+    if (index.has(key)) { malformed = true; continue; }
+    index.set(key, item);
   }
-  return index;
+  return { index, malformed };
 }
 
 export function mergeKeyedList<T>(args: {
@@ -67,16 +85,21 @@ export function mergeKeyedList<T>(args: {
   spec: KeyedMergeSpec<T>;
 }): KeyedMergeResult<T> {
   const { spec } = args;
-  const localIndex = indexByKey(args.local, spec.keyOf);
-  const remoteIndex = indexByKey(args.remote, spec.keyOf);
-  const ancestorIndex = indexByKey(args.ancestor, spec.keyOf);
+  const localIdx = indexByKey(args.local, spec.keyOf);
+  const remoteIdx = indexByKey(args.remote, spec.keyOf);
+  const ancestorIdx = indexByKey(args.ancestor, spec.keyOf);
+  if (localIdx.malformed || remoteIdx.malformed || ancestorIdx.malformed) {
+    return { merged: [], conflicts: [], mergePoints: 0, malformed: true };
+  }
+  const { index: localIndex } = localIdx;
+  const { index: remoteIndex } = remoteIdx;
+  const { index: ancestorIndex } = ancestorIdx;
 
   const order: string[] = [...localIndex.keys()];
   for (const key of remoteIndex.keys()) if (!localIndex.has(key)) order.push(key);
 
   const merged: T[] = [];
   const conflicts: MergeConflict[] = [];
-  const keptAgainstDelete: string[] = [];
   let mergePoints = 0;
 
   for (const key of order) {
@@ -91,7 +114,8 @@ export function mergeKeyedList<T>(args: {
 
     if (l !== undefined && spec.keepLocal?.(l) === true) {
       merged.push(l);
-      if (identity(l) !== identity(r)) mergePoints += 1;
+      // 只有真的采纳了远端内容才算一个合并点（远端根本没这条时不算，复审 P2-3）
+      if (r !== undefined && identity(l) !== identity(r)) mergePoints += 1;
       continue;
     }
     if (l !== undefined && r !== undefined) {
@@ -99,7 +123,7 @@ export function mergeKeyedList<T>(args: {
       if (li === ri) { merged.push(l); continue; }
       if (a === undefined) { conflict('both-modified'); continue; }
       const ai = identity(a);
-      if (li === ai) { merged.push(r); mergePoints += 1; continue; }
+      if (li === ai) { merged.push(spec.compose?.(l, r) ?? r); mergePoints += 1; continue; }
       if (ri === ai) { merged.push(l); mergePoints += 1; continue; }
       conflict('both-modified');
       continue;
@@ -109,7 +133,6 @@ export function mergeKeyedList<T>(args: {
       if (identity(l) !== identity(a)) { conflict('modify-delete'); continue; } // 本机改过 → 交人工
       if (spec.followDelete) { mergePoints += 1; continue; } // 跟随远端删除
       merged.push(l);
-      keptAgainstDelete.push(key);
       continue;
     }
     if (r !== undefined) {
@@ -118,5 +141,5 @@ export function mergeKeyedList<T>(args: {
       mergePoints += 1; // 远端未改，本机删过它 → 跟随本机删除
     }
   }
-  return { merged, conflicts, mergePoints, keptAgainstDelete };
+  return { merged, conflicts, mergePoints, malformed: false };
 }

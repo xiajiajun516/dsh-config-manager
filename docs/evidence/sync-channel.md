@@ -605,6 +605,15 @@ FAIL `同步引擎必须在 endpoint 处理函数内构造: sync.ts:106`；当�
 
 **守卫（一条一个测试，已全部落地）**：A 卸载 → B 删除 / B 新装不删 / B 改版不删且报冲突 / 开关关不删且逐项 warning / 开关开 → 手动与自动都删且落 undo + 报告列明 / `bundlesOnly` 与本插件自身不删 / 祖先缺失不删 / 删除失败逐项 warning 不阻断 / `desktop` 档案被拒记 warning 不阻断 / 回滚能重装被删插件 —— 覆盖在 `src/sync/plugin-removals.test.ts`（判据 16 例）、`src/sync/sync-engine.test.ts`（引擎行为 6 例 + 单通道源码守卫）、`src/core/restore-plugin-install.test.ts`（undo 三例）、`src/sync/sync-selection.test.ts`（开关持久化）。
 
+**复审修正（2026-11-15，同一轮实现内，报告者 review 后）**：
+
+- **合并必须收敛**：`pnpmWorkspace` 的 `null` 是合法值（adapter 没有 patch 组时就导出 `null`），三方合并后按原始形态写回（`wsCarried = 'pnpmWorkspace' in l || 'pnpmWorkspace' in r`，只有「两侧都没这个键」才删键）。原实现三侧 `null` 一律删键 ⇒ 合并结果与两侧散列都不等 ⇒ 每轮 `decision:'merge'`、永不收敛。
+- **本机启停不被远端版本覆盖**：`plugins` 的按键合并带 `compose`（`{ ...remote, enabled: local.enabled }`）—— 「本机没改过这一条」才走采纳远端的分支，版本/来源听远端，启停这种本机 UI 态恒留本机。
+- **开关只管插件清单**：`patch` / `localTarballs` / `patchFiles` 的 `followDelete` 恒 `false`；`deletePlugins` 的语义是「远端删了插件」，不是「远端删了 MCP 配置」。
+- **畸形形状退回通用路径**：`KeyedMergeResult.malformed`（同键重复 / 空键 / 非对象条目）任一命中 → `mergePluginsSection` 返回 `undefined`，绝不「留一条丢一条」。
+- **可维护性**：patch 冲突路径带行号 `patch.<file>#<lineId>`（同文件两行可分辨）；合并基底改 `{ ...r, ...l }`（远端独有的将来字段不被本机形状吞掉）；`keepLocal` 命中只在本机与远端确实不同时计合并点；删掉无人读取的 `keptAgainstDelete`（信息已由 `planPluginRemovals` 的 `switch-off` 项承担）。
+- 守卫：`node --test src/sync/merge-keyed.test.ts src/sync/plugin-removals.test.ts` → 46 pass / 0 fail；`node --test src/sync/*.test.ts tests/sync-merge/*.test.ts` → 694 pass。
+
 ## 脱敏剥空的 patch 行值会静默覆盖本机明文（issue #136，2026-11-13 修复）
 
 **事故机理（复现脚本在主检出 `.tmp/repro-136.ts`，未提交）**：

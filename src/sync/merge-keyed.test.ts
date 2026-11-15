@@ -55,14 +55,13 @@ test('mergeKeyedList: 无祖先时本机独有保留、远端独有采纳；两�
 test('mergeKeyedList: followDelete=true → 本机未改且远端删了，跟随删除', () => {
   const res = mergeKeyedList({ local: [item('a', '1')], remote: [], ancestor: [item('a', '1')], spec });
   assert.deepEqual(res.merged, []);
-  assert.deepEqual(res.keptAgainstDelete, []);
   assert.equal(res.mergePoints, 1);
 });
 
-test('mergeKeyedList: followDelete=false → 远端删了也保留本机，并记进 keptAgainstDelete', () => {
+test('mergeKeyedList: followDelete=false → 远端删了也保留本机，且不计合并点', () => {
   const res = mergeKeyedList({ local: [item('a', '1')], remote: [], ancestor: [item('a', '1')], spec: { ...spec, followDelete: false } });
   assert.deepEqual(res.merged, [item('a', '1')]);
-  assert.deepEqual(res.keptAgainstDelete, ['a']);
+  assert.equal(res.mergePoints, 0);
   assert.deepEqual(res.conflicts, []);
 });
 
@@ -105,8 +104,32 @@ test('mergeKeyedList: keepLocal 命中的条目以本机为准 —— 既不被�
   assert.deepEqual(changed.conflicts, []);
 });
 
-test('mergeKeyedList: 空键的条目跳过（没有身份的条目绝不按位置对齐）', () => {
+test('mergeKeyedList: 空键的条目让整轮退回通用路径（malformed，不按位置对齐）', () => {
   const res = mergeKeyedList({ local: [item('', '1')], remote: [item('', '2')], ancestor: undefined, spec });
   assert.deepEqual(res.merged, []);
   assert.deepEqual(res.conflicts, []);
+  assert.equal(res.malformed, true, '没有身份键 = 形状不支持按键合并');
+});
+
+test('mergeKeyedList: 同键重复 → malformed（绝不「留一条丢一条」，复审 P1-2）', () => {
+  const res = mergeKeyedList({ local: [item('a', '1'), item('a', '2')], remote: [item('a', '1')], ancestor: undefined, spec });
+  assert.equal(res.malformed, true);
+  assert.deepEqual(res.merged, []);
+});
+
+test('mergeKeyedList: 非对象条目 → malformed（畸形数据交回通用路径）', () => {
+  const res = mergeKeyedList<Item>({ local: [null as unknown as Item], remote: [], ancestor: undefined, spec });
+  assert.equal(res.malformed, true);
+});
+
+test('mergeKeyedList: 采纳远端时 compose 合成（本机态字段留在本机，复审 P0-2）', () => {
+  const composed = { ...spec, compose: (l: Item, r: Item) => ({ key: r.key, value: r.value + '/keep:' + l.value }) };
+  const res = mergeKeyedList({ local: [item('a', '1')], remote: [item('a', '2')], ancestor: [item('a', '1')], spec: composed });
+  assert.deepEqual(res.merged, [item('a', '2/keep:1')]);
+});
+
+test('mergeKeyedList: keepLocal 只在本机独有时不计合并点（复审 P2-3）', () => {
+  const keep = { ...spec, keepLocal: (i: Item) => i.key === 'self' };
+  const res = mergeKeyedList({ local: [item('self', '1')], remote: [], ancestor: undefined, spec: keep });
+  assert.equal(res.mergePoints, 0);
 });
