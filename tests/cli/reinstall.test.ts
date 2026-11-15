@@ -389,3 +389,19 @@ test('F29: runExternalIntent 暴露 operationId 给 fn（供 recovery point 绑�
   const j = await recovery.store.load(operationId);
   assert.equal(j?.state, 'COMMITTED');
 });
+
+test('R-CLI reinstall 非交互终端默认拒绝不挂起，--dry-run 仍可直接预览', async () => {
+  if (process.stdin.isTTY) return; // test worker 下通常非 TTY；如为真 TTY 环境则跳过本断言
+  const errLines: string[] = [];
+  const outLines: string[] = [];
+  const io = { log: (s: string) => { outLines.push(s); }, error: (s: string) => { errLines.push(s); } };
+  const fakeExec = async () => '0.1.0-rc.6';
+  const refused = await runCli(['reinstall'], io, { DSH_HOME: '/home' }, { exec: fakeExec, platform: 'linux' });
+  assert.equal(refused, 1, '非 TTY 未传 --yes 必须拒绝执行');
+  assert.match(errLines.join('\n'), /非交互.*默认拒绝/);
+  assert.match(errLines.join('\n'), /--yes/);
+
+  const preview = await runCli(['reinstall', '--dry-run'], io, { DSH_HOME: '/home' }, { exec: fakeExec, platform: 'linux' });
+  assert.equal(preview, 0, '非 TTY 下 --dry-run 不依赖交互确认，直接输出计划');
+  assert.match(outLines.join('\n'), /重装计划/);
+});

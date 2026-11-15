@@ -174,24 +174,18 @@ const WEB_REJECTED_FLAGS = new Set([
   '--wipe-config', '--version', '--json', '--fix',
 ]);
 
-/** recover-stale-lock 专用解析：只接受 --data-dir（用于定位 locks 目录），返回 dataDir 选项 */
+/** recover-stale-lock 专用解析：接受 --data-dir / --data-root（用于定位 locks 目录） */
 function parseCliDataDir(argv: readonly string[]): ParseResult {
   const options: CliOptions = { command: 'recover-stale-lock', dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false, json: false, positionals: [] };
   for (let i = 1; i < argv.length; i += 1) {
     const flag = argv[i]!;
-    if (flag === '--help' || flag === '-h') {
-      return { ok: true, options: { ...options, command: 'help', helpTopic: 'recover-stale-lock' } };
-    }
-    if (flag === '--data-dir') {
-      const value = argv[i + 1];
-      if (value === undefined || value === '' || value.startsWith('-')) {
-        return { ok: false, error: '参数 --data-dir 缺少值 / missing value for --data-dir' };
-      }
-      options.dataDir = value;
-      i += 1;
-    } else if (flag.startsWith('--data-dir=')) {
-      options.dataDir = flag.slice('--data-dir='.length);
-      if (options.dataDir === '') return { ok: false, error: '参数 --data-dir 缺少值 / missing value for --data-dir' };
+    if (flag === '--help' || flag === '-h') return { ok: true, options: { ...options, command: 'help', helpTopic: 'recover-stale-lock' } };
+    const at = flag.indexOf('=');
+    const name = at >= 0 ? flag.slice(0, at) : flag;
+    if (name === '--data-dir' || name === '--data-root') {
+      const value = at >= 0 ? flag.slice(at + 1) : argv[++i];
+      if (value === undefined || value === '' || value.startsWith('-')) return { ok: false, error: `参数 ${name} 缺少值 / missing value for ${name}` };
+      if (name === '--data-dir') options.dataDir = value; else options.dataRoot = value;
     } else {
       return { ok: false, error: `未知参数 / unknown flag: ${flag}` };
     }
@@ -199,19 +193,9 @@ function parseCliDataDir(argv: readonly string[]): ParseResult {
   return { ok: true, options };
 }
 
-/*
- * 「本机有没有 DSH 在跑」的判据已抽到 src/cli/actions.ts 的 readRunningInstances
- * （救急台网页与 sessions repair 的安全门共用同一实现；旧实现把快照目录当 dataDir 用，
- * 缺省路径下找不到心跳 → 门形同虚设，已一并修正）。
- */
+/* 「本机有没有 DSH 在跑」的判据已抽到 src/cli/actions.ts 的 readRunningInstances */
 
-
-
-/**
- * sessions 专用解析：sessions repair [--home <dir>] [--fix] [--keep <dir>] [--map old=new]... [--json]
- *
- * 与 recover-stale-lock 同样的姿态：独立解析器，只接受本动作真正有意义的参数（绝不悄悄忽略）。
- */
+/** sessions 专用解析：sessions list|doctor|repair [--home <dir>] [--data-dir <dir>] [--data-root <dir>] [--fix] [--keep <dir>] [--map old=new]... [--json] */
 function parseCliSessions(argv: readonly string[]): ParseResult {
   const options: CliOptions = {
     command: 'sessions', dryRun: false, profile: 'web', yes: false, list: false,
@@ -219,41 +203,26 @@ function parseCliSessions(argv: readonly string[]): ParseResult {
   };
   const rest = argv.slice(1);
   const action = rest[0];
-  if (action === undefined) return { ok: false, error: 'sessions 需要子动作 / missing action: sessions repair' };
-  if (action === '--help' || action === '-h') {
-    return { ok: true, options: { ...options, command: 'help', helpTopic: 'sessions' } };
-  }
-  // T6：三个只读/安全动作 —— list（列出会话）/ doctor（体检）/ repair（预览或 --fix 执行）
+  if (action === undefined) return { ok: false, error: 'sessions 需要子动作（list / doctor / repair）/ missing action' };
+  if (action === '--help' || action === '-h') return { ok: true, options: { ...options, command: 'help', helpTopic: 'sessions' } };
   if (action !== 'repair' && action !== 'list' && action !== 'doctor') {
     return { ok: false, error: 'sessions 只支持 list / doctor / repair / unsupported action: ' + action };
   }
   options.positionals.push(action);
   for (let i = 1; i < rest.length; i += 1) {
     const flag = rest[i]!;
-    if (flag === '--help' || flag === '-h') {
-      return { ok: true, options: { ...options, command: 'help', helpTopic: 'sessions' } };
-    }
-    if (flag === '--fix') { options.fix = true; continue; }
-    if (flag === '--apply') { options.fix = true; continue; }  // --apply 是 --fix 的可读别名（T6）
+    if (flag === '--help' || flag === '-h') return { ok: true, options: { ...options, command: 'help', helpTopic: 'sessions' } };
+    if (flag === '--fix' || flag === '--apply') { options.fix = true; continue; }
     if (flag === '--json') { options.json = true; continue; }
-    if (flag === '--home' || flag === '--keep' || flag === '--map') {
-      const value = rest[i + 1];
-      if (value === undefined || value === '' || value.startsWith('-')) {
-        return { ok: false, error: '参数 ' + flag + ' 缺少值 / missing value for ' + flag };
-      }
-      if (flag === '--home') options.home = value;
-      else if (flag === '--keep') options.keep = value;
-      else options.maps!.push(value);
-      i += 1;
-      continue;
-    }
-    if (flag.startsWith('--home=') || flag.startsWith('--keep=') || flag.startsWith('--map=')) {
-      const at = flag.indexOf('=');
-      const name = flag.slice(0, at);
-      const value = flag.slice(at + 1);
-      if (value === '') return { ok: false, error: '参数 ' + name + ' 缺少值 / missing value for ' + name };
+    const at = flag.indexOf('=');
+    const name = at >= 0 ? flag.slice(0, at) : flag;
+    if (name === '--home' || name === '--keep' || name === '--map' || name === '--data-dir' || name === '--data-root') {
+      const value = at >= 0 ? flag.slice(at + 1) : rest[++i];
+      if (value === undefined || value === '' || value.startsWith('-')) return { ok: false, error: '参数 ' + name + ' 缺少值 / missing value for ' + name };
       if (name === '--home') options.home = value;
       else if (name === '--keep') options.keep = value;
+      else if (name === '--data-dir') options.dataDir = value;
+      else if (name === '--data-root') options.dataRoot = value;
       else options.maps!.push(value);
       continue;
     }
@@ -262,13 +231,7 @@ function parseCliSessions(argv: readonly string[]): ParseResult {
   return { ok: true, options };
 }
 
-/**
- * import 专用解析：`import --from <source> [--dry-run] [--out <path>] [--cwd <dir>] [--data-dir <dir>]`
- *
- * 与 sessions / recover-stale-lock 同样的姿态：只接受本动作真正有意义的参数（绝不悄悄忽略）。
- * `--from` 的值在这里**不做词表校验**：未知来源要由运行层给出「可用来源清单」——
- * 那需要真实注册表（CLI 与宿主共用同一份装配，见 src/foreign/registry.ts）。
- */
+/** import 专用解析：import --from <source> [--dry-run] [--out <path>] [--cwd <dir>] [--data-dir <dir>] */
 function parseCliImport(argv: readonly string[]): ParseResult {
   const options: CliOptions = {
     command: 'import', dryRun: false, profile: 'web', yes: false, list: false,
@@ -278,23 +241,18 @@ function parseCliImport(argv: readonly string[]): ParseResult {
   for (let i = 0; i < rest.length; i += 1) {
     const flag = rest[i]!;
     if (flag === '--help' || flag === '-h') return { ok: true, options: { ...options, command: 'help', helpTopic: 'import' } };
-    if (flag === '--dry-run') {
-      options.dryRun = true;
-      continue;
-    }
+    if (flag === '--dry-run') { options.dryRun = true; continue; }
     const at = flag.indexOf('=');
     const name = at >= 0 ? flag.slice(0, at) : flag;
-    const isValueFlag = name === '--from' || name === '--cwd' || name === '--out' || name === '--data-dir';
+    const isValueFlag = name === '--from' || name === '--cwd' || name === '--out' || name === '--data-dir' || name === '--data-root';
     if (isValueFlag) {
-      const value = at >= 0 ? flag.slice(at + 1) : rest[i + 1];
-      if (value === undefined || value === '' || value.startsWith('-')) {
-        return { ok: false, error: '参数 ' + name + ' 缺少值 / missing value for ' + name };
-      }
+      const value = at >= 0 ? flag.slice(at + 1) : rest[++i];
+      if (value === undefined || value === '' || value.startsWith('-')) return { ok: false, error: '参数 ' + name + ' 缺少值 / missing value for ' + name };
       if (name === '--from') options.from = value;
       else if (name === '--cwd') options.cwd = value;
       else if (name === '--out') options.out = value;
+      else if (name === '--data-root') options.dataRoot = value;
       else options.dataDir = value;
-      if (at < 0) i += 1;
       continue;
     }
     return { ok: false, error: '未知参数 / unknown flag: ' + flag };
@@ -334,8 +292,18 @@ export function parseCli(argv: readonly string[]): ParseResult {  const command 
 
   const options: CliOptions = { command, dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false, json: false, positionals: [] };
   const rest = argv.slice(1);
+  const takeValue = (flagName: string, idx: number, inline: string | undefined): { ok: true; value: string; nextIdx: number } | { ok: false; error: string } => {
+    const val = inline ?? rest[idx + 1];
+    if (val === undefined || val === '' || (inline === undefined && val.startsWith('-'))) {
+      return { ok: false, error: `参数 ${flagName} 缺少值 / missing value for ${flagName}` };
+    }
+    return { ok: true, value: val, nextIdx: inline === undefined ? idx + 1 : idx };
+  };
   for (let i = 0; i < rest.length; i += 1) {
-    const flag = rest[i]!;
+    const rawFlag = rest[i]!;
+    const eq = rawFlag.startsWith('-') ? rawFlag.indexOf('=') : -1;
+    const flag = eq > 0 ? rawFlag.slice(0, eq) : rawFlag;
+    const inline = eq > 0 ? rawFlag.slice(eq + 1) : undefined;
     if (flag === '--help' || flag === '-h') {
       return { ok: true, options: { ...options, command: 'help', helpTopic: command } };
     }
@@ -389,26 +357,22 @@ export function parseCli(argv: readonly string[]): ParseResult {  const command 
       if (command !== 'web') {
         return { ok: false, error: `${command} 子命令不支持参数 / flag not allowed here: ${flag}` };
       }
-      const value = rest[i + 1];
-      if (value === undefined || value === '' || value.startsWith('-')) {
-        return { ok: false, error: '参数 --home 缺少值 / missing value for --home' };
-      }
-      options.home = value;
-      i += 1;
+      const v = takeValue('--home', i, inline);
+      if (!v.ok) return v;
+      options.home = v.value;
+      i = v.nextIdx;
       continue;
     }
     if (flag === '--port' || flag === '--idle-timeout') {
-      const value = rest[i + 1];
-      if (value === undefined || value === '' || value.startsWith('-')) {
-        return { ok: false, error: `参数 ${flag} 缺少值 / missing value for ${flag}` };
-      }
-      const parsed = Number(value);
+      const v = takeValue(flag, i, inline);
+      if (!v.ok) return v;
+      const parsed = Number(v.value);
       if (!Number.isInteger(parsed) || parsed < 0 || (flag === '--port' && parsed > 65535)) {
         return { ok: false, error: `参数 ${flag} 需要 0 以上的整数 / ${flag} expects a non-negative integer` };
       }
       if (flag === '--port') options.port = parsed;
       else options.idleTimeoutMin = parsed;
-      i += 1;
+      i = v.nextIdx;
       continue;
     }
     if (flag === '--dry-run') {
@@ -428,29 +392,25 @@ export function parseCli(argv: readonly string[]): ParseResult {  const command 
       continue;
     }
     if (flag === '--version') {
-      const value = rest[i + 1];
-      if (value === undefined || value === '' || value.startsWith('-')) {
-        return { ok: false, error: '参数 --version 缺少值 / missing value for --version' };
-      }
-      options.version = value;
-      i += 1;
+      const v = takeValue('--version', i, inline);
+      if (!v.ok) return v;
+      options.version = v.value;
+      i = v.nextIdx;
       continue;
     }
     const key = VALUE_FLAGS.get(flag);
     if (key === undefined) {
       return { ok: false, error: `未知参数 / unknown flag: ${flag}` };
     }
-    const value = rest[i + 1];
-    if (value === undefined || value === '' || value.startsWith('-')) {
-      return { ok: false, error: `参数 ${flag} 缺少值 / missing value for ${flag}` };
-    }
+    const v = takeValue(flag, i, inline);
+    if (!v.ok) return v;
     if (key === 'sections') {
       // 分区名提前校验：未知/离线不可用的分区一律在这里拒绝（不留到收集阶段才报）
-      const parsed = parseSectionsArg(value);
+      const parsed = parseSectionsArg(v.value);
       if (!parsed.ok) return { ok: false, error: parsed.error };
     }
-    options[key] = value;
-    i += 1;
+    options[key] = v.value;
+    i = v.nextIdx;
   }
   return { ok: true, options };
 }
@@ -740,10 +700,22 @@ function createDefaultExec(platform: NodeJS.Platform = process.platform): Exec {
 let defaultRl: ReturnType<typeof createInterface> | undefined;
 /** 缺省交互提问（懒建真实 readline；注入 ask 时不会创建）。 */
 async function defaultAsk(prompt: string): Promise<string> {
+  if (processStdin.readableEnded) {
+    throw new Error('CLI_STDIN_EOF');
+  }
   if (defaultRl === undefined) {
     defaultRl = createInterface({ input: processStdin, output: processStdout });
   }
-  return defaultRl.question(prompt);
+  try {
+    return await defaultRl.question(prompt);
+  } catch (err) {
+    const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
+    const msg = err instanceof Error ? err.message : String(err);
+    if (code === 'ERR_USE_AFTER_CLOSE' || msg.includes('readline was closed') || msg.includes('closed')) {
+      throw new Error('CLI_STDIN_EOF');
+    }
+    throw err;
+  }
 }
 function closeDefaultAsk(): void {
   if (defaultRl !== undefined) {
@@ -805,15 +777,34 @@ async function runReinstall(
         defaults.add('plugins');
         defaults.add('data');
       }
-      selection = await interactiveReinstallSelect(defaults, io, ask);
-      const hasDestructive = [...selection].some((id) =>
-        REINSTALL_ITEMS.find((it) => it.id === id)?.destructive === true,
-      );
-      if (hasDestructive || options.wipeConfig) {
-        io.log('⚠ 所选动作包含清除 ~/.dsh 数据的危险步骤（执行前会先做 .reinstall-backup 备份）。/ WARNING: destructive ~/.dsh actions selected');
-        if (!parseConfirmInput(await ask('输入 YES 确认继续 / type YES to continue> '))) {
-          io.log('已取消 / cancelled');
+      if (deps.ask === undefined && !processStdin.isTTY) {
+        if (options.dryRun) {
+          selection = defaults;
+        } else {
+          io.error('错误：reinstall 是破坏性操作，在非交互终端（stdin 非 TTY）下默认拒绝，不会挂起等待确认。');
+          io.error('下一步：先运行 `dcm reinstall --dry-run` 预览步骤；确认后再传 `--yes` 显式放行。');
           return 1;
+        }
+      } else {
+        try {
+          selection = await interactiveReinstallSelect(defaults, io, ask);
+          const hasDestructive = [...selection].some((id) =>
+            REINSTALL_ITEMS.find((it) => it.id === id)?.destructive === true,
+          );
+          if (hasDestructive || options.wipeConfig) {
+            io.log('⚠ 所选动作包含清除 ~/.dsh 数据的危险步骤（执行前会先做 .reinstall-backup 备份）。/ WARNING: destructive ~/.dsh actions selected');
+            if (!parseConfirmInput(await ask('输入 YES 确认继续 / type YES to continue> '))) {
+              io.log('已取消 / cancelled');
+              return 1;
+            }
+          }
+        } catch (err) {
+          if (err instanceof Error && err.message === 'CLI_STDIN_EOF') {
+            io.error('错误：标准输入已结束（EOF），无法读取交互确认，已取消执行。');
+            io.error('下一步：在交互终端运行，或用 `--dry-run` 预览 / `--yes` 非交互执行。');
+            return 1;
+          }
+          throw err;
         }
       }
     }
@@ -948,8 +939,14 @@ export async function runCli(
 ): Promise<number> {
   const parsed = parseCli(argv);
   if (!parsed.ok) {
-    io.error(parsed.error);
-    printUsage(io);
+    io.error(`错误：${parsed.error}`);
+    const subcmd = argv[0];
+    if (subcmd !== undefined && !subcmd.startsWith('-') && renderCommandHelp(subcmd, CLI_EXPORTER_VERSION) !== null) {
+      io.error(`下一步：运行 \`dcm ${subcmd} --help\` 查看该命令的参数与示例。`);
+    } else {
+      io.error('下一步：运行 `dcm --help` 查看可用命令与示例。');
+      printUsage(io);
+    }
     return 1;
   }
   const { options } = parsed;
@@ -1472,7 +1469,8 @@ if (isDirectRun) {
       process.exitCode = code;
     })
     .catch((err) => {
-      console.error(`dsh-config-manager 执行失败 / failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`错误：dsh-config-manager 执行失败（${err instanceof Error ? err.message : String(err)}）。`);
+      console.error('下一步：检查输入参数、路径权限或运行 `dcm --help` 查看正确用法。');
       process.exitCode = 1;
     });
 }

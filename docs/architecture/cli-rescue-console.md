@@ -1,88 +1,78 @@
-# 离线救急台的设计系统（IBM Carbon + Raycast，2026-10）
+# 离线救急台的设计系统（自研阶梯色板 + Carbon/Raycast 保留规范，2026-11）
 
-`dcm web`（离线救急台）是唯一不挂在 DSH GUI 内的界面：服务端直出 HTML、零脚本、零外链、零构建，
-样式全部内联在 `src/cli/web/page.ts` 的 `STYLE` 常量里，CSP 是 `default-src 'none'`。
-因此它**不消费 `--dsw-*` token、也不进 CSS Modules**（见 `DESIGN.md` §4 的救急台条目）。
+`dcm web`（离线救急台）是唯一不挂在 DSH GUI 内的界面：服务端直出 HTML、内联脚本、零外链、零构建，
+样式全部内联在 `src/cli/web/page.ts` 的 `STYLE` 常量里，CSP 是 `default-src 'none'`（内联脚本按 `sha256` 放行）。
+因此它**不消费 `--dsw-*` token、也不进 CSS Modules**（见 `DESIGN.md` §14 救急台条目）。
 
 本文是该界面的**设计系统出处与映射表**：改了 `STYLE` 必须先改这里，反之亦然。
 
 ## 1. 出处与只取哪些章节
 
-| 用途 | 出处 | 取了什么 |
+| 用途 | 出处 | 取了什么 / 为何保留 |
 |---|---|---|
-| 亮色主体 | `reference/ibm-DESIGN.md`（IBM Carbon 分析） | §2 Colors（语义四色 / surface 画布 / hairline）、§3 Typography 的 12–18px 档、§4 Components 的 Buttons / Inputs & Forms / Cards、§5 Spacing System 的 4–48 阶、§7 Do's and Don'ts |
-| 暗色 | `reference/raycast-DESIGN.md` | `canvas #07080a → surface #0d0d0d → surface-card #121212` 的 surface 阶梯、`hairline #242728`、`accent-blue/green/yellow/red` 四个语义 accent |
+| 阶梯底色与双主题语义色 | 自研 AA 阶梯色板（2026-11，Linear/Raycast 式 3 阶中性灰 + 高饱和 Indigo 主色 + WCAG AA 四态语义色） | 取代旧版零差值 `--bg`/`--surface` 与过暗黑底；实测对比度全项 ≥ 5.3:1 |
+| 表单字段、按钮尺寸与焦点规范（保留旧 Carbon） | `reference/ibm-DESIGN.md` §3–§4 & §7 | **逐条保留理由**：① 全局 `:focus-visible` 2px `--accent` 描边与输入框 `-2px` 内嵌聚焦（键盘无障碍基线）；② 主按钮 40px 高度 `md` 触控区；③ 无框表面填充 + 底线输入框；④ 句首自然写法表头与 `tabular-nums` 数字列；⑤ 系统字体栈 |
+| 明暗两套三阶阶梯逻辑（保留旧 Raycast 思路） | `reference/raycast-DESIGN.md` | **保留理由**：背景 → 卡片 → 填充面三阶逐级拉开，减少边框分割依赖；配合 `1px hairline`（仅页头与表行保留） |
 
-两份原文件按 MIT 逐字保存（只读参考，**不得当作可执行规范直接照抄**——它们是营销页面分析，含大量本页用不到的 hero / 摄影 / display 排版）。
+两份旧参照文件只保留上述可用组件纪律；**明确弃用**：Carbon 的「全直角 `border-radius:0` 处方角」（本轮改为 `8px` 卡片 / `6px` 控件）、`#f4f4f4` 同值双面色与满屏卡片 1px 外框。
 
-**明确不取**：IBM 的 display 档（42–76px 轻字重）、页脚反色块、摄影几何；Raycast 的红色渐条 hero、Inter 的 ss03 字型特性；
-两者的 `spacing.section`（88–96px 营销节奏）；任何自定义字体（`@font-face` 会被 CSP 与「零外链」承诺同时否掉）。
+## 2. 亮色 token（实测对比度对 `--card #ffffff`）
 
-## 2. 亮色 token（IBM Carbon 语义）
-
-| token | 值 | Carbon 出处 | 对比度（对底色） |
+| token | 值 | 用途 / 出处 | 对比度 |
 |---|---|---|---|
-| `--fg` | `#161616` | `ink` | 18.10:1 on `--card` |
-| `--muted` | `#525252` | `ink-muted` | 7.81:1 on `--card` |
-| `--bg` | `#f4f4f4` | `surface-1` | 页面底 |
-| `--card` | `#fff` | `canvas` | 卡片面 |
-| `--surface` | `#f4f4f4` | `surface-1` | 填充：chip / 表单字段 / `.consequence` / 骨架 |
-| `--line` | `#e0e0e0` | `hairline` | 1px 分隔 |
-| `--accent` | `#0f62fe` | `primary`（IBM Blue） | 5.00:1 |
-| `--accent-hover` | `#0043ce` | blue-70（Carbon 的 pressed 档） | 7.79:1 |
-| `--on-accent` | `#fff` | `on-primary` | 5.00:1 on `--accent` |
-| `--ok` | `#198038` | green-60（**不是** `semantic-success` #24a148） | 5.02:1 |
-| `--warn` | `#8e6a00` | yellow-60 加深（**不是** `semantic-warning` #f1c21b） | 4.99:1 |
-| `--bad` | `#da1e28` | `semantic-error` / red-60 | 5.00:1 |
-| `--scrim` | `rgba(22,22,22,.45)` | 自定 | 弹窗遮罩 |
+| `--fg` | `#111318` | 主正文（自研中性碳黑） | **18.58:1** on `--card` |
+| `--muted` | `#5a606b` | 次要文案 / 表头 / 路径元数据 | **6.32:1** on `--card` |
+| `--bg` | `#f7f7f9` | 页面画布（L = 0.9314） | 页面底 |
+| `--card` | `#ffffff` | 卡片主面（L = 1.0000，无需边框即可与 `--bg` 拉开） | 卡片面 |
+| `--surface` | `#eef0f4` | 卡片内次级填充面（L = 0.8703：指标格 / 后果块 / 输入框 / 骨架） | 次级面 |
+| `--line` | `#e3e5ea` | 极细分隔与次要按钮描边 | 页头 / 表行 |
+| `--accent` | `#4b58e0` | 唯一主操作 Indigo | **5.57:1** on `--card` |
+| `--accent-hover` | `#3a46c9` | 主色悬停态 | **7.24:1** on `--card` |
+| `--on-accent` | `#ffffff` | 主按钮文字 | **5.57:1** on `--accent` / **7.24:1** on hover |
+| `--ok` | `#157a53` | 成功 / 可启动语义 | **5.33:1** on `--card` |
+| `--warn` | `#8a5d00` | 警告 / 待排查语义 | **5.76:1** on `--card` |
+| `--bad` | `#c72a34` | 错误 / 危险语义 | **5.51:1** on `--card` |
+| `--scrim` | `rgba(15,17,22,.42)` | 弹窗遮罩与浮层投影 | 遮罩 / 导航下拉 |
+| `--radius` | `8px` | 卡片、横幅、弹窗、折叠面板圆角（只在亮色 `:root` 定义） | — |
+| `--radius-sm` | `6px` | 按钮、输入框、标签胶囊、导航项、三段流胶囊圆角（只在亮色 `:root`） | — |
 
-## 3. 暗色 token（Raycast 阶梯）
+## 3. 暗色 token（实测对比度对 `--card #101114`）
 
-| token | 值 | Raycast 出处 | 对比度（对底色） |
+| token | 值 | 用途 / 出处 | 对比度 |
 |---|---|---|---|
-| `--fg` | `#f4f4f6` | `ink` | 17.69:1 on `--card` |
-| `--muted` | `#9c9c9d` | `mute` | 7.09:1 on `--card` |
-| `--bg` | `#07080a` | `canvas` | 页面底 |
-| `--card` | `#0d0d0d` | `surface` | 卡片面 |
-| `--surface` | `#121212` | `surface-card` | 填充 |
-| `--line` | `#242728` | `hairline` | 1px 分隔 |
-| `--accent` | `#57c1ff` | `accent-blue` | 9.70:1 |
-| `--accent-hover` | `#8ad3ff` | 由 `accent-blue` 提亮 | 11.89:1 on `--card` |
-| `--on-accent` | `#0a0a0a` | 极性反转 | 9.70:1 on `--accent` |
-| `--ok` | `#59d499` | `accent-green` | 10.46:1 |
-| `--warn` | `#ffc533` | `accent-yellow` | 12.30:1 |
-| `--bad` | `#ff6161` | `accent-red` | 6.60:1 |
-| `--scrim` | `rgba(0,0,0,.6)` | 自定 | 弹窗遮罩 |
+| `--fg` | `#f0f1f4` | 主正文 | **16.72:1** on `--card` |
+| `--muted` | `#8d929c` | 次要文案 / 元数据 | **6.05:1** on `--card` |
+| `--bg` | `#08090b` | 页面画布（L = 0.0027） | 页面底 |
+| `--card` | `#101114` | 卡片主面（L = 0.0056） | 卡片面 |
+| `--surface` | `#17181c` | 卡片内次级填充面（L = 0.0092） | 次级面 |
+| `--line` | `#23252b` | 极细分隔与次要按钮描边 | 页头 / 表行 |
+| `--accent` | `#7b88ff` | 主色提亮版 | **6.12:1** on `--card` |
+| `--accent-hover` | `#96a0ff` | 主色悬停态 | **7.88:1** on `--card` |
+| `--on-accent` | `#0a0b12` | 主按钮反色文字 | **6.37:1** on `--accent` / **8.20:1** on hover |
+| `--ok` | `#4ed6a4` | 成功 / 可启动语义 | **10.32:1** on `--card` |
+| `--warn` | `#f0bf6a` | 警告 / 待排查语义 | **11.12:1** on `--card` |
+| `--bad` | `#ff7b7b` | 错误 / 危险语义 | **7.53:1** on `--card` |
+| `--scrim` | `rgba(0,0,0,.62)` | 弹窗遮罩与浮层投影 | 遮罩 / 导航下拉 |
 
-亮/暗 **颜色 token 名完全一致**（只换值），所以 `STYLE` 里只写一套规则、靠 `prefers-color-scheme` 换值；
-`--font` / `--mono` 是两套共用的字体栈，**只在亮色块里定义一次**（暗色不重复）。
-R3-02 断言的就是这条：亮色是 token 全集、暗色不得定义亮色没有的名字、且 13 个颜色 token 必须逐个覆盖，
-每个 `var(--x)` 都要有定义。
+亮/暗 **13 个颜色 token 名完全一致**（只换值），`--font` / `--mono` / `--radius` / `--radius-sm` **只在亮色 `:root` 定义一次**（暗色不重复，满足 `R3-02`「暗色不得定义亮色没有的 token」）。
+R3-02 同时校验两个暗色块（`@media (prefers-color-scheme:dark)` 与 `:root[data-theme="dark"]`）逐字相同，且全表对均 ≥ 4.5:1 AA。
 
-## 4. 排版与间距标尺
+## 4. 排版、间距标尺与降噪规则
 
-- **正文 14px / 行高 1.6 / `letter-spacing:.16px`**：字号与字距来自 Carbon（`body-sm` + Carbon 的 0.16px 精度细节），
-  但**行高按 1.6 上调** —— Carbon 的 1.29 是给拉丁文的，中文会挤在一起。
-- 分区标题 `h2` 16px/600；品牌 18px/600；caption 档（`.sub`/`.kv`/`.chip`/`.gatePath`/`th`）12px；行内 `code` 用 `.9em` 跟随上下文。
-- 表格：`th` 12px/600/`letter-spacing:.32px`（**句首大写、不做全大写** —— Carbon 的 do/don't），`td` 14px；数字列 `tabular-nums`。
-- 按钮：14px/600、高 **40px**（Carbon 的 md 档）、`padding:0 16px`。
-- 间距只用 Carbon 阶 **4 / 8 / 12 / 16 / 24 / 32 / 48**：卡片内边距 16、块间距 24、`main` 24、网格 gap `8×24`（`.grid`）与 16（`.actions`）。
-- **处方角**：全表无 `border-radius`（Carbon 的「半径为 0 才是品牌」），胶囊 chip / `.cov` 一并改方。
-- **层级只用 surface 变化 + 1px hairline，无阴影**（Carbon）。
-- **焦点可见**：全局 `:focus-visible` 2px `--accent` 描边；表单字段用 `outline-offset:-2px` 内嵌（Carbon 的输入框聚焦形态）。
-- 字体：`--font` 是系统栈 + 中文族（`PingFang SC` / `Hiragino Sans GB` / `Microsoft YaHei` / `Noto Sans SC`），`--mono` 是系统等宽栈。
-  IBM 的 §Note on Font Substitutes 允许替换字族；本页**不允许任何外链**，所以只继承字号阶 / 字重 / 字距，不继承字族。
+- **4 档字号（行高 1.5–1.55）**：`20px`（品牌 / 首屏启动结论）、`15px`（`h2` / 动作标题 / 横幅标题）、`13px`（正文 / 表格 / 表单 / 按钮 / 副作用说明）、`12px`（次要信息 `.sub`/`.kv`/`th`/`footer`/`.monoMeta`/`code` 降为辅助灰色）。
+- **6 档统一间距**：全部 `margin`/`padding`/`gap` 取自 `4 / 8 / 12 / 16 / 24 / 32px`。
+- **双档圆角统一**：卡片、横幅、弹窗、折叠区统一 `var(--radius)`（`8px`）；按钮、输入框、导航项、三段流步、徽章统一 `var(--radius-sm)`（`6px`），零直角与圆角混排（仅 `.btnSpinner` 为 `50%` 圆形）。
+- **层次靠阶梯与留白，减少分隔线**：取消 `section.card`、`.actionCard`、`footer`、`.themeSwitch`、`.themeBtn`、`.skeletonCard` 的全部外框 `border`，纯分隔用途边框只保留 **`header.top` 底线**与**表格 `th,td` 行底线**两处；`.banner` 与 `.gateCard` 改用左侧内嵌 `box-shadow: inset 4px 0 0`。
+- **同屏唯一主色**：每屏至多 1 个 `.btnPrimary`，首页首屏第 1 建议动作使用 `.btnPrimary`，其余建议与多项目列表的后续操作一律降为 `.btnPlain` 或 `.btnDanger`。
+- **处境分组与首屏收束**：页头导航从平铺 8 项收成 3 个顶层组（`状态总览` / `救援动作` / `检查`，仍全部从 `CONSOLE_PAGE_NAV` 派生）；首页首屏只答「DSH 现在能不能起」+ 最多 3 张带「什么情况下点它」的建议动作卡，能力边界 / 快照备份 / 路径细节折入第二屏 `<details class="foldCard">`。
+- **操作三阶段与加载动效**：写操作页渲染 `① 预览与前置检查 → ② 显式确认 → ③ 执行结果` 步进条，结果页按 `ok`/`bad` 分色；表单提交注入 `.btnSpinner` + `执行中…`，页面切换走 CSS `@view-transition{navigation:auto}`，折叠展开 `180ms` 渐显；开 `prefers-reduced-motion: reduce` 时关停一切动画与位移；禁用 JS 时主题切换与复制按钮隐藏，`<details open>` 表单照常可提交。
+- **390px 窄屏响应**：`@media (max-width:480px)` 下收紧边距为 `16px`、下拉导航展开为静态块、表格允许横向滚动、输入框全宽不溢出。
 
 ## 5. 偏离记录（每条都要有理由）
 
-1. **危险按钮不用 Carbon 的实心红**（保留描边红 + 悬停 12% 红底）：救急台的破坏性按钮常与主操作成对出现（实例卡里的「启动 / 停止」），
-   双实心按钮会互相抢层级；而且红色在本页已被 `banner.bad` 与 `.sev` 占为**状态**语义，实心红会把「状态」和「动作」混为一谈。
-   整页本就危险的重装页已有 `banner bad` 起头，不需要按钮再喊一遍。
-2. **不受 Carbon「不要加粗标题」的约束**：那条针对 42px+ 的 display headline（Plex 300）。救急台不存在 display 排版，
-   `h2` 是 productive 层级的 16px/600，属 Carbon 的 body-emphasis 家族。
-3. **保留入场动画与骨架屏**（IBM 未定义动效）：这是本页既有的**无脚本渐进增强**（禁用 JS 时骨架层同样存在、2.4s 后由 CSS 自己隐藏），
-   属功能而非装饰。只删掉 active 态的 `translateY(1px)`（与扁平处方角不一致），并保留 `prefers-reduced-motion` 全局闸门。
-4. **`.chip` / `.cov` 从胶囊改方**：Carbon 明令禁止 pill，圆角也会破坏整页的处方角语言。
+1. **弃用 Carbon 零圆角与全卡片线框**：平铺 1px 灰框配合同值 `--bg`/`--surface` 会制造视觉栅格噪音（改前 `STYLE` 含 29 处 `border` 字符串）；改用明确三阶灰背景差 + `8px/6px` 圆角后，全表纯分隔 `border` 降至 2 处。
+2. **危险按钮保持描边红（`.btnDanger`）**：避免与主操作同屏双实心按钮抢层级，并保留实心红/背景淡红给 `.banner.bad` 状态警示。
+3. **保留渐进增强骨架与 CSS 过渡**：用无脚本 `.skeleton`（2.4s 自动退出，`prefers-reduced-motion` 下不渲染动画）与 CSS `@view-transition` / `.btnSpinner` 提供加载反馈，在满足零外链/零构建/无 JS 可用的同时不阻塞表单。
 
 ## 6. 顺手修掉的三个既有缺陷
 

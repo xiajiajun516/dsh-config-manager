@@ -1471,3 +1471,41 @@ test('cli-F7 //x 形态的请求目标不得被解析成首页', async () => {
   })
 })
 
+test('R4-01 页面结构重排、圆角 token、低边框与动效微反馈契约', async () => {
+  await withConsole(async (handle) => {
+    const { cookie } = await bootstrap(handle)
+    const home = await getPage(handle, cookie!, '/')
+    const restore = await getPage(handle, cookie!, '/restore')
+    const style = /<style>([\s\S]*?)<\/style>/.exec(home)?.[1] ?? ''
+    const darkBlock = /:root\[data-theme="dark"\]\{([^}]*)\}/.exec(style)?.[1] ?? ''
+
+    // 1) 圆角 token 只定义在亮色 :root，暗色块不得重复
+    assert.match(style, /--radius:8px/)
+    assert.match(style, /--radius-sm:6px/)
+    assert.doesNotMatch(darkBlock, /--radius/)
+
+    // 2) 分隔边框收敛（显著低于改造前 29 处：仅页头底线与表行底线作纯分隔）
+    const activeBorders = [...style.matchAll(/\b(?:border|border-top|border-bottom|border-left|border-right):([^;'}]+)/g)]
+      .filter((m) => !m[1]!.startsWith('0') && m[1] !== 'none')
+    assert.ok(activeBorders.length <= 10, '实际有效 border 声明应 ≤ 10，实际=' + String(activeBorders.length))
+
+    // 3) 处境分组导航（3 个顶层组 ≤ 5）且首页首屏只答「DSH 现在能不能起」+ <=3 张带触发条件的建议卡
+    const navHtml = /<nav class="sitNav"[\s\S]*?<\/nav>/.exec(home)?.[0] ?? ''
+    const topGroups = (navHtml.match(/class="navGroup"|href="\/"/g) ?? []).length
+    assert.equal(topGroups, 3, '顶层导航收拢为 状态/救援动作/检查 三组')
+    assert.match(home, /DSH 现在可以启动|DSH 正在运行|DSH 写动作受阻|DSH 可能被环境锁卡住|DSH 存在待排查状态/)
+    const homeActionCards = (home.match(/class="actionCard"/g) ?? []).length
+    assert.ok(homeActionCards >= 1 && homeActionCards <= 3, '首页首屏建议卡应 1–3 张，实际=' + String(homeActionCards))
+    assert.equal((home.match(/class="btnPrimary"/g) ?? []).length, 1, '首页首屏同屏仅允许 1 个主色按钮')
+    assert.match(home, /什么情况下点它/)
+
+    // 4) 能力边界与全部 8 入口进第二屏折叠区，写操作页带三段步进条，脚本含 spinner 与复制微反馈
+    assert.match(home, /data-dcm-persist="home-capability"/)
+    assert.match(home, /data-dcm-persist="home-all-actions"/)
+    assert.match(restore, /aria-label="操作三阶段"/)
+    const { CONSOLE_SCRIPT } = await import('./client-script.ts')
+    assert.match(CONSOLE_SCRIPT, /btnSpinner/)
+    assert.match(CONSOLE_SCRIPT, /已复制 ✓/)
+  })
+})
+

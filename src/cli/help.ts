@@ -69,11 +69,10 @@ export interface HelpGroup {
   readonly rows: readonly HelpRow[];
 }
 
-/** 通用选项（所有命令共有）——命令专属选项只出现在各自的详情页里 */
+/** 通用选项（所有命令共有）——范围仅限少数命令的参数（如 --home 仅用于 web/sessions）写在各自详情页 */
 export const GENERAL_OPTIONS: readonly HelpEntry[] = [
-  { flag: '--data-dir <dir>', desc: '快照 / 导出目录（缺省 $DSH_HOME/dsh-config-manager/snapshots）' },
+  { flag: '--data-dir <dir>', desc: '快照 / 导出 / 锁推导目录（缺省 $DSH_HOME/dsh-config-manager/<subdir>）' },
   { flag: '--data-root <dir>', desc: '插件数据根 dataDir（自定义时必须显式传；缺省 $DSH_HOME/dsh-config-manager）' },
-  { flag: '--home <dir>', desc: 'DSH home（缺省 $DSH_HOME，即 ~/.dsh）' },
   { flag: '-h, --help', desc: '显示本页帮助' },
 ];
 
@@ -192,7 +191,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
     title: '列出导入前的安全快照',
     usage: 'snapshots',
     summary: '列出导入前快照',
-    usageLines: ['snapshots [--data-dir <dir>]'],
+    usageLines: ['snapshots [--data-dir <dir>] [--data-root <dir>]'],
     description: [
       '快照是每次导入前自动留下的整机配置副本；本命令只读，按新→旧列出：',
       'ID / 创建时间 / 来源 ZIP / 状态 / 条目数 / 宿主文件数 / 插件数。',
@@ -204,6 +203,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
         title: '选项',
         entries: [
           { flag: '--data-dir <dir>', desc: '快照目录（缺省 $DSH_HOME/dsh-config-manager/snapshots）' },
+          { flag: '--data-root <dir>', desc: '插件数据根 dataDir（自定义时必须显式传）' },
           { flag: '-h, --help', desc: '显示本页' },
         ],
       },
@@ -222,7 +222,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
     title: '只读自检备份 ZIP',
     usage: 'verify [<file|path>]',
     summary: '只读自检备份 ZIP（无参 = 导出目录全部）',
-    usageLines: ['verify [<file|path> | --id <file|path>] [--json] [--data-dir <dir>]'],
+    usageLines: ['verify [<file|path> | --id <file|path>] [--json] [--data-dir <dir>] [--data-root <dir>]'],
     description: [
       '重新读取备份 ZIP，核对结构与 integrity/checksums.json 的逐条 SHA-256；全程零写入。',
       '无参数时校验导出目录下全部 *.zip；也可以给一个文件名或完整路径。',
@@ -245,6 +245,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
           { flag: '--json', desc: '机器可读输出（退出码仍为 0/1；出错的 JSON 也走 stdout）' },
           { flag: '--id <file|path>', desc: '待校验目标（文件名或路径）；与位置参数同义，同时给出时以 --id 为准' },
           { flag: '--data-dir <dir>', desc: '导出目录（缺省 $DSH_HOME/dsh-config-manager/exports）' },
+          { flag: '--data-root <dir>', desc: '插件数据根 dataDir（自定义时必须显式传）' },
           { flag: '-h, --help', desc: '显示本页' },
         ],
       },
@@ -263,7 +264,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
     title: '离线文件级备份',
     usage: 'backup',
     summary: '离线文件级备份（写出后自动自检）',
-    usageLines: ['backup [--sections <a,b,c>] [--out <path>] [--dry-run] [--data-dir <dir>]'],
+    usageLines: ['backup [--sections <a,b,c>] [--out <path>] [--dry-run] [--data-dir <dir>] [--data-root <dir>]'],
     description: [
       '把不需要 DSH 运行时就能读的分区打包成 ZIP，结构与 GUI 导出一致：',
       'manifest.json + integrity/checksums.json + 分区目录；落盘后立刻用 verify 同一引擎自检。',
@@ -279,6 +280,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
           { flag: '--out <path>', desc: '输出 ZIP 路径（缺省导出目录自动命名，绝不覆盖既有文件）' },
           { flag: '--dry-run', desc: '只打印待打包清单，零写入' },
           { flag: '--data-dir <dir>', desc: '导出目录（缺省 $DSH_HOME/dsh-config-manager/exports）' },
+          { flag: '--data-root <dir>', desc: '插件数据根 dataDir（自定义时必须显式传）' },
           { flag: '-h, --help', desc: '显示本页' },
         ],
       },
@@ -301,7 +303,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
     title: '外部 agent 配置 → 标准 bundle ZIP',
     usage: 'import --from <source>',
     summary: '外部 agent 配置 → 标准 bundle ZIP',
-    usageLines: ['import --from <source> [--dry-run] [--out <path>] [--cwd <dir>] [--data-dir <dir>]'],
+    usageLines: ['import --from <source> [--dry-run] [--out <path>] [--cwd <dir>] [--data-dir <dir>] [--data-root <dir>]'],
     description: IMPORT_DESCRIPTION,
     sections: [
       {
@@ -312,6 +314,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
           { flag: '--out <path>', desc: '输出 ZIP 路径（缺省导出目录自动命名，绝不覆盖）' },
           { flag: '--cwd <dir>', desc: '项目级配置所在目录（缺省 = 进程当前目录）' },
           { flag: '--data-dir <dir>', desc: '导出目录（缺省 $DSH_HOME/dsh-config-manager/exports）' },
+          { flag: '--data-root <dir>', desc: '插件数据根 dataDir（自定义时必须显式传）' },
           { flag: '-h, --help', desc: '显示本页' },
         ],
       },
@@ -373,9 +376,9 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
     usage: 'sessions list | doctor | repair',
     summary: '列出本机会话 / 体检并给处置建议',
     usageLines: [
-      'sessions list   [--home <dir>] [--json]',
-      'sessions doctor [--home <dir>] [--json]',
-      'sessions repair [--home <dir>] [--fix] [--keep <dir>] [--map old=new]... [--json]',
+      'sessions list   [--home <dir>] [--data-dir <dir>] [--data-root <dir>] [--json]',
+      'sessions doctor [--home <dir>] [--data-dir <dir>] [--data-root <dir>] [--json]',
+      'sessions repair [--home <dir>] [--data-dir <dir>] [--data-root <dir>] [--fix] [--keep <dir>] [--map old=new]... [--json]',
     ],
     description: [
       'DSH 会校验「日志位置 == projectKey(header.cwd)/id」；位置不对就拒绝启动：',
@@ -401,7 +404,9 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
         title: '选项',
         entries: [
           { flag: '--home <dir>', desc: '要修复的 DSH home（缺省 $DSH_HOME，即 ~/.dsh）' },
-          { flag: '--json', desc: '机器可读输出（list / doctor / repair 预览）' },
+          { flag: '--data-dir <dir>', desc: '衍生控制面目录候选（用于 SAFE MODE / 锁门禁）' },
+          { flag: '--data-root <dir>', desc: '插件数据根 dataDir（自定义时必须显式传；用于安全门禁）' },
+          { flag: '--json', desc: '机器可读输出（stdout 只输出 JSON；人类提示走 stderr，含 --fix）' },
           { flag: '--fix, --apply', desc: 'repair 真的落盘（缺省只打印计划）' },
           { flag: '--keep <dir>', desc: '重复 id 时保留哪一份会话目录（其余移入隔离目录）' },
           { flag: '--map old=new', desc: '路径前缀映射（可重复；命中即改写首帧 cwd）' },
@@ -429,7 +434,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
     title: '回收残留的环境锁',
     usage: 'recover-stale-lock',
     summary: '回收残留环境锁（持有者已确证死亡才回收）',
-    usageLines: ['recover-stale-lock [--data-dir <dir>]'],
+    usageLines: ['recover-stale-lock [--data-dir <dir>] [--data-root <dir>]'],
     description: [
       '环境锁记录「谁在操作」并带心跳，保证两个操作不会同时写你的配置。',
       '进程被强制结束（任务管理器 / kill -9）会留下死锁：之后每次操作都被拒，',
@@ -442,6 +447,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
         title: '选项',
         entries: [
           { flag: '--data-dir <dir>', desc: '用它派生锁目录所在的插件数据目录' },
+          { flag: '--data-root <dir>', desc: '插件数据根 dataDir（自定义时必须显式传；定位 <dataRoot>/locks）' },
           { flag: '-h, --help', desc: '显示本页' },
         ],
       },
@@ -460,7 +466,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
     title: '重装 DSH 程序本体',
     usage: 'reinstall',
     summary: '重装 DSH 程序本体（破坏性选择需二次确认）',
-    usageLines: ['reinstall [--version <v>] [--yes] [--list] [--wipe-config] [--dry-run] [--data-root <dir>]'],
+    usageLines: ['reinstall [--version <v>] [--yes] [--list] [--wipe-config] [--dry-run] [--data-dir <dir>] [--data-root <dir>]'],
     description: [
       '跨平台重装 @deepseek-ai/dsh 启动器（Windows 用 PowerShell，Unix 用 bash）。',
       '缺省只重装启动器 + 清全局缓存；数据类清理项（settings / plugins / data）默认不勾，',
@@ -472,10 +478,11 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
         title: '选项',
         entries: [
           { flag: '--list', desc: '只列出可选的清理项，然后退出' },
-          { flag: '--yes', desc: '非交互：全选并跳过二次确认' },
+          { flag: '--yes', desc: '非交互：全选并跳过二次确认（非 TTY 终端执行重装时必须传）' },
           { flag: '--wipe-config', desc: '等价于勾选全部数据类（settings / plugins / data）' },
           { flag: '--version <v>', desc: '要安装的 DSH 版本（缺省 latest）' },
           { flag: '--dry-run', desc: '只打印重装计划，不执行' },
+          { flag: '--data-dir <dir>', desc: '衍生控制面目录候选（用于 SAFE MODE / 锁门禁）' },
           { flag: '--data-root <dir>', desc: '插件数据根 dataDir（自定义时必须显式传）' },
           { flag: '-h, --help', desc: '显示本页' },
         ],

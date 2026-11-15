@@ -30,8 +30,13 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
-- **保留策略不再被读成「定时备份」的一部分**：它在首页备份卡里独立成段，标题直接写明同时管快照与定时备份；同步页的自动同步说明里也能看到远端快照按同一份策略裁剪、入口在首页；产物库「导出」按钮上那条与导出无关的「自动保留最近 10 个」已摘掉。（issue #143）
-  **Retention policy no longer reads as part of scheduled backups**: it is now its own section on the Home backup card, its title states that it covers both snapshots and scheduled backups, the Auto Sync description points to it, and the library Export button no longer carries an unrelated "keeps the latest 10" note. (issue #143)
+- **离线救急台（`dcm web`）重排信息结构、更换高对比度色板并补齐操作反馈**：页头导航按使用处境收成「状态 / 救援动作 / 检查」三组；首页首屏只集中回答「DSH 现在能不能起」并给出按当前症状排序的最多 3 个建议动作（附触发条件说明），其余全量入口、快照与备份清单及能力边界退入第二屏可折叠区；全站换用 Indigo + 三阶灰低噪色板与 `8px`/`6px` 圆角（大幅减少纯分隔边框、同屏仅留一个主色动作，适配 390px 窄屏与系统减少动效设置），写入页展示「预览 → 确认 → 结果」三段进度并在提交、复制命令与路径时给出即时反馈，禁用脚本时仍保持完整可提交表单。
+  **Restructured the offline rescue console (`dcm web`) with a new high-contrast palette and interaction feedback**: top navigation is now grouped into three situational buckets (Status / Rescue / Inspect); the Home first screen focuses on whether DSH can start plus up to three symptom-ranked action cards with when-to-use guidance while folding the full directory, artifacts, paths, and capability boundary into the second screen; adopted a new stepped surface palette with `8px`/`6px` radii, minimal separating borders, single-primary-action hierarchy, 390px responsive layout, reduced-motion support, three-stage write progress indicators, submit spinners, and copy feedback while preserving pure-HTML fallback when JavaScript is disabled.
+
+### 🐛 修复 · Fixed
+
+- **命令行的 `--json` 输出、跨命令参数与非交互安全护栏更可靠**：`sessions repair` 启用 `--json` 时标准输出只保留合法 JSON（包括 `--fix --json` 与非会话目录跳过提示，人类提示均改走标准错误）；各子命令与帮助页统一 `--data-dir` 与 `--data-root` 支持，子命令参数错误直接给出对应 `--help` 下一步提示；无终端交互环境下运行 `reinstall`（未加 `--yes`）时不再挂起等待输入，而是直接提示预览或确认后拒绝退出，`--dry-run` 仍可零等待预览计划。
+  **Cleaner CLI `--json` output, flag parity, and non-TTY safety**: `sessions repair --json` now keeps stdout strictly valid JSON (routing human notices and skip logs to stderr even with `--fix`); `--data-dir` and `--data-root` options and help text stay consistent across commands while invalid subcommand flags point directly to `dcm <command> --help`; `reinstall` now refuses cleanly without hanging in non-interactive shells unless `--yes` is passed while keeping `--dry-run` non-blocking.
 
 ## [0.9.0] - 2026-11-14
 

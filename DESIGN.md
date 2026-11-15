@@ -1346,50 +1346,22 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   - 旧的「切换预览」弹窗（计划项 diff + 咨询卡）随该功能一并移除；
     `ConsultCard` 仍在导入向导使用。
 
-- **离线救急台（`dcm web`，2026-10，独立于 DSH 设置弹窗）**：这是**唯一不挂在 DSH GUI 内的界面** ——
+- **离线救急台（`dcm web`，2026-11 迭代，独立于 DSH 设置弹窗）**：这是**唯一不挂在 DSH GUI 内的界面** ——
   DSH 都起不来时它要在浏览器里可用，所以它**不消费 `--dsw-*` token、也不走 CSS Modules**：样式内联在
-  `src/cli/web/page.ts` 的 `STYLE` 常量里，由**服务端直出 HTML**（零脚本、零外链；CSP `default-src 'none'`）。
+  `src/cli/web/page.ts` 的 `STYLE` 常量里，由**服务端直出 HTML + 一段 sha256 钉住的内联脚本**（CSP `default-src 'none'`）。
   仍遵守本文件的精神与结构：
-  - **颜色仍按语义命名**（`--fg/--muted/--bg/--card/--surface/--line/--accent/--accent-hover/--on-accent/--ok/--warn/--bad/--scrim`），
-    并给出 `prefers-color-scheme: dark` 暗色一套 —— 因为 DSH 的 token 在这里不存在，只能自带；
-    token 的**语义**与本文 §3 对齐（ok=成功、warn=需注意、bad=危险/失败）。
-  - **救急台的设计系统有外部出处（2026-10）**：亮色取 **IBM Carbon**（`docs/archive/reference-ibm-design.md`）的语义四色与 surface 画布，
-    暗色取 **Raycast**（`docs/archive/reference-raycast-design.md`）的 surface 阶梯与语义 accent。逐条映射、只取的四节、
-    以及**全部偏离记录**在 `docs/architecture/cli-rescue-console.md`。四条硬约束：
-    ① **处方角**（一律 `border-radius:0` —— Carbon 的「半径为 0 才是品牌」，胶囊 chip / cov 一并改方）；
-    ② **文字色取「能读的那一档」**：Carbon 的 `#24a148` / `#f1c21b` 只做填充，正文用 `#198038` / `#8e6a00`（AA 对比度由 `web.test.ts` 的 R3-02 逐对钉住）；
-    ③ **层级只用 surface 变化 + 1px hairline，禁止阴影**（Carbon 的 do/don't）；④ 字体仍走**系统栈（含中文字族）**，
-    绝不外链字体或任何资源（CSP `default-src 'none'` 不变，R3-01/R3-02 双守卫）。
-    ⑤ **三态主题（自动 / 浅色 / 深色，2026-10）**：页头品牌行右侧的三方按钮，选中态用 `--surface` 填充 + `aria-pressed` 表达；
-    载体是 **cookie `dcm-theme`（非敏感、`SameSite=Lax`、1 年）**—— 救急台每次启动换随机端口，只有 cookie 不区分端口能跨次记住，
-    且 R1-01 明确禁止该脚本使用 `localStorage`；脚本因此从 `<body>` 末尾移到 `<head>`（`data-theme` 必须在首帧前落地，否则强制主题会闪）；
-    **无脚本时整组隐藏**（`:root[data-dcm-js="1"]` 才显示），页面回落「自动跟随系统」= 改造前的行为；
-    暗色 token 刻意写两次（媒体查询 + `[data-theme="dark"]`）并由 R3-02 断言**逐字相同**（防漂移），详见设计文档 §8。
-  - **结构 = 页头（品牌 + 版本 + 只读徽章 + 页签 + 路径事实行）→ 内容区（每块一个 `.card`）→ 页脚（CLI 等价命令清单）**；
-    页签为**八个**（首页 / 磁盘占用 / 会话体检 / 档案与实例 / 恢复 / 导出 / 解锁 / 重装；清单唯一事实源 =
-    `src/cli/web/page.ts` 的 `CONSOLE_PAGE_NAV`，头部导航与 404/405 页的「可用页面」都由它派生，本文只记分组语义）：**每组页签对应一类
-    明确动作**（看 / 修 / 救 / 装），首页只放动作卡与能力边界，不重复渲染各页内容。
-  - **状态一律横幅优先**（`.banner.ok|warn|bad`）：SAFE MODE 激活 / 状态无法判定 / 有项目读不出来，
-    必须在页面顶部先说，再谈数据；「正常」用 `ok` 横幅明确说出口径（不靠「没有红字」暗示）。
-  - **表格是主数据结构**（`.card` 内的 `table`）：等宽列用 `td.num`（`tabular-nums`），路径/ID 用 `code`；
-    镜像本文件的两条纪律 —— ① **读不到的不显示 0**（磁盘子区未统计就写「未统计（读不到）」，
-    会话体检必须显示「未做深度校验 N 条」）；② **未体检 ≠ 没问题**，「另有 N 条未检查」必须常驻。
-  - **每个动作给等价 CLI 命令**（页脚 + 相关卡片）：即使有了写按钮也恒给命令行等价入口 —— 出问题时用户至少能复制走。
-  - **写动作 = 两段式（计划 → 确认 → 结果），页面无脚本**（2026-10 阶段 2）：确认页与执行页是两个独立请求，
-    靠 `<form method="post">` + **一次性 action token**（hidden input，用过即废，重复提交 400）串起来。三条呈现纪律：
-    ① **先给计划再给按钮**（会话修复页展示与 CLI 同源的逐条步骤表；磁盘页给出「可回收 / 已超期」字节数）；
-    ② **副作用写在按钮上方**（`.consequence` 块，先读后点）；③ **结果页逐条如实**（`.resultList`；被安全门拒绝时
-    写清门名与原因，绝不出现「已成功」而实际没做）。危险动作用 `.btnDanger`（描边红），普通动作用 `.btnPrimary`。
-  - **「档案与实例」页是实例启停的唯一入口**：每个可启动档案一张确认卡、不可启动的写清原因
-    （桌面端独占 / 非 web 形态 / 已在运行）；运行中的实例给「停止」卡，并区分 `本插件启动` 与
-    `外部实例`（后者按心跳 pid 停）。
-  - **高危动作的摩擦是设计的一部分**：重装页的确认码**只在终端打印**（页面里搜不到），
-    颜色上整页用 `banner bad` 起头；恢复页先渲染**零写入的计划表**再给执行按钮。
-    摩擦不能省 —— 这两件事的失败代价是「DSH 没了」，而救急台本身是给「已经出问题」的时刻用的。
-  - **展示文本一律先 `redact()` 再转义**（`page.ts` 的 `esc()` 是唯一出口）：救急台会渲染磁盘路径、
-    日志尾部与失败原因，里面可能夹带 `"apiKey": …` / `?token=…` —— §7 的纪律在插件 UI 之外同样适用。
-  - 响应式：`.grid` 用 `auto-fit/minmax(280px)` 收窄即换行；表格允许横向滚动，不做移动端专属布局
-    （救急台的使用场景是本机浏览器）。
+  - **颜色与阶梯色板（2026-11）**：13 个语义色 token（`--fg/--muted/--bg/--card/--surface/--line/--accent/--accent-hover/--on-accent/--ok/--warn/--bad/--scrim`）
+    + 2 个亮色专属圆角 token（`--radius: 8px` 卡片、`--radius-sm: 6px` 按钮与输入），暗色通过 `@media (prefers-color-scheme:dark)`
+    与 `:root[data-theme="dark"]` 两处逐字同源覆盖并由 `R3-02` 守卫（两套全项 AA ≥ 5.3:1）。
+  - **设计与视觉刻度（迁移说明见 `docs/architecture/cli-rescue-console.md`）**：
+    ① **自研阶梯色板 + 保留 Carbon 交互无障碍纪律**（2px `--accent` 焦点环、40px 按钮高度、无框底线输入框、句首自然表头、系统字体栈）与 Raycast 三阶底色思路；
+    ② **层次靠阶梯与留白，不靠边框**：取消卡片 / 动作卡 / 页脚 / 主题开关外框，全样式表仅保留页头底线与表行底线两处纯分隔边框（≤10），`.banner`/`.gateCard` 用 4px 内嵌左侧提示条；
+    ③ **收敛尺度**：字号严格 4 档（12 / 13 / 15 / 20px，行高 1.5–1.55），边距严格 6 档（4 / 8 / 12 / 16 / 24 / 32px），同屏至多 1 个 `.btnPrimary` 主色按钮；
+    ④ **三态主题（自动 / 浅色 / 深色）**：页头三方按钮 + cookie `dcm-theme`（不用 `localStorage`），首帧前 `<head>` 内脚本落盘 `[data-theme]`，禁用 JS 时 `:root[data-dcm-js="1"]` 隐藏开关；
+    ⑤ **加载与微反馈**：表单提交按钮内联 `.btnSpinner`（`执行中…`），路径与 CLI 命令带 `[data-dcm-copy]` 一键复制微反馈，跨页切换走 CSS `@view-transition{navigation:auto}` 与 180ms 展开过渡；全部尊重 `prefers-reduced-motion: reduce`。
+  - **结构与处境分组导航**：顶层 `<nav class="sitNav">` 按用户处境归为 3 组（`状态总览` / `救援动作` / `检查`，全部由 `CONSOLE_PAGE_NAV` 单一事实源派生，禁用 JS 时原生 `<details>` 仍可展开）；
+    首页**第一屏**只回答「DSH 现在能不能起」+ 最多 3 张按当前症状排序、带「什么情况下点它」说明的建议卡；能力边界、全量 8 入口清单、快照/备份产物与环境路径详情折叠进**第二屏** `<details class="foldCard" data-dcm-persist>`；390px 窄屏下布局自动单列/横向表滚动且不溢出。
+  - **写动作三阶段与安全门**：所有写动作页顶部渲染 `① 预览与前置检查 → ② 显式确认 → ③ 执行结果` 步进条，服务端直出 `<details open>` + `<form method="post">` + 一次性 token（有 JS 时渐进升级为 `<dialog>`；禁用 JS 原样可提交），结果页按 `ok`/`bad` 分色；展示文本恒经 `esc()` 先 `redact()` 再转义（仅能力 URL 例外走 `escCapability()`）。
 
 ### 2026-11 照稿重构新增类（`.stitch-refactor` 设计稿落地）
 

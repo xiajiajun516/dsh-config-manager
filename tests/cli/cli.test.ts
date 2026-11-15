@@ -258,3 +258,18 @@ test('C-09 runCli restore --dry-run：零写入（不还原文件、不建 pre-r
     );
   });
 });
+
+test('C-10 参数一致性与错误信息引导：全命令支持 --data-root；子命令参数错给出对应 --help', async () => {
+  assert.equal(parseCli(['recover-stale-lock', '--data-root', '/tmp/r']).ok, true, 'recover-stale-lock 接受 --data-root');
+  assert.equal(parseCli(['sessions', 'repair', '--data-root', '/tmp/r']).ok, true, 'sessions 接受 --data-root');
+  assert.equal(parseCli(['verify', '--data-root', '/tmp/r']).ok, true, 'verify 接受 --data-root');
+  assert.equal(parseCli(['snapshots', '--data-root=/tmp/r']).ok, true, 'snapshots 接受 --data-root=');
+
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: CliIo = { log: (s) => out.push(s), error: (s) => err.push(s) };
+  const code = await runCli(['verify', '--bogus'], io);
+  assert.equal(code, 1);
+  assert.match(err.join('\n'), /dcm verify --help/, '已知子命令报错给出针对性 --help 下一步');
+  assert.equal(out.length, 0, '子命令参数错不把 60 行全局概览倾倒到 stdout');
+});

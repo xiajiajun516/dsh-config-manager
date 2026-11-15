@@ -156,40 +156,100 @@ export function buildConsoleRoutes(context: ConsoleContext): WebRoute[] {
 
     consoleEndpoint({ path: '/', methods: ['GET'] }, async (_req, res) => {
       const status = await readRescueStatus(paths)
-      const actions: ActionCard[] = [
+      const hasBlockedSafe = status.safeMode.some((r) => r.state === 'blocked')
+      const hasStaleLock = status.lock.present && status.lock.state === 'STALE_LOCK_DETECTED'
+      const hasEncrypted = status.backups.some((b) => b.containerType === 'encrypted')
+      const scored: Array<{ score: number; card: ActionCard }> = [
         {
-          id: 'recover-lock',
-          title: '环境锁 / 回收残留锁',
-          description: '查看锁状态；仅当持有进程被确证不存在时才允许回收（活锁一律拒绝）。',
-          href: '/lock',
-          disabled: false,
+          score: hasStaleLock ? 100 : (status.lock.present ? 60 : 20),
+          card: {
+            id: 'recover-lock',
+            title: '环境锁 / 回收残留锁',
+            description: '查看锁状态；仅当持有进程被确证不存在时才允许回收（活锁一律拒绝）。',
+            when: '启动或写操作报环境锁冲突、怀疑上次异常退出残留锁文件时先点它。',
+            href: '/lock',
+            disabled: false,
+          },
         },
         {
-          id: 'session-repair',
-          title: '会话布局修复',
-          description: '位置与 header cwd 不一致的会话按计划归位（前置：DSH 已停、无 SAFE MODE、无残留锁）。',
-          href: '/sessions',
-          disabled: false,
+          score: hasBlockedSafe ? 95 : (status.snapshots.length > 0 ? 75 : 15),
+          card: {
+            id: 'restore',
+            title: '恢复快照',
+            description: '先看逐项恢复计划（零写入），确认后覆盖回滚到某个导入前快照。',
+            when: '刚导入配置或变更设置后 DSH 异常，需要按计划回滚到导入前安全快照时点它。',
+            href: '/restore',
+            disabled: false,
+          },
         },
         {
-          id: 'disk-cleanup',
-          title: '清理磁盘',
-          description: '可重建缓存与过期导出产物；导入前快照与同步数据永不在候选集内。',
-          href: '/disk',
-          disabled: false,
+          score: 85,
+          card: {
+            id: 'session-repair',
+            title: '会话布局修复',
+            description: '位置与 header cwd 不一致的会话按计划归位（前置：DSH 已停、无 SAFE MODE、无残留锁）。',
+            when: '会话打不开、报 cwd/路径不一致，或存在重放重复行需要零损失清理时点它。',
+            href: '/sessions',
+            disabled: false,
+          },
         },
         {
-          id: 'profiles',
-          title: '档案与实例',
-          description: '查看本机档案与在跑的实例，并把某个档案作为独立实例启动（DSH 起不来时最有用的一条路）。',
-          href: '/profiles',
-          disabled: false,
+          score: status.instances.length > 0 ? 70 : 65,
+          card: {
+            id: 'profiles',
+            title: '档案与实例',
+            description: '查看本机档案与在跑的实例，并把某个档案作为独立实例启动（DSH 起不来时最有用的一条路）。',
+            when: '想另起一个干净 profile 应急继续干活，或需要停掉阻塞写入的在跑实例时点它。',
+            href: '/profiles',
+            disabled: false,
+          },
         },
-        { id: 'restore', title: '恢复快照', description: '先看逐项恢复计划（零写入），确认后覆盖回滚到某个导入前快照。', href: '/restore', disabled: false },
-        { id: 'export', title: '离线导出', description: '把离线可读的文件类分区导出成与 GUI 同结构的 ZIP（落盘后自检）。', href: '/export', disabled: false },
-        { id: 'unlock', title: '解锁加密备份', description: '用密码在内存里解出明文并查看条目清单；不写盘、不回传内容。', href: '/unlock', disabled: false },
-        { id: 'reinstall', title: '重装 DSH', description: '最危险的动作：卸载并重装全局 DSH。需要终端里打印的 6 位确认码。', href: '/reinstall', disabled: false },
+        {
+          score: 55,
+          card: {
+            id: 'disk-cleanup',
+            title: '清理磁盘',
+            description: '可重建缓存与过期导出产物；导入前快照与同步数据永不在候选集内。',
+            when: '磁盘空间告急、怀疑缓存损坏，或要按保留期回收旧导出产物时点它。',
+            href: '/disk',
+            disabled: false,
+          },
+        },
+        {
+          score: 45,
+          card: {
+            id: 'export',
+            title: '离线导出',
+            description: '把离线可读的文件类分区导出成与 GUI 同结构的 ZIP（落盘后自检）。',
+            when: '准备重装、迁移机器或大改配置前，需要先把当前可读文件备份出来时点它。',
+            href: '/export',
+            disabled: false,
+          },
+        },
+        {
+          score: hasEncrypted ? 40 : 10,
+          card: {
+            id: 'unlock',
+            title: '解锁加密备份',
+            description: '用密码在内存里解出明文并查看条目清单；不写盘、不回传内容。',
+            when: '手里有加密容器备份，需用密码在内存里核对包含哪些配置条目时点它。',
+            href: '/unlock',
+            disabled: false,
+          },
+        },
+        {
+          score: 5,
+          card: {
+            id: 'reinstall',
+            title: '重装 DSH',
+            description: '最危险的动作：卸载并重装全局 DSH。需要终端里打印的 6 位确认码。',
+            when: '前几项排查都无效、怀疑全局 DSH 程序损坏须卸载重装时点它（需终端确认码）。',
+            href: '/reinstall',
+            disabled: false,
+          },
+        },
       ]
+      const actions: ActionCard[] = scored.sort((a, b) => b.score - a.score).map((item) => item.card)
       writeHtml(res, 200, renderHomePage({ status, version, actions }))
     }),
 

@@ -80,7 +80,7 @@ interface ScanResult {
  * 返回值里必须带 rootReadable：会话根存在但读不出来时，空列表只能说明「扫描失败」，
  * 调用方据此拒绝给出「无需修复」+ exit 0（读不到 ≠ 无会话 —— 验收 F2 同口径）。
  */
-async function scanSessions(sessionsRoot: string, io: SessionsRepairIo): Promise<ScanResult> {
+async function scanSessions(sessionsRoot: string, io: SessionsRepairIo, json = false): Promise<ScanResult> {
   const out: ScannedSession[] = [];
   let projectDirs: import('node:fs').Dirent[];
   try {
@@ -97,8 +97,10 @@ async function scanSessions(sessionsRoot: string, io: SessionsRepairIo): Promise
     if (!entry.isDirectory()) continue;
     const projectKey = entry.name;
     if (!PROJECT_KEY_RE.test(projectKey)) {
-      // 不是 DSH 的 projectKey 形状：原样说明并跳过（隔离目录也走这里）
-      io.log('跳过非 projectKey 目录 / skip non-projectKey dir: ' + projectKey);
+      // 不是 DSH 的 projectKey 形状：原样说明并跳过（--json 下走 stderr，不污染 stdout JSON）
+      const skipMsg = '跳过非 projectKey 目录 / skip non-projectKey dir: ' + projectKey;
+      if (json) io.error(skipMsg);
+      else io.log(skipMsg);
       continue;
     }
     const projectDir = join(sessionsRoot, projectKey);
@@ -139,17 +141,30 @@ async function quarantineDirFor(sessionsRoot: string, stamp: string, action: Ses
  * --fix 时只要有失败/冲突/回滚就返回 1。
  */
 export async function runSessionsRepair(options: SessionsRepairOptions, io: SessionsRepairIo): Promise<number> {
+  const logHuman = (line: string): void => {
+    if (options.json) io.error(line);
+    else io.log(line);
+  };
   const sessionsRoot = join(options.home, 'sessions');
   if (!(await exists(sessionsRoot))) {
-    io.error('找不到会话根目录 / sessions root not found: ' + sessionsRoot);
+    const message = '找不到会话根目录 / sessions root not found: ' + sessionsRoot;
+    io.error(message);
     io.error('用 --home <DSH_HOME> 指定正确的 DSH home；缺省取 $DSH_HOME（~/.dsh）。');
+    if (options.json) {
+      io.log(JSON.stringify({ ok: false, dryRun: options.fix !== true, home: options.home, root: sessionsRoot, error: message }, null, 2));
+    }
     return 1;
   }
   const parsed = parseRepairMaps(options.maps);
   for (const error of parsed.errors) io.error(error);
-  if (parsed.errors.length > 0) return 1;
+  if (parsed.errors.length > 0) {
+    if (options.json) {
+      io.log(JSON.stringify({ ok: false, dryRun: options.fix !== true, home: options.home, errors: parsed.errors }, null, 2));
+    }
+    return 1;
+  }
 
-  const scan = await scanSessions(sessionsRoot, io);
+  const scan = await scanSessions(sessionsRoot, io, options.json);
   if (!scan.rootReadable) {
     // 「读不到」≠「没有会话」：根存在但读不出来时，空扫描结果只说明**扫描失败** ——
     // 绝不能给出「无需修复」+ exit 0（那等于把「读不到」说成「没问题」），--json 也不得回 ok:true。
@@ -175,8 +190,8 @@ export async function runSessionsRepair(options: SessionsRepairOptions, io: Sess
     return 0;
   }
 
-  io.log('会话根 / sessions root: ' + sessionsRoot);
-  io.log(
+  logHuman('会话根 / sessions root: ' + sessionsRoot);
+  logHuman(
     '扫描 ' + String(plan.summary.scanned) + ' 条会话：位置正确 ' + String(plan.summary.ok)
     + '，待搬家 ' + String(plan.summary.move)
     + '，待改写+搬家 ' + String(plan.summary.rewriteMove)
@@ -187,15 +202,16 @@ export async function runSessionsRepair(options: SessionsRepairOptions, io: Sess
     if (action.kind === 'ok') continue;
     const move = action.toProjectKey === undefined ? '' : ' → ' + action.toProjectKey;
     const rewrite = action.rewrite === undefined ? '' : '（改写首帧 cwd: ' + action.rewrite.from + ' → ' + action.rewrite.to + '）';
-    io.log('  [' + action.kind + '] ' + action.sessionId + '  ' + action.fromProjectKey + move + rewrite + '  reason=' + action.reason);
+    logHuman('  [' + action.kind + '] ' + action.sessionId + '  ' + action.fromProjectKey + move + rewrite + '  reason=' + action.reason);
   }
   if (!options.fix) {
-    if (pending) io.log('以上为计划（零写入）。加 --fix 执行；重复 id 需用 --keep <目录> 指定保留哪一份。');
-    else io.log('无需修复。/ nothing to repair.');
+    if (pending) logHuman('以上为计划（零写入）。加 --fix 执行；重复 id 需用 --keep <目录> 指定保留哪一份。');
+    else logHuman('无需修复。/ nothing to repair.');
     return 0;
   }
 
   let failures = 0;
+  const results: Array<{ sessionId: string; kind: SessionRepairAction['kind']; ok: boolean; targetDir?: string; error?: string }> = [];
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   for (const action of plan.actions) {
     if (!action.applies) {
@@ -206,12 +222,15 @@ export async function runSessionsRepair(options: SessionsRepairOptions, io: Sess
       if (action.kind === 'quarantine') {
         const target = await quarantineDirFor(sessionsRoot, stamp, action);
         if (await exists(target)) {
-          io.error('隔离目标已存在，跳过 / quarantine target exists: ' + target);
+          const msg = '隔离目标已存在，跳过 / quarantine target exists: ' + target;
+          io.error(msg);
+          results.push({ sessionId: action.sessionId, kind: action.kind, ok: false, error: msg });
           failures += 1;
           continue;
         }
         await fs.rename(action.dir, target);
-        io.log('已隔离重复副本 / quarantined duplicate: ' + action.dir + ' → ' + target);
+        logHuman('已隔离重复副本 / quarantined duplicate: ' + action.dir + ' → ' + target);
+        results.push({ sessionId: action.sessionId, kind: action.kind, ok: true, targetDir: target });
         continue;
       }
       // move / rewrite-move
@@ -219,7 +238,9 @@ export async function runSessionsRepair(options: SessionsRepairOptions, io: Sess
       if (action.rewrite !== undefined) {
         const result = await rewriteSessionLogDir(action.dir, action.rewrite.to);
         if (!result.ok) {
-          io.error('改写首帧失败（未搬目录）/ rewrite failed: ' + action.sessionId + ' reason=' + String(result.reason));
+          const msg = '改写首帧失败（未搬目录）/ rewrite failed: ' + action.sessionId + ' reason=' + String(result.reason);
+          io.error(msg);
+          results.push({ sessionId: action.sessionId, kind: action.kind, ok: false, error: msg });
           failures += 1;
           continue;
         }
@@ -229,37 +250,49 @@ export async function runSessionsRepair(options: SessionsRepairOptions, io: Sess
         ? undefined
         : join(sessionsRoot, action.toProjectKey, action.sessionId);
       if (targetDir === undefined) {
-        io.error('缺少目标 projectKey，跳过 / missing target projectKey: ' + action.sessionId);
+        const msg = '缺少目标 projectKey，跳过 / missing target projectKey: ' + action.sessionId;
+        io.error(msg);
+        results.push({ sessionId: action.sessionId, kind: action.kind, ok: false, error: msg });
         failures += 1;
         continue;
       }
       if (await exists(targetDir)) {
-        io.error('目标目录已存在，拒绝覆盖 / target exists: ' + targetDir);
+        const msg = '目标目录已存在，拒绝覆盖 / target exists: ' + targetDir;
+        io.error(msg);
         if (rewritten && action.rewrite !== undefined) {
           const back = await rewriteSessionLogDir(action.dir, action.rewrite.from);
           io.error(back.ok ? '已回滚首帧改写 / rewrite rolled back' : '回滚失败（请人工检查）/ rollback FAILED');
         }
+        results.push({ sessionId: action.sessionId, kind: action.kind, ok: false, error: msg });
         failures += 1;
         continue;
       }
       await fs.mkdir(join(targetDir, '..'), { recursive: true });
       await fs.rename(action.dir, targetDir);
       if (!(await exists(targetDir)) || await exists(action.dir)) {
-        io.error('搬迁自检失败 / post-move check failed: ' + action.dir);
+        const msg = '搬迁自检失败 / post-move check failed: ' + action.dir;
+        io.error(msg);
+        results.push({ sessionId: action.sessionId, kind: action.kind, ok: false, error: msg });
         failures += 1;
         continue;
       }
-      io.log('已归位 / moved: ' + action.sessionId + '  ' + action.fromProjectKey + ' → ' + action.toProjectKey);
-      io.log('  会话目录 / dir: ' + targetDir);
+      logHuman('已归位 / moved: ' + action.sessionId + '  ' + action.fromProjectKey + ' → ' + action.toProjectKey);
+      logHuman('  会话目录 / dir: ' + targetDir);
       if (rewritten) {
-        io.log('  已改写首帧 cwd（其余帧逐字节保留）；DSH 侧工作区登记请启动 DSH 后在「会话归位」卡片执行。');
+        logHuman('  已改写首帧 cwd（其余帧逐字节保留）；DSH 侧工作区登记请启动 DSH 后在「会话归位」卡片执行。');
       }
+      results.push({ sessionId: action.sessionId, kind: action.kind, ok: true, targetDir });
     } catch (error) {
-      io.error('修复失败 / repair failed: ' + action.sessionId + ' ' + (error instanceof Error ? error.message : String(error)));
+      const msg = '修复失败 / repair failed: ' + action.sessionId + ' ' + (error instanceof Error ? error.message : String(error));
+      io.error(msg);
+      results.push({ sessionId: action.sessionId, kind: action.kind, ok: false, error: msg });
       failures += 1;
     }
   }
-  io.log(failures === 0 ? '完成（无失败）/ done' : '完成但有 ' + String(failures) + ' 项失败 / done with failures');
+  logHuman(failures === 0 ? '完成（无失败）/ done' : '完成但有 ' + String(failures) + ' 项失败 / done with failures');
+  if (options.json) {
+    io.log(JSON.stringify({ ok: failures === 0, dryRun: false, home: options.home, sessionsRoot, failures, summary: plan.summary, results }, null, 2));
+  }
   return failures === 0 ? 0 : 1;
 }
 

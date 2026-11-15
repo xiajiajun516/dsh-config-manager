@@ -1,14 +1,13 @@
 /**
- * 离线救急台页面 —— **服务端直出 HTML**（阶段 1，只读）。
+ * 离线救急台页面 —— **服务端直出 HTML + 渐进增强内联脚本**。
  *
  * 为什么不用客户端框架：救急台的场景是「DSH 都起不来了」，页面依赖越少越好 —— 因此这里直出
- * HTML：**零脚本、零外部资源、零构建产物**，配合 http.ts 里收紧的 CSP。
- * 样式内联在 <style> 里（独立于插件 UI 的 CSS Modules；该新 pattern 已登记进 DESIGN.md）。
- * 这套样式表**有一份外部出处**（亮色 IBM Carbon / 暗色 Raycast 阶梯）与逐条对照表：
- * docs/architecture/cli-rescue-console.md —— 改 STYLE 前先读它，改完跑 web.test.ts 的 R3-02。
+ * HTML：**零构建、零外部资源、零第三方库**，配合 http.ts 里 sha256 钉死的 CSP。
+ * 样式内联在 <style> 里（独立于插件 UI 的 CSS Modules；契约与出处见 DESIGN.md §14 与
+ * docs/architecture/cli-rescue-console.md —— 改 STYLE 前先读它，改完跑 web.test.ts 的 R3-02）。
  *
  * 呈现纪律：每个数字都要能回答「你怎么知道的」—— 离线拿不到的（结构化分区/凭据/同步令牌）
- * 一律显式列出并说明原因，绝不显示为 0 或留空。
+ * 一律显式列出并说明原因，绝不显示为 0 或留空；展示文本一律先 redact() 再转义。
  */
 import { DEFAULT_BACKUP_SECTIONS, OFFLINE_UNAVAILABLE_SECTIONS } from '../../core/backup-plan.ts'
 import type { BackupVerifyResult } from '../../core/backup-verify.ts'
@@ -30,138 +29,156 @@ export interface PageChrome {
   active: 'home' | 'disk' | 'sessions' | 'profiles' | 'unlock' | 'restore' | 'export' | 'reinstall'
 }
 
+// 13 色 token + 2 圆角 token（--radius / --radius-sm 只定义在亮色 :root，暗色不重复）
+// 实测对比度（对 --card）均 >= 4.5:1 AA，见 docs/architecture/cli-rescue-console.md & web.test.ts R3-02
+const LIGHT_TOKENS = '--fg:#111318;--muted:#5a606b;--bg:#f7f7f9;--card:#ffffff;--surface:#eef0f4;--line:#e3e5ea;--accent:#4b58e0;--accent-hover:#3a46c9;--on-accent:#ffffff;--ok:#157a53;--warn:#8a5d00;--bad:#c72a34;--scrim:rgba(15,17,22,.42);--radius:8px;--radius-sm:6px'
+const DARK_TOKENS = '--fg:#f0f1f4;--muted:#8d929c;--bg:#08090b;--card:#101114;--surface:#17181c;--line:#23252b;--accent:#7b88ff;--accent-hover:#96a0ff;--on-accent:#0a0b12;--ok:#4ed6a4;--warn:#f0bf6a;--bad:#ff7b7b;--scrim:rgba(0,0,0,.62)'
+
 const STYLE = [
-  // ---- 设计 token：IBM Carbon（亮色语义四色）+ Raycast（暗色 surface 阶梯）----
-  // 映射表、取的章节与全部偏离记录：docs/architecture/cli-rescue-console.md
-  // 文字色一律取「能读」的那一档：Carbon 的 #24a148 / #f1c21b 只做填充，正文用 #198038 / #8e6a00
-  // （AA 对比度由 web.test.ts 的 R3-02 逐对钉住，改色先过那条测试）。
-':root{color-scheme:light dark;--font:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;--fg:#161616;--muted:#525252;--bg:#f4f4f4;--card:#fff;--surface:#f4f4f4;--line:#e0e0e0;--accent:#0f62fe;--accent-hover:#0043ce;--on-accent:#fff;--ok:#198038;--warn:#8e6a00;--bad:#da1e28;--scrim:rgba(22,22,22,.45)}',
-'@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--fg:#f4f4f6;--muted:#9c9c9d;--bg:#07080a;--card:#0d0d0d;--surface:#121212;--line:#242728;--accent:#57c1ff;--accent-hover:#8ad3ff;--on-accent:#0a0a0a;--ok:#59d499;--warn:#ffc533;--bad:#ff6161;--scrim:rgba(0,0,0,.6)}}',
-  // 强制暗色：系统是浅色也照做。**必须与上面的媒体查询块逐字相同**（R3-02 断言两者相等，防漂移）。
-':root[data-theme="dark"]{--fg:#f4f4f6;--muted:#9c9c9d;--bg:#07080a;--card:#0d0d0d;--surface:#121212;--line:#242728;--accent:#57c1ff;--accent-hover:#8ad3ff;--on-accent:#0a0a0a;--ok:#59d499;--warn:#ffc533;--bad:#ff6161;--scrim:rgba(0,0,0,.6)}',
-  // color-scheme 要跟着主题走，否则系统是暗色时强制浅色的表单控件/滚动条仍然是暗的。
-':root[data-theme="dark"]{color-scheme:dark}',
-':root[data-theme="light"]{color-scheme:light}',
-'*{box-sizing:border-box}',
-'body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14px;line-height:1.6;letter-spacing:.16px}',
-  // 焦点可见（Carbon 的 2px 强调描边）：键盘用户必须看得见自己在哪 —— 旧版没有任何 focus 样式。
-':focus-visible{outline:2px solid var(--accent);outline-offset:2px}',
-'header.top{position:sticky;top:0;z-index:2;background:var(--card);border-bottom:1px solid var(--line);padding:12px 24px}',
-'.brand{font-size:18px;font-weight:600} .brand .ver{font-size:12px;color:var(--muted);font-weight:400;margin-left:8px;letter-spacing:.32px}',
-  // 配色开关：三方按钮（自动 / 浅色 / 深色）。无脚本时整组隐藏 —— 页面回落到跟随系统，而不是给个点不动的控件。
-'.brandRow{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}',
-'.themeSwitch{display:none;align-items:center;gap:8px;font-size:12px;color:var(--muted)}',
-':root[data-dcm-js="1"] .themeSwitch{display:inline-flex}',
-'.themeBtn{font:inherit;font-size:12px;height:28px;padding:0 10px;border:1px solid var(--line);background:var(--card);color:var(--muted);cursor:pointer}',
-'.themeBtn+.themeBtn{border-left:0}',
-'.themeBtn:hover{color:var(--fg)}',
-'.themeBtn[aria-pressed="true"]{background:var(--surface);color:var(--fg);font-weight:600}',
-'nav{margin-top:8px;display:flex;gap:4px 20px;flex-wrap:wrap}',
-'nav a{color:var(--muted);text-decoration:none;font-weight:500;padding-bottom:3px;border-bottom:2px solid transparent}',
-'nav a:hover{color:var(--fg)} nav a.active{color:var(--fg);border-bottom-color:var(--accent)}',
-'.sub{color:var(--muted);font-size:12px;margin-top:8px;word-break:break-all}',
-'main{padding:24px;max-width:1180px;margin:0 auto}',
-'h2{font-size:16px;font-weight:600;margin:24px 0 12px}',
-  // 层级一律用「surface 变化 + 1px hairline」，不用阴影（Carbon）。
-'section.card{background:var(--card);border:1px solid var(--line);padding:16px;margin-bottom:24px}',
-'table{border-collapse:collapse;width:100%;font-size:14px}',
-'th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}',
-'th{color:var(--muted);font-size:12px;font-weight:600;letter-spacing:.32px;white-space:nowrap} tr:last-child td{border-bottom:none}',
-'td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}',
-'code{font-family:var(--mono);font-size:.9em}',
-'.muted{color:var(--muted)}',
-'.banner{border:1px solid;padding:12px 16px;margin-bottom:24px}',
-'.banner.ok{border-color:color-mix(in srgb,var(--ok) 45%,var(--line));background:color-mix(in srgb,var(--ok) 8%,var(--card))}',
-'.banner.info{border-color:color-mix(in srgb,var(--accent) 40%,var(--line));background:color-mix(in srgb,var(--accent) 8%,var(--card))}',
-'.banner.warn{border-color:color-mix(in srgb,var(--warn) 45%,var(--line));background:color-mix(in srgb,var(--warn) 10%,var(--card))}',
-'.banner.bad{border-color:color-mix(in srgb,var(--bad) 50%,var(--line));background:color-mix(in srgb,var(--bad) 10%,var(--card))}',
-'.banner b{display:block;margin-bottom:4px}',
-'.chip{display:inline-block;padding:2px 8px;background:var(--surface);font-size:12px;margin-right:6px}',
-'.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px 24px}',
-'.kv{display:flex;gap:8px;font-size:12px} .kv .k{color:var(--muted);min-width:104px;flex:none}',
-'.kv .v{word-break:break-all}',
-'footer{border-top:1px solid var(--line);color:var(--muted);font-size:12px;padding:16px 24px 48px;max-width:1180px;margin:0 auto}',
-'footer ul{margin:8px 0 0;padding-left:18px} footer li{margin:4px 0}',
-'a{color:var(--accent)} a:hover{color:var(--accent-hover)}',
-'.sev{font-weight:600} .sev.blocksStartup{color:var(--bad)} .sev.unloadable{color:var(--bad)}',
-'.sev.nextRequestFails{color:var(--warn)} .sev.invisible{color:var(--warn)} .sev.ok{color:var(--ok)}',
-'.actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}',
-'.actionCard{border:1px solid var(--line);padding:12px 16px;background:var(--card)}',
-'.actionCard p{margin:8px 0 0;font-size:12px}',
-'.actionLink{font-weight:600;text-decoration:none} .actionLink:hover{text-decoration:underline}',
-'.confirmForm{margin-top:8px}',
-'.checkList{display:flex;flex-direction:column;gap:8px;margin:8px 0}',
-'.checkRow{display:flex;gap:12px;align-items:flex-start;font-size:14px}',
-'.checkRow input{margin-top:3px}',
-'.consequence{background:var(--surface);padding:12px 16px;margin:12px 0;font-size:14px}',
-  // 按钮 = Carbon 的处方角 + 40px 高（md）。危险动作刻意不用 Carbon 的实心红：见设计文档的偏离记录。
-'.btnPrimary,.btnDanger,.btnPlain{font:inherit;font-weight:600;height:40px;padding:0 16px;cursor:pointer}',
-'.btnPrimary{border:1px solid var(--accent);background:var(--accent);color:var(--on-accent)}',
-'.btnPrimary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}',
-'.btnDanger{border:1px solid var(--bad);background:transparent;color:var(--bad)}',
-'.btnDanger:hover{background:color-mix(in srgb,var(--bad) 12%,transparent)}',
-'.btnPlain{border:1px solid var(--line);background:transparent;color:var(--fg)}',
-'.btnPlain:hover{background:var(--surface)}',
-'.resultList{margin:0;padding-left:18px} .resultList li{margin:4px 0;word-break:break-all}',
-'.gapTable{margin-top:12px}',
-  // 表单 = Carbon 的 text-input：无框 + surface 填充 + 1px 底线，聚焦时内嵌 2px 强调描边。
-'.inputText,.repairForm select{font:inherit;height:40px;padding:0 12px;border:0;border-bottom:1px solid var(--muted);background:var(--surface);color:var(--fg)}',
-'.inputText{min-width:240px} .repairForm select{max-width:420px}',
-'.inputText:focus-visible,.repairForm select:focus-visible{outline-offset:-2px}',
-'.repairForm{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}',
-'.confirmWrap{margin-top:8px}',
-'.confirmWrap>summary{cursor:pointer;display:inline-block;list-style:none}',
-'.confirmWrap>summary::-webkit-details-marker{display:none}',
-'.confirmTitle{font-size:14px;margin:0 0 8px}',
-'.confirmBody{margin-top:12px}',
-'dialog.dcmDialog{border:1px solid var(--line);padding:16px 24px;background:var(--card);color:var(--fg);width:min(680px,92vw);max-height:86vh;overflow:auto}',
-  // 遮罩走 --scrim：旧版用 --fg 45%，暗色下变成「白纱」（越糊越白）—— 顺手修掉。
-'dialog.dcmDialog::backdrop{background:var(--scrim)}',
-'.dialogFooter{display:flex;gap:12px;margin-top:16px}',
-'.backRow{margin-top:8px}',
-'.gateCard{border:1px solid color-mix(in srgb,var(--warn) 45%,var(--line));background:color-mix(in srgb,var(--warn) 8%,var(--card));padding:12px 16px;margin:12px 0}',
-'.gateCard b{display:block;margin-bottom:8px}',
-'.gateCard ul{margin:8px 0 0;padding-left:18px} .gateCard li{margin:4px 0;word-break:break-all}',
-'.gatePath{font-size:12px;color:var(--muted)}',
-'.cov{display:inline-block;padding:2px 8px;background:var(--surface);font-size:12px;margin-left:6px}',
-'.cov.warn{background:color-mix(in srgb,var(--warn) 18%,var(--surface))}',
-  // ---- 过渡动画与骨架屏（零依赖、纯 CSS；全部吃 prefers-reduced-motion） ----
-'@keyframes dcmFadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}',
-'@keyframes dcmShimmer{from{background-position:-320px 0}to{background-position:320px 0}}',
-'main>*{animation:dcmFadeUp .22s ease-out both}',
-'main>*:nth-child(2){animation-delay:.03s} main>*:nth-child(3){animation-delay:.06s}',
-'main>*:nth-child(4){animation-delay:.09s} main>*:nth-child(n+5){animation-delay:.12s}',
-'nav a{transition:color .15s ease,border-color .15s ease}',
-'a.actionLink,.actionCard,td a{transition:color .15s ease,background-color .15s ease}',
-'.actionCard{transition:border-color .15s ease}',
-'.actionCard:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}',
-'.btnPrimary,.btnDanger,.btnPlain{transition:background-color .15s ease,border-color .15s ease}',
-'.confirmWrap>summary{transition:background-color .15s ease}',
-'dialog.dcmDialog{animation:dcmFadeUp .18s ease-out both}',
-'dialog.dcmDialog::backdrop{animation:dcmFadeUp .18s ease-out both}',
-  // 顶部进度条：导航一开始就出现，新页面 load 后自然被替换掉（不需要 JS）
-'body::before{content:"";position:fixed;top:0;left:0;height:2px;width:100%;z-index:9;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:dcmSweep 1.1s linear infinite}',
-'@keyframes dcmSweep{from{opacity:.25;transform:translateX(-40%)}to{opacity:.85;transform:translateX(40%)}}',
-  // 骨架屏：加载期可见的占位（动画结束即隐藏，纯 CSS，禁用 JS 也成立）
-'.skeleton{position:fixed;inset:0;z-index:8;background:var(--bg);padding:24px;animation:dcmSkeletonOut 0s linear 2.4s forwards}',
-'.skeletonBar{height:14px;margin-bottom:12px;background:linear-gradient(90deg,var(--surface) 0%,color-mix(in srgb,var(--surface) 45%,var(--card)) 50%,var(--surface) 100%);background-size:320px 100%;animation:dcmShimmer 1.2s linear infinite}',
-'.skeletonCard{height:96px;border:1px solid var(--line);background:var(--card);margin-bottom:16px;overflow:hidden}',
-'@keyframes dcmSkeletonOut{to{opacity:0;visibility:hidden}}',
-'@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001s!important;animation-iteration-count:1!important;transition-duration:.001s!important}}',
+  // ---- 设计 token（明暗阶梯 + AA 语义色，R3-02 钉死 @media 与 [data-theme="dark"] 逐字相等） ----
+  ':root{color-scheme:light dark;--font:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;' + LIGHT_TOKENS + '}',
+  '@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){' + DARK_TOKENS + '}}',
+  ':root[data-theme="dark"]{' + DARK_TOKENS + '}',
+  ':root[data-theme="dark"]{color-scheme:dark}',
+  ':root[data-theme="light"]{color-scheme:light}',
+  '@view-transition{navigation:auto}',
+  '*{box-sizing:border-box}',
+  // 字号收敛到 4 档：12px / 13px / 15px / 20px；间距 6 档：4 / 8 / 12 / 16 / 24 / 32px
+  'body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);font-size:13px;line-height:1.55}',
+  ':focus-visible{outline:2px solid var(--accent);outline-offset:2px}',
+  'header.top{position:sticky;top:0;z-index:4;background:var(--card);border-bottom:1px solid var(--line);padding:12px 24px}',
+  '.brandRow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}',
+  '.brand{font-size:20px;line-height:1.5;font-weight:600;margin:0}',
+  '.brand .ver{font-size:12px;color:var(--muted);font-weight:400;margin-left:8px}',
+  // 配色开关：纯 surface 阶梯（无边框）；无脚本时整组隐藏并回落跟随系统
+  '.themeSwitch{display:none;align-items:center;gap:4px;font-size:12px;color:var(--muted);background:var(--surface);padding:4px;border-radius:var(--radius-sm)}',
+  ':root[data-dcm-js="1"] .themeSwitch{display:inline-flex}',
+  '.themeBtn{font:inherit;font-size:12px;height:24px;padding:0 8px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--muted);cursor:pointer;transition:background-color .15s ease,color .15s ease}',
+  '.themeBtn:hover{color:var(--fg)}',
+  '.themeBtn[aria-pressed="true"]{background:var(--card);color:var(--fg);font-weight:600}',
+  // 处境分组导航（3 个顶层组：状态 / 救援动作 / 检查）
+  'nav.sitNav{margin-top:8px;display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap}',
+  '.navGroup{position:relative}',
+  '.navGroup>summary{list-style:none;cursor:pointer}',
+  '.navGroup>summary::-webkit-details-marker{display:none}',
+  '.navItem{display:inline-flex;align-items:center;gap:4px;height:32px;padding:0 12px;font-size:13px;font-weight:500;color:var(--muted);text-decoration:none;border-radius:var(--radius-sm);transition:background-color .15s ease,color .15s ease}',
+  '.navItem:hover{background:var(--surface);color:var(--fg)}',
+  '.navItem.active{background:color-mix(in srgb,var(--accent) 14%,var(--surface));color:var(--accent);font-weight:600}',
+  '.navDrop{position:absolute;top:calc(100% + 4px);left:0;min-width:220px;background:var(--card);border-radius:var(--radius);padding:8px;box-shadow:0 12px 32px var(--scrim);z-index:10;display:flex;flex-direction:column;gap:4px}',
+  '.navDrop a{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-radius:var(--radius-sm);font-size:13px;color:var(--fg);text-decoration:none;transition:background-color .15s ease}',
+  '.navDrop a:hover{background:var(--surface)}',
+  '.navDrop a.active{background:color-mix(in srgb,var(--accent) 14%,var(--surface));color:var(--accent);font-weight:600}',
+  '.sub{color:var(--muted);font-size:12px;margin-top:8px;word-break:break-all}',
+  'main{padding:24px;max-width:1120px;margin:0 auto}',
+  'h2{font-size:15px;line-height:1.5;font-weight:600;margin:24px 0 12px}',
+  'h3{font-size:13px;line-height:1.5;font-weight:600;margin:16px 0 8px}',
+  // 层次靠表面阶梯（--bg -> --card -> --surface）与留白，去掉外边框
+  'section.card,.verdictCard,.foldCard{background:var(--card);border-radius:var(--radius);padding:16px 24px;margin-bottom:16px}',
+  '.verdictCard{padding:24px;margin-bottom:24px}',
+  '.verdictHead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}',
+  '.verdictTitle{font-size:20px;line-height:1.5;font-weight:600;margin:0}',
+  '.verdictSub{font-size:13px;color:var(--muted);margin:0 0 16px}',
+  '.statGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}',
+  '.statCell{background:var(--surface);border-radius:var(--radius-sm);padding:12px 16px}',
+  '.statLabel{font-size:12px;color:var(--muted);display:block;margin-bottom:4px}',
+  '.statValue{font-size:15px;font-weight:600}',
+  'table{border-collapse:collapse;width:100%;font-size:13px}',
+  'th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}',
+  'th{color:var(--muted);font-size:12px;font-weight:600;white-space:nowrap} tr:last-child td{border-bottom:none}',
+  'td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}',
+  'code,.monoMeta{font-family:var(--mono);font-size:12px;color:var(--muted);word-break:break-all}',
+  '.muted{color:var(--muted)}',
+  '.banner{padding:12px 16px;border-radius:var(--radius);margin-bottom:16px;background:var(--card);box-shadow:inset 4px 0 0 var(--line)}',
+  '.banner.ok{box-shadow:inset 4px 0 0 var(--ok);background:color-mix(in srgb,var(--ok) 10%,var(--card))}',
+  '.banner.info{box-shadow:inset 4px 0 0 var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--card))}',
+  '.banner.warn{box-shadow:inset 4px 0 0 var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--card))}',
+  '.banner.bad{box-shadow:inset 4px 0 0 var(--bad);background:color-mix(in srgb,var(--bad) 12%,var(--card))}',
+  '.banner b{display:block;font-size:15px;margin-bottom:4px}',
+  '.chip,.pillOk,.pillWarn,.pillBad{display:inline-block;padding:2px 8px;border-radius:var(--radius-sm);background:var(--surface);font-size:12px;font-weight:600;margin-right:8px}',
+  '.pillOk{background:color-mix(in srgb,var(--ok) 14%,var(--card));color:var(--ok)}',
+  '.pillWarn{background:color-mix(in srgb,var(--warn) 16%,var(--card));color:var(--warn)}',
+  '.pillBad{background:color-mix(in srgb,var(--bad) 16%,var(--card));color:var(--bad)}',
+  '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px 24px}',
+  '.kv{display:flex;gap:8px;align-items:baseline;font-size:12px} .kv .k{color:var(--muted);min-width:96px;flex:none}',
+  '.kv .v{display:flex;align-items:center;gap:8px;flex-wrap:wrap;word-break:break-all}',
+  'footer{color:var(--muted);font-size:12px;padding:16px 24px 32px;max-width:1120px;margin:24px auto 0;background:var(--card);border-radius:var(--radius)}',
+  'footer ul{margin:8px 0 0;padding-left:16px} footer li{margin:4px 0}',
+  'a{color:var(--accent)} a:hover{color:var(--accent-hover)}',
+  '.sev{font-weight:600} .sev.blocksStartup,.sev.unloadable{color:var(--bad)} .sev.nextRequestFails,.sev.invisible{color:var(--warn)} .sev.ok{color:var(--ok)}',
+  '.actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:24px}',
+  '.actionCard{display:flex;flex-direction:column;justify-content:space-between;gap:12px;padding:16px;border-radius:var(--radius);background:var(--card);transition:background-color .15s ease,transform .15s ease}',
+  '.actionCard:hover{background:color-mix(in srgb,var(--accent) 4%,var(--card))}',
+  '.actionTitle{font-size:15px;font-weight:600;margin:0 0 4px}',
+  '.actionDesc{margin:0;font-size:13px;color:var(--muted)}',
+  '.whenLine{margin:8px 0 0;padding:8px 12px;background:var(--surface);border-radius:var(--radius-sm);font-size:12px;color:var(--fg)}',
+  '.foldCard>summary{cursor:pointer;list-style:none;font-size:15px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px}',
+  '.foldCard>summary::-webkit-details-marker{display:none}',
+  '.foldBody{margin-top:16px;animation:dcmFadeUp .18s ease-out both}',
+  '.flowSteps{display:flex;gap:8px;list-style:none;padding:0;margin:0 0 16px;flex-wrap:wrap}',
+  '.flowStep{font-size:12px;padding:4px 12px;border-radius:var(--radius-sm);background:var(--surface);color:var(--muted)}',
+  '.flowStep.active{background:color-mix(in srgb,var(--accent) 14%,var(--card));color:var(--accent);font-weight:600}',
+  '.flowStep.doneOk{background:color-mix(in srgb,var(--ok) 14%,var(--card));color:var(--ok);font-weight:600}',
+  '.flowStep.doneBad{background:color-mix(in srgb,var(--bad) 14%,var(--card));color:var(--bad);font-weight:600}',
+  '.confirmForm{margin-top:8px}',
+  '.checkList{display:flex;flex-direction:column;gap:8px;margin:8px 0}',
+  '.checkRow{display:flex;gap:12px;align-items:flex-start;font-size:13px}',
+  '.checkRow input{margin-top:4px}',
+  '.consequence{background:var(--surface);border-radius:var(--radius-sm);padding:12px 16px;margin:12px 0;font-size:13px}',
+  // 按钮：唯一主色用于主动作；危险描边、次要透明、统一圆角 6px
+  '.btnPrimary,.btnDanger,.btnPlain{display:inline-flex;align-items:center;justify-content:center;gap:8px;font:inherit;font-size:13px;font-weight:600;height:40px;padding:0 16px;border-radius:var(--radius-sm);cursor:pointer;text-decoration:none;transition:background-color .15s ease,border-color .15s ease,color .15s ease}',
+  '.btnPrimary{border:0;background:var(--accent);color:var(--on-accent)}',
+  '.btnPrimary:hover{background:var(--accent-hover);color:var(--on-accent)}',
+  '.btnDanger{border:1px solid var(--bad);background:transparent;color:var(--bad)}',
+  '.btnDanger:hover{background:color-mix(in srgb,var(--bad) 12%,transparent)}',
+  '.btnPlain{border:1px solid var(--line);background:transparent;color:var(--fg)}',
+  '.btnPlain:hover{background:var(--surface);color:var(--fg)}',
+  '.copyBtn{display:none;align-items:center;font:inherit;font-size:12px;height:24px;padding:0 8px;border:1px solid var(--line);border-radius:var(--radius-sm);background:transparent;color:var(--muted);cursor:pointer;transition:background-color .15s ease,color .15s ease}',
+  ':root[data-dcm-js="1"] .copyBtn{display:inline-flex}',
+  '.copyBtn:hover{background:var(--surface);color:var(--fg)}',
+  '.copyBtn[data-copied="1"]{color:var(--ok)}',
+  '.btnSpinner{display:inline-block;width:12px;height:12px;border:2px solid color-mix(in srgb,currentColor 28%,transparent);border-top-color:currentColor;border-radius:50%;animation:dcmSpin .7s linear infinite}',
+  '.resultList{margin:0;padding-left:16px} .resultList li{margin:4px 0;word-break:break-all}',
+  '.gapTable{margin-top:12px}',
+  '.inputText,.repairForm select{font:inherit;font-size:13px;height:40px;padding:0 12px;border:0;border-bottom:1px solid var(--muted);border-radius:var(--radius-sm);background:var(--surface);color:var(--fg)}',
+  '.inputText{min-width:240px} .repairForm select{max-width:420px}',
+  '.inputText:focus-visible,.repairForm select:focus-visible{outline-offset:-2px}',
+  '.repairForm{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}',
+  '.confirmWrap{margin-top:8px}',
+  '.confirmWrap>summary{cursor:pointer;list-style:none}',
+  '.confirmWrap>summary::-webkit-details-marker{display:none}',
+  '.confirmTitle{font-size:15px;margin:0 0 8px}',
+  '.confirmBody{margin-top:12px}',
+  'dialog.dcmDialog{border:0;border-radius:var(--radius);padding:24px;background:var(--card);color:var(--fg);width:min(680px,92vw);max-height:86vh;overflow:auto;box-shadow:0 16px 32px var(--scrim);animation:dcmFadeUp .18s ease-out both}',
+  'dialog.dcmDialog::backdrop{background:var(--scrim);animation:dcmFadeUp .18s ease-out both}',
+  '.dialogFooter{display:flex;gap:12px;margin-top:16px}',
+  '.backRow{margin-top:16px}',
+  '.gateCard{background:color-mix(in srgb,var(--warn) 10%,var(--card));box-shadow:inset 4px 0 0 var(--warn);border-radius:var(--radius);padding:12px 16px;margin:12px 0}',
+  '.gateCard b{display:block;margin-bottom:8px}',
+  '.gateCard ul{margin:8px 0 0;padding-left:16px} .gateCard li{margin:4px 0;word-break:break-all}',
+  '.gatePath{font-size:12px;color:var(--muted)}',
+  '.cov{display:inline-block;padding:2px 8px;border-radius:var(--radius-sm);background:var(--surface);font-size:12px;margin-left:8px}',
+  '.cov.warn{background:color-mix(in srgb,var(--warn) 18%,var(--surface))}',
+  // ---- 动效、加载态与 390px 窄屏适配（尊重 prefers-reduced-motion） ----
+  '@keyframes dcmFadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}',
+  '@keyframes dcmShimmer{from{background-position:-320px 0}to{background-position:320px 0}}',
+  '@keyframes dcmSpin{to{transform:rotate(360deg)}}',
+  '@keyframes dcmSweep{from{opacity:.25;transform:translateX(-40%)}to{opacity:.85;transform:translateX(40%)}}',
+  '@keyframes dcmSkeletonOut{to{opacity:0;visibility:hidden}}',
+  'main>*{animation:dcmFadeUp .18s ease-out both}',
+  'body::before{content:"";position:fixed;top:0;left:0;height:2px;width:100%;z-index:9;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:dcmSweep 1.1s linear infinite}',
+  '.skeleton{position:fixed;inset:0;z-index:8;background:var(--bg);padding:24px;animation:dcmSkeletonOut 0s linear 2.4s forwards}',
+  '.skeletonBar{height:12px;margin-bottom:12px;border-radius:var(--radius-sm);background:linear-gradient(90deg,var(--surface) 0%,color-mix(in srgb,var(--surface) 45%,var(--card)) 50%,var(--surface) 100%);background-size:320px 100%;animation:dcmShimmer 1.2s linear infinite}',
+  '.skeletonCard{height:96px;border-radius:var(--radius);background:var(--card);margin-bottom:16px;overflow:hidden}',
+  '@media (max-width:480px){header.top,main,footer{padding-left:16px;padding-right:16px}.navDrop{position:static;box-shadow:none;background:var(--surface);margin-top:4px;min-width:0}table{display:block;overflow-x:auto}.inputText{min-width:0;width:100%}}',
+  '@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition-duration:.001s!important;transform:none!important}}',
 ].join('\n')
 
 /**
- * 加载骨架：**纯 HTML + CSS 的"瞬态层"**，不依赖任何脚本。
- *
- * 为什么这样做而不是用 JS 显隐：救急台的渐进增强承诺是「禁用 JS 时功能与今天完全一致」。
- * 这一层在 HTML 解析到它时就已经在屏幕上了（浏览器还没渲染完后续内容 = 真正在加载），
- * 用 `animation-delay` 在 2.4s 后自动淡出并 `visibility:hidden`；它 `position:fixed` 覆盖视口、
- * `pointer-events` 不拦交互（z-index 低于顶部进度条）。页面加载完成那一刻其实早已不可见，
- * 所以不存在「卡住不消失」的风险 —— 这是无脚本约束下唯一诚实的做法。
+ * 加载骨架：**纯 HTML + CSS 的"瞬态层"**，禁用 JS 时在 2.4s 后自动淡出；开 reduced-motion 时零闪烁。
  */
 const SKELETON = '<div class="skeleton" aria-hidden="true">'
   + '<div class="skeletonBar" style="width:34%"></div>'
-  + '<div class="skeletonBar" style="width:58%;height:11px"></div>'
+  + '<div class="skeletonBar" style="width:58%;height:12px"></div>'
   + '<div class="skeletonCard"></div><div class="skeletonCard" style="height:132px"></div>'
   + '<div class="skeletonCard" style="height:72px"></div>'
   + '</div>'
@@ -172,8 +189,7 @@ const SKELETON = '<div class="skeleton" aria-hidden="true">'
  * HTML 转义 + **脱敏**（唯一出口）。
  *
  * 两件事必须一起做，且顺序固定：先 `redact()` 再转义 —— 救急台会把磁盘上的路径、日志尾部、
- * 失败原因直接渲染出来，里面可能夹带形如 `"apiKey": "…"` / `?token=…` 的内容（§7 纪律：
- * 展示文本渲染前一律过 `redact()`，插件 UI 与 CLI 都遵守，这里不能例外）。
+ * 失败原因直接渲染出来，里面可能夹带形如 `"apiKey": "…"` / `?token=…` 的内容（§7 纪律）。
  */
 function escapeHtml(value: string): string {
   return value
@@ -188,14 +204,7 @@ export function esc(value: string): string {
 }
 
 /**
- * **只转义、不脱敏**的展示出口：唯一用途是救急台**有意**回传给终端用户的「能力 URL」
- * （启动器从子进程日志抓到的带 token 的认证 URL）。
- *
- * 为什么必须与 esc() 分开（cli-F1）：esc() 先过安全侧 redact()，而 redact 的 URL_QUERY_RE
- * 会把 `?token=…` 的值抹成 ***REDACTED*** —— 那正是认证 URL 的形态，于是页面给出一条必然
- * 401 的死链（/profiles 的「打开实例」入口 + 启动结果页）。这些 URL 与终端里打印的 bootstrap
- * URL 同一性质：只给拿到会话 cookie 的人，本来就该原样可见。
- * 纪律：**只允许**用于本层自己签发/抓取的能力 URL；其余一切文本仍走 esc()。
+ * **只转义、不脱敏**的展示出口：唯一用途是救急台**有意**回传给终端用户的「能力 URL」。
  */
 export function escCapability(value: string): string {
   return escapeHtml(value)
@@ -220,6 +229,11 @@ function cellHtml(value: Cell): string {
   return typeof value === 'string' ? esc(value) : value.html
 }
 
+function copyButton(raw: string, ariaLabel: string): string {
+  const safe = esc(raw)
+  return '<button type="button" class="copyBtn" data-dcm-copy="' + safe + '" aria-label="' + esc(ariaLabel) + '">复制</button>'
+}
+
 function renderTable(headers: readonly string[], rows: readonly Cell[][]): string {
   if (rows.length === 0) return '<p class="muted">（无）</p>'
   const head = headers.map((h) => '<th>' + esc(h) + '</th>').join('')
@@ -233,9 +247,10 @@ function banner(kind: 'ok' | 'info' | 'warn' | 'bad', title: string, text: strin
   return '<div class="banner ' + kind + '"><b>' + esc(title) + '</b>' + esc(text) + '</div>'
 }
 
-function kv(pairs: ReadonlyArray<[string, string]>): string {
+function kv(pairs: ReadonlyArray<[string, string]>, withCopy = false): string {
   return '<div class="grid">' + pairs
-    .map(([k, v]) => '<div class="kv"><span class="k">' + esc(k) + '</span><span class="v"><code>' + esc(v) + '</code></span></div>')
+    .map(([k, v]) => '<div class="kv"><span class="k">' + esc(k) + '</span><span class="v"><code>' + esc(v) + '</code>'
+      + (withCopy && v !== '' && v !== '—' ? copyButton(v, '复制 ' + k) : '') + '</span></div>')
     .join('') + '</div>'
 }
 
@@ -243,29 +258,50 @@ function section(title: string, body: string): string {
   return '<h2>' + esc(title) + '</h2><section class="card">' + body + '</section>'
 }
 
+function foldSection(persistId: string, title: string, body: string): string {
+  return '<details class="foldCard" data-dcm-persist="' + esc(persistId) + '">'
+    + '<summary><span>' + esc(title) + '</span><span class="monoMeta">展开 / 收起 ▾</span></summary>'
+    + '<div class="foldBody">' + body + '</div></details>'
+}
+
+function renderFlowSteps(stage: 1 | 2 | 3, outcome?: 'ok' | 'bad'): string {
+  const steps: Array<{ n: 1 | 2 | 3; label: string }> = [
+    { n: 1, label: '① 预览与前置检查' },
+    { n: 2, label: '② 显式确认' },
+    { n: 3, label: outcome === 'ok' ? '③ 已执行（成功）' : outcome === 'bad' ? '③ 已终止（失败或拒绝）' : '③ 执行结果' },
+  ]
+  return '<ol class="flowSteps" aria-label="操作三阶段">' + steps.map((s) => {
+    let cls = 'flowStep'
+    if (stage === 3 && s.n === 3) cls += outcome === 'ok' ? ' doneOk' : ' doneBad'
+    else if (s.n === stage) cls += ' active'
+    return '<li class="' + cls + '"' + (s.n === stage ? ' aria-current="step"' : '') + '>' + esc(s.label) + '</li>'
+  }).join('') + '</ol>'
+}
+
 /* ------------------------------------------------------------ 布局 */
 
-/**
- * 救急台是**多页**的（首页 / 会话 / 恢复 / 磁盘 …），所以「本页」这个词必须能落地：
- * 要么指向**本页内真实存在**的入口，要么**点名到页**（C1d 口径，captain 裁决）。
- * 页面名在这里只定义一次，导航与跨页指引共用，免得两处说法漂移。
- */
 const RESTORE_PAGE_LABEL = '恢复'
 
+export type NavGroupId = 'status' | 'rescue' | 'inspect'
+
 /**
- * 救急台的**页面导航表（唯一事实源）**：头部导航与 404 / 405 / 错误页的「可用页面」清单
- * 全部由它派生 —— 此前那三处各写一份、且与现实不一致（把 JSON 自述的 `/healthz` 说成页面，
- * 又漏掉 `/restore` / `/export`）。`/healthz` 是 JSON 自述、不是页面，故不在表内。
+ * 救急台的**页面导航表（唯一事实源）**：处境分组导航与 404 / 405 / 错误页的「可用页面」清单
+ * 全部由它派生 —— 绝不另建第二份页面清单。
  */
-export const CONSOLE_PAGE_NAV: ReadonlyArray<{ key: PageChrome['active']; href: string; label: string }> = [
-  { key: 'home', href: '/', label: '首页' },
-  { key: 'disk', href: '/disk', label: '磁盘占用' },
-  { key: 'sessions', href: '/sessions', label: '会话体检' },
-  { key: 'profiles', href: '/profiles', label: '档案与实例' },
-  { key: 'restore', href: '/restore', label: RESTORE_PAGE_LABEL },
-  { key: 'export', href: '/export', label: '导出' },
-  { key: 'unlock', href: '/unlock', label: '解锁' },
-  { key: 'reinstall', href: '/reinstall', label: '重装' },
+export const CONSOLE_PAGE_NAV: ReadonlyArray<{
+  key: PageChrome['active']
+  href: string
+  label: string
+  groups: readonly NavGroupId[]
+}> = [
+  { key: 'home', href: '/', label: '状态总览', groups: ['status'] },
+  { key: 'restore', href: '/restore', label: RESTORE_PAGE_LABEL, groups: ['rescue'] },
+  { key: 'unlock', href: '/unlock', label: '解锁', groups: ['rescue'] },
+  { key: 'export', href: '/export', label: '导出', groups: ['rescue'] },
+  { key: 'reinstall', href: '/reinstall', label: '重装', groups: ['rescue'] },
+  { key: 'sessions', href: '/sessions', label: '会话体检与修复', groups: ['inspect', 'rescue'] },
+  { key: 'disk', href: '/disk', label: '磁盘占用与清理', groups: ['inspect', 'rescue'] },
+  { key: 'profiles', href: '/profiles', label: '档案与实例', groups: ['inspect'] },
 ]
 
 /** 「可用页面」提示行（404 / 405 / 错误页共用这一份派生结果，不再各写一份）。 */
@@ -274,9 +310,21 @@ export function consolePagesHint(): string {
 }
 
 function renderHeader(chrome: PageChrome, subtitle: string): string {
-  const links = CONSOLE_PAGE_NAV
-    .map((item) => '<a href="' + item.href + '"' + (chrome.active === item.key ? ' class="active"' : '') + '>' + esc(item.label) + '</a>')
-    .join('')
+  const statusItem = CONSOLE_PAGE_NAV.find((item) => item.groups.includes('status'))!
+  const rescueItems = CONSOLE_PAGE_NAV.filter((item) => item.groups.includes('rescue'))
+  const inspectItems = CONSOLE_PAGE_NAV.filter((item) => item.groups.includes('inspect'))
+  const renderMenu = (title: string, items: typeof CONSOLE_PAGE_NAV): string => {
+    const anyActive = items.some((it) => it.key === chrome.active)
+    const drop = items
+      .map((it) => '<a href="' + it.href + '"' + (chrome.active === it.key ? ' class="active"' : '') + '>' + esc(it.label) + '</a>')
+      .join('')
+    return '<details class="navGroup" data-dcm-nav-group><summary class="navItem' + (anyActive ? ' active' : '') + '">'
+      + esc(title) + ' ▾</summary><div class="navDrop">' + drop + '</div></details>'
+  }
+  // 顶层入口 3 组（<= 5）：状态 / 救援动作 / 检查，全部从 CONSOLE_PAGE_NAV 派生
+  const nav = '<a href="' + statusItem.href + '" class="navItem' + (chrome.active === statusItem.key ? ' active' : '') + '">' + esc(statusItem.label) + '</a>'
+    + renderMenu('救援动作', rescueItems)
+    + renderMenu('检查', inspectItems)
   const themeSwitch = '<div class="themeSwitch" role="group" aria-label="配色"><span>配色</span>'
     + [['auto', '自动'], ['light', '浅色'], ['dark', '深色']]
       .map(([mode, label]) => '<button type="button" class="themeBtn" data-dcm-theme="' + mode + '" aria-pressed="false">' + label + '</button>')
@@ -285,7 +333,7 @@ function renderHeader(chrome: PageChrome, subtitle: string): string {
   return '<header class="top"><div class="brandRow"><div class="brand">DCM 离线救急台'
     + '<span class="ver">v' + esc(chrome.version) + ' · 默认只读 / 写动作需确认</span></div>'
     + themeSwitch + '</div>'
-    + '<nav>' + links + '</nav>'
+    + '<nav class="sitNav" aria-label="处境导航">' + nav + '</nav>'
     + '<div class="sub">' + esc(subtitle) + '</div></header>'
 }
 
@@ -300,7 +348,7 @@ function renderFooter(): string {
     ['dsh-config-manager recover-stale-lock', '回收残留环境锁（本页按同一实现执行）'],
   ]
   return '<footer><div>本页默认<strong>只读</strong>；写动作（会话归位 / 清理缓存 / 回收残留锁）只在你点开对应页面并显式提交时才执行，执行前会先给计划与副作用说明。</div><ul>'
-    + lines.map(([cmd, desc]) => '<li><code>' + esc(cmd) + '</code> — ' + esc(desc) + '</li>').join('')
+    + lines.map(([cmd, desc]) => '<li><code>' + esc(cmd) + '</code> ' + copyButton(cmd, '复制命令') + ' — ' + esc(desc) + '</li>').join('')
     + '</ul></footer>'
 }
 
@@ -308,8 +356,6 @@ export function renderLayout(chrome: PageChrome, body: string, subtitle = ''): s
   return '<!doctype html>\n<html lang="zh-CN">\n<head>\n<meta charset="utf-8">\n'
     + '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
     + '<title>DCM 离线救急台</title>\n<style>' + STYLE + '</style>\n'
-    // 脚本放 <head>：主题要在**首帧之前**落到 <html> 上（放 body 末尾会先闪一下强制主题）。
-    // 脚本自己的 DOM 操作全部等在 DOMContentLoaded，所以放 head 不会读到半个 DOM。
     + '<script>' + CONSOLE_SCRIPT + '</script>\n</head>\n<body>\n'
     + renderHeader(chrome, subtitle) + '\n' + SKELETON + '\n<main>\n' + body + '\n</main>\n' + renderFooter()
     + '\n</body>\n</html>\n'
@@ -328,6 +374,49 @@ export function renderMessagePage(title: string, message: string, hint = ''): st
 
 export interface HomePageInput { status: RescueStatus; version: string; actions?: readonly ActionCard[] }
 
+function renderVerdictCard(s: RescueStatus): string {
+  const blocked = s.safeMode.filter((r) => r.state === 'blocked')
+  const unknown = s.safeMode.filter((r) => r.state === 'unknown')
+  const established = s.safeMode.filter((r) => r.established)
+  const staleLock = s.lock.present && s.lock.state === 'STALE_LOCK_DETECTED'
+  let pillCls = 'pillOk'
+  let pillText = '可正常启动'
+  let title = 'DSH 现在可以启动（无阻断门）'
+  let summary = '未检测到 SAFE MODE 阻断与残留环境锁；若仍遇到异常，可按下方当前症状优先级处理。'
+  if (blocked.length > 0) {
+    pillCls = 'pillBad'
+    pillText = '受阻 · SAFE MODE'
+    title = 'DSH 写动作受阻：SAFE MODE 已激活'
+    summary = '存在未结案的配置 transaction（先在运行中 DSH 的「事故恢复」处理，或进「恢复」页查看快照方案）。'
+  } else if (staleLock || unknown.length > 0 || s.errors.length > 0) {
+    pillCls = 'pillWarn'
+    pillText = '需先处理异常'
+    title = staleLock ? 'DSH 可能被环境锁卡住' : 'DSH 存在待排查状态'
+    summary = staleLock
+      ? '锁目录发现可回收的残留 ownership 文件；请进入「环境锁 / 回收残留锁」检查并回收。'
+      : '部分安全状态或目录读不出来，建议先展开下方详情核对错误信息与目录权限。'
+  } else if (s.instances.length > 0) {
+    pillCls = 'pillOk'
+    pillText = '已在运行'
+    title = 'DSH 正在运行（' + String(s.instances.length) + ' 个实例活跃）'
+    summary = '实例心跳正常；若需执行会话修复、恢复快照或卸载重装，请先手动停掉在跑实例。'
+  }
+  const safeValue = blocked.length > 0 ? '已激活（阻断）'
+    : unknown.length > 0 ? '状态未知'
+      : established.length === 0 ? '未建控制面' : '正常'
+  const lockValue = !s.lock.present ? '无残留锁' : (staleLock ? '残留锁（可回收）' : s.lock.state)
+  return '<section class="verdictCard">'
+    + '<div class="verdictHead"><span class="' + pillCls + '">' + esc(pillText) + '</span>'
+    + '<h2 class="verdictTitle">' + esc(title) + '</h2></div>'
+    + '<p class="verdictSub">' + esc(summary) + '</p>'
+    + '<div class="statGrid">'
+    + '<div class="statCell"><span class="statLabel">SAFE MODE</span><span class="statValue">' + esc(safeValue) + '</span></div>'
+    + '<div class="statCell"><span class="statLabel">环境锁</span><span class="statValue">' + esc(lockValue) + '</span></div>'
+    + '<div class="statCell"><span class="statLabel">运行中实例</span><span class="statValue">' + String(s.instances.length) + ' 个</span></div>'
+    + '<div class="statCell"><span class="statLabel">快照 / 导出备份</span><span class="statValue">' + String(s.snapshots.length) + ' / ' + String(s.backups.length) + '</span></div>'
+    + '</div></section>'
+}
+
 export function renderHomePage(input: HomePageInput): string {
   const s = input.status
   const chrome: PageChrome = { version: input.version, paths: s.paths, active: 'home' }
@@ -335,18 +424,42 @@ export function renderHomePage(input: HomePageInput): string {
   for (const error of s.errors) {
     parts.push(banner('bad', '有一项读不出来', error + ' —— 下面的列表可能不完整，请先处理这条。'))
   }
-  parts.push(safeModeBanner(s.safeMode))
-  parts.push(section('路径与口径', pathsBody(s.paths, s.generatedAt)))
-  parts.push(section('运行中的 DSH 实例（心跳）', instancesBody(s.instances)))
-  parts.push(section('环境锁', lockBody(s.lock)))
+  // 第一屏：只回答「DSH 现在能不能起」 + 按症状排序的前 <=3 个建议动作
+  parts.push(renderVerdictCard(s))
+  const allActions = input.actions ?? []
+  const topActions = allActions.slice(0, 3)
+  if (topActions.length > 0) {
+    parts.push('<h2>建议动作（按当前症状排序）</h2>' + actionCards(topActions))
+  }
+  // 第二屏：全量入口、快照/备份产物、环境明细、能力边界按需展开，避免首屏过载
   const unreadableList = new Set(s.errors)
-  parts.push(section('快照（导入前备份）',
-    snapshotsBody(s.snapshots, [...unreadableList].some((e) => e.includes('快照目录读不出来')))))
-  parts.push(section('备份产物（导出目录）',
-    backupsBody(s.backups, [...unreadableList].some((e) => e.includes('导出目录读不出来')))))
-  parts.push(section('可以在这里做的事（写动作需显式确认）', actionCards(input.actions ?? [])))
-  parts.push(section('能力边界（先说清楚，免得白找）', capabilityBody()))
-  parts.push(section('离线看不到什么', offlineBody()))
+  const navRows: Cell[][] = CONSOLE_PAGE_NAV.map((item) => {
+    const matched = allActions.find((a) => a.href === item.href)
+    return [
+      { html: '<a href="' + item.href + '">' + esc(item.label) + '</a>' },
+      { html: '<code>' + esc(item.href) + '</code>' },
+      matched?.when ?? matched?.description ?? '按处境进入对应诊断或写操作页',
+    ]
+  })
+  const lockRow: Cell[][] = allActions.some((a) => a.href === '/lock')
+    ? [[{ html: '<a href="/lock">环境锁 / 回收残留锁</a>' }, { html: '<code>/lock</code>' }, allActions.find((a) => a.href === '/lock')?.when ?? '启动或写入报环境锁冲突时点它']]
+    : []
+  parts.push('<h2>更多诊断与详细清单（按需展开）</h2>')
+  parts.push(foldSection('home-all-actions', '全部 8 个救援与检查入口',
+    renderTable(['入口', '路径', '适用场景'], [...navRows, ...lockRow])))
+  parts.push(foldSection('home-artifacts',
+    '快照与备份产物（' + String(s.snapshots.length) + ' 个快照 · ' + String(s.backups.length) + ' 个备份）',
+    '<h3>快照（导入前备份）</h3>'
+    + snapshotsBody(s.snapshots, [...unreadableList].some((e) => e.includes('快照目录读不出来')))
+    + '<h3>备份产物（导出目录）</h3>'
+    + backupsBody(s.backups, [...unreadableList].some((e) => e.includes('导出目录读不出来')))))
+  parts.push(foldSection('home-env', '环境明细：SAFE MODE、路径、心跳与环境锁',
+    safeModeBanner(s.safeMode)
+    + '<h3>路径与口径</h3>' + pathsBody(s.paths, s.generatedAt)
+    + '<h3>运行中的 DSH 实例（心跳）</h3>' + instancesBody(s.instances)
+    + '<h3>环境锁</h3>' + lockBody(s.lock)))
+  parts.push(foldSection('home-capability', '能力边界与重装说明（能做什么 / 不能做什么）',
+    capabilityBody() + '<h3>离线看不到什么</h3>' + offlineBody()))
   const subtitle = s.paths.homeDir + ' · profile ' + s.paths.profile + ' · 生成于 ' + s.generatedAt
   return renderLayout(chrome, parts.join('\n'), subtitle)
 }
@@ -395,7 +508,7 @@ function pathsBody(paths: RescuePaths, generatedAt: string): string {
     ['锁目录', paths.locksDir],
     ['profile', paths.profile],
     ['生成时间', generatedAt],
-  ])
+  ], true)
 }
 
 function safeModeBanner(reports: readonly SafeModeReport[]): string {
@@ -540,12 +653,13 @@ export function renderDiskPage(
         + unreadableAreas.map((area) => '<code>' + esc(area) + '</code>').join('、') + '。</p>')
   const retention = '<p class="muted">定时备份保留最近 ' + String(report.backupRetention.keepLast)
     + ' 个（最新一份 ' + esc(formatBytes(report.backupRetention.latestBackupBytes)) + '，'
-    // C1d：清理的写入口**就在本页下一张卡**（/disk/cleanup，见 :DISK_CLEANUP_SECTION_TITLE），
-    // 旧文案「本页不提供」与它自相矛盾。按裁决 (a) 指向本页真实存在的入口。
     + esc(formatIso(report.backupRetention.latestBackupAt)) + '）。清理是写动作，就在本页下方「'
     + DISK_CLEANUP_SECTION_TITLE + '」卡里执行（需显式确认）。</p>'
-  const parts = [section('磁盘占用（只读体检）', summary + renderTable(
-    ['子区', '体积', '文件数', '回收策略', '已超期'], rows) + retention)]
+  const parts = [
+    renderFlowSteps(2),
+    section('磁盘占用（只读体检）', summary + renderTable(
+      ['子区', '体积', '文件数', '回收策略', '已超期'], rows) + retention),
+  ]
   if (done === 'cleaned') parts.unshift(banner('ok', '清理已完成', '结果见下方逐条明细（本次操作的回执）。'))
   const cleanable = report.reclaimableBytes + report.expiredBytes
   parts.push(section(DISK_CLEANUP_SECTION_TITLE, renderConfirmForm({
@@ -737,7 +851,7 @@ export function renderSessionsPage(
   if (result === null) {
     return renderLayout(chrome, banner('bad', '会话体检失败', error ?? '未知原因'), paths.homeDir + ' · 只读')
   }
-  const parts: string[] = []
+  const parts: string[] = [renderFlowSteps(2)]
   if (!result.sessionsDirExists) {
     parts.push(banner('warn', '这台机器上没有会话数据', '会话根不存在：' + result.sessionsDir))
   }
@@ -812,6 +926,8 @@ export interface ActionCard {
   id: string
   title: string
   description: string
+  /** 什么情况下点它（首页建议卡必现一行） */
+  when?: string
   href: string
   disabled: boolean
   disabledReason?: string
@@ -819,23 +935,17 @@ export interface ActionCard {
 
 function actionCards(cards: readonly ActionCard[]): string {
   if (cards.length === 0) return ''
-  return '<div class="actions">' + cards.map((c) => {
-    const link = '<a class="actionLink" href="' + esc(c.href) + '">' + esc(c.title) + ' →</a>'
-    return '<div class="actionCard">'
-      + (c.disabled ? link + '<p class="muted">' + esc(c.disabledReason ?? '当前不可用。') + '</p>'
-        : link + '<p class="muted">' + esc(c.description) + '</p>')
-      + '</div>'
+  return '<div class="actions">' + cards.map((c, index) => {
+    const ctaCls = index === 0 && !c.disabled ? 'btnPrimary' : 'btnPlain'
+    const btn = '<a class="' + ctaCls + '" href="' + esc(c.href) + '">' + esc(c.title) + ' →</a>'
+    const whenHtml = c.when === undefined ? '' : '<p class="whenLine"><b>什么情况下点它：</b>' + esc(c.when) + '</p>'
+    return '<div class="actionCard"><div><div class="actionTitle">' + esc(c.title) + '</div>'
+      + (c.disabled ? '<p class="actionDesc">' + esc(c.disabledReason ?? '当前不可用。') + '</p>'
+        : '<p class="actionDesc">' + esc(c.description) + '</p>' + whenHtml)
+      + '</div><div>' + btn + '</div></div>'
   }).join('') + '</div>'
 }
 
-/**
- * 「确认后执行」表单：放宽的是**展示层**，不是提交语义。
- *
- * 服务端直出的是 `<details open>` + 原始 `<form method="post">`（一次性 token、副作用说明、勾选项
- * 全都在表单里）：禁用 JS 时它就是今天那份可直接提交的纯 HTML。有 JS 且浏览器支持 showModal 时，
- * 客户端脚本才把 details 升级成原生 `<dialog>` —— 提交仍然 POST 到同一个 action、带同一个 token，
- * token 校验顺序（token → 安全门）在服务端一字未改。客户端校验/弹窗只算 UX，不构成任何边界。
- */
 export function renderConfirmForm(options: {
   action: string
   token: string
@@ -843,6 +953,8 @@ export function renderConfirmForm(options: {
   consequence: string
   submitLabel: string
   danger: boolean
+  /** 列表页同屏多个非危险按钮时，除首个外设 true 退为中性次要样式，保单屏唯一主色 */
+  neutral?: boolean
   checklist?: ReadonlyArray<{ name: string; label: string; description: string; checked: boolean }>
   /** 固定随表单提交的隐藏字段（如档案名）—— 表单是唯一参数载体，不依赖客户端脚本 */
   hidden?: Record<string, string>
@@ -852,6 +964,7 @@ export function renderConfirmForm(options: {
   versionField?: string
   note?: string
 }): string {
+  const btnCls = options.danger ? 'btnDanger' : (options.neutral === true ? 'btnPlain' : 'btnPrimary')
   const boxes = (options.checklist ?? []).map((item) =>
     '<label class="checkRow"><input type="checkbox" name="' + esc(item.name) + '"' + (item.checked ? ' checked' : '') + '>'
     + '<span><b>' + esc(item.label) + '</b><br><span class="muted">' + esc(item.description) + '</span></span></label>',
@@ -868,10 +981,10 @@ export function renderConfirmForm(options: {
     + (boxes === '' ? '' : '<div class="checkList">' + boxes + '</div>')
     + '<p class="consequence">' + esc(options.consequence) + '</p>'
     + (options.note === undefined ? '' : '<p class="muted">' + esc(options.note) + '</p>')
-    + '<button class="' + (options.danger ? 'btnDanger' : 'btnPrimary') + '" type="submit">' + esc(options.submitLabel) + '</button>'
+    + '<button class="' + btnCls + '" type="submit">' + esc(options.submitLabel) + '</button>'
     + '</form>'
   return '<details class="confirmWrap" data-dcm-confirm open>'
-    + '<summary class="' + (options.danger ? 'btnDanger' : 'btnPrimary') + '">' + esc(options.submitLabel) + '</summary>'
+    + '<summary class="' + btnCls + '">' + esc(options.submitLabel) + '</summary>'
     + '<div class="confirmBody"><h3 class="confirmTitle">' + esc(options.title) + '</h3>' + form + '</div>'
     + '</details>'
 }
@@ -889,7 +1002,9 @@ export function renderResultPage(
 ): string {
   const chrome: PageChrome = { version, paths, active: 'home' }
   const tone = kind === 'ok' ? 'ok' : kind === 'bad' ? 'bad' : 'warn'
-  const body = banner(tone, title, lines.length === 0 ? '（无更多信息）' : '')
+  const outcome: 'ok' | 'bad' = kind === 'ok' ? 'ok' : 'bad'
+  const body = renderFlowSteps(3, outcome)
+    + banner(tone, title, lines.length === 0 ? '（无更多信息）' : '')
     + section('逐条结果', '<ul class="resultList">' + lines.map((l) => '<li>' + cellHtml(l) + '</li>').join('') + '</ul>')
     + '<p class="backRow"><a href="' + esc(backHref) + '" data-dcm-back>← 返回上一页并恢复原位置</a>'
     + ' · <a href="/">返回首页</a> · <a href="/sessions">会话体检</a> · <a href="/disk">磁盘占用</a></p>'
@@ -905,7 +1020,7 @@ export function renderLockPage(
   done: string,
 ): string {
   const chrome: PageChrome = { version, paths, active: 'home' }
-  const parts: string[] = []
+  const parts: string[] = [renderFlowSteps(2)]
   if (done === 'recovered') parts.push(banner('ok', '残留锁已回收', '现在可以重新尝试之前被拒绝的操作。'))
   if (!lock.present) {
     parts.push(banner('info', '当前没有残留锁', '锁目录里没有 ownership 文件：' + lock.locksDir))
@@ -957,7 +1072,7 @@ export function renderUnlockPage(
   done: string,
 ): string {
   const chrome: PageChrome = { version, paths, active: 'unlock' }
-  const parts: string[] = []
+  const parts: string[] = [renderFlowSteps(2)]
   if (done === 'ok') parts.push(banner('ok', '解锁成功', '清单已在上一步给出；明文只在内存里解出，没有落盘。'))
   parts.push(section('什么是加密容器',
     '<p>勾了「加密」导出的备份，整份 ZIP 被密码包住（DCA1 容器，文件名仍是 .zip）。'
@@ -972,7 +1087,7 @@ export function renderUnlockPage(
     { html: '<a href="#unlock-' + esc(verifyIdOf(b.name)) + '">解锁</a>' },
   ])
   if (rows2.length > 0) parts.push(section('加密备份（' + String(rows2.length) + '）', renderTable(['文件', '大小', '修改时间', ''], rows2)))
-  for (const b of encrypted) {
+  encrypted.forEach((b, idx) => {
     parts.push(section('解锁 ' + b.name, renderConfirmForm({
       action: '/unlock/run',
       token: actionToken,
@@ -981,11 +1096,12 @@ export function renderUnlockPage(
       consequence: '会在内存中解出明文 ZIP 并列出条目清单；不写盘、不回传内容、不自动导入。密码区分大小写，忘记无法找回。',
       submitLabel: '解锁并列出清单',
       danger: false,
+      neutral: idx > 0,
       hidden: { id: verifyIdOf(b.name) },
       passwordField: 'password',
       note: '等价命令：先在 GUI 的导入向导里走「解锁加密备份」；命令行暂无解锁子命令。',
     })))
-  }
+  })
   return renderLayout(chrome, parts.join('\n'), paths.exportsDir + ' · 密码只走本次请求')
 }
 
@@ -998,7 +1114,7 @@ export function renderRestorePage(
   actionToken: string,
 ): string {
   const chrome: PageChrome = { version, paths, active: 'restore' }
-  const parts: string[] = []
+  const parts: string[] = [renderFlowSteps(plan !== null && plan.ok ? 2 : 1)]
   parts.push(banner('warn', '恢复是危险动作',
     '它会覆盖 $DSH_HOME 下的文件、删除导入后新增的文件、并卸载插件。执行前三道门必须通过（SAFE MODE 未激活 / 无残留锁 / DSH 已停止）；每次覆盖前 core 会把当前文件复制到 <快照>/pre-restore/，可人工反悔。'))
   const rows2: Cell[][] = snapshots.map((s) => [
@@ -1086,7 +1202,7 @@ export function renderExportPage(
       checklist,
       note: '等价命令：dsh-config-manager backup --sections <a,b,c>',
     })
-  return renderLayout(chrome, section('离线导出', body), paths.exportsDir)
+  return renderLayout(chrome, renderFlowSteps(2) + section('离线导出', body), paths.exportsDir)
 }
 
 /** 重装：计划 + 终端确认码。 */
@@ -1118,7 +1234,7 @@ export function renderReinstallPage(
       versionField: 'version',
       note: '等价命令：dsh-config-manager reinstall --dry-run',
     })
-  return renderLayout(chrome, section('重装 DSH', body), paths.homeDir + ' · 需终端确认码')
+  return renderLayout(chrome, renderFlowSteps(1) + section('重装 DSH', body), paths.homeDir + ' · 需终端确认码')
 }
 /* ------------------------------------------------------------ 备份自检 */
 
@@ -1182,6 +1298,7 @@ export function renderProfilesPage(
   if (outcome.rows.length === 0) {
     parts.push(banner('info', '本机还没有任何档案', 'DSH 首次启动时会按模板建一个；这里没什么可启停的。'))
   }
+  let primaryLaunchUsed = false
   for (const row of outcome.rows) {
     if (row.launchable) {
       parts.push(section('启动 ' + row.name, renderConfirmForm({
@@ -1191,9 +1308,11 @@ export function renderProfilesPage(
         consequence: '会在后台拉起一个独立的 DSH 实例（自动挑空闲端口），就绪后给出带 token 的认证 URL。它独立于当前任何实例；要关掉它请回本页点「停止」。',
         submitLabel: '启动实例',
         danger: false,
+        neutral: primaryLaunchUsed,
         hidden: { name: row.name },
         note: '等价命令：dsh --profile ' + row.name,
       })))
+      primaryLaunchUsed = true
     } else if (row.running) {
       parts.push(section('停止 ' + row.name, renderConfirmForm({
         action: '/profiles/stop',

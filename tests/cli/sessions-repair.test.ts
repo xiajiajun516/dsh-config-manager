@@ -194,3 +194,20 @@ test('sessions repair --json：机器可读计划（dry-run 时输出 summary+ac
     assert.equal(payload.actions.some((a) => a.kind === 'move'), true);
   });
 });
+
+test('sessions repair --json：含非 projectKey 目录与 --fix 时 stdout 仍只有合法 JSON（日志走 stderr）', async () => {
+  await withTmp(async (home) => {
+    await fs.mkdir(path.join(home, 'sessions', 'stray-folder'), { recursive: true });
+    await seedSession(home, '--D-Ghost-proj--', 'session-fix-json', 'D:/Real/proj');
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: CliIo = { log: (s) => { out.push(s); }, error: (s) => { err.push(s); } };
+    assert.equal(await runCli(['sessions', 'repair', '--home', home, '--fix', '--json'], io, noDshEnv(home)), 0);
+    const parsed = JSON.parse(out.join('\n')) as { ok: boolean; dryRun: boolean; results: Array<{ ok: boolean }> };
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.dryRun, false);
+    assert.equal(parsed.results.length, 1);
+    assert.match(err.join('\n'), /stray-folder/);
+    assert.match(err.join('\n'), /完成/);
+  });
+});

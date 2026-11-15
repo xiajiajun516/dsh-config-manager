@@ -51,6 +51,41 @@ export const CONSOLE_SCRIPT = `(function () {
       node = node.parentNode;
     }
   });
+  function copyText(text, btn) {
+    var done = function () {
+      var orig = btn.getAttribute('data-dcm-orig') || btn.textContent || '复制';
+      if (!btn.getAttribute('data-dcm-orig')) btn.setAttribute('data-dcm-orig', orig);
+      btn.setAttribute('data-copied', '1');
+      btn.textContent = '已复制 ✓';
+      if (typeof window.setTimeout === 'function') {
+        window.setTimeout(function () {
+          btn.removeAttribute('data-copied');
+          btn.textContent = orig;
+        }, 1200);
+      }
+    };
+    if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+      return;
+    }
+    fallbackCopy(text, done);
+  }
+  function fallbackCopy(text, done) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch (e) {
+      // 剪贴板不可用时静默退出，不打断页面交互
+    }
+  }
   // 离线救急台的**唯一**客户端脚本：只做两件事 —— ① 会话内状态恢复（sessionStorage，dcm: 前缀）
   // ② 把确认表单从 details 升级成原生 dialog 元素。禁用 JS 时两者都不参与，页面回落到纯 HTML。
   var PREFIX = 'dcm:';
@@ -114,12 +149,30 @@ export const CONSOLE_SCRIPT = `(function () {
   }
   function onField(event) {
     var el = event.target;
+    if (el && el.required && typeof el.setAttribute === 'function') {
+      el.setAttribute('aria-invalid', String(el.value || '').trim() === '' ? 'true' : 'false');
+    }
     if (!persistable(el)) return;
     if (el.type === 'checkbox' || el.type === 'radio') writeJson(fieldKey(el), { checked: el.checked === true });
     else writeJson(fieldKey(el), { value: String(el.value) });
   }
   document.addEventListener('change', onField, true);
   document.addEventListener('input', onField, true);
+  document.addEventListener('submit', function (event) {
+    var form = event.target;
+    if (!form || form.tagName !== 'FORM') return;
+    form.setAttribute('aria-busy', 'true');
+    if (typeof form.querySelector !== 'function') return;
+    var btn = form.querySelector('button[type="submit"]');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    var spin = document.createElement('span');
+    spin.className = 'btnSpinner';
+    spin.setAttribute('aria-hidden', 'true');
+    btn.textContent = '';
+    btn.appendChild(spin);
+    btn.appendChild(document.createTextNode('执行中…'));
+  }, true);
   function detailsState() {
     var list = document.querySelectorAll('details[data-dcm-persist]');
     for (var i = 0; i < list.length; i++) {
@@ -217,14 +270,27 @@ export const CONSOLE_SCRIPT = `(function () {
     for (var i = 0; i < list.length; i++) enhanceOne(list[i]);
   }
   document.addEventListener('click', function (event) {
+    var menus = document.querySelectorAll('details[data-dcm-nav-group][open]');
+    for (var m = 0; m < menus.length; m++) {
+      var menu = menus[m];
+      if (typeof menu.contains === 'function' && (!menu.contains(event.target) || (event.target && event.target.tagName === 'A'))) {
+        menu.open = false;
+      }
+    }
     var node = event.target;
     while (node !== null && node !== document) {
-      if (typeof node.hasAttribute === 'function' && node.hasAttribute('data-dcm-back')) {
-        if (window.history.length > 1) {
-          event.preventDefault();
-          window.history.back();
+      if (typeof node.hasAttribute === 'function') {
+        if (node.hasAttribute('data-dcm-copy')) {
+          copyText(String(node.getAttribute('data-dcm-copy') || ''), node);
+          return;
         }
-        return;
+        if (node.hasAttribute('data-dcm-back')) {
+          if (window.history.length > 1) {
+            event.preventDefault();
+            window.history.back();
+          }
+          return;
+        }
       }
       node = node.parentNode;
     }
