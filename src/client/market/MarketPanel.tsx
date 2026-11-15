@@ -25,7 +25,8 @@ import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { ImportResult, ItemResolution } from '../../core/types.ts'
 import type { SectionId } from '../../schema/types.ts'
-import { Badge, Banner, Button, Card, Empty, SectionTitle } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Segmented } from '../common/ui.tsx'
+import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { InspectIcon } from '../common/Icon.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
@@ -51,6 +52,7 @@ import type { MyInstallSlice, MyWizardSlice } from './my-configs-view.ts'
 import { readDisclaimerDismissed, writeDisclaimerDismissed } from './disclaimer.ts'
 import type { DisclaimerKey } from './disclaimer.ts'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
+import { sectionLabel } from '../common/section-labels.ts'
 import { redact } from '../../security/redaction.ts'
 import { runStore, toMarketStoreSlice, type MarketStoreSlice } from '../run-store.ts'
 import css from '../config-manager.module.css'
@@ -434,26 +436,15 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
       }
     >
       {/* 子视图切换（§4.6）：浏览市场 / 我的配置（低频面板状态镜像 runStore，切 tab/刷新不丢） */}
-      <div className={css.modeTabs} role="tablist">
-        <button
-          type="button" role="tab"
-          aria-selected={state.subView === 'browse'}
-          data-active={state.subView === 'browse' ? '' : undefined}
-          className={css.modeTab}
-          onClick={() => { patch({ subView: 'browse' }) }}
-        >
-          {t('myconfigs.tab.browse')}
-        </button>
-        <button
-          type="button" role="tab"
-          aria-selected={state.subView === 'myconfigs'}
-          data-active={state.subView === 'myconfigs' ? '' : undefined}
-          className={css.modeTab}
-          onClick={() => { patch({ subView: 'myconfigs' }) }}
-        >
-          {t('myconfigs.tab.myconfigs')}
-        </button>
-      </div>
+      <Segmented
+        items={[
+          { id: 'browse', label: t('myconfigs.tab.browse') },
+          { id: 'myconfigs', label: t('myconfigs.tab.myconfigs') },
+        ]}
+        active={state.subView}
+        onChange={(id) => { patch({ subView: id as 'browse' | 'myconfigs' }) }}
+        ariaLabel={t('section.label')}
+      />
 
       {/* 「我的配置」子视图（登录卡 / 上传向导 / 已上传列表 / 装回本地） */}
       {state.subView === 'myconfigs' ? (
@@ -616,12 +607,12 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
               （「内置市场尚未加载，请先『拉取最新』」），错误原文被整个丢弃 ——
               用户只会反复点刷新，永远不知是宿主没就绪、网络不通还是本地 index 读不出来。 */}
           {state.loadError !== null && (
-            <>
-              <Banner kind="error">{redact(state.loadError)}</Banner>
-              <div className={css.actionRow}>
-                <Button loading={state.loading} onClick={() => { void loadStatus() }}>{t('common.retry')}</Button>
-              </div>
-            </>
+            <ErrorBanner
+              error={redact(state.loadError)}
+              onRetry={() => { void loadStatus() }}
+              retrying={state.loading}
+              t={api.t}
+            />
           )}
           {state.loadError === null && (<>
             {/* 筛选控件 2×2 网格（搜索框跨两列 + 4 个 select 两两一行）：
@@ -656,7 +647,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
                 onChange={(next) => { patch({ sectionFilter: next }) }}
                 options={[
                   { value: '', label: t('list.sectionsAll') },
-                  ...sectionOptions.map((s) => ({ value: s, label: s })),
+                  ...sectionOptions.map((s) => ({ value: s, label: sectionLabel(s as SectionId, cmT) })),
                 ]}
               />
               <Select
@@ -751,14 +742,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
         onConfirm={confirmDownloadDisclaimer}
         onCancel={() => { setDisclaimerKey(null) }}
       >
-        <label className={css.checkboxRow}>
-          <input
-            type="checkbox"
-            checked={dontAsk}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => { setDontAsk(e.target.checked) }}
-          />
-          <span>{t('disclaimer.dontAsk')}</span>
-        </label>
+        <Checkbox checked={dontAsk} onChange={setDontAsk} label={t('disclaimer.dontAsk')} />
       </ConfirmDialog>
       </>
     )}

@@ -382,6 +382,20 @@ test('visibleUnits：真实规模展开即全量（UI-15 修正后）；只有�
   assert.equal(visibleUnits([], false).shown.length, 0)
   // 恰好等于上限：不折叠（边界）
   assert.equal(visibleUnits(huge.slice(0, UNIT_RENDER_LIMIT), false).hidden, 0)
+
+  // 数字分页：每增一页多渲染一个 limit 批，直到全部显示
+  const paged = Array.from({ length: 25 }, (_, i) => ({ id: `u:${i}`, label: `u-${i}`, sizeBytes: 1 }))
+  const page1 = visibleUnits(paged, 1, 10)
+  assert.equal(page1.shown.length, 10)
+  assert.equal(page1.hidden, 15)
+  const page2 = visibleUnits(paged, 2, 10)
+  assert.equal(page2.shown.length, 20)
+  assert.equal(page2.hidden, 5)
+  const page3 = visibleUnits(paged, 3, 10)
+  assert.equal(page3.shown.length, 25)
+  assert.equal(page3.hidden, 0)
+  // 0 或负数保护：退回第 1 页
+  assert.equal(visibleUnits(paged, 0, 10).shown.length, 10)
 })
 
 test('groupUnits：按分组名切块；无分组时退化为单块（其它分区渲染路径不变）', () => {

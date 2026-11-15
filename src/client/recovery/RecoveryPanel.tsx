@@ -23,6 +23,7 @@ import type { TranslateNS } from '../client-types.ts'
 import {
   Badge, Banner, Button, Card, FoldToggle, SectionTitle, Spinner, StatusDot,
 } from '../common/ui.tsx'
+import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { RefreshIcon } from '../common/Icon.tsx'
 import { Collapse } from '../common/Motion.tsx'
 import { DiskUsageCard } from '../environment/maintenance/DiskUsageCard.tsx'
@@ -210,7 +211,7 @@ function incidentStateLabel(t: TranslateNS<'config-manager-recovery'>, state: st
 }
 
 export function RecoveryPanel(props: RecoveryPanelProps) {
-  const { recoveryApi, incidentApi, t } = props
+  const { recoveryApi, incidentApi, t, diskApi } = props
   const [state, setState] = useState<PanelState>(initFromStore)
   const stateRef = useRef<PanelState>(state)
   const mountedRef = useRef(true)
@@ -526,10 +527,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
       {state.status === 'loading' && <SkeletonList label={t('recovery.loading')} />}
 
       {state.status === 'error' && (
-        <Banner kind="error">
-          {state.error ?? t('common.unknownError')}
-          <Button variant="primary" onClick={load}>{t('common.retry')}</Button>
-        </Banner>
+        <ErrorBanner error={state.error ?? t('common.unknownError')} onRetry={load} t={diskApi.t} />
       )}
 
       {/* issue #56：「保护开着但已无待处理事项」——这正是 423 与空面板同时出现的死结态。
@@ -860,7 +858,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
           它要解决的正是同一件事（事故后把工作区与会话退回某个时刻），且时间线按会话分组，
           与会话体检的分组口径一致；会话回退只 fork 子会话，原会话日志只读。
            卡内缺省收起：这是维护页最长的一块（台账 + 预览），入口与摘要留在标题行。 */}
-      <RollbackCard recoveryApi={recoveryApi} t={t} />
+      <RollbackCard recoveryApi={recoveryApi} t={t} uiT={diskApi.t} />
 
       {/* 执行恢复二次确认（破坏性操作） */}
       <ConfirmDialog

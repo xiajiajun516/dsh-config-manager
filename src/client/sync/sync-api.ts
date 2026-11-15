@@ -1018,7 +1018,7 @@ export class SyncApi {
   }
 
   /** Phase 7 迁移前咨询（只读健康评分 + 建议）：对远端快照生成咨询报告。 */
-  async consult(input: { type: 'remote-snapshot'; id: string; snapshotId?: string }): Promise<ConsultReport> {
+  async consult(input: SyncPushPayload & { type: 'remote-snapshot'; id: string; snapshotId?: string }): Promise<ConsultReport> {
     return postJson<ConsultReport>(CONFIG_MANAGER_API.consult, input, this.t, SYNC_OPTS);
   }
 }

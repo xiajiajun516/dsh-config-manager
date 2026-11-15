@@ -36,6 +36,7 @@ import { RecoveryPanel } from '../recovery/RecoveryPanel.tsx'
 import type { RecoveryPort } from '../../ui/types.ts'
 import type { IncidentApi } from '../recovery/incident-api.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Segmented } from '../common/ui.tsx'
+import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { Icon } from '../common/Icon.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
@@ -572,10 +573,7 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
       {/* —— 列表 —— */}
       {phase === 'loading' && <SkeletonList label={t('profiles.loading')} />}
       {phase === 'error' && (
-        <Banner kind="error">
-          {redact(state.loadError ?? t('common.unknownError'))}
-          <Button size="sm" onClick={load}>{t('common.retry')}</Button>
-        </Banner>
+        <ErrorBanner error={redact(state.loadError ?? t('common.unknownError'))} onRetry={load} t={api.t} />
       )}
       {phase === 'ready' && profileList.length === 0 && <Empty>{t('profiles.empty')}</Empty>}
       {phase === 'ready' && profileList.length > 0 && (

@@ -28,6 +28,7 @@ import { SkeletonList } from '../../common/Skeleton.tsx'
 import { ConfirmDialog } from '../../common/ConfirmDialog.tsx'
 import { RefreshIcon } from '../../common/Icon.tsx'
 import { toast } from '../../common/toast-store.ts'
+import { WRITE_KEY, useRecoveryWriteKey, withRecoveryWrite } from '../../recovery/use-recovery-write.ts'
 import css from '../../config-manager.module.css'
 
 export interface DiskUsageCardProps {
@@ -41,7 +42,8 @@ export function DiskUsageCard({ api, onBackupsChanged }: DiskUsageCardProps) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [report, setReport] = useState<DiskUsageReport | null>(null)
-  const [busy, setBusy] = useState(false)
+  const writeKey = useRecoveryWriteKey()
+  const busy = writeKey === WRITE_KEY.diskCleanup
   const [includeExpired, setIncludeExpired] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const mountedRef = useRef(true)
@@ -101,15 +103,13 @@ export function DiskUsageCard({ api, onBackupsChanged }: DiskUsageCardProps) {
    */
   const runCleanup = (): void => {
     if (busy) return
-    setBusy(true)
     setConfirmOpen(false)
     // categories 是**分区白名单**：没勾过期导出就一个导出文件都不碰（硬边界 ②）
     const categories: Array<'tmp' | 'expired-exports'> = ['tmp']
     if (includeExpired) categories.push('expired-exports')
-    api.cleanupDiskUsage(categories).then(
+    void withRecoveryWrite(WRITE_KEY.diskCleanup, () => api.cleanupDiskUsage(categories)).then(
       (result) => {
         if (!mountedRef.current) return
-        setBusy(false)
         setReport(result.report)
         if (includeExpired) onBackupsChanged?.()
         // e2e-F3：呈现判定在 ui/disk-usage-view.ts（「目录不存在」不是失败）；组件只按 kind 挑 toast
@@ -125,7 +125,6 @@ export function DiskUsageCard({ api, onBackupsChanged }: DiskUsageCardProps) {
       },
       (err) => {
         if (!mountedRef.current) return
-        setBusy(false)
         toast.error(redact(err instanceof Error ? err.message : String(err)))
       },
     )

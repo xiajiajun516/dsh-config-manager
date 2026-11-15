@@ -36,7 +36,7 @@ import {
 import type { ExportGroup } from '../../ui/types.ts'
 import { formatBytes } from '../../ui/report.ts'
 import { redact } from '../../security/redaction.ts'
-import { Badge, Button, Checkbox, Spinner } from './ui.tsx'
+import { Badge, Button, Checkbox, Empty, Spinner } from './ui.tsx'
 import { Skeleton } from './Skeleton.tsx'
 import { Collapse } from './Motion.tsx'
 import { ExpandChevron } from './Icon.tsx'
@@ -139,11 +139,10 @@ export function ContentPicker({
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   /**
-   * 「显示全部」的展开态（UI-15，逐分区）。默认只渲染前 UNIT_RENDER_LIMIT 条 ——
-   * sessions 实测 631 个单元，一次性铺满 DOM 只会拖慢渲染（见 selection-model 的
-   * visibleUnits / UNIT_RENDER_LIMIT）。
+   * 渐进分页的页数（UI-15，逐分区/桶）：每点一次追加一页 UNIT_RENDER_LIMIT（1000 条），
+   * 默认只渲染第 1 页 —— 避免上万条时一次性塞进 DOM 卡死主线程。
    */
-  const [showAllUnits, setShowAllUnits] = useState<Record<string, boolean>>({})
+  const [unitPages, setUnitPages] = useState<Record<string, number>>({})
   /**
    * 二级分组的展开态（键 = 分区:分组名）。**默认全部折叠** —— 级联树语义（用户明确要求）：
    * 展开分区只列出工作区分组，点某个分组的 chevron 才展开**那一棵子树**，不会一次铺开全部。
@@ -332,7 +331,7 @@ export function ContentPicker({
       {tree.pluginsLoaded
         && tree.entries.length === 0
         && tree.buckets.every((b) => b.units.length === 0)
-        && <span className={css.hint}>{t('picker.empty')}</span>}
+        && <Empty>{t('picker.empty')}</Empty>}
       {tree.entries.map((entry) => {
         const open = expandedPlugins[entry.name] === true
         const state = pluginEntryPickState(value, entry)
@@ -444,7 +443,7 @@ export function ContentPicker({
         if (node === undefined) return null
         const key = 'bucket:' + bucket.section
         const open = expandedPlugins[key] === true
-        const units = visibleUnits(bucket.units, showAllUnits[key] === true)
+        const units = visibleUnits(bucket.units, unitPages[key] ?? 1)
         const bodyId = 'picker-bucket-' + bucket.section
         return (
           <div key={key} className={css.pickerGroup}>
@@ -501,7 +500,7 @@ export function ContentPicker({
                     type="button"
                     className={css.ghostButton}
                     data-size="sm"
-                    onClick={() => { setShowAllUnits({ ...showAllUnits, [key]: true }) }}
+                    onClick={() => { setUnitPages({ ...unitPages, [key]: (unitPages[key] ?? 1) + 1 }) }}
                   >
                     {t('picker.showAll', { count: String(bucket.units.length) })}
                   </button>
@@ -593,7 +592,7 @@ export function ContentPicker({
       {loading && <Skeleton count={3} label={t('picker.loading')} />}
       {failedSections.length > 0 && <span className={css.hint}>{t('picker.unitsUnavailable')}</span>}
 
-      {!loading && visible.length === 0 && <span className={css.hint}>{t('picker.empty')}</span>}
+      {!loading && visible.length === 0 && <Empty>{t('picker.empty')}</Empty>}
 
       {visible.length > 0 && (
         <div className={css.pickerList}>
@@ -631,8 +630,8 @@ export function ContentPicker({
               if (!open && node.unitsUnread === true) onRequestUnits?.(node.section)
               setExpanded({ ...expanded, [node.section]: !open })
             }
-            /** 本帧要渲染的单元（默认前 N 条；UI-15） */
-            const units = visibleUnits(node.units, showAllUnits[node.section] === true)
+            /** 本帧要渲染的单元（按页渐进披露，每页 UNIT_RENDER_LIMIT 条；UI-15） */
+            const units = visibleUnits(node.units, unitPages[node.section] ?? 1)
             return (
               <Fragment key={node.section}>
                 {groupTitle !== undefined && (
@@ -775,7 +774,7 @@ export function ContentPicker({
                             type="button"
                             className={css.ghostButton}
                             data-size="sm"
-                            onClick={() => { setShowAllUnits({ ...showAllUnits, [node.section]: true }) }}
+                            onClick={() => { setUnitPages({ ...unitPages, [node.section]: (unitPages[node.section] ?? 1) + 1 }) }}
                           >
                             {t('picker.showAll', { count: String(node.units.length) })}
                           </button>

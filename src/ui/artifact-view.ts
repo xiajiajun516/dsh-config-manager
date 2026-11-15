@@ -68,7 +68,7 @@ export interface ArtifactInput {
   /** 远端当前基线（sync-state.lastSnapshotId）；命中即标「当前基线」。未知/缺省 = 不标 */
   remoteCurrentId?: string | null
   /** 远端通道类型（元数据行第 1 段）。未知 = 该段不渲染（不猜成 Git） */
-  remoteChannel?: 'git' | 'webdav' | null
+  remoteChannel?: 'git' | 'webdav' | 's3' | 'gist' | null
   marketItems?: readonly MarketItemInput[]
 }
 

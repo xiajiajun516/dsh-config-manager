@@ -25,7 +25,7 @@ import { useEffect, useId, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SectionId } from '../../schema/types.ts'
-import { Badge, Banner, Button, Card, Checkbox, Switch } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Segmented, Switch } from '../common/ui.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ContentPicker } from '../common/ContentPicker.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
@@ -154,26 +154,15 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
       <Modal.Body scroll style={{ maxHeight: '66vh' }}>
         {/* 页签：两个目标都一屏装得下，用分段而不是并列的两张卡 —— 卡片会让「当前在哪一页」
             变成依靠位置判断，而分段控件的选中态本身就在回答这个问题。 */}
-        <div className={css.settingsTabs} role="tablist" aria-label={t('mode.settingsTitle')}>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'content'}
-            className={tab === 'content' ? css.settingsTabOn : css.settingsTab}
-            onClick={() => { setTab('content') }}
-          >
-            {t('mode.tabContent')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'settings'}
-            className={tab === 'settings' ? css.settingsTabOn : css.settingsTab}
-            onClick={() => { setTab('settings') }}
-          >
-            {t('mode.tabAutosyncSecurity')}
-          </button>
-        </div>
+        <Segmented
+          items={[
+            { id: 'content', label: t('mode.tabContent') },
+            { id: 'settings', label: t('mode.tabAutosyncSecurity') },
+          ]}
+          active={tab}
+          onChange={(id) => { setTab(id as SyncSettingsTab) }}
+          ariaLabel={t('mode.settingsTitle')}
+        />
         {tab === 'settings' ? (
           /* 这条通道的全部策略一页装完（D-39）：自动同步（段头带总开关）→ 加密与密钥导出
              （段头带加密开关）→ 解密密码（段头带「已保存」）→ 插件（跟随远端删除）。

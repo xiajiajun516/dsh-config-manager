@@ -15,7 +15,8 @@
  * 业务判定全在 \`src/ui/rollback-view.ts\`（框架无关、node 可测）；本组件只做装配与交互状态。
  * 禁止组件直接 fetch：一律走 \`RecoveryApi\`（\`RecoveryPort & Partial<RollbackPointPort>\`）。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { liveUiT, type UiT } from '../../ui/i18n.ts'
 import type { RecoveryPort } from '../../ui/types.ts'
 import type { TranslateNS } from '../client-types.ts'
 import {
@@ -56,7 +57,9 @@ import type {
   RollbackRewindResult,
 } from '../../ui/rollback-view.ts'
 import { redact } from '../../security/redaction.ts'
-import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Spinner, Switch } from '../common/ui.tsx'
+import { ErrorBanner } from '../common/ErrorBanner.tsx'
+import { Select } from '../common/Select.tsx'
 import { Icon } from '../common/Icon.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
@@ -66,7 +69,12 @@ import { resetChatPointCache } from '../chat/chat-entry-view.ts'
 import { readRollbackPreviewFiles, readRollbackPreviewRemovals } from '../chat/rollback-entry-view.ts'
 import { formatSessionBytes } from '../../ui/session-inventory-view.ts'
 import { rollbackEntryVisible } from '../../ui/rollback-view.ts'
-import { setRollbackEntryEnabled } from './rollback-enabled.ts'
+import {
+  consumeRollbackLedgerOpen,
+  setRollbackEntryEnabled,
+  subscribeRollbackLedgerOpen,
+} from './rollback-enabled.ts'
+import { WRITE_KEY, useRecoveryWriteKey, withRecoveryWrite } from './use-recovery-write.ts'
 import { RollbackDiffPane, type RollbackDiffState } from './RollbackDiffPane.tsx'
 import { RollbackFileChanges, type RollbackFileViewEntry } from './RollbackFileChanges.tsx'
 import css from '../config-manager.module.css'
@@ -75,6 +83,7 @@ export interface RollbackCardProps {
   /** recovery 端口（rollback-points 方法为 Partial：宿主旧版可能没有这一族）。 */
   recoveryApi: RecoveryPort & Partial<RollbackPointPort>
   t: TranslateNS<'config-manager-recovery'>
+  uiT?: UiT
 }
 
 /** 宿主错误文本渲染前统一过 redact（AGENTS.md UI 硬性规则 7）。 */
@@ -97,7 +106,8 @@ function apiCodeOf(err: unknown): string | null {
   return typeof code === 'string' && code !== '' ? code : null
 }
 
-export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
+export function RollbackCard({ recoveryApi, t, uiT = liveUiT }: RollbackCardProps) {
+  const autoSwitchId = useId()
   /** 动态字典键（机器码 / 段名拼出来的 key）在这里**集中收窄一次** —— 视图模型已保证未知码回落 unknown 键。 */
   const dyn = (key: string): Parameters<typeof t>[0] => key as Parameters<typeof t>[0]
 
@@ -117,7 +127,8 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   const [error, setError] = useState<string | null>(null)
   const [list, setList] = useState<RollbackListResult | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const writeKey = useRecoveryWriteKey()
+  const busy = writeKey === WRITE_KEY.rollbackRewind || writeKey === WRITE_KEY.rollbackDelete
   const [target, setTarget] = useState<RollbackPointRowView | null>(null)
   const [preview, setPreview] = useState<RollbackPreviewResult | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -138,7 +149,10 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   }, [])
 
   /** 台账弹窗的开关（2026-10-12：本卡退出折叠，台账整块进弹窗，且只在打开时挂载） */
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(() => consumeRollbackLedgerOpen())
+  useEffect(() => subscribeRollbackLedgerOpen(() => {
+    if (consumeRollbackLedgerOpen()) setOpen(true)
+  }), [])
   /**
    * 弹窗左侧选中的对话（键 = sessionId；缺 id 的记录归入 `__unknown__` 组）。
    * 存**键**而不是对象：刷新后台账会换一批对象，键仍能对上；键失效时自动回落到第一条
@@ -153,11 +167,11 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   /** 「刷新」在途：**保留旧内容**，只把刷新按钮置为在途（见 load 的 keep 语义） */
   const [refreshing, setRefreshing] = useState(false)
   /** 开关（issue #88）在途：置灰防重复点击，但不改开关的显示值（值只在宿主确认后变） */
-  const [prefsBusy, setPrefsBusy] = useState(false)
+  const prefsBusy = writeKey === WRITE_KEY.rollbackPrefs
   /** 清理台账（issue #89）：确认弹窗 / 勾选 / 结果文案 */
   const [cleanupOpen, setCleanupOpen] = useState(false)
   const [cleanupGuards, setCleanupGuards] = useState(false)
-  const [cleanupBusy, setCleanupBusy] = useState(false)
+  const cleanupBusy = writeKey === WRITE_KEY.rollbackPurge
   const [cleanupNote, setCleanupNote] = useState<string | null>(null)
 
   const fail = (err: unknown): void => {
@@ -260,11 +274,12 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   }
 
   const rewind = (): void => {
-    if (recoveryApi.restoreRollbackPoint === undefined || target === null) return
+    const restoreFn = recoveryApi.restoreRollbackPoint
+    if (restoreFn === undefined || target === null || busy) return
+    const pointId = target.id
     setConfirmOpen(false)
-    setBusy(true)
     setActionError(null)
-    recoveryApi.restoreRollbackPoint(target.id, {
+    void withRecoveryWrite(WRITE_KEY.rollbackRewind, () => restoreFn.call(recoveryApi, pointId, {
       // fail-closed：这里恒为 true（用户刚在 danger 弹窗里点过确认），API 侧不自动置真
       userConfirmed: true,
       mode,
@@ -272,30 +287,28 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
       allowPartial,
       // 全选（或清单为空）⇒ onlyPaths 为 null ⇒ 不传字段，走既有全量口径
       ...(onlyPaths === null ? {} : { onlyPaths }),
-    }).then(
+    })).then(
       (res) => {
         if (!mounted.current) return
-        setBusy(false)
         setResult(res)
         const outcome = rollbackOutcome(res.outcome)
         if (outcome.badgeKind === 'ok') toast.ok(t(dyn(outcome.key)))
         else toast.warn(t(dyn(outcome.key)))
         load()
       },
-      (err: unknown) => { if (mounted.current) { setBusy(false); fail(err) } },
+      (err: unknown) => { if (mounted.current) fail(err) },
     )
   }
 
   const remove = (): void => {
-    if (recoveryApi.removeRollbackPoint === undefined || deleteTarget === null) return
+    const removeFn = recoveryApi.removeRollbackPoint
+    if (removeFn === undefined || deleteTarget === null || busy) return
     const id = deleteTarget.id
     setDeleteTarget(null)
-    setBusy(true)
     setActionError(null)
-    recoveryApi.removeRollbackPoint(id, true).then(
+    void withRecoveryWrite(WRITE_KEY.rollbackDelete, () => removeFn.call(recoveryApi, id, true)).then(
       (res) => {
         if (!mounted.current) return
-        setBusy(false)
         if (res.ok) {
           toast.ok(t('rollback.delete.done'))
           // C7：删掉的点可能正是聊天入口缓存里那条 → 清掉，否则 30 s 内入口仍按旧列表判「可点」，
@@ -306,7 +319,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
         }
         setActionError(t(dyn(rollbackCodeKey(res.code))))
       },
-      (err: unknown) => { if (mounted.current) { setBusy(false); fail(err) } },
+      (err: unknown) => { if (mounted.current) fail(err) },
     )
   }
 
@@ -315,20 +328,19 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
    * 显示值仍以宿主回传的磁盘真值为准（不是把我们传下去的那个值当真）。
    */
   const togglePrefs = (next: boolean): void => {
-    if (typeof recoveryApi.setRollbackEnabled !== 'function') return
-    setPrefsBusy(true)
+    const setEnabledFn = recoveryApi.setRollbackEnabled
+    if (typeof setEnabledFn !== 'function' || prefsBusy) return
     setActionError(null)
-    recoveryApi.setRollbackEnabled(next).then(
+    void withRecoveryWrite(WRITE_KEY.rollbackPrefs, () => setEnabledFn.call(recoveryApi, next)).then(
       (res) => {
         if (!mounted.current) return
-        setPrefsBusy(false)
         setList((prev) => (prev === null ? prev : {
           ...prev,
           storage: { ...prev.storage, rollbackEnabled: res.rollbackEnabled, rollbackActive: res.rollbackActive },
         }))
         setRollbackEntryEnabled(res.rollbackEnabled === true)
       },
-      (err: unknown) => { if (mounted.current) { setPrefsBusy(false); fail(err) } },
+      (err: unknown) => { if (mounted.current) fail(err) },
     )
   }
 
@@ -338,13 +350,12 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
    * 删了 0 个 = 「没有可删的」，不是失败：三态如实分派。
    */
   const purge = (): void => {
-    if (typeof recoveryApi.purgeRollbackPoints !== 'function') return
-    setCleanupBusy(true)
+    const purgeFn = recoveryApi.purgeRollbackPoints
+    if (typeof purgeFn !== 'function' || cleanupBusy) return
     setActionError(null)
-    recoveryApi.purgeRollbackPoints({ includeGuards: cleanupGuards }).then(
+    void withRecoveryWrite(WRITE_KEY.rollbackPurge, () => purgeFn.call(recoveryApi, { includeGuards: cleanupGuards })).then(
       (res) => {
         if (!mounted.current) return
-        setCleanupBusy(false)
         setCleanupOpen(false)
         const removed = res.removedRecords ?? 0
         setCleanupNote(removed === 0
@@ -354,7 +365,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
         if (removed > 0) resetChatPointCache()
         load({ keep: true })
       },
-      (err: unknown) => { if (mounted.current) { setCleanupBusy(false); setCleanupOpen(false); fail(err) } },
+      (err: unknown) => { if (mounted.current) { setCleanupOpen(false); fail(err) } },
     )
   }
 
@@ -431,13 +442,14 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             关闭语义 = 不订阅会话事件、不写台账、聊天入口收起（文案逐条对应代码，不含糊）。 */}
         {hasPrefsApi && (
           <div className={css.actionRowTop} title={t('rollback.switch.hint')}>
-            <Checkbox
-              // 三态：`null`（还没读到）显示为未勾选且**禁用** —— 绝不替磁盘猜一个值
+            <Switch
+              id={autoSwitchId}
               checked={prefsEnabled === true}
               disabled={prefsBusy || busy || prefsEnabled === null}
               onChange={togglePrefs}
               label={t('rollback.switch.label')}
             />
+            <label className={css.toggleLabel} htmlFor={autoSwitchId}>{t('rollback.switch.label')}</label>
             {/* 三态不再各占一行解释：提示做成开关**旁边**的状态徽章，分歧态再给一次点击就生效的动作。
                 「还没读到」= info 徽章（开关此时同时禁用）；「磁盘开着但本进程没生效」= warn 徽章 + 立即生效。 */}
             {hasPrefsApi && prefsEnabled === null && <Badge kind="info">{t('rollback.switch.reading')}</Badge>}
@@ -475,10 +487,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
           </div>
         )}
         {status === 'error' && (
-          <div className={css.actionRow}>
-            <Banner kind="error">{error !== null ? error : t('rollback.apiMissing')}</Banner>
-            <Button onClick={load}>{t('common.retry')}</Button>
-          </div>
+          <ErrorBanner error={error !== null ? error : t('rollback.apiMissing')} onRetry={() => { void load() }} t={uiT} />
         )}
 
         {status === 'ready' && (
@@ -816,21 +825,20 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             )}
 
             {/* 三选一：范围（不可用的组合直接禁用，绝不发一个注定失败的请求） */}
-            <label className={css.field}>
+            <div className={css.field}>
               <span className={css.fieldLabel}>{t('rollback.mode.label')}</span>
-              <select
-                className={css.input}
+              <Select
                 value={mode}
                 disabled={busy}
-                onChange={(e) => { setMode(e.target.value as RollbackMode) }}
-              >
-                {ROLLBACK_MODES.map((option) => (
-                  <option key={option} value={option} disabled={!rollbackModeAvailable(option, verdict.segments)}>
-                    {t(dyn(rollbackModeKey(option)))}
-                  </option>
-                ))}
-              </select>
-            </label>
+                ariaLabel={t('rollback.mode.label')}
+                onChange={(next) => { setMode(next as RollbackMode) }}
+                options={ROLLBACK_MODES.map((option) => ({
+                  value: option,
+                  label: t(dyn(rollbackModeKey(option))),
+                  disabled: !rollbackModeAvailable(option, verdict.segments),
+                }))}
+              />
+            </div>
 
             {verdict.incomplete && (
               <Checkbox checked={allowPartial} disabled={busy} onChange={setAllowPartial} label={t('rollback.rewind.allowPartial')} />
@@ -840,14 +848,6 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             {!verdict.canRestore && verdict.reasonKey !== null && (
               <div className={css.warnText}>{t(dyn(verdict.reasonKey))}</div>
             )}
-
-            {/* 动作顺序与 MergeModal 同口径（DESIGN §9）：**取消在左、主操作在右**。
-                以前危险操作在左、取消在右 —— 两个弹窗的「取消」位置相反，用户会点错。 */}
-            <div className={css.actionRow}>
-              <Button disabled={busy} onClick={closePreview}>{t('common.cancel')}</Button>
-              <span className={css.statusSpacer} />
-              <Button variant="danger" disabled={busy || !canRewind || selectionBlocked} loading={busy} onClick={() => { setConfirmOpen(true) }}>{t('rollback.rewind')}</Button>
-            </div>
           </>
         )}
 
@@ -918,13 +918,28 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             {rollbackGuidanceRows(result.guidance).map((row) => (
               <div key={row.key + (row.detail ?? '')} className={css.hint}>{t(dyn(row.key))}{row.detail !== null ? ' — ' + row.detail : ''}</div>
             ))}
-            {actionError !== null && <Banner kind="error">{actionError}</Banner>}
-            <div className={css.actionRow}>
-              <Button onClick={closePreview}>{t('common.close')}</Button>
-            </div>
+            {actionError !== null && <ErrorBanner error={actionError} t={uiT} />}
           </>
         )}
         </Modal.Body>
+        <Modal.Footer>
+          {result === null && (
+            <>
+              <Button disabled={busy} onClick={closePreview}>{t('common.cancel')}</Button>
+              {preview !== null && (
+                <>
+                  <span className={css.statusSpacer} />
+                  <Button variant="danger" disabled={busy || !canRewind || selectionBlocked} loading={busy} onClick={() => { setConfirmOpen(true) }}>
+                    {t('rollback.rewind')}
+                  </Button>
+                </>
+              )}
+            </>
+          )}
+          {result !== null && (
+            <Button onClick={closePreview}>{t('common.close')}</Button>
+          )}
+        </Modal.Footer>
       </Modal>
 
       {/* 回退二次确认（破坏性：覆盖工作区记录在案的路径 + fork 子会话；原会话日志不改写） */}

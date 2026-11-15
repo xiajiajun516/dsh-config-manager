@@ -481,6 +481,11 @@ export const uiZh = {
   'foreign.lossy.entry-backslash.detail': 'ZIP 条目名里出现在中段的反斜杠不会被拒绝：同一个包在 Windows 目标上会被当作路径分隔符（落成多级目录），在 POSIX 目标上只是一个普通字符。本实现刻意不改这一格式行为；界面无法逐条检查条目名，跨平台导入后请核对这类文件是否落在预期位置。',
   'foreign.lossy.prompt-persona-reshape.title': 'prompts 的 systemPrompt 形状变化',
   'foreign.lossy.prompt-persona-reshape.detail': '源里的 systemPrompt 是字符串，导入落盘时写成带 persona 字段的对象：persona 文本无损，字段形状改变。兼容性评分不会为这一条给出原因 —— 它不改变内容，只改变形态。',
+  // 复制外部转换提示词（competitor-ui-review §5.2 #1）
+  'foreign.prompt.header': '请帮我将以下 {source} 配置/会话转换为 DSH 可导入的格式：',
+  'foreign.prompt.paths': '检测路径：{paths}',
+  'foreign.prompt.skips': '未自动迁移项：',
+  'foreign.prompt.failure': '失败原因：{reason}',
   // ---------- 英文界面零中文（t3）：静态目录 / 纯逻辑层的文案 ----------
   // 导出分类目录的**描述**：静态目录（ui/export-flow.ts）只留键，渲染层用 t() 解析
   // （见 ExportCategory.descriptionKey）。此前这些中文硬编码在纯逻辑层。
@@ -968,6 +973,10 @@ export const uiEn: Record<UiTextKey, string> = {
   'foreign.lossy.entry-backslash.detail': 'A backslash in the middle of a ZIP entry name is not rejected: the same bundle treats it as a path separator on Windows targets (creating extra directory levels) and as an ordinary character on POSIX targets. This format behaviour is left unchanged on purpose; the UI cannot inspect entry names one by one, so check where such files landed after a cross-platform import.',
   'foreign.lossy.prompt-persona-reshape.title': 'prompts systemPrompt changes shape',
   'foreign.lossy.prompt-persona-reshape.detail': 'A source systemPrompt is a string and is written back as an object with a persona field: the persona text is lossless, the field shape changes. The compatibility score gives no reason for this one because it changes the form, not the content.',
+  'foreign.prompt.header': 'Please help me convert the following {source} configuration/sessions into a DSH-importable format:',
+  'foreign.prompt.paths': 'Detected paths: {paths}',
+  'foreign.prompt.skips': 'Items not migrated automatically:',
+  'foreign.prompt.failure': 'Failure reason: {reason}',
   // --- English-UI zero-Chinese (t3): static catalogs / pure logic layer ---
   'export.category.settings': 'Global DSH settings (namespace sections, redacted)',
   'export.category.providers': 'LLM providers / models / default model / base URL',

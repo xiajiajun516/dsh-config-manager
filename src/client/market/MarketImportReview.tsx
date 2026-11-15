@@ -37,7 +37,7 @@ import {
   type MarketPickerFilter, type MarketReviewStep,
 } from '../../ui/market-import.ts'
 import { redact } from '../../security/redaction.ts'
-import { Badge, Banner, Button, Chip, Segmented, Stepper } from '../common/ui.tsx'
+import { Badge, Banner, Button, Chip, Empty, Segmented, Stepper } from '../common/ui.tsx'
 import { ContentPicker } from '../common/ContentPicker.tsx'
 import { ConflictList } from '../import/ConflictList.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
@@ -273,7 +273,7 @@ export function MarketImportReview({
             {countBadges}
             {/* 步骤名由顶部 Stepper 承担：这里再写一遍「本次将改动的内容」是同屏第二次说同一步叫什么 */}
             {sectionSummaries.length === 0
-              ? <div className={css.hint}>{t('review.changeEmpty')}</div>
+              ? <Empty>{t('review.changeEmpty')}</Empty>
               : renderSectionRows(false)}
           </div>
           <div className={css.actionRow}>
@@ -291,7 +291,7 @@ export function MarketImportReview({
             ariaLabel={t('review.filterAria')}
           />
           {visibleNodes.length === 0
-            ? <div className={css.hint}>{t('review.filterEmpty')}</div>
+            ? <Empty>{t('review.filterEmpty')}</Empty>
             : (
               <ContentPicker
                 nodes={visibleNodes}
@@ -353,7 +353,7 @@ export function MarketImportReview({
         <>
           <div className={css.marketReviewScroll}>
             {result === null
-              ? <div className={css.hint}>{t('review.changeEmpty')}</div>
+              ? <Empty>{t('review.changeEmpty')}</Empty>
               : (
                 <>
                   {(() => {

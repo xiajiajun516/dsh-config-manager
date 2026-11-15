@@ -30,6 +30,7 @@ export const zh = {
   'snapshots.manualHints': '需人工处理',
   'snapshots.failed': '失败',
   'snapshots.skipped': '跳过',
+  'snapshots.preRestoreDir': '恢复前安全备份目录：{dir}',
   // 恢复计划动作 kind 标签（原硬编码中文字符串，改走字典）
   // —— git 风格恢复预览（快照改动逐行对照） ——
   'snapshots.plan.changed': '将被还原 {count}',
@@ -92,6 +93,7 @@ export const en: Record<keyof typeof zh, string> = {
   'snapshots.manualHints': 'Manual action needed',
   'snapshots.failed': 'Failed',
   'snapshots.skipped': 'Skipped',
+  'snapshots.preRestoreDir': 'Pre-restore safety backup: {dir}',
   // —— git-style restore preview (line-by-line) ——
   'snapshots.plan.changed': '{count} {count, plural, file|files} to restore',
   'snapshots.plan.added': '{count} added',

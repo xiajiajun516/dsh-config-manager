@@ -35,6 +35,7 @@ import { runStore } from '../run-store.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, StatusDot, Switch } from '../common/ui.tsx'
+import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { Select } from '../common/Select.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -63,7 +64,7 @@ export interface BackupScheduleCardProps {
 
 export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupScheduleCardProps) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
-  const [, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState<BackupScheduleDraft>({ enabled: false, interval: '24h' })
   /** 开关的 id：让标题文字也能拨动（label htmlFor），与原来勾选框的点击面一致 */
   const enabledSwitchId = useId()
@@ -102,7 +103,7 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
       (err) => {
         if (!mountedRef.current) return
         setStatus('error')
-        setError(err instanceof Error ? err.message : String(err))
+        setError(redactErrorText(err))
       },
     )
   }
@@ -237,10 +238,7 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
       {status === 'loading' && <Skeleton count={2} label={t('backupSchedule.loading')} />}
 
       {status === 'error' && (
-        <Banner kind="error">
-          {t('backupSchedule.error')}
-          <Button variant="primary" onClick={load}>{t('common.retry')}</Button>
-        </Banner>
+        <ErrorBanner error={error ?? t('backupSchedule.error')} onRetry={load} t={api.t} />
       )}
 
       {status === 'ready' && (

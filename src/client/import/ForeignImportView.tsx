@@ -29,14 +29,17 @@ import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi, ForeignImportResponse } from '../api.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import {
+  foreignAgentPrompt,
   foreignImportFailure,
   foreignLossyRows,
   foreignPathsText,
+  foreignProducedSkips,
   foreignSourcesViewModel,
   type ForeignImportFailure,
   type ForeignSourceRow,
 } from '../../ui/foreign-view.ts'
 import { Badge, Banner, Button, Card, SectionTitle } from '../common/ui.tsx'
+import { CopyButton } from '../common/CopyButton.tsx'
 import { SkeletonList } from '../common/Skeleton.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { redact } from '../../security/redaction.ts'
@@ -146,6 +149,8 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
   }, [api, uiT, tick])
 
   const rows = vm?.rows ?? []
+  const selectedRow = rows.find((r) => r.id === selected) ?? null
+  const producedSkips = foreignProducedSkips(produced?.skipped, uiT)
   /**
    * 三类已知有损的展示行（F-5）：尚未产包时 applicable=null（界面不渲染适用性徽章），
    * 产包后按包内分区逐条标注是否适用。判定全在 src/ui/foreign-view.ts 的纯函数里。
@@ -276,12 +281,20 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
 
       {/* 选中来源的未迁移项：**在选它之后**才展开，避免六来源的码堆在一起淹没有效信息 */}
       {(() => {
-        const row = rows.find((r) => r.id === selected) ?? null
+        const row = selectedRow
         if (row === null || row.skips.length === 0) return null
         return (
           <Card>
-            <div className={css.groupLabel}>
-              {t('foreign.skipped', { count: String(row.skips.length) })}
+            <div className={css.headRow}>
+              <div className={css.groupLabel}>
+                {t('foreign.skipped', { count: String(row.skips.length) })}
+              </div>
+              <span className={css.statusSpacer} />
+              <CopyButton
+                text={foreignAgentPrompt({ label: row.label, paths: row.paths, skips: row.skips }, uiT)}
+                label={t('foreign.copyAgentPrompt')}
+                t={t}
+              />
             </div>
             <ul className={css.skipList}>
               {row.skips.map((s, i) => (
@@ -313,6 +326,35 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
               ? <Badge kind="warn">{t('foreign.credentialRefs', { count: String(produced.credentialRefs.length) })}</Badge>
               : <Badge kind="info">{t('foreign.credentialRefsNone')}</Badge>}
           </div>
+          {producedSkips.length > 0 && (
+            <>
+              <div className={css.headRow}>
+                <div className={css.groupLabel}>
+                  {t('foreign.skipped', { count: String(producedSkips.length) })}
+                </div>
+                <span className={css.statusSpacer} />
+                <CopyButton
+                  text={foreignAgentPrompt({
+                    label: selectedRow?.label ?? redact(produced.source),
+                    paths: produced.detectedPaths,
+                    skips: producedSkips,
+                  }, uiT)}
+                  label={t('foreign.copyAgentPrompt')}
+                  t={t}
+                />
+              </div>
+              <ul className={css.skipList}>
+                {producedSkips.map((s, i) => (
+                  <SkipLine
+                    key={s.code + '-' + String(i)}
+                    code={s.code}
+                    text={redact(s.text)}
+                    meta={s.origin !== undefined ? redact(s.origin) : (s.count !== undefined ? String(s.count) : '')}
+                  />
+                ))}
+              </ul>
+            </>
+          )}
         </Card>
       )}
 
@@ -321,6 +363,21 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
           {t('foreign.importFailed', { reason: redact(importFailure.text) })}
           {/* 稳定码保留给排查/上报：文案是人话，码是可搜索的锚点（未知码时它就是唯一信息） */}
           {importFailure.code !== null && <span className={css.skipCode}>{importFailure.code}</span>}
+          {selectedRow !== null && (
+            <>
+              <span className={css.statusSpacer} />
+              <CopyButton
+                text={foreignAgentPrompt({
+                  label: selectedRow.label,
+                  paths: selectedRow.paths,
+                  skips: selectedRow.skips,
+                  failure: importFailure,
+                }, uiT)}
+                label={t('foreign.copyAgentPrompt')}
+                t={t}
+              />
+            </>
+          )}
         </Banner>
       )}
 

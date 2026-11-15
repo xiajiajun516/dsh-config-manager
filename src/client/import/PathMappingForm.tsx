@@ -10,7 +10,7 @@ import { useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { PathIssue, PathMapping } from '../../core/types.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Banner, IconButton } from '../common/ui.tsx'
+import { Banner, Button, IconButton } from '../common/ui.tsx'
 import { FolderOpenIcon } from '../common/Icon.tsx'
 import { PathPickerDialog } from './PathPickerDialog.tsx'
 import type { PathBrowsePort } from './PathPickerDialog.tsx'
@@ -53,13 +53,33 @@ export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappi
     return out
   })
 
-  const setNewPrefix = (oldPrefix: string, value: string): void => {
-    const next = { ...drafts, [oldPrefix]: value }
+  const commitDrafts = (next: Record<string, string>): void => {
     setDrafts(next)
     const mappings: PathMapping[] = Object.entries(next)
-      .filter(([, v]) => v !== '')
-      .map(([oldPrefix, newPrefix]) => ({ oldPrefix, newPrefix, appliesTo: [] }))
+      .filter(([, v]) => v.trim() !== '')
+      .map(([oldPrefix, newPrefix]) => ({ oldPrefix, newPrefix: newPrefix.trim(), appliesTo: [] }))
     onChange(mappings)
+  }
+
+  const setNewPrefix = (oldPrefix: string, value: string): void => {
+    commitDrafts({ ...drafts, [oldPrefix]: value })
+  }
+
+  const suggestedIssues = issues.filter(
+    (issue) =>
+      typeof issue.mappedTo === 'string' &&
+      issue.mappedTo.trim() !== '' &&
+      (drafts[issue.value] ?? '').trim() === '',
+  )
+
+  const applySuggested = (): void => {
+    const next = { ...drafts }
+    for (const issue of suggestedIssues) {
+      if (typeof issue.mappedTo === 'string' && issue.mappedTo.trim() !== '') {
+        next[issue.value] = issue.mappedTo
+      }
+    }
+    commitDrafts(next)
   }
 
   /**
@@ -101,6 +121,13 @@ export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappi
           不得用于建议性内容；黄色横幅在首屏就会被读成「出错了」）。计数随输入实时更新。 */}
       {unresolved.length > 0 && (
         <Banner kind="info">{t('import.paths.unresolved', { count: String(unresolved.length) })}</Banner>
+      )}
+      {suggestedIssues.length > 0 && (
+        <div className={css.actionRow}>
+          <Button size="sm" variant="ghost" onClick={applySuggested}>
+            {t('import.paths.applySuggested')}
+          </Button>
+        </div>
       )}
       {issues.length === 0 && <div className={css.empty}>{t('import.paths.empty')}</div>}
       {issues.map((issue) => (

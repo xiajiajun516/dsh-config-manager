@@ -87,6 +87,7 @@ export const zh = {
   'import.paths.kind.homeMismatch': '基础路径不同',
   'import.paths.unresolved': '还有 {count} 条路径未映射（留空将跳过该路径，可以继续）',
   'import.paths.empty': '无需映射路径',
+  'import.paths.applySuggested': '填入建议路径',
   // 「选择本机路径」弹窗（第③项）：浏览器拿不到本机真实路径，目录列举走宿主只读端点
   'import.paths.browse': '选择本机路径',
   'import.paths.picker.title': '选择本机路径',
@@ -178,6 +179,7 @@ export const en: Record<keyof typeof zh, string> = {
   'import.paths.kind.homeMismatch': 'Different base path',
   'import.paths.unresolved': '{count} {count, plural, path|paths} unmapped (blank = skip that path, you can continue)',
   'import.paths.empty': 'No paths to map',
+  'import.paths.applySuggested': 'Apply suggested paths',
   'import.paths.browse': 'Choose a local path',
   'import.paths.picker.title': 'Choose a local path',
   'import.paths.picker.up': 'Up one level',

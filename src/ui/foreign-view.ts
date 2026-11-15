@@ -443,3 +443,50 @@ export function foreignImportFailure(err: unknown, t: UiT): ForeignImportFailure
   return { code, message, text: mapped === undefined ? message : t(mapped) }
 }
 
+/* ------------------------------------------------ 产包跳过 & Agent Prompt */
+
+/** 产包阶段的跳过项（POST /foreign-import 的 skipped）→ 可渲染行。 */
+export function foreignProducedSkips(
+  skipped: readonly ForeignSkip[] | null | undefined,
+  t: UiT,
+): ForeignSkipLine[] {
+  if (!skipped || skipped.length === 0) return []
+  return skipped.map((s) => foreignSkipLine(s, t))
+}
+
+/** 构造外部转换任务 Prompt 的输入（用于一键复制给 Agent）。 */
+export interface ForeignAgentPromptInput {
+  label: string
+  paths: readonly string[]
+  skips: readonly ForeignSkipLine[]
+  failure?: ForeignImportFailure | null
+}
+
+/**
+ * 把「检测路径 + 未自动迁移项 + 可选失败原因」组织成可直接贴进对话的 Agent 转换 Prompt。
+ * 既没有 skip 也没有 failure 时返回空串，避免渲染出一个空提示词复制动作。
+ */
+export function foreignAgentPrompt(input: ForeignAgentPromptInput, t: UiT): string {
+  if (input.skips.length === 0 && (input.failure === undefined || input.failure === null)) return ''
+  const lines: string[] = [t('foreign.prompt.header', { source: input.label })]
+  if (input.paths.length > 0) {
+    lines.push(t('foreign.prompt.paths', { paths: input.paths.join(', ') }))
+  }
+  if (input.failure !== undefined && input.failure !== null) {
+    const reason = input.failure.code !== null
+      ? `${input.failure.code}: ${input.failure.text}`
+      : input.failure.text
+    lines.push(t('foreign.prompt.failure', { reason }))
+  }
+  if (input.skips.length > 0) {
+    lines.push(t('foreign.prompt.skips'))
+    for (const s of input.skips) {
+      const origin = s.origin !== undefined && s.origin !== '' ? ` (${s.origin})` : ''
+      const count = s.count !== undefined && s.count > 1 ? ` ×${String(s.count)}` : ''
+      lines.push(`- [${s.code}]${origin}${count} ${s.text}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+

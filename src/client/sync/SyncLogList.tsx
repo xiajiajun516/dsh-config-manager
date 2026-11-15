@@ -20,7 +20,7 @@ import {
   projectSyncHistoryEntries, summarizeSyncHistory,
 } from './history-model.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Badge, Button, Card, SectionTitle } from '../common/ui.tsx'
+import { Badge, Button, Card, Empty, SectionTitle } from '../common/ui.tsx'
 import { RefreshIcon } from '../common/Icon.tsx'
 import { SkeletonTable } from '../common/Skeleton.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
@@ -29,9 +29,11 @@ import css from '../config-manager.module.css'
 export interface SyncLogListProps {
   api: SyncApi
   t: TranslateNS<'config-manager-sync'>
+  /** 分区可读名映射（避免直接渲染裸 SectionId） */
+  sectionName?: (id: string) => string
 }
 
-export function SyncLogList({ api, t }: SyncLogListProps): ReactNode {
+export function SyncLogList({ api, t, sectionName }: SyncLogListProps): ReactNode {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [entries, setEntries] = useState<SyncHistoryEntry[]>([])
@@ -76,15 +78,17 @@ export function SyncLogList({ api, t }: SyncLogListProps): ReactNode {
   }
   if (rows.length === 0) {
     return (
-      <Card>
-        <strong>{t('history.empty')}</strong>
-        <p>{t('history.emptyHint')}</p>
+      <Card className={css.fillCard}>
+        <Empty>
+          <strong>{t('history.empty')}</strong>
+          <p>{t('history.emptyHint')}</p>
+        </Empty>
       </Card>
     )
   }
 
   return (
-    <Card>
+    <Card className={css.fillCard}>
       {/* 条数只在下面那排统计徽章里给一次：标题里的 (12) 与「共 12 条」是同一个数，
           两处并列时用户要先比对才敢确定它们说的是同一件事 */}
       {/* 刷新走 SectionTitle 的 action 槽：它渲在标题同一行的右侧（内部自带推右的 spacer），
@@ -114,7 +118,7 @@ export function SyncLogList({ api, t }: SyncLogListProps): ReactNode {
             <tbody>
               {rows.map((r) => {
                 if (r.kind === 'autosync' && r.autosync !== undefined) {
-                  return <AutosyncRow key={r.id} entry={r.autosync} t={t} />
+                  return <AutosyncRow key={r.id} entry={r.autosync} t={t} sectionName={sectionName} />
                 }
                 return <OperationRow key={r.id} row={r} t={t} />
               })}
@@ -152,7 +156,7 @@ function OperationRow({ row, t }: { row: SyncHistoryEntry; t: TranslateNS<'confi
  * 自动同步行：引擎自己跑的同步（push / pull 成对），与人为操作区分开。
  * 全部取值来自 `projectAutosyncEntry` 的投影 —— 本组件不自己拼文案。
  */
-function AutosyncRow({ entry, t }: { entry: AutosyncHistoryEntry; t: TranslateNS<'config-manager-sync'> }): ReactNode {
+function AutosyncRow({ entry, t, sectionName }: { entry: AutosyncHistoryEntry; t: TranslateNS<'config-manager-sync'>; sectionName?: (id: string) => string }): ReactNode {
   const row = projectAutosyncEntry(entry, t)
   return (
     <tr>
@@ -186,7 +190,7 @@ function AutosyncRow({ entry, t }: { entry: AutosyncHistoryEntry; t: TranslateNS
                 <div>
                   <span className={css.fieldLabel}>{t('history.autosyncConflicted', { sections: '' })}</span>
                   <div className={css.statRow}>
-                    {row.conflictedSections.map((sid) => <Badge key={sid} kind="warn">{sid}</Badge>)}
+                    {row.conflictedSections.map((sid) => <Badge key={sid} kind="warn">{sectionName !== undefined ? sectionName(sid) : sid}</Badge>)}
                   </div>
                 </div>
               )}
@@ -194,7 +198,7 @@ function AutosyncRow({ entry, t }: { entry: AutosyncHistoryEntry; t: TranslateNS
                 <div>
                   <span className={css.fieldLabel}>{t('history.autosyncApplied', { sections: '' })}</span>
                   <div className={css.statRow}>
-                    {row.appliedSections.map((sid) => <Badge key={sid} kind="ok">{sid}</Badge>)}
+                    {row.appliedSections.map((sid) => <Badge key={sid} kind="ok">{sectionName !== undefined ? sectionName(sid) : sid}</Badge>)}
                   </div>
                 </div>
               )}

@@ -28,22 +28,43 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+> **{{本版主题}}**：{{一句话中文主题}}
+>
+> **Theme**: {{one-line English theme}}
+
+## [0.10.0] - 2026-11-15
+
+> **整个插件换过界面之后，救急台和迁移流程也补齐了**：离线救急台（`dcm web`）重排信息架构、换新色板并给出操作反馈，保留策略有了自己的位置；从别的 agent 迁移失败时能一键拿到转换提示词，命令面板（`⌘K`）直达回滚台账，长清单按批展开。同步这边，插件按名字逐条合并、还在等裁决的分区不再悄悄上行，导入插件配置也不再让插件自己的设置页报「配置已被覆盖」。
+>
+> **Theme**: after the interface overhaul, the rescue console and migration flows caught up — a restructured `dcm web` with a new palette and real feedback, retention in its own section, one-click prompt copy for foreign-import failures, direct rollback-ledger navigation from ⌘K, and incremental long lists. On the sync side, plugins merge entry by entry, sections awaiting decisions are never pushed silently, and an imported plugin config no longer makes its own settings page report an override.
+
+
 ### 🔧 变更 · Changed
 
 - **离线救急台（`dcm web`）重排信息结构、更换高对比度色板并补齐操作反馈**：页头导航按使用处境收成「状态 / 救援动作 / 检查」三组；首页首屏只集中回答「DSH 现在能不能起」并给出按当前症状排序的最多 3 个建议动作（附触发条件说明），其余全量入口、快照与备份清单及能力边界退入第二屏可折叠区；全站换用 Indigo + 三阶灰低噪色板与 `8px`/`6px` 圆角（大幅减少纯分隔边框、同屏仅留一个主色动作，适配 390px 窄屏与系统减少动效设置），写入页展示「预览 → 确认 → 结果」三段进度并在提交、复制命令与路径时给出即时反馈，禁用脚本时仍保持完整可提交表单。
   **Restructured the offline rescue console (`dcm web`) with a new high-contrast palette and interaction feedback**: top navigation is now grouped into three situational buckets (Status / Rescue / Inspect); the Home first screen focuses on whether DSH can start plus up to three symptom-ranked action cards with when-to-use guidance while folding the full directory, artifacts, paths, and capability boundary into the second screen; adopted a new stepped surface palette with `8px`/`6px` radii, minimal separating borders, single-primary-action hierarchy, 390px responsive layout, reduced-motion support, three-stage write progress indicators, submit spinners, and copy feedback while preserving pure-HTML fallback when JavaScript is disabled.
+- **保留策略不再被读成「定时备份」的一部分**：它在首页备份卡里独立成段，标题直接写明同时管快照与定时备份；同步页的自动同步说明里也能看到远端快照按同一份策略裁剪、入口在首页；产物库「导出」按钮上那条与导出无关的「自动保留最近 10 个」已摘掉。（issue #143）
+  **Retention policy no longer reads as part of scheduled backups**: it is now its own section on the Home backup card, its title states that it covers both snapshots and scheduled backups, the Auto Sync description points to it, and the library Export button no longer carries an unrelated "keeps the latest 10" note. (issue #143)
+- **优化外部迁移排障、回滚直达、内容分页与恢复/映射交互**：从其它 agent 导入时，存在未迁移项或失败时支持一键复制转换提示词并在产包预览展示构建阶段的跳过原因；命令面板（`⌘K`）打开回滚台账现在直接展开台账弹窗；导出与导入内容选择器超过 1000 条后按每批 1000 条渐进展开，避免一次性渲染大量节点；磁盘清理与回滚操作状态在切换页签期间持续保留并在底部状态栏可见；快照恢复报告展示恢复前安全备份目录；存在系统建议路径且尚未填写时，支持一键「填入建议路径」。
+  **Improved foreign-import troubleshooting, direct rollback ledger navigation, unit pagination, and restore/mapping ergonomics**: importing from another agent now offers a one-click prompt copy action for skipped items or failures and shows package build-time skip reasons; triggering the rollback ledger from the command palette (`⌘K`) opens the ledger dialog directly; large content pickers reveal additional entries incrementally (1,000 per batch) instead of rendering everything at once; disk cleanup and rollback write operations stay visible in the status bar across tab switches; snapshot restore reports now display the pre-restore safety backup directory; and path mapping offers a one-click button to fill available suggested paths.
 
 ### 🐛 修复 · Fixed
 
 - **导入插件配置后，插件自己的设置页不再报「配置已被覆盖」**：某个插件条目本来就由插件包自带的配置提供时，导入现在只写一条覆盖设置，不再多插一份同名条目（否则在该插件的设置页保存会一直失败）；导入清单里这类条目显示为「覆盖已存在条目」并写明是哪一层提供的，写入时若仍遇到同 id 重复也会自动降级成覆盖行并给出提示。（issue #144）
   **Imported plugin configs no longer make the plugin's own settings page report "overridden"**: when an entry is already provided by the config bundled with a plugin, the import now writes a single override instead of a second entry with the same id (which made saving that plugin's settings fail), the import list labels such items as "override the existing entry" and names the layer that provides it, and any duplicate detected at write time is downgraded to an override with a notice. (issue #144)
-
 - **插件同步不再「有改动就整段冲突」**：默认配置下，本机新装了插件、远端删掉了另一个，两边现在按插件名逐条合并（patch 行按文件+行号、本地打包按包名、patch 文件按路径），不会再因为「插件列表这一整块两侧都动过」被判成冲突；被脱敏备份剥空的密钥字段也不再让同一条 patch 行看起来两边都改过；本机停用的插件不会因为远端升了版本就被改回启用；「跟随远端删除」开关只决定删不删，关着时照常合并、本机插件一个不丢，删除项则在报告里逐条提示。（issue #145）
   **Plugin sync no longer conflicts as one block whenever both sides change**: with default settings, installing a plugin locally while the remote deletes another now merges entry by entry (plugins by name, patch lines by file + line id, local tarballs by package name, patch files by path) instead of treating the whole plugins section as one conflicting array; secret fields stripped by a redacted backup no longer make the same patch line look modified on both sides; a plugin you disabled locally stays disabled when the remote bumps its version; and the follow-remote-deletions switch now only decides whether to delete — while it is off, merging still happens, no local plugin is dropped, and any deletion candidate is reported item by item. (issue #145)
 - **还在等冲突裁决的分区不再被推上远端**：自动同步、同步页的立即推送、推送预览与 agent 的推送工具都会扣下等待裁决的分区（含此前几轮遗留的），只上传真正能安全同步的部分，基线也只记已推送的分区；「本机优先」与显式强制推送照旧整段覆盖。若一个分区都没上行，自动同步台账显示「成功但跳过」并写明原因是「仍在等裁决」，同步页写「未推送任何分区」，都不会再显示成「推送完成」；被扣下的分区逐条列出，绝不静默少推。选了「本机优先」时，此前一直挂着的待裁决分区也会被一并覆盖掉，并在台账里点名覆盖了哪些分区，不再出现「设置了本机优先却什么都不发生」。（issue #146）
   **Sections still awaiting conflict resolution are no longer pushed**: auto-sync, the Sync page's push-now action, push preview, and the agent push tool all hold back sections awaiting resolution (including ones left over from earlier runs), uploading only what can be safely synced and recording just those in the baseline; "local wins" and an explicit force push still overwrite wholesale. When nothing gets uploaded, the auto-sync ledger reports "succeeded but skipped" with the reason "still awaiting resolution" and the Sync page says "nothing pushed" instead of "push completed", with every held-back section listed — never a silent partial push. (issue #146)
 - **命令行的 `--json` 输出、跨命令参数与非交互安全护栏更可靠**：`sessions repair` 启用 `--json` 时标准输出只保留合法 JSON（包括 `--fix --json` 与非会话目录跳过提示，人类提示均改走标准错误）；各子命令与帮助页统一 `--data-dir` 与 `--data-root` 支持，子命令参数错误直接给出对应 `--help` 下一步提示；无终端交互环境下运行 `reinstall`（未加 `--yes`）时不再挂起等待输入，而是直接提示预览或确认后拒绝退出，`--dry-run` 仍可零等待预览计划。
   **Cleaner CLI `--json` output, flag parity, and non-TTY safety**: `sessions repair --json` now keeps stdout strictly valid JSON (routing human notices and skip logs to stderr even with `--fix`); `--data-dir` and `--data-root` options and help text stay consistent across commands while invalid subcommand flags point directly to `dcm <command> --help`; `reinstall` now refuses cleanly without hanging in non-interactive shells unless `--yes` is passed while keeping `--dry-run` non-blocking.
+
+- 产物库「远端快照」页签与同步确认弹窗的迁移前咨询现已完整支持 S3 与 GitHub Gist 通道；同步页初始化时自动同步状态现已覆盖全部四个通道。
+  The Library's "Remote Snapshots" tab and pre-migration consultation in the sync confirmation dialog now fully support S3 and GitHub Gist channels, and initial auto-sync status loading on the Sync page now covers all four channels.
+- 首页健康状态条在存在待处理恢复事项时点击可直达「环境 → 维护与诊断」子视图；备份差异查看、同步确认与日志、导入后续步骤及市场筛选中的分区名称均已显示为本地化可读名称；快照删除确认弹窗中的时间戳已格式化为本地可读时间。
+  Clicking the Home health strip when recovery items are pending now navigates directly to the "Environment → Maintenance & Diagnostics" view; section names across backup inspection, sync confirmation and logs, post-import next steps, and marketplace filters are now localized; and timestamps in the snapshot deletion confirmation dialog are now formatted as readable local time.
+- 统一各页面的加载失败错误横幅、弹窗底部固定操作栏、表单原语（开关/下拉/复选框）、子视图分段切换器及空状态占位样式。
+  Unified load-failure error banners, fixed modal footers, form primitives (switches, selects, checkboxes), sub-view segmented controls, and empty-state placeholders across all pages.
 
 ## [0.9.0] - 2026-11-14
 

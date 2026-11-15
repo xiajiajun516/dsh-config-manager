@@ -340,7 +340,7 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
    * v1 跳到备份页的恢复子视图 —— 那条路在第 3 步之后已不存在。
    */
   const navRecovery = (): void => {
-    runStore.patch({ panel: 'environment' })
+    runStore.patch({ panel: 'environment', profiles: { subView: 'maintenance' } })
   }
 
   /**
@@ -503,7 +503,7 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
       {emptyState ? (
         /* 首用空态：只交代顺序（备份 → 导出 → 导入），动作全交给上方工具栏 ——
            此前这里又放了一遍「立即备份 / 远程同步」，等于同一屏两个入口。 */
-        <Card className={css.activityCard}>
+        <Card className={css.activityCard + ' ' + css.activityCardFill}>
           <span className={css.groupLabel}>{t('overview.empty.title')}</span>
           <div className={css.emptySteps}>
             <Stepper

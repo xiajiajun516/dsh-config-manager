@@ -26,7 +26,7 @@
  * 本文件不 import 任何 node 模块（纯浏览器 bundle）。
  */
 import { useEffect, useRef, useState } from 'react'
-import type { ChangeEvent, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import { MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO } from '../../market/upstream.ts'
@@ -34,7 +34,7 @@ import type { MarketApi } from './market-api.ts'
 import type { MyConfigsApi, MyItemEntry } from './my-configs-api.ts'
 import type { ListingStatusResponse } from '../../market/my-repo.ts'
 import type { SyncApi, GithubPollResponse } from '../sync/sync-api.ts'
-import { Button, Card, SectionTitle } from '../common/ui.tsx'
+import { Button, Card, Checkbox, SectionTitle } from '../common/ui.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
@@ -794,14 +794,7 @@ export function MyConfigsView({
         onConfirm={confirmDisclaimer}
         onCancel={cancelDisclaimer}
       >
-        <label className={css.checkboxRow}>
-          <input
-            type="checkbox"
-            checked={dontAsk}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => { setDontAsk(e.target.checked) }}
-          />
-          <span>{t('disclaimer.dontAsk')}</span>
-        </label>
+        <Checkbox checked={dontAsk} onChange={setDontAsk} label={t('disclaimer.dontAsk')} />
       </ConfirmDialog>
       {/* 删除确认弹窗（二次确认；不可恢复；确认执行中 busy 防重复提交） */}
       <ConfirmDialog

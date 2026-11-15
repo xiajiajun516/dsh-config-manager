@@ -72,8 +72,8 @@ const RENDER_POINTS: RenderPoint[] = [
   {
     id: 'import-next-steps-description',
     file: 'src/client/import/ImportWizardView.tsx',
-    redacted: R('{item.adapter}: {redact(item.description)}</li>'),
-    bare: R('{item.adapter}: {item.description}</li>'),
+    redacted: R('{sectionLabel(item.adapter as SectionId, t)}: {redact(item.description)}</li>'),
+    bare: R('{sectionLabel(item.adapter as SectionId, t)}: {item.description}</li>'),
     why: '收尾清单的重启项描述（宿主按计划项拼装）',
   },
   {

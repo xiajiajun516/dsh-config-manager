@@ -46,6 +46,7 @@ import { EnvironmentPanel } from './environment/EnvironmentPanel.tsx'
 import { HistoryPanel } from './history/HistoryPanel.tsx'
 import { RunsCenter } from './common/RunsCenter.tsx'
 import { toRecoveryView } from './recovery/recovery-view.ts'
+import { requestRollbackLedgerOpen } from './recovery/rollback-enabled.ts'
 import { ConfirmDialog } from './common/ConfirmDialog.tsx'
 import { MODAL_ROOT_ID } from './common/Modal.tsx'
 import { Banner, IconButton, StatusDot } from './common/ui.tsx'
@@ -368,7 +369,7 @@ const navLayoutResult = navWidths === null
         ? t('nav.sync')
         : state.snapshots.running
           ? t('shell.running.restore')
-          : state.recovery.running
+          : (state.recovery.running || state.recovery.write !== null)
             ? t('palette.rescue.recovery')
             : null
 
@@ -378,7 +379,7 @@ const navLayoutResult = navWidths === null
     + (state.import.running ? 1 : 0)
     + (state.sync.busy !== null ? 1 : 0)
     + (state.snapshots.running ? 1 : 0)
-    + (state.recovery.running ? 1 : 0)
+    + (state.recovery.running || state.recovery.write !== null ? 1 : 0)
   const statusKind: 'ok' | 'info' | 'error' = recoveryRequired
     ? 'error'
     : runningCount > 0 ? 'info' : 'ok'
@@ -441,8 +442,11 @@ const navLayoutResult = navWidths === null
       case 'recovery.open': openMaintenance(); return
       // 救援模式：与事故恢复同一子视图（救援卡在其中）；两条命令都必须存在（§3.6）
       case 'rescue.open': openMaintenance(); return
-      // S7：回滚点卡也在维护与诊断里（紧跟会话体检），命令直达同一落点
-      case 'rollback.open': openMaintenance(); return
+      // S7：回滚点卡也在维护与诊断里（紧跟会话体检），命令直达并自动打开台账弹窗
+      case 'rollback.open':
+        requestRollbackLedgerOpen()
+        openMaintenance()
+        return
       default: return
     }
   }

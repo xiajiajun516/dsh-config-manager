@@ -39,3 +39,32 @@ export function subscribeRollbackEntryEnabled(listener: () => void): () => void 
     listeners.delete(listener)
   }
 }
+
+/* ---------------- 从 ⌘K 直达回滚台账弹窗（一次性内存信号） ---------------- */
+
+let pendingLedgerOpen = false
+const ledgerListeners = new Set<() => void>()
+
+export function requestRollbackLedgerOpen(): void {
+  pendingLedgerOpen = true
+  for (const listener of [...ledgerListeners]) {
+    try {
+      listener()
+    } catch {
+      /* 单个订阅者自己的问题不影响信号 */
+    }
+  }
+}
+
+export function consumeRollbackLedgerOpen(): boolean {
+  if (!pendingLedgerOpen) return false
+  pendingLedgerOpen = false
+  return true
+}
+
+export function subscribeRollbackLedgerOpen(listener: () => void): () => void {
+  ledgerListeners.add(listener)
+  return () => {
+    ledgerListeners.delete(listener)
+  }
+}

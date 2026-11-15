@@ -22,12 +22,14 @@ import type { MarketApi } from '../market/market-api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { formatDateTimeFull } from '../sync/history-model.ts'
 import { deviceLabelsById } from '../sync/remote-device-view.ts'
+import { isClientChannel, type SyncChannel } from '../sync/sync-view.ts'
 import { runStore, type LibraryStoreSlice } from '../run-store.ts'
 import { Badge, Button, Card, Empty } from '../common/ui.tsx'
 import { snapshotOriginOf, snapshotOriginState } from '../../ui/snapshots-view.ts'
 import { SkeletonRows } from '../common/Skeleton.tsx'
 import { redact } from '../../security/redaction.ts'
 import { ArtifactRowView, type ArtifactPendingAction } from './ArtifactRow.tsx'
+import { resolveRemoteChannelPayload } from './LibraryActions.tsx'
 import css from '../config-manager.module.css'
 
 export interface LibraryPanelProps {
@@ -81,7 +83,7 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
   /** 快照目录读不出来的事实（宿主 out.unreadable；null = 正常） */
   const [snapshotsUnreadable, setSnapshotsUnreadable] = useState<string | null>(null)
   const [currentRemoteId, setCurrentRemoteId] = useState<string | null>(null)
-  const [remoteChannel, setRemoteChannel] = useState<'git' | 'webdav' | null>(null)
+  const [remoteChannel, setRemoteChannel] = useState<SyncChannel | null>(null)
   /** 面板内部的刷新信号（失败源卡片里的「重试」）；外部的走 props.refreshTick */
   const [localTick, setLocalTick] = useState(0)
   /**
@@ -124,15 +126,11 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
     // 先取 /sync/status 拿到通道与地址，再据此发请求；两处都不可用时该源如实标失败，绝不空手请求。
     put(setRemote, syncApi.status({ workDirDetail: false }).then((status) => {
       if (!mounted.current) return [] as SyncSnapshotLite[]
-      setRemoteChannel(status.lastSyncChannel === 'webdav' ? 'webdav' : status.lastSyncChannel === 'git' ? 'git' : null)
+      const resolved = resolveRemoteChannelPayload(status)
+      setRemoteChannel(resolved?.channel ?? (isClientChannel(status.lastSyncChannel) ? status.lastSyncChannel : null))
       const configured = status.configured === true
-      const webdavUrl = status.webdav?.url ?? ''
-      const repoUrl = status.repoUrl ?? ''
-      const payload = status.lastSyncChannel === 'webdav'
-        ? (webdavUrl.trim() !== '' ? { transport: 'webdav' as const, url: webdavUrl.trim() } : null)
-        : (repoUrl.trim() !== '' ? { transport: 'git' as const, repoUrl: repoUrl.trim() } : null)
-      if (!configured || payload === null) return [] as SyncSnapshotLite[]
-      return syncApi.snapshotsList(payload).then((res) => {
+      if (!configured || resolved === null) return [] as SyncSnapshotLite[]
+      return syncApi.snapshotsList(resolved.payload).then((res) => {
         if (mounted.current) setCurrentRemoteId(res.currentSnapshotId ?? null)
         return res.snapshots
       })

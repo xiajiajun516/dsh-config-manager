@@ -18,6 +18,12 @@ import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { ArtifactCapability, ArtifactRow } from '../../ui/artifact-view.ts'
 import { remoteSnapshotFileName } from '../../ui/artifact-view.ts'
 import { planHasExecutableActions } from '../../ui/snapshots-view.ts'
+import {
+  buildSyncChannelBody, channelRemoteReady, cloudFormFromStatus,
+  type SyncFormSnapshot, type SyncPushBody,
+} from '../../ui/sync-settings-view.ts'
+import { isClientChannel, SYNC_CHANNEL_ORDER, type SyncChannel } from '../sync/sync-view.ts'
+import type { SyncStatusResponse } from '../sync/sync-api.ts'
 import { runStore } from '../run-store.ts'
 import type { ConfigManagerApi, BackupInspectResult } from '../api.ts'
 import type { SyncApi } from '../sync/sync-api.ts'
@@ -545,7 +551,7 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
             ? t('backupFiles.deleteConfirm', { name: fileNameOf(confirmDelete) })
             : confirmDelete.kind === 'remote-snapshot'
               ? t('library.remoteDeleteConfirm', { time: timeText(confirmDelete) })
-              : t('snapshots.deleteConfirm', { time: confirmDelete.title.kind === 'time' ? confirmDelete.title.iso : '' })}
+              : t('snapshots.deleteConfirm', { time: timeText(confirmDelete) })}
         confirmLabel={confirmDelete === null ? t('snapshots.delete')
           : confirmDelete.kind === 'backup-file' ? t('backupFiles.delete')
             : confirmDelete.kind === 'remote-snapshot' ? t('library.delete')
@@ -575,6 +581,9 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
           {inspect !== null && !inspect.loading && inspect.result === null && inspect.error === null && <Empty>{t('backupFiles.inspectEmpty')}</Empty>}
           {inspect?.result != null && <BackupInspectView result={inspect.result} t={t} />}
         </Modal.Body>
+        <Modal.Footer>
+          <Button variant="ghost" onClick={() => { setInspect(null) }}>{t('common.close')}</Button>
+        </Modal.Footer>
       </Modal>
 
       {/* 执行恢复的报告（一次性回执，必须给显式退出入口） */}
@@ -583,6 +592,9 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
         <Modal.Body scroll>
           {report !== null && (
             <>
+              {report.preRestoreDir !== undefined && report.preRestoreDir !== '' && (
+                <div className={css.hint}>{t('snapshots.preRestoreDir', { dir: redact(report.preRestoreDir) })}</div>
+              )}
               {reportLine(t('snapshots.restored'), report.restored, t)}
               {reportLine(t('snapshots.removedPlugins'), report.removedPlugins, t)}
               {reportLine(t('snapshots.manualHints'), report.manualHints, t, true)}
@@ -640,28 +652,64 @@ function pullProgressLabel(mode: PullState['mode'], t: TranslateNS<'config-manag
  * 咨询 / 拉取 / 下载 / 删除四条远端动作共用这一份判定，避免各写一份而分叉。
  * 地址从 /sync/status 现取，与产物库加载远端列表同源。
  */
-async function remotePayload(syncApi: SyncApi): Promise<{ transport: 'git'; repoUrl: string } | { transport: 'webdav'; url: string }> {
+/**
+ * 从 /sync/status 响应解析当前可用的远端通道与请求载荷（覆盖 git/webdav/s3/gist 四通道）。
+ * 优先取 lastSyncChannel 或 transport.type；若首选通道未就绪，按 SYNC_CHANNEL_ORDER 顺延找第一个已就绪通道。
+ */
+export function resolveRemoteChannelPayload(
+  status: SyncStatusResponse,
+): { channel: SyncChannel; payload: SyncPushBody } | null {
+  const preferred: SyncChannel = isClientChannel(status.lastSyncChannel)
+    ? status.lastSyncChannel
+    : isClientChannel(status.transport?.type)
+      ? status.transport.type
+      : 'git'
+  const candidates: SyncChannel[] = [
+    preferred,
+    ...SYNC_CHANNEL_ORDER.filter((ch) => ch !== preferred),
+  ]
+  const cloud = cloudFormFromStatus(status)
+  for (const ch of candidates) {
+    const form: SyncFormSnapshot = {
+      channel: ch,
+      repoUrl: status.repoUrl ?? '',
+      gitSubdir: status.subdir ?? '',
+      token: '',
+      webdavUrl: status.webdav?.url ?? '',
+      webdavUsername: status.webdav?.username ?? '',
+      webdavPassword: '',
+      ...cloud,
+      s3Secret: '',
+      gistToken: '',
+    }
+    if (channelRemoteReady(form)) {
+      return { channel: ch, payload: buildSyncChannelBody(form) }
+    }
+  }
+  return null
+}
+
+async function remotePayload(syncApi: SyncApi): Promise<SyncPushBody> {
   // 只要通道与地址，不要工作副本的 ahead/dirty/远端快照（省 5 次 git 子进程启动）
   const status = await syncApi.status({ workDirDetail: false })
-  const isWebdav = status.lastSyncChannel === 'webdav'
-  const webdavUrl = (status.webdav?.url ?? '').trim()
-  const repoUrl = (status.repoUrl ?? '').trim()
-  const payload = isWebdav
-    ? (webdavUrl !== '' ? { transport: 'webdav' as const, url: webdavUrl } : null)
-    : (repoUrl !== '' ? { transport: 'git' as const, repoUrl } : null)
-  if (payload === null) throw new Error('sync channel address is unavailable')
-  return payload
+  const resolved = resolveRemoteChannelPayload(status)
+  if (resolved === null) throw new Error('sync channel address is unavailable')
+  return resolved.payload
 }
 
 /**
  * 「迁移前咨询」的输入：**四种可迁移源统一走这一个入口**（§6.8 ②）。
  * 每种的 id 语义不同（快照 id / 备份路径 / 远端快照 id），照 consult 路由的契约给。
  */
-async function consultInput(row: ArtifactRow, syncApi: SyncApi): Promise<{ type: 'export-zip' | 'local-snapshot' | 'remote-snapshot'; id: string; snapshotId?: string; transport?: 'git' | 'webdav'; repoUrl?: string; url?: string }> {
+async function consultInput(
+  row: ArtifactRow,
+  syncApi: SyncApi,
+): Promise<SyncPushBody & { type: 'export-zip' | 'local-snapshot' | 'remote-snapshot'; id: string; snapshotId?: string }> {
   if (row.kind === 'snapshot') return { type: 'local-snapshot', id: row.ref.snapshotId ?? '', snapshotId: row.ref.snapshotId }
   if (row.kind === 'remote-snapshot') {
     // 远端来源**必须**带通道与地址（与拉取/下载/删除共用 remotePayload 那一份判定）
-    return { type: 'remote-snapshot', id: row.ref.remoteId ?? '', ...(await remotePayload(syncApi)) }
+    const remote = await remotePayload(syncApi)
+    return { ...remote, type: 'remote-snapshot', id: row.ref.remoteId ?? '', snapshotId: row.ref.remoteId }
   }
   return { type: 'export-zip', id: row.ref.path ?? '' }
 }

@@ -21,7 +21,7 @@
  *      这里对原始错误/告警再过一次）。
  */
 import type { TranslateNS } from '../client-types.ts'
-import { Badge, Banner, Button, SectionTitle } from '../common/ui.tsx'
+import { Badge, Banner, Button, Empty, SectionTitle } from '../common/ui.tsx'
 import { CheckIcon, RefreshIcon } from '../common/Icon.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
@@ -141,7 +141,7 @@ export function MergePreviewView({
       {/* 空态只说结论：「远端与本地一致 / 没有分区参与同步」是两个原因，而两者的处置完全相同
           （关掉弹窗，没有可做的事）—— 区分它们不改变任何决定，只把空态撑成一段话。 */}
       {preview !== null && !loading && rows.length === 0 && (
-        <div className={css.hint}>{t('merge.empty')}</div>
+        <Empty>{t('merge.empty')}</Empty>
       )}
 
       {rows.length > 0 && (

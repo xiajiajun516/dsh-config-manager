@@ -82,7 +82,7 @@ test('t45/t50: 脱敏登记渲染点必须留在主文件（或日志面板模�
     /import \{ redact \} from '\.\.\/\.\.\/security\/redaction\.ts'/,
     'tests/client/import-wizard-redaction.test.ts 要求主文件 import redact',
   )
-  assert.match(view, /\{item\.adapter\}: \{redact\(item\.description\)\}<\/li>/, '收尾清单登记点必须留在主文件')
+  assert.match(view, /\{sectionLabel\(item\.adapter as SectionId, t\)\}: \{redact\(item\.description\)\}<\/li>/, '收尾清单登记点必须留在主文件')
   assert.match(view, /\{analysis\.warnings\.map\(\(w, i\) => <div key=\{i\}>\{redact\(w\)\}<\/div>\)\}/, '分析告警登记点必须留在主文件')
   // 2026-09：日志改为「合并后的项状态行 + 明细行」，两处脱敏渲染点在日志面板模块内
   // （同点登记见 src/client/common/plan-text-redaction.test.ts 的 import-log-* 两条）

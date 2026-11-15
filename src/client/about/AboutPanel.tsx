@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import { Badge, Banner, Button, Card } from '../common/ui.tsx'
+import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
 import { ABOUT_CLI, ABOUT_LINKS, ABOUT_META, aboutStatusRows, aboutUpdateView, buildFeedbackSnippet } from './about-view.ts'
@@ -113,12 +114,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
       <Card>
         {state.loading && <Skeleton count={3} label={t('about.loading')} />}
         {state.loadError !== null && (
-          <div>
-            <Banner kind="error">{redact(state.loadError)}</Banner>
-            <div className={css.actionRow}>
-              <Button onClick={() => { void loadStatus() }}>{t('about.retryStatus')}</Button>
-            </div>
-          </div>
+          <ErrorBanner error={redact(state.loadError)} onRetry={() => { void loadStatus() }} t={api.t} />
         )}
         {state.rows !== null && (
           <div className={css.statRow}>

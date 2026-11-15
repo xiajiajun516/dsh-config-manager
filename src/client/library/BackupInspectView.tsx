@@ -9,7 +9,9 @@ import { inspectGroupedChanges, inspectSections, inspectSummary, type InspectGro
 // 脱敏：计划项文本由宿主拼装，渲染前必须过 redact（安全自查）
 import { redact } from '../../security/redaction.ts'
 import type { BackupInspectResult } from '../api.ts'
+import type { SectionId } from '../../schema/types.ts'
 import type { TranslateNS } from '../client-types.ts'
+import { sectionLabel } from '../common/section-labels.ts'
 import { Badge } from '../common/ui.tsx'
 import css from '../config-manager.module.css'
 
@@ -39,7 +41,7 @@ export function BackupInspectView({ result, t }: BackupInspectViewProps) {
         <div className={css.groupLabel}>{t('backupFiles.inspectSections')}</div>
         <div className={css.statRow}>
           {sections.map((s) => (
-            <Badge key={s.section} kind="info" className={css.inspectBadge}>{s.section}: {s.count}</Badge>
+            <Badge key={s.section} kind="info" className={css.inspectBadge}>{sectionLabel(s.section as SectionId, t)}: {s.count}</Badge>
           ))}
         </div>
       </div>
@@ -77,7 +79,7 @@ export function BackupInspectView({ result, t }: BackupInspectViewProps) {
                        在同一次提交里同步改成这里的锚点（见该表）。 */
                     <li key={item.id} className={css.inspectItem}>
                       <span className={css.inspectDot} aria-hidden="true" />
-                      <span className={css.mono + ' ' + css.inspectAdapter}>{item.adapter}:</span>
+                      <span className={css.inspectAdapter}>{sectionLabel(item.adapter as SectionId, t)}:</span>
                       <span className={css.inspectDesc}>{redact(item.description)}</span>
                     </li>
                   ))}

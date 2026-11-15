@@ -41,6 +41,7 @@ import {
 } from '../../ui/session-format-disposition.ts'
 import type { ImportPreviewSummary } from '../../ui/types.ts'
 import type { ImportAnalysis, ImportPlan, ImportResult } from '../../core/types.ts'
+import type { SectionId } from '../../schema/types.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
@@ -104,7 +105,7 @@ function NextStepsCard({ plan, result, t }: {
           <ul className={`${css.reportList} ${css.nextStepsList}`}>
             {steps.restartItems.map((item) => (
               // description 由宿主按计划项拼装（可能含 MCP env/headers 等本地配置片段）→ 渲染前过 redact
-              <li key={item.id}>{item.adapter}: {redact(item.description)}</li>
+              <li key={item.id}>{sectionLabel(item.adapter as SectionId, t)}: {redact(item.description)}</li>
             ))}
           </ul>
         </div>

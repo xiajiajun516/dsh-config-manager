@@ -147,14 +147,17 @@ export interface VisibleUnits {
   hidden: number
 }
 
-/** 单元列表渐进披露：默认只给前 limit 条，`showAll` 为 true 时全量。 */
+/** 单元列表渐进披露：默认只给前 limit 条；传页数按 pages * limit 分页，传 true 全量。 */
 export function visibleUnits(
   units: readonly SelectionUnit[],
-  showAll: boolean,
+  showAll: boolean | number,
   limit: number = UNIT_RENDER_LIMIT,
 ): VisibleUnits {
-  if (showAll || units.length <= limit) return { shown: [...units], hidden: 0 }
-  return { shown: units.slice(0, limit), hidden: units.length - limit }
+  if (showAll === true) return { shown: [...units], hidden: 0 }
+  const pages = typeof showAll === 'number' ? Math.max(1, Math.floor(showAll)) : 1
+  const cap = pages * limit
+  if (units.length <= cap) return { shown: [...units], hidden: 0 }
+  return { shown: units.slice(0, cap), hidden: units.length - cap }
 }
 
 /**

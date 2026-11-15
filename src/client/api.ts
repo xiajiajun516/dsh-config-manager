@@ -45,6 +45,7 @@ import type { DiskUsageReport } from '../core/disk-usage.ts';
 import type { BrowseResult } from '../core/path-browse.ts';
 import type { NativePickResult } from '../core/native-path-picker.ts';
 import type { UiT } from '../ui/i18n.ts';
+import type { SyncPushBody } from '../ui/sync-settings-view.ts';
 import { failedSectionsFromResponse } from '../ui/export-flow.ts';
 import type { SessionFormatDisposition } from '../ui/session-format-disposition.ts';
 import { CONFIG_MANAGER_API } from './common/routes.ts';
@@ -898,7 +899,7 @@ export class ConfigManagerApi {
 
   // ------------------------------------------------- Phase 7 迁移前咨询
   /** 迁移前咨询（只读健康评分 + 建议）：对 4 种可迁移源生成统一咨询报告。 */
-  async consult(input: { type: 'export-zip' | 'local-snapshot' | 'remote-snapshot' | 'profile'; id: string; snapshotId?: string }): Promise<ConsultReport> {
+  async consult(input: SyncPushBody & { type: 'export-zip' | 'local-snapshot' | 'remote-snapshot' | 'profile'; id: string; snapshotId?: string }): Promise<ConsultReport> {
     // 只读咨询要读备份/快照内容：长操作档位。
     return postJson<ConsultReport>(CONFIG_MANAGER_API.consult, input, this.t, LONG_OPTS);
   }

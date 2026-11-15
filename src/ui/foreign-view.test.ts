@@ -14,9 +14,11 @@ import assert from 'node:assert/strict';
 import {
   FOREIGN_LOSSY_KINDS,
   FOREIGN_SKIP_KEY,
+  foreignAgentPrompt,
   foreignImportFailure,
   foreignLossyRows,
   foreignPathsText,
+  foreignProducedSkips,
   foreignSkipLine,
   foreignSourceRow,
   foreignSourcesViewModel,
@@ -351,4 +353,51 @@ test('foreign-view：导入失败按稳定码翻字典（skip 码 / nothing-to-i
   const weird = foreignImportFailure('not an error', zh);
   assert.equal(weird.code, null);
   assert.equal(weird.text, 'not an error');
+});
+
+test('foreign-view：产包跳过项映射与 Agent 转换 Prompt 拼装（中英文跟随）', () => {
+  assert.deepEqual(foreignProducedSkips(null, zh), []);
+  assert.deepEqual(foreignProducedSkips([], zh), []);
+  const skips = foreignProducedSkips(
+    [
+      { code: 'unsupported-hooks', origin: 'settings.json', count: 2 },
+      { code: 'skill-missing-file', origin: 'foo-skill' },
+    ],
+    zh,
+  );
+  assert.equal(skips.length, 2);
+  assert.equal(skips[0]?.code, 'unsupported-hooks');
+  assert.equal(skips[0]?.origin, 'settings.json');
+  assert.equal(skips[0]?.count, 2);
+
+  // 无 skip 且无 failure → 空串
+  assert.equal(foreignAgentPrompt({ label: 'Claude Code', paths: ['.claude'], skips: [] }, zh), '');
+
+  const promptZh = foreignAgentPrompt(
+    {
+      label: 'Claude Code',
+      paths: ['.claude/settings.json', '.mcp.json'],
+      skips,
+      failure: { code: 'nothing-to-import', message: 'raw', text: zh('foreign.importNothing') },
+    },
+    zh,
+  );
+  assert.ok(promptZh.includes('Claude Code'));
+  assert.ok(promptZh.includes('.claude/settings.json, .mcp.json'));
+  assert.ok(promptZh.includes('nothing-to-import'));
+  assert.ok(promptZh.includes('[unsupported-hooks] (settings.json) ×2'));
+  assert.ok(promptZh.includes('[skill-missing-file] (foo-skill)'));
+
+  const promptEn = foreignAgentPrompt(
+    {
+      label: 'Claude Code',
+      paths: ['.claude/settings.json'],
+      skips: foreignProducedSkips([{ code: 'unsupported-hooks' }], en),
+    },
+    en,
+  );
+  assert.ok(promptEn.includes('Please help me convert the following Claude Code'));
+  assert.ok(promptEn.includes('Detected paths: .claude/settings.json'));
+  assert.ok(promptEn.includes('Items not migrated automatically:'));
+  assert.ok(promptEn.includes('[unsupported-hooks]'));
 });

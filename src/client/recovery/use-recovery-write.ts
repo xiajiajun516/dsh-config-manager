@@ -23,6 +23,11 @@ export const WRITE_KEY = {
   lockRecover: 'lock-recover',
   rescueOn: 'rescue:on',
   rescueOff: 'rescue:off',
+  diskCleanup: 'disk-cleanup',
+  rollbackRewind: 'rollback:rewind',
+  rollbackDelete: 'rollback:delete',
+  rollbackPrefs: 'rollback:prefs',
+  rollbackPurge: 'rollback:purge',
 } as const
 
 /** 选择器必须是模块级常量（引用稳定，subscribe 才能跳过无变化的重渲染）。 */

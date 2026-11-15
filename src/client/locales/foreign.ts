@@ -102,6 +102,7 @@ export const zh = {
   'foreign.skip.trae-db-schema-mismatch': 'Trae 加密会话库解密成功但表结构不符（缺 chat_session / history_v2 或必需列）：不猜字段，本次未读出任何会话',
   // 冲突语义（用户决策：同 id 不覆盖、跳过并报码）
   'foreign.conflict.policy': '同 id 冲突不覆盖本机内容：跳过并逐条报告',
+  'foreign.copyAgentPrompt': '复制转换提示词',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -190,4 +191,5 @@ export const en: Record<keyof typeof zh, string> = {
   'foreign.skip.trae-db-decrypt-failed': 'The Trae encrypted session database cannot be decrypted: the file is truncated, not in SQLCipher form, or unreadable, so no session was read',
   'foreign.skip.trae-db-schema-mismatch': 'The Trae encrypted session database decrypted but its schema does not match (chat_session / history_v2 or a required column is missing): fields are never guessed, so no session was read',
   'foreign.conflict.policy': 'Same-id conflicts never overwrite local content: skipped and listed in the report',
+  'foreign.copyAgentPrompt': 'Copy conversion prompt',
 };

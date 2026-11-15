@@ -13,12 +13,13 @@ import type { ReactNode } from 'react'
 import { useEffect } from 'react'
 
 import { redact } from '../../security/redaction.ts'
-import { Badge, Banner, Button } from '../common/ui.tsx'
+import { Badge, Banner, Button, Checkbox } from '../common/ui.tsx'
+import { Modal } from '../common/Modal.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { toast } from '../common/toast-store.ts'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
 import type { ConsultReport } from '../../core/migration-consult.ts'
-import type { SyncApi, SyncConfirmItem } from './sync-api.ts'
+import type { SyncApi, SyncConfirmItem, SyncPushPayload } from './sync-api.ts'
 import {
   buildAdoptions, confirmListSummary, hasBulkDecidable, isBulkDecidable, keepLocalAll, kindLabel, reviewItems, severityLabel,
   summarizeConfirmItems, useRemoteAll, type BulkDecision, type SyncConflictResolution,
@@ -61,6 +62,10 @@ export interface SyncConfirmViewProps {
   onCancel: () => void
   /** 回滚成功后回调（清空 lastRestoreId）。 */
   onRollbackDone?: () => void
+  /** 当前通道的远端连接参数（供 consult 远端快照定位通道） */
+  remoteChannelBody?: SyncPushPayload
+  /** 分区可读名映射（避免直接渲染裸 SectionId） */
+  sectionName?: (id: string) => string
 }
 
 /** 冲突解决方式：与导入恢复向导一致的两项（保留当前 / 使用备份）。 */
@@ -73,7 +78,7 @@ interface ItemState {
 }
 
 export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
-  const { api, syncSessionId, snapshotId, items, needsReview, compatibility, t, decisions, onDecisionsChange, onCancel, onRollbackDone } = props;
+  const { api, syncSessionId, snapshotId, items, needsReview, compatibility, t, decisions, onDecisionsChange, onCancel, onRollbackDone, remoteChannelBody, sectionName } = props;
   // 逐项决策状态（受控：来自 props.decisions；null 时按 defaultAdopt 初始化；持久化决策覆盖同名项）
   const states = useMemo<Record<string, ItemState>>(() => {
     const base: Record<string, ItemState> = {};
@@ -98,7 +103,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
   useEffect(() => {
     let cancelled = false;
     setConsultLoading(true);
-    api.consult({ type: 'remote-snapshot', id: snapshotId, snapshotId })
+    api.consult({ ...(remoteChannelBody ?? {}), type: 'remote-snapshot', id: snapshotId, snapshotId })
       .then((report) => { if (!cancelled) setConsultReport(report); })
       .catch(() => { if (!cancelled) setConsultReport(null); })
       .finally(() => { if (!cancelled) setConsultLoading(false); });
@@ -228,134 +233,116 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
 
   if (items.length === 0) {
     return (
-      <div className={css.blockStack}>
-        <Banner kind="ok">{t('syncflow.empty')}</Banner>
-        <div className={css.actionRow}>
+      <>
+        <Modal.Body scroll style={{ maxHeight: '72vh' }}>
+          <div className={css.blockStack}>
+            <Banner kind="ok">{t('syncflow.empty')}</Banner>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
           <Button disabled={busy} onClick={() => { void runCancel() }}>
             {t('common.close')}
           </Button>
-        </div>
-      </div>
+        </Modal.Footer>
+      </>
     );
   }
 
   return (
-    <div className={css.blockStack}>
-      {/* 状态与计数一律徽章，不再先来一条整句 Banner：此前 Banner 与下面的徽章把「共 N 项差异」
-          在同一屏里说了两遍。映射用 src/ui 的纯函数（等级 + 语义色），文案走 sync 字典 —— 不在这里另写分级规则。 */}
-      <div className={css.statRow}>
-        {compatibility !== undefined && (
-          <Badge kind={compatibilityBadgeKind(compatibilityLevel(compatibility))}>
-            {t(SYNC_COMPAT_KEYS[compatibilityLevel(compatibility)])}
-          </Badge>
-        )}
-        {needsReview && <Badge kind="warn">{t('syncflow.needsReviewBadge')}</Badge>}
-        {/* 一个徽章给两个数字：本次会导入几项 / 差异几项（原来的「共 N 项差异」与此重复） */}
-        <Badge kind="ok">{t('syncflow.adoptRemote')} {summary.adopted}/{summary.total}</Badge>
-        {summary.error > 0 && <Badge kind="error">{severityLabel('error', api.t)} × {summary.error}</Badge>}
-        {summary.warning > 0 && <Badge kind="warn">{severityLabel('warning', api.t)} × {summary.warning}</Badge>}
-      </div>
-
-      {/* 列表图例（合成一行）：勾选框怎么读 + 列表为什么比全量短。两件事都在解释下面这张列表，
-          各占一段只会把列表推到更低处。autoCount=0 时后半句不显示（没有差集可交代）。 */}
-      <div className={css.hint}>
-        {t('syncflow.adoptHint')}
-        {listSummary.autoCount > 0 && (
-          <> · {t('syncflow.listScope', { review: String(listSummary.reviewCount), auto: String(listSummary.autoCount) })}</>
-        )}
-      </div>
-
-      {/* 批量决策（快捷方式，一律 ghost —— primary 只留给弹窗底部真正的主操作「确认导入」）。
-          作用范围标在按钮行尾：能批量决策几项、错误项为什么只能逐项处理。 */}
-      <div className={css.actionRow}>
-        <Button variant="ghost" disabled={busy || !bulkDecidable} onClick={() => { applyBulkDecision(keepLocalAll(items)) }}>
-          {t('syncflow.keepLocalAll')}
-        </Button>
-        <Button variant="ghost" disabled={busy || !bulkDecidable} onClick={() => { applyBulkDecision(useRemoteAll(items)) }}>
-          {t('syncflow.useRemoteAll')}
-        </Button>
-        <span className={css.hint}>
-          {t('syncflow.bulkHint', { n: String(bulkCount) })}
-          {summary.error > 0 && <> · {t('syncflow.bulkErrorNote')}</>}
-        </span>
-      </div>
-
-      {/* 逐项差异列表（仅需人工决策的项）；固定容器限高 + 内部滚动，防止整页被拉长 */}
-      <div className={css.confirmScroll}>
-        <div className={css.reportList}>
-          {displayItems.map((it) => {
-            const st = states[it.itemId] ?? { adopted: it.defaultAdopt };
-            const isConflict = it.kind === 'Conflict';
-            return (
-              <div key={it.itemId} className={css.confirmItem}>
-                {/* 首行 = 勾选 + 类型 + 级别 + 描述；冲突的解决方式另起一行 ——
-                    此前它们挤在同一个 flex 行里，描述被压成窄列、勾选框被撑高的冲突块顶到垂直居中。 */}
-                <div className={css.confirmItemHead}>
-                  <label className={css.checkboxRow}>
-                    <input
-                      type="checkbox"
-                      checked={st.adopted}
-                      disabled={busy}
-                      onChange={(e) => { setAdopted(it.itemId, e.target.checked) }}
-                    />
-                    <span>{kindLabel(it.kind, api.t)}</span>
-                  </label>
-                  <Badge kind={it.severity === 'error' ? 'error' : it.severity === 'warning' ? 'warn' : 'info'}>
-                    {severityLabel(it.severity, api.t)}
-                  </Badge>
-                  {/* 同步差异项描述由宿主/引擎拼装，可能含本地配置值 → 渲染前过 redact（安全自查） */}
-                  <span className={css.confirmItemDesc}>{redact(it.description)}</span>
-                </div>
-                {isConflict && (
-                  <ConflictResolver
-                    item={it}
-                    resolution={st.resolution}
-                    busy={busy}
-                    t={t}
-                    onResolve={(r) => { setResolution(it.itemId, r) }}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
-      {consultLoading && <Skeleton shape="line" count={5} label={api.t('consult.loading')} />}
-      {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
-
-      {error !== null && <Banner kind="error">{error}</Banner>}
-
-      {/* 确认导入 / 取消 */}
-      {phase === 'idle' && (
-        <div className={css.actionRow}>
-          <Button variant="primary" disabled={busy || summary.adopted === 0} onClick={() => { void runApply() }}>
-            {t('syncflow.confirmImport')}
-          </Button>
-          <Button disabled={busy} onClick={() => { void runCancel() }}>
-            {t('syncflow.cancel')}
-          </Button>
-        </div>
-      )}
-
-      {/* 执行结果 */}
-      {(phase === 'done' || phase === 'failed') && applyResult !== null && (
-        <>
-          <ApplyResultCard result={applyResult} busy={busy} t={t} onRollback={runRollback} />
-          <div className={css.actionRow + ' ' + css.actionRowSpaced}>
-            <Button variant="primary" disabled={busy} onClick={() => { onCancel() }}>
-              {t('common.close')}
-            </Button>
+    <>
+      <Modal.Body scroll style={{ maxHeight: '72vh' }}>
+        <div className={css.blockStack}>
+          {/* 状态与计数一律徽章，不再先来一条整句 Banner：此前 Banner 与下面的徽章把「共 N 项差异」
+              在同一屏里说了两遍。映射用 src/ui 的纯函数（等级 + 语义色），文案走 sync 字典 —— 不在这里另写分级规则。 */}
+          <div className={css.statRow}>
+            {compatibility !== undefined && (
+              <Badge kind={compatibilityBadgeKind(compatibilityLevel(compatibility))}>
+                {t(SYNC_COMPAT_KEYS[compatibilityLevel(compatibility)])}
+              </Badge>
+            )}
+            {needsReview && <Badge kind="warn">{t('syncflow.needsReviewBadge')}</Badge>}
+            {/* 一个徽章给两个数字：本次会导入几项 / 差异几项（原来的「共 N 项差异」与此重复） */}
+            <Badge kind="ok">{t('syncflow.adoptRemote')} {summary.adopted}/{summary.total}</Badge>
+            {summary.error > 0 && <Badge kind="error">{severityLabel('error', api.t)} × {summary.error}</Badge>}
+            {summary.warning > 0 && <Badge kind="warn">{severityLabel('warning', api.t)} × {summary.warning}</Badge>}
           </div>
-        </>
-      )}
-      {(phase === 'done' || phase === 'failed') && applyResult === null && (
-        <>
-          {/* 诚实性（2026-10）：回滚未完成（full=false）时逐条列出未恢复项与人工提示，
-              绝不用「已回滚」这一句话盖过去。完整回滚仍走 Toast（见 runRollback）。 */}
-          {rollbackResult !== null && rollbackResult.full === false && (
+
+          {/* 列表图例（合成一行）：勾选框怎么读 + 列表为什么比全量短。两件事都在解释下面这张列表，
+              各占一段只会把列表推到更低处。autoCount=0 时后半句不显示（没有差集可交代）。 */}
+          <div className={css.hint}>
+            {t('syncflow.adoptHint')}
+            {listSummary.autoCount > 0 && (
+              <> · {t('syncflow.listScope', { review: String(listSummary.reviewCount), auto: String(listSummary.autoCount) })}</>
+            )}
+          </div>
+
+          {/* 批量决策（快捷方式，一律 ghost —— primary 只留给弹窗底部真正的主操作「确认导入」）。
+              作用范围标在按钮行尾：能批量决策几项、错误项为什么只能逐项处理。 */}
+          <div className={css.actionRow}>
+            <Button variant="ghost" disabled={busy || !bulkDecidable} onClick={() => { applyBulkDecision(keepLocalAll(items)) }}>
+              {t('syncflow.keepLocalAll')}
+            </Button>
+            <Button variant="ghost" disabled={busy || !bulkDecidable} onClick={() => { applyBulkDecision(useRemoteAll(items)) }}>
+              {t('syncflow.useRemoteAll')}
+            </Button>
+            <span className={css.hint}>
+              {t('syncflow.bulkHint', { n: String(bulkCount) })}
+              {summary.error > 0 && <> · {t('syncflow.bulkErrorNote')}</>}
+            </span>
+          </div>
+
+          {/* 逐项差异列表（仅需人工决策的项）；固定容器限高 + 内部滚动，防止整页被拉长 */}
+          <div className={css.confirmScroll}>
+            <div className={css.reportList}>
+              {displayItems.map((it) => {
+                const st = states[it.itemId] ?? { adopted: it.defaultAdopt };
+                const isConflict = it.kind === 'Conflict';
+                return (
+                  <div key={it.itemId} className={css.confirmItem}>
+                    {/* 首行 = 勾选 + 类型 + 级别 + 描述；冲突的解决方式另起一行 ——
+                        此前它们挤在同一个 flex 行里，描述被压成窄列、勾选框被撑高的冲突块顶到垂直居中。 */}
+                    <div className={css.confirmItemHead}>
+                      <Checkbox
+                        checked={st.adopted}
+                        disabled={busy}
+                        onChange={(checked) => { setAdopted(it.itemId, checked) }}
+                        label={kindLabel(it.kind, api.t)}
+                      />
+                      <Badge kind={it.severity === 'error' ? 'error' : it.severity === 'warning' ? 'warn' : 'info'}>
+                        {severityLabel(it.severity, api.t)}
+                      </Badge>
+                      {/* 同步差异项描述由宿主/引擎拼装，可能含本地配置值 → 渲染前过 redact（安全自查） */}
+                      <span className={css.confirmItemDesc}>{redact(it.description)}</span>
+                    </div>
+                    {isConflict && (
+                      <ConflictResolver
+                        item={it}
+                        resolution={st.resolution}
+                        busy={busy}
+                        t={t}
+                        onResolve={(r) => { setResolution(it.itemId, r) }}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
+          {consultLoading && <Skeleton shape="line" count={5} label={api.t('consult.loading')} />}
+          {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
+
+          {error !== null && <Banner kind="error">{error}</Banner>}
+
+          {/* 执行结果 */}
+          {(phase === 'done' || phase === 'failed') && applyResult !== null && (
+            <ApplyResultCard result={applyResult} busy={busy} t={t} sectionName={sectionName} onRollback={runRollback} />
+          )}
+          {(phase === 'done' || phase === 'failed') && applyResult === null && rollbackResult !== null && rollbackResult.full === false && (
             <>
+              {/* 诚实性（2026-10）：回滚未完成（full=false）时逐条列出未恢复项与人工提示，
+                  绝不用「已回滚」这一句话盖过去。完整回滚仍走 Toast（见 runRollback）。 */}
               <Banner kind="error">
                 {t('syncflow.rollbackIncomplete', { n: String((rollbackResult.failed ?? []).length) })}
               </Banner>
@@ -374,17 +361,26 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
               )}
             </>
           )}
-          {/* R-04：回滚成功的 ok Banner 已改为 Toast（见 runRollback）。此处仅保留收尾「关闭」按钮；
-             一并消除了原实现在 runApply 抛错（phase=failed 且 applyResult 仍为 null）时
-              误显示「已回滚到应用前」的问题 —— 那种情况下方 error Banner 才是唯一事实。 */}
-          <div className={css.actionRow + ' ' + css.actionRowSpaced}>
-            <Button variant="primary" disabled={busy} onClick={() => { onCancel() }}>
-              {t('common.close')}
+        </div>
+      </Modal.Body>
+      <Modal.Footer>
+        {(phase === 'idle' || phase === 'applying' || phase === 'cancelling') && (
+          <>
+            <Button variant="primary" loading={phase === 'applying'} disabled={busy || summary.adopted === 0} onClick={() => { void runApply() }}>
+              {t('syncflow.confirmImport')}
             </Button>
-          </div>
-        </>
-      )}
-    </div>
+            <Button disabled={busy} onClick={() => { void runCancel() }}>
+              {t('syncflow.cancel')}
+            </Button>
+          </>
+        )}
+        {(phase === 'done' || phase === 'failed') && (
+          <Button variant="primary" disabled={busy} onClick={() => { onCancel() }}>
+            {t('common.close')}
+          </Button>
+        )}
+      </Modal.Footer>
+    </>
   );
 }
 
@@ -444,10 +440,11 @@ interface ApplyResultCardProps {
   result: ApplyItemsResponse
   busy: boolean
   t: TranslateNS<'config-manager-sync'>
+  sectionName?: (id: string) => string
   onRollback: (restoreId: string) => Promise<void>
 }
 
-function ApplyResultCard({ result, busy, t, onRollback }: ApplyResultCardProps): ReactNode {
+function ApplyResultCard({ result, busy, t, sectionName, onRollback }: ApplyResultCardProps): ReactNode {
   const ok = result.ok;
   /** issue #56：未生效项（warning）= 非致命但确实没写进去（旧宿主无字段 → 空数组） */
   const ineffective = result.ineffective ?? [];
@@ -482,7 +479,7 @@ function ApplyResultCard({ result, busy, t, onRollback }: ApplyResultCardProps):
         <div>
           <span className={css.fieldLabel}>{t('syncflow.importedSections')}</span>
           <div className={css.statRow}>
-            {result.applied.map((sid) => <Badge key={sid} kind="ok">{sid}</Badge>)}
+            {result.applied.map((sid) => <Badge key={sid} kind="ok">{sectionName !== undefined ? sectionName(sid) : sid}</Badge>)}
           </div>
         </div>
       )}
