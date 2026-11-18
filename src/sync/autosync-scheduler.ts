@@ -1174,6 +1174,25 @@ export class AutoSyncScheduler {
       return { kind: 'skip', result };
     }
 
+    // G 项（P1）：同一版远端快照已经评估过并写进 pendingMerge 时，远端轮询（不查本地）不再每 5 分钟
+    // 重下载整包再 merge 一遍；只有远端出现了更新快照（latestId !== pending.remoteSnapshotId）才重新拉取。
+    const latestMeta = remoteMetas !== null && remoteMetas.length > 0 ? remoteMetas[remoteMetas.length - 1]! : null;
+    if (opts.localCheck === false && latestMeta !== null && typeof (engine as Partial<SyncEngine>).pendingMergeRemoteId === 'function') {
+      const pending = await engine.pendingMergeRemoteId().catch(() => null);
+      if (pending !== null && pending.remoteSnapshotId === latestMeta.id && pending.sections.length > 0) {
+        const result: AutosyncRunResult = {
+          status: 'skipped', direction: 'pull', skipReason: 'conflict',
+          conflictedSections: pending.sections, historyId, consecutiveFailures: 0,
+        };
+        await this.appendHistory(channel, {
+          direction: 'pull', status: 'skipped', skipReason: 'conflict',
+          conflictedSections: pending.sections, createdAt: nowIso, failureCountAtRun: 0,
+        });
+        await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
+        return { kind: 'skip', result };
+      }
+    }
+
     // 事件驱动触发（§3.1/§3.2/§3.3 看变化不看时间）：
     // - remoteNew：远端是否出现比本地祖先更新的快照 → 决定是否做下载合并（Phase A）；
     // - localDirty：本地 portable 配置相对基线是否真的变了 → 决定是否上传（Phase C）。

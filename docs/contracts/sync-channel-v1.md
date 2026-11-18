@@ -262,8 +262,8 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
 | apply/合并**失败**（含整体回滚） | **不动** | 失败不是「部分成功」 |
 | apply/合并成功但**仍有未裁决冲突**（或用户 `action='skip'`） | **不动**，并写 `pendingMerge` | 未裁决冲突下一轮必须重新出现，绝不静默丢一侧改动 |
 | 全部裁决完且应用成功 | → 本次远端快照 id，清空 `pendingMerge` | |
-| push 有分区仍在等裁决（`skipSections` 扣下） | **只记已推分区**，被扣分区保持原 hash | 被扣分区不算「已同步」，下一轮照旧需要裁决 |
-| push 全部分区都在等裁决 | **不动** | 返回 `{ ok:true, snapshotId:'', sections:[], skipped:'all-conflicted' }`：零远端写入、零基线变化、`pendingMerge` 原样（`since` 保留） |
+| push 有分区仍在等裁决（`skipSections` 扣下） | **只记已推分区**，被扣分区保持原 hash | 被扣分区不算「已同步」，下一轮照旧需要裁决；若此前远端已推进且 `pendingMerge.remoteSnapshotId === latest`，仅允许带 `skipSections` 且有非扣下本地改动时推上去：新快照原样保留远端已改动但未裁决/未修改的分区，本地仅推进已推分区 hash，祖先副本保留原未推送分区的共同祖先，`pendingMerge.remoteSnapshotId` 同步更新为新快照 id（保留原 `since`） |
+| push 全部分区都在等裁决（或仅被扣分区有本地改动） | **不动** | 返回 `{ ok:true, snapshotId:'', sections:[], skipped:'all-conflicted' }`：零远端写入、零基线变化、`pendingMerge` 原样（`since` 保留） |
 
 - **基线以「实际落地的本地导出」为准**（不是 merged 载荷）：适配器写回时可能自增
   revision 这类派生字段（真机 settings 即如此），拿 merged 载荷记基线会让下一轮把「只有派生字段不同」
@@ -297,9 +297,10 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
 
 ### 7.4 push 前置：远端推进检测与 `force`
 
-- 判据：本机已有基线（`lastSnapshotId !== ''`）且远端最新快照 id ≠ 基线 id → **拒绝本次 push**：
+- 判据：本机已有基线（`lastSnapshotId !== ''`）且远端最新快照 id ≠ 基线 id → 默认**拒绝本次 push**：
   返回 `{ ok:false, snapshotId:'', sections:[], conflict:true, warnings, message }`（**不抛错**），
   零远端写入、基线字段零变化；界面据此引导「先同步远端」。
+- **例外（分区级冲突扣下推非冲突改动）**：调用方显式传入 `skipSections`、存在非空 `held` 分区、非加密通道、且 `state.pendingMerge?.remoteSnapshotId === latest`（说明该版远端快照已评估过并记录待裁决分区）时，允许把不冲突且本地确有改动的分区推上去，并在新快照中沿用该远端快照的被扣与远端已改写而本地未动之分区（若非扣下分区也发生双侧改动或远端为加密快照，仍按冲突拒绝）。
 - 首次同步（无基线）与远端为空**不拦**；`list()` 读不到时**不把「读不到」当「没变」**：照常继续但如实告警。
 - `force: true` 是**显式覆盖意图**：跳过该检查直接推送（用户确认要覆盖远端时使用）。
 - 通道自身的条件写（§3 索引 `If-Match`）是**另一道**防线：两者互补，不互相替代。

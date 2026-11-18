@@ -50,6 +50,12 @@ export interface RecordBaselineOptions {
    * 绝不允许由传入的 `sections`（本机观测）推导。
    */
   remoteSections?: SectionHashes;
+  /**
+   * 写新祖先副本目录时使用的载荷（缺省 = `sections`）。
+   * 冲突扣下只推送非冲突分区时，新远端快照带了远端版本，但本机新祖先副本仍需保留被扣/未应用
+   * 分区的共同祖先内容，后续预览/三方合并才不会退化成「无祖先」。
+   */
+  ancestorSections?: Partial<Record<SectionId, SectionData>>;
 }
 
 /** 落盘所需的环境（引擎逐字段透传；此处不持有引擎实例）。 */
@@ -97,10 +103,10 @@ export async function recordBaseline(input: RecordBaselineInput): Promise<void> 
       ...(encryptedAncestor ? { encrypted: true } : {}),
     };
     if (encryptedAncestor) {
-      const encryptedSections = await encryptSectionsPayload(sections, ancestorPassword);
+      const encryptedSections = await encryptSectionsPayload(opts.ancestorSections ?? sections, ancestorPassword);
       await writeEncryptedAncestor(env.localSnapshotsDir, { id: snapshotId, createdAt: ts, manifest, sections: encryptedSections }, env.fsx);
     } else {
-      await writeAncestor(env.localSnapshotsDir, { id: snapshotId, createdAt: ts, manifest, sections }, env.fsx);
+      await writeAncestor(env.localSnapshotsDir, { id: snapshotId, createdAt: ts, manifest, sections: opts.ancestorSections ?? sections }, env.fsx);
     }
   }
 

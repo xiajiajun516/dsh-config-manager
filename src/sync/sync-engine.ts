@@ -30,14 +30,11 @@ import type {
   ConfigAdapter, ExportSection, GlobalConflictStrategy, HostContext,
   ImportAnalysis, ImportPlan, ImportResult, PathMapping, PlanItem, PlanItemKind, RollbackReport, SecretScanner,
 } from '../core/types.ts';
-import { isFileSection, SECTION_FILE_PREFIXES, SECTION_JSON_PATHS } from '../schema/config.ts';
-import { buildManifest, CHECKSUMS_FILE, MANIFEST_FILE } from '../schema/manifest.ts';
-import type { FilesSection, Platform, SectionData, SectionId } from '../schema/types.ts';
+import { isFileSection } from '../schema/config.ts';
+import type { Platform, SectionData, SectionId } from '../schema/types.ts';
 import { CURRENT_SCHEMA_VERSION } from '../schema/versions.ts';
-import { buildChecksums } from '../utils/hashing.ts';
-import { stringifyJsonSafe } from '../utils/json.ts';
-import { writeZip } from '../utils/zip.ts';
-import type { ZipWriteEntry } from '../utils/zip.ts';
+import { buildSnapshotZip } from './snapshot-zip.ts';
+import { buildConflictIsolatedSnapshot, hasLocalDirtyTarget } from './partial-conflict-push.ts';
 import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
 import { writeSnapshotToDir } from './layout.ts';
@@ -82,6 +79,7 @@ import { msgOf, zhMsg } from '../core/messages.ts';
 import { engineMsg } from './messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import { tryLoadAncestor } from './ancestor.ts';
+import { appendCredentialPlanItems as appendCredentialPlanItemsAt } from './credential-plan.ts';
 import type { MergePlan, MergeSectionResult } from './merge.ts';
 import { merge as mergeSections } from './merge.ts';
 import { prepareApplyBundle } from './apply-bundle.ts';
@@ -534,6 +532,7 @@ export class SyncEngine {
    * 每次 merge() 重设；merge 失败/远端为空时置 null（= 远端 id 未知）。
    */
   private lastMergedRemoteSnapshotId: string | null = null;
+  private lastMergedRemoteSnapshot: SyncSnapshot | null = null;
   /**
    * 最近一次 merge() 命中的**远端快照各分区哈希**（G-44，C 组修复）：
    * 紧随其后的 applyMergePlan() 推进 lastSnapshotId 时必须同时传给 recordBaseline.remoteSections，
@@ -761,88 +760,9 @@ export class SyncEngine {
     return credentialsMapFromYaml(await decryptCredentialsPayload(payload, password));
   }
 
-  /**
-   * 把「随加密快照迁移的凭据」补进导入计划：**需要写回**的 ref 生成 MissingSecret 项，
-   * 本机值已与快照逐字节相同的 ref 生成 Skip（info）——写回是 no-op，不该再让用户确认。
-   * 执行阶段由 credentials adapter 经 ImportContext.decryptedCredentials（仅内存）
-   * 调用 credentials.set(ref, value) 写回本机 —— 与手动补录走同一条已验证路径。
-   *
-   * 判定与导入路径同规则（**值的有无优先于本机状态**），并多做一步「值是否已经相同」：
-   *  - 有值 + 本机不同 / 本机没有 → MissingSecret（确认后写回）。**不因本机已配置而跳过**：
-   *    快照显式带了值（用户勾了「导出密钥」），跳过就等于「密钥没同步过来」；
-   *    要逐项放过用确认列表的批量按钮（sync-view 的 isBulkDecidable）。
-   *  - 有值 + 本机逐字节相同 → Skip（info）。这是对上一轮「有值一律 MissingSecret」的**收窄**
-   *    （真机反馈：本机 refs 一条不缺，列表却全标「缺密钥」+ 黄色警告）：只有真的会改动本机的
-   *    ref 才需要人工确认。
-   *  - 本机凭据文件读不到 → 无法比较 → 保守按 MissingSecret 处理，绝不静默跳过。
-   *  - 「只有 ref 名、没有值」的情形由 createImportPlan → buildCredentialPlanItems 处理
-   *    （那里才做本机已配置 → Skip 的判定）。
-   *  - 同 id 已是 **Skip**（上面那条规则在「无值」时先判成了 Skip）→ 值不同时**升级**为
-   *    MissingSecret：否则有值也会被 Skip 挡住，值永远不会写回；值相同时保持 Skip。
-   */
+  /** 凭据计划项补录（实现下沉至 credential-plan.ts，口径与安全不变量见该模块注释）。 */
   private async appendCredentialPlanItems(plan: ImportPlan, credentials: Map<string, string> | undefined): Promise<void> {
-    if (credentials === undefined || credentials.size === 0) return;
-    const local = await this.readLocalCredentials();
-    const byId = new Map(plan.items.map((i) => [i.id, i] as const));
-    for (const [ref, value] of credentials) {
-      const id = `secret:${ref}`;
-      const prev = byId.get(id);
-      if (local?.get(ref) === value) {
-        const description = this.msg('sync.credentialsItemSame', { ref });
-        if (prev === undefined) {
-          const same: PlanItem = {
-            id, kind: 'Skip', adapter: 'credentialsStatus', description,
-            severity: 'info', target: { adapter: 'credentialsStatus', ref },
-          };
-          plan.items.push(same);
-          byId.set(id, same);
-        } else if (prev.kind === 'Skip' || prev.kind === 'MissingSecret') {
-          prev.kind = 'Skip';
-          prev.severity = 'info';
-          prev.description = description;
-        }
-        continue;
-      }
-      if (prev !== undefined) {
-        if (prev.kind !== 'Skip') continue; // 已有可执行项 → 不重复
-        prev.kind = 'MissingSecret';
-        prev.severity = 'warning';
-        prev.description = this.msg('sync.credentialsItemDesc', { ref });
-        continue;
-      }
-      const item: PlanItem = {
-        id,
-        kind: 'MissingSecret',
-        adapter: 'credentialsStatus',
-        description: this.msg('sync.credentialsItemDesc', { ref }),
-        severity: 'warning',
-        target: { adapter: 'credentialsStatus', ref },
-      };
-      plan.items.push(item);
-      byId.set(id, item);
-    }
-    // missingSecrets 与 items 必须同源：否则「随快照恢复的凭据」不进补录统计/结果报告
-    plan.missingSecrets = plan.items
-      .filter((i) => i.kind === 'MissingSecret')
-      .map((i) => ({ ref: i.id.replace(/^secret:/, ''), required: true }));
-  }
-
-  /**
-   * 读本机 `$DSH_HOME/.credentials.yaml` → `Map<ref, value>`，**只用于**「值是否已经相同」比对。
-   * 与 push 侧 buildCredentialsPayload 读同一个文件、同一解析口径（credentialsMapFromYaml）；
-   * 不新增任何能力，也不回读凭据值到 UI。
-   * 读不到 / 解析失败 → undefined = **无法比较**：调用方必须按「未知」保守处理（照旧要求确认），
-   * 绝不因为读失败就静默跳过写回。
-   * 安全：值只在进程内存里比较 —— 不落盘、不进日志/报告/响应体。
-   */
-  private async readLocalCredentials(): Promise<Map<string, string> | undefined> {
-    try {
-      const file = path.join(this.ctx.homeDir, '.credentials.yaml');
-      const raw = Buffer.from(await this.ctx.fs.readFile(file)).toString('utf8');
-      return credentialsMapFromYaml(raw);
-    } catch {
-      return undefined;
-    }
+    await appendCredentialPlanItemsAt({ ctx: this.ctx, msg: this.msg, plan, credentials });
   }
 
   /**
@@ -890,16 +810,33 @@ export class SyncEngine {
     // SYN-02：本轮只列一次远端 index（推进检测 + 继承会话删除墓碑共用；墓碑累积在最新快照里）
     const remoteIndex = await listRemoteSnapshotIndex(this.transport);
     const remoteTombstones = remoteIndex.reason === undefined ? remoteTombstonesOf(remoteIndex.metas) : [];
+    const latestMeta = remoteIndex.reason === undefined ? remoteIndex.metas[remoteIndex.metas.length - 1] : undefined;
+    const stateBefore = await loadState();
+    let carryOverFromRemoteId: string | null = null;
     // 远端推进检测（判据与 0.4.1 自愈收养全在 push-precheck.ts）；冲突时**不抛错**、
     // 不 upload、不记基线、不改 sync-state，只把文案回给调用方走 force 出口。
+    // G 项：若调用方显式传 skipSections、存在待裁决扣下分区、且该远端快照已被 merge() 评估进
+    // pendingMerge.remoteSnapshotId，则允许继续推导不冲突分区的局部推送。
     if (opts.force !== true) {
       const pre = await resolvePushBase({
         stateDir: this.stateDir, fsx: this.fsx, localSnapshotsDir: this.localSnapshotsDir,
         index: remoteIndex, transport: { type: this.transport.type, ref: this.transportRef },
         msg: this.msg, warnings,
       });
-      if (!pre.ok) return { ok: false, snapshotId: '', sections: [], warnings, conflict: true, message: pre.message };
-      adopted = pre.adopted;
+      if (!pre.ok) {
+        const canIsolate = opts.skipSections !== undefined && held.length > 0 && !encrypt
+          && latestMeta !== undefined && stateBefore.pendingMerge?.remoteSnapshotId === latestMeta.id;
+        if (!canIsolate) return { ok: false, snapshotId: '', sections: [], warnings, conflict: true, message: pre.message };
+        carryOverFromRemoteId = latestMeta.id;
+      } else {
+        adopted = pre.adopted;
+      }
+    }
+    // 同理：即使 lastSnapshotId 已推进到最新混合快照，若远端仍带着被扣下的另一设备变更，仍须沿用远端被扣分区
+    if (carryOverFromRemoteId === null && opts.force !== true && opts.skipSections !== undefined
+      && held.length > 0 && !encrypt && latestMeta !== undefined
+      && held.some((sid) => latestMeta.sections[sid] !== undefined && latestMeta.sections[sid] !== stateBefore.sections[sid]?.hash)) {
+      carryOverFromRemoteId = latestMeta.id;
     }
     // issue #146：全被冲突扣下 ⇒ 一个分区都不上行。放在前置检测之后：远端已推进时「先同步远端」更该被报出来。
     if (targets.length === 0 && held.length > 0) {
@@ -934,11 +871,37 @@ export class SyncEngine {
     }
     this.assertNoForbiddenSections(plainSections as Record<string, unknown>);
 
+    let pushedLocalSections: Partial<Record<SectionId, SectionData>> = plainSections;
+    let snapshotPlainSections: Partial<Record<SectionId, SectionData>> = plainSections;
+    let ancestorRecordSections: Partial<Record<SectionId, SectionData>> | undefined;
+    if (carryOverFromRemoteId !== null) {
+      if (!hasLocalDirtyTarget(plainSections, stateBefore.sections)) {
+        const message = this.msg('sync.pushSkipConflicted', { sections: held.join(', ') });
+        return { ok: true, snapshotId: '', sections: [], warnings: [...warnings, message], message, skipped: 'all-conflicted' };
+      }
+      const remoteSnap = this.lastMergedRemoteSnapshot?.id === carryOverFromRemoteId
+        ? this.lastMergedRemoteSnapshot
+        : await this.transport.download(carryOverFromRemoteId);
+      const prevAncestor = stateBefore.ancestorId !== undefined && stateBefore.ancestorId !== '' && this.localSnapshotsDir !== undefined
+        ? await tryLoadAncestor(this.localSnapshotsDir, stateBefore.ancestorId, this.fsx)
+        : undefined;
+      const isolated = buildConflictIsolatedSnapshot({ held, plainSections, stateBefore, remoteSnap, prevAncestor });
+      if (!isolated.ok) {
+        return {
+          ok: false, snapshotId: '', sections: [], warnings, conflict: true,
+          message: this.msg('sync.pushRemoteAdvanced', { remote: carryOverFromRemoteId, base: stateBefore.lastSnapshotId }),
+        };
+      }
+      pushedLocalSections = isolated.pushedSections;
+      snapshotPlainSections = isolated.snapshotSections;
+      ancestorRecordSections = isolated.ancestorSections;
+    }
+
     // 加密：整个明文 sections 载荷加密为密文（manifest 只存非秘密参数）
-    let sections: SyncSnapshot['sections'] = plainSections;
+    let sections: SyncSnapshot['sections'] = snapshotPlainSections;
     const encrypted = encrypt;
     if (encrypt) {
-      sections = await encryptSectionsPayload(plainSections, opts.password!);
+      sections = await encryptSectionsPayload(snapshotPlainSections, opts.password!);
     }
     // issue #38：勾选「导出密钥」→ 读取 .credentials.yaml 并加密为独立凭据载荷随快照上行。
     // includeSecrets ⇒ encrypt（上方已强制），故凭据载荷永远是密文；读不到/为空则只告警。
@@ -948,7 +911,9 @@ export class SyncEngine {
 
     // P1-5 + SYN-02：本机墓碑（上次推过、本机已删）叠加上远端继承的墓碑 ——
     // 不继承的话「A 删 → B 推」会漏掉墓碑，C 带旧快照就能把已删会话复活（删除只在本机传播）。
-    const bookkeeping = await this.computeSessionBookkeeping(targets, plainSections, remoteTombstones);
+    const pushedSections = Object.keys(pushedLocalSections) as SectionId[];
+    const snapshotSectionIds = Object.keys(snapshotPlainSections) as SectionId[];
+    const bookkeeping = await this.computeSessionBookkeeping(targets, snapshotPlainSections, remoteTombstones);
     const sessionBookkeeping = bookkeeping.tracked ? { sessionUnits: bookkeeping.sessionUnits, deletedSessions: bookkeeping.tombstones } : {};
     if (bookkeeping.deletedNow.length > 0) {
       warnings.push(this.msg('sync.sessionDeletionsRecorded', { count: String(bookkeeping.deletedNow.length) }));
@@ -958,7 +923,6 @@ export class SyncEngine {
     }
 
     // issue #146：待裁决只剔除**真正推上去**的分区（导出失败/不在候选里的分区一律保留）。
-    const pushedSections = Object.keys(plainSections) as SectionId[];
     const pendingAfterPush = await pendingMergeAfterPush(loadState, pushedSections);
     // issue #140：内容没变就**不新建快照**（不 upload、不建目录、不裁剪），只收养远端最新指针。
     // 判据只有一处实现（content-diff.ts）：远端最新快照实际携带的分区哈希 vs 本次导出。
@@ -967,14 +931,15 @@ export class SyncEngine {
     // - 本轮新发现会话删除墓碑时不跳过：墓碑只随新快照的 manifest 传播，跳过等于丢掉删除。
     if (!encrypted && opts.force !== true && bookkeeping.deletedNow.length === 0) {
       const latest = remoteIndex.metas[remoteIndex.metas.length - 1];
-      const diff = diffSnapshotContent(latest, undefined, hashSections(plainSections));
+      const diff = diffSnapshotContent(latest, undefined, hashSections(snapshotPlainSections));
       if (diff.reason === 'same-content' && latest !== undefined) {
-        await this.recordBaseline(latest.id, plainSections, this.now().toISOString(), {
+        await this.recordBaseline(latest.id, pushedLocalSections, this.now().toISOString(), {
           remoteSnapshotId: latest.id,
           // P2：本轮内容已被远端收下 ⇒ 待裁决已有结论；但 issue #146 被扣下的分区仍待裁决，绝不一起清掉。
           pendingMerge: pendingAfterPush,
           // G-44：远端观测必须是**远端快照自己**的 sections，绝不由 state.sections 反推
           remoteSections: latest.sections,
+          ...(ancestorRecordSections !== undefined ? { ancestorSections: ancestorRecordSections } : {}),
           ...sessionBookkeeping,
         });
         return {
@@ -1004,7 +969,7 @@ export class SyncEngine {
         schemaVersion: CURRENT_SCHEMA_VERSION,
         dshVersion: this.ctx.dshVersion,
         platform: this.ctx.platform as Platform,
-        sectionIds: pushedSections,
+        sectionIds: snapshotSectionIds,
         containsSecrets: includeSecrets,
         // 记录触发通道（git/webdav），供同步历史展示「由哪个通道触发」
         transport: this.transport.type,
@@ -1037,18 +1002,24 @@ export class SyncEngine {
     await this.pruneRemoteSnapshots(id, warnings);
     // ③ 记录祖先基线：写 sync-state（lastSnapshotId + 每分区 hash/updatedAt + lastSyncAt + transport）+ 裁剪。
     //    基线 hash 用明文（hasLocalChanges 与本地明文可比）；加密快照不写明文祖先副本（密钥不落盘）。
-    await this.recordBaseline(id, plainSections, nowIso, {
+    const nextPendingMerge = pendingAfterPush === null || pendingAfterPush === undefined
+      ? pendingAfterPush
+      : carryOverFromRemoteId !== null
+        ? { ...pendingAfterPush, remoteSnapshotId: id }
+        : pendingAfterPush;
+    await this.recordBaseline(id, pushedLocalSections, nowIso, {
       // issue #107：加密快照也落**密文**祖先副本（密码只在本进程内存里用；磁盘上只有密文）。
       // 不落任何副本的旧行为会让每轮合并都缺共同祖先 → 三方退化成两方、整分区冲突，
       // 用户被迫反复人工裁决。明文通道不受影响（缺省走 writeAncestor 的明文散文件布局）。
       ...(encrypted ? { ancestorPassword: opts.password! } : {}),
       ...sessionBookkeeping,
-      // issue #140：远端刚收下的就是这份明文 hash ⇒ 记录远端观测（下一次推送/拉取的内容判定起点）。
+      // issue #140：远端刚收下的就是这份完整快照 hash ⇒ 记录远端观测（下一次推送/拉取的内容判定起点）。
       // 加密快照的 sections 恒空 ⇒ 不写（指针一变就清空该字段，判定因此回落 id 比较）。
-      ...(encrypted ? {} : { remoteSections: hashSections(plainSections) }),
+      ...(encrypted ? {} : { remoteSections: hashSections(snapshotPlainSections) }),
+      ...(ancestorRecordSections !== undefined ? { ancestorSections: ancestorRecordSections } : {}),
       // P2：本机配置已经推成远端最新 ⇒ 之前的待裁决已被这次推送消解，不再挂着误导用户。
       // issue #146：被扣下的分区没推上去，它们的待裁决必须留下（只剔除已推分区）。
-      pendingMerge: pendingAfterPush,
+      pendingMerge: nextPendingMerge,
     });
 
     return {
@@ -1527,6 +1498,7 @@ export class SyncEngine {
     const metas = await this.transport.list();
     if (metas.length === 0) {
       this.lastMergedRemoteSnapshotId = null;
+      this.lastMergedRemoteSnapshot = null;
       this.lastMergedRemoteSections = undefined;
       this.lastMergedRemoteSourceHome = '';
       this.lastMergedPathMappings = [];
@@ -1547,10 +1519,14 @@ export class SyncEngine {
     const matchedMeta = metas.find((m) => m.id === targetId);
     if (this.lastMergedRemoteEncrypted || isEncryptedSections(remote.sections)) {
       this.lastMergedRemoteSections = undefined;
-    } else if (matchedMeta !== undefined && Object.keys(matchedMeta.sections).length > 0) {
-      this.lastMergedRemoteSections = { ...matchedMeta.sections };
+      this.lastMergedRemoteSnapshot = null;
     } else {
-      this.lastMergedRemoteSections = hashSections(remote.sections as Partial<Record<SectionId, SectionData>>);
+      this.lastMergedRemoteSnapshot = structuredClone(remote);
+      if (matchedMeta !== undefined && Object.keys(matchedMeta.sections).length > 0) {
+        this.lastMergedRemoteSections = { ...matchedMeta.sections };
+      } else {
+        this.lastMergedRemoteSections = hashSections(remote.sections as Partial<Record<SectionId, SectionData>>);
+      }
     }
     // P1-5：按远端墓碑剔除已删除的会话（三方合并的 remote 侧同样不许复活）
     stripTombstonedSessionsInPlace(remote);
@@ -1789,6 +1765,14 @@ export class SyncEngine {
   async recordPendingMerge(sections: readonly SectionId[]): Promise<PendingMerge | null> {
     const deps = { stateDir: this.stateDir, fsx: this.fsx, msg: this.msg };
     return persistPendingMerge(deps, this.lastMergedRemoteSnapshotId, sections, this.now().toISOString());
+  }
+
+  /** 只读读取已落盘的 pendingMerge 远端快照 id 与待裁决分区（供调度器识别重复轮询）。 */
+  async pendingMergeRemoteId(): Promise<{ remoteSnapshotId: string; sections: SectionId[] } | null> {
+    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
+    return state.pendingMerge
+      ? { remoteSnapshotId: state.pendingMerge.remoteSnapshotId, sections: [...state.pendingMerge.sections] }
+      : null;
   }
 
   /** 组装 pendingMerge 记录（同一远端快照上连续冲突保留首次时间）；见 pending-merge.ts。 */
@@ -2180,55 +2164,11 @@ export class SyncEngine {
     };
   }
 
-  /** 散文件快照 → 标准导出 ZIP（临时目录，用完即删）：buildManifest + checksums + 平铺分区 */
+  /** 散文件快照 → 标准导出 ZIP（临时目录，用完即删）：实现下沉至 snapshot-zip.ts */
   private async snapshotToZip(snapshot: SyncSnapshot, portableIds: Set<SectionId>): Promise<string> {
-    // 防御：加密快照必须已由调用方解密（prepareSnapshot）；此处不处理密文载荷
-    if (isEncryptedSections(snapshot.sections)) {
-      throw new Error(this.msg('sync.snapshotStillEncrypted'));
-    }
-    const entries: ZipWriteEntry[] = [];
-    const sectionFlags = {} as Record<SectionId, boolean>;
-    for (const sid of portableIds) {
-      const data = snapshot.sections[sid];
-      if (data === undefined) continue;
-      sectionFlags[sid] = true;
-      if (isFileSection(sid)) {
-        const prefix = SECTION_FILE_PREFIXES[sid]!;
-        const files = (data as FilesSection).files ?? [];
-        for (const f of files) {
-          entries.push({ name: `${prefix}${f.relativePath}`, data: f.data });
-        }
-      } else {
-        const jsonPath = SECTION_JSON_PATHS[sid];
-        if (jsonPath === undefined) continue;
-        entries.push({ name: jsonPath, data: Buffer.from(stringifyJsonSafe(data, { space: 2 }), 'utf8') });
-      }
-    }
-    const manifest = buildManifest({
-      exporterVersion: this.exporterVersion,
-      dshVersion: snapshot.manifest.dshVersion,
-      platform: snapshot.manifest.platform as Platform,
-      arch: 'unknown', // ManifestSummary 不含 arch；仅影响展示，不影响导入决策
-      sections: sectionFlags,
-      containsSecrets: false,
-      encrypted: false,
-      encryption: null,
-      exportedAt: snapshot.createdAt,
-      // issue #45：把快照记录的导出机 home 透传进临时 ZIP —— Importer 依它生成
-      // 「源机 home → 本机 home」的重定基规则（工作区 path + 会话首帧 cwd 一并改写）。
-      sourceHome: snapshot.manifest.sourceHome,
+    return buildSnapshotZip({
+      snapshot, portableIds, exporterVersion: this.exporterVersion, zipDir: this.zipDir,
+      stillEncryptedMessage: this.msg('sync.snapshotStillEncrypted'),
     });
-    // checksums：覆盖除 manifest/checksums 外全部条目（与 exporter 一致）
-    const contentEntries = entries.filter((e) => e.name !== MANIFEST_FILE && e.name !== CHECKSUMS_FILE);
-    entries.push({
-      name: CHECKSUMS_FILE,
-      data: Buffer.from(stringifyJsonSafe(buildChecksums(contentEntries), { space: 2 }), 'utf8'),
-    });
-    entries.push({ name: MANIFEST_FILE, data: Buffer.from(stringifyJsonSafe(manifest, { space: 2 }), 'utf8') });
-
-    const dir = await fs.mkdtemp(path.join(this.zipDir, 'dsh-sync-pull-'));
-    const zipPath = path.join(dir, 'snapshot.zip');
-    await writeZip(zipPath, entries);
-    return zipPath;
   }
 }
