@@ -10,15 +10,25 @@ import assert from 'node:assert/strict';
 
 import {
   isLocalOnlyExternalFailure,
+  isNonBlockingExternalFailure,
+  isRetryableExternalFailure,
   localOnlyFailureReason,
   markLocalOnlyExternalFailure,
+  markRetryableExternalFailure,
+  NON_BLOCKING_EXTERNAL_REASONS,
+  retryableExternalFailureReason,
 } from './external-failure.ts';
 
 test('默认无标记：普通错误/非对象输入一律不算 localOnly（fail-closed 的默认面）', () => {
   assert.equal(isLocalOnlyExternalFailure(new Error('boom')), false);
+  assert.equal(isRetryableExternalFailure(new Error('boom')), false);
+  assert.equal(isNonBlockingExternalFailure(new Error('boom')), false);
   assert.equal(localOnlyFailureReason(new Error('boom')), null);
+  assert.equal(retryableExternalFailureReason(new Error('boom')), null);
   for (const weird of [null, undefined, 0, '', 'fatal: unable to auto-detect email address', [], {}, () => {}]) {
     assert.equal(isLocalOnlyExternalFailure(weird), false, '非错误输入不得被判为 localOnly: ' + String(weird));
+    assert.equal(isRetryableExternalFailure(weird), false);
+    assert.equal(isNonBlockingExternalFailure(weird), false);
     assert.equal(localOnlyFailureReason(weird), null);
   }
 });
@@ -57,4 +67,25 @@ test('空判据名不算标记（localOnlyFailureReason 只认非空字符串）
   const err = new Error('x');
   markLocalOnlyExternalFailure(err, '');
   assert.equal(isLocalOnlyExternalFailure(err), false);
+  assert.equal(isNonBlockingExternalFailure(err), false);
+});
+
+test('retryableExternal：允许网络/超时/5xx/401鉴权/熔断白名单，非白名单保持 fail-closed', () => {
+  for (const reason of NON_BLOCKING_EXTERNAL_REASONS) {
+    const err = new Error('external ' + reason);
+    const out = markRetryableExternalFailure(err, reason);
+    assert.equal(out, err);
+    assert.equal(isRetryableExternalFailure(err), true);
+    assert.equal(isNonBlockingExternalFailure(err), true);
+    assert.equal(retryableExternalFailureReason(err), reason);
+    assert.equal(isLocalOnlyExternalFailure(err), false, '不混淆 localOnly 语义');
+  }
+  const unknown = new Error('io half write');
+  markRetryableExternalFailure(unknown, 'not-in-allowlist');
+  assert.equal(isRetryableExternalFailure(unknown), false, '非白名单 reason 不得放行');
+  assert.equal(isNonBlockingExternalFailure(unknown), false);
+
+  const frozen = Object.freeze(new Error('frozen network'));
+  markRetryableExternalFailure(frozen, 'network');
+  assert.equal(isRetryableExternalFailure(frozen), false, '冻结对象保持 fail-closed');
 });

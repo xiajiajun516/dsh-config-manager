@@ -23,7 +23,8 @@ import { createSnapshot, FileSnapshotStore, verifySnapshot } from './backup.ts';
 import type { Snapshot } from './types.ts';
 import { makeContext } from '../adapters/test-helpers.ts';
 import type { MutationLockContext } from '../utils/env-lock.ts';
-import { markLocalOnlyExternalFailure } from './external-failure.ts';
+import { markLocalOnlyExternalFailure, markRetryableExternalFailure } from './external-failure.ts';
+import { SyncTransportError } from '../sync/transport.ts';
 
 function tmp(t: test.TestContext): string {
   const dir = fssync.mkdtempSync(path.join(os.tmpdir(), 'p3prod-'));
@@ -330,4 +331,75 @@ test('Phase4: snapshotExists 注入后正向校验（存在+READY+binding 匹配
   assert.equal(await inj.recoveryHooks.snapshotExists(snap.id, { operationId: 'WRONG' }), false, 'operationId 不匹配 → false（防伪造快照）');
   assert.equal(await inj.recoveryHooks.snapshotExists('bad..id', {}), false, '非法 snapshotId → false');
   assert.equal(await inj.recoveryHooks.snapshotExists(null, {}), false, 'null → false');
+});
+
+/* ---- Group A P0-1：可重试/认证传输失败不升 SAFE MODE；普通 Error 与半回滚继续 fail-closed ---- */
+
+test('Group A(a): SyncTransportError(network/timeout/server/auth) 与 circuit-open → NEEDS_ATTENTION 但不写 SAFE MODE', async (t) => {
+  const cases: Array<{ err: Error; match: RegExp }> = [
+    { err: new SyncTransportError('connect ETIMEDOUT', { kind: 'timeout' }), match: /ETIMEDOUT/ },
+    { err: new SyncTransportError('getaddrinfo EAI_AGAIN', { kind: 'network' }), match: /EAI_AGAIN/ },
+    { err: new SyncTransportError('HTTP 502 Bad Gateway', { kind: 'server', status: 502 }), match: /502/ },
+    { err: new SyncTransportError('HTTP 401 Bad credentials', { kind: 'auth', status: 401 }), match: /401/ },
+    { err: markRetryableExternalFailure(new Error('channel circuit open'), 'circuit-open'), match: /circuit open/ },
+  ];
+  for (const c of cases) {
+    const dir = tmp(t);
+    const recovery = await makeRecovery(dir);
+    await assert.rejects(
+      () => recovery.runExternalIntent({
+        operationType: 'autosync-push',
+        lockCtx: lk(),
+        intent: { adapter: 'sync', ref: 'git', kind: 'Push' },
+        fn: async () => { throw c.err; },
+      }),
+      c.match,
+    );
+    const active = await recovery.store.scanActive();
+    assert.equal(active.length, 1, '必须留下 journal: ' + c.err.message);
+    const journal = await recovery.store.loadActive(active[0]!);
+    assert.equal(journal?.state, 'NEEDS_ATTENTION');
+    assert.equal(recovery.safeModeActive, false, '不升内存 SAFE MODE: ' + c.err.message);
+    assert.equal(await recovery.store.readSafeMode(), false, '不写 durable SAFE MODE: ' + c.err.message);
+  }
+});
+
+test('Group A(b)/(c): 未标记普通 Error 仍写 SAFE MODE；SyncTransportError(unknown) 与半回滚态继续 fail-closed', async (t) => {
+  // (b) SyncTransportError(kind='unknown') 未打标，必须继续 fail-closed
+  {
+    const dir = tmp(t);
+    const recovery = await makeRecovery(dir);
+    await assert.rejects(
+      () => recovery.runExternalIntent({
+        operationType: 'autosync-push',
+        lockCtx: lk(),
+        intent: { adapter: 'sync', ref: 'git', kind: 'Push' },
+        fn: async () => { throw new SyncTransportError('unknown disk corruption', { kind: 'unknown' }); },
+      }),
+      /unknown disk corruption/,
+    );
+    assert.equal(recovery.safeModeActive, true);
+    assert.equal(await recovery.store.readSafeMode(), true);
+  }
+  // (c) 半回滚态（rolledBack.full === false）仍必须写 durable SAFE MODE
+  {
+    const dir = tmp(t);
+    const recovery = await makeRecovery(dir);
+    const { operationId } = await recovery.runExternalIntent({
+      operationType: 'autosync-apply',
+      lockCtx: lk(),
+      intent: { adapter: 'sync', ref: 'git', kind: 'Apply' },
+      fn: async (ctx) => {
+        await ctx?.recordRollback({
+          full: false,
+          failed: ['settings:general: disk full'],
+        });
+        return { ok: false };
+      },
+    });
+    const j = await recovery.store.load(operationId);
+    assert.equal(j?.state, 'ROLLED_BACK');
+    assert.equal(recovery.safeModeActive, true, '半回滚必须置位内存 SAFE MODE');
+    assert.equal(await recovery.store.readSafeMode(), true, '半回滚必须写 durable SAFE MODE');
+  }
 });

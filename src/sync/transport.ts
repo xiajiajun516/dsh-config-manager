@@ -4,6 +4,7 @@
  * 与核心引擎同原则：只依赖 src/schema/types.ts 的纯类型，不 import 任何 DSH 运行时包。
  */
 import type { EncryptionInfo, Manifest, SectionData, SectionId } from '../schema/types.ts';
+import { markRetryableExternalFailure, NON_BLOCKING_EXTERNAL_REASONS } from '../core/external-failure.ts';
 import { hashSection } from './sync-state.ts';
 
 /** manifest 摘要：快照列表展示 / 变更判断所需的轻量来源信息 */
@@ -212,6 +213,13 @@ export class SyncTransportError extends Error {
     this.retryable = opts.retryable ?? RETRYABLE_KINDS.includes(this.kind);
     this.status = opts.status;
     this.code = opts.code;
+    // 明确属于网络/超时/5xx/401鉴权/本机配置类失败（或显式可重试且非未知）：
+    // 不会造成本机磁盘半写态，打上外部可重试标记，防止 phase3 误升全局 durable SAFE MODE。
+    if (NON_BLOCKING_EXTERNAL_REASONS.has(this.kind)) {
+      markRetryableExternalFailure(this, this.kind);
+    } else if (this.retryable && this.kind !== 'unknown') {
+      markRetryableExternalFailure(this, 'network');
+    }
   }
 }
 
@@ -315,7 +323,7 @@ export function classifyNetworkErrorText(text: string): { kind: SyncTransportErr
   if (has('etimedout', 'timed out', 'timeout', 'time out', 'socket hang up', 'operation was aborted')) {
     return { kind: 'timeout', retryable: true };
   }
-  if (has('econnreset', 'econnrefused', 'eai_again', 'enotfound', 'enotreach', 'network is unreachable',
+  if (has('econnreset', 'econnrefused', 'eai_again', 'enotfound', 'enotreach', 'enetunreach', 'ehostunreach', 'network is unreachable',
     'connection reset', 'connection refused', 'connection closed', 'broken pipe', 'epipe',
     'resolve host', 'name or service not known', 'failed to connect', 'could not connect',
     'remote end hung up', 'early eof')) {
@@ -326,7 +334,7 @@ export function classifyNetworkErrorText(text: string): { kind: SyncTransportErr
     return { kind: 'server', retryable: true };
   }
   if (status(401) || status(403) || has('authentication failed', 'permission denied', 'access denied',
-    'unauthorized', 'invalid credentials', 'could not read username', 'invalid username or password',
+    'unauthorized', 'invalid credentials', 'bad credentials', 'token expired', 'could not read username', 'invalid username or password',
     // git/GitHub：口令不是有效令牌 —— 含「本机没配令牌、git 却提交了空口令」这条最常见的真机形态。
     // 远端文案分不清「令牌缺失」与「令牌失效」，两者都必须归 auth，上层才能给出可操作提示。
     'invalid username or token', 'password authentication is not supported',

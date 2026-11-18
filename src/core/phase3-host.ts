@@ -24,7 +24,7 @@ import { OWNERSHIP_FILE, type LockState, type MutationLockContext } from '../uti
 import { sha256Hex } from '../utils/hashing.ts';
 import type { JournalStepRecord } from './types.ts';
 import { engineMsg } from './messages-core.ts';
-import { isLocalOnlyExternalFailure } from './external-failure.ts';
+import { isNonBlockingExternalFailure } from './external-failure.ts';
 
 /** 存在未收敛的 active transaction → 拒绝创建第二个（active≤1）。 */
 export class TransactionRecoveryRequiredError extends Error {
@@ -655,7 +655,7 @@ export class Phase3Recovery {
       // 放大成「全部写入 423，直到手动解除阻断」，而界面还说是「环境锁被占用」——
       // 真机 issue 的链路就是这样（locks 目录为空却报锁，见 core/external-failure.ts）。
       // 除该判据之外的一切失败保持 fail-closed（照旧 durable SAFE MODE，跨重启生效）。
-      if (!isLocalOnlyExternalFailure(err)) {
+      if (!isNonBlockingExternalFailure(err)) {
         this.safeModeActive = true;
         await this.store.writeSafeMode(true).catch(() => undefined);
       }
