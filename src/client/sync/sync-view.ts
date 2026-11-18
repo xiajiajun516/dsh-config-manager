@@ -1245,3 +1245,11 @@ export function autosyncEffectiveOptions(
     conflictPolicy: autosync?.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY,
   };
 }
+
+/**
+ * F 项：开启加密备份时返回显式提醒字典键（界面不得让自动同步悄悄失效）；关闭返回 null。
+ * 源码依据：`autosync-scheduler.ts` 在远端出现加密快照时短路返回 `skipped('encrypted')` 且从不加密推送。
+ */
+export function encryptAutosyncNoticeKey(encrypt: boolean | undefined): 'mode.encryptAutosyncNotice' | null {
+  return encrypt === true ? 'mode.encryptAutosyncNotice' : null;
+}

@@ -10,8 +10,8 @@ import type { SectionId } from '../../schema/types.ts'
 import type { AutosyncStatusResponse, GithubPollResponse, SyncSectionInfo, SyncStatusResponse } from './sync-api.ts'
 import {
   autosyncEffectiveOptions, autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeSyncButtons,
-  computeSyncStatus, DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState, formatDateTime, formatIntervalDuration,
-  formatLastSync, autosyncFailureMessage, autosyncSkipDetail,
+  computeSyncStatus, DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState, encryptAutosyncNoticeKey, formatDateTime,
+  formatIntervalDuration, formatLastSync, autosyncFailureMessage, autosyncSkipDetail,
   githubPollMessage, initialSyncSections, kindLabel, normalizeSessionsLimit, privateRepoHint,
   pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
   severityLabel, summarizePullChanges, syncSectionGroups, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
@@ -621,4 +621,12 @@ test('E3：客户端 autosyncEffectiveOptions 回落默认值必须与宿主 DEF
     autoApplyTier: 'low',
     conflictPolicy: 'local',
   });
+});
+
+test('F 项：encryptAutosyncNoticeKey 开启加密返回提示键，未开启返回 null', () => {
+  assert.equal(encryptAutosyncNoticeKey(true), 'mode.encryptAutosyncNotice');
+  assert.equal(encryptAutosyncNoticeKey(false), null);
+  assert.equal(encryptAutosyncNoticeKey(undefined), null);
+  assert.ok((syncZh['mode.encryptAutosyncNotice'] ?? '').includes('手动'));
+  assert.match(syncEn['mode.encryptAutosyncNotice'] ?? '', /manual/i);
 });

@@ -220,3 +220,10 @@ test('静默自动保存必须有可见回执（四通道共用：输入防抖�
   assert.doesNotMatch(dialog, /t\('config\.saveHint'\)/, '弹窗不得再有「改动会自动保存」的 ⓘ（凭据去向已写在各密钥字段旁）')
   assert.doesNotMatch(dialog, /onSave/, '手动保存回调整条链路必须移除')
 })
+
+test('F 项：开启加密时安全段与自动同步段都必须渲染人工接管提示（不得悄悄失效）', () => {
+  const security = readSource(fileURLToPath(new URL('./SyncSecuritySection.tsx', import.meta.url)))
+  const autosyncCard = readSource(fileURLToPath(new URL('./AutosyncCard.tsx', import.meta.url)))
+  assert.match(security, /encryptAutosyncNoticeKey\(settings\.encrypt\)/, '安全段开启加密时必须渲染自动同步停用/改手动提示')
+  assert.match(autosyncCard, /encryptAutosyncNoticeKey\(settings\.encrypt\)/, '自动同步段开启加密时必须同步提示')
+})

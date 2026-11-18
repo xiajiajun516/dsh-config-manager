@@ -16,7 +16,7 @@ import { Badge, Switch } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import {
   autosyncEffectiveOptions, autosyncFailureMessage, autosyncIntervalMs, autosyncLastCheckText, autosyncSkipDetail,
-  autosyncStatusText, computeAutosyncCountdown, formatIntervalDuration,
+  autosyncStatusText, computeAutosyncCountdown, encryptAutosyncNoticeKey, formatIntervalDuration,
 } from './sync-view.ts'
 // 展示文本渲染前统一脱敏（与 ErrorBanner/ReportView 同规矩）
 import { redact } from '../../security/redaction.ts'
@@ -80,7 +80,7 @@ function formatPendingSince(since: string): string {
 export function AutosyncCard({ t, uiT, settings, busy, pendingMerge, onToggleAutosync, onUpdateInterval, onUpdateOptions }: {
   t: TranslateNS<'config-manager-sync'>
   uiT: UiT
-  settings: Pick<ChannelSyncState, 'autosync' | 'autosyncEnabled' | 'autosyncInterval'>
+  settings: Pick<ChannelSyncState, 'autosync' | 'autosyncEnabled' | 'autosyncInterval'> & { encrypt?: boolean }
   busy: boolean
   /**
    * P2（2026-11-14 真机事故）：宿主 sync-state.pendingMerge —— 有分区在等用户裁决。
@@ -112,6 +112,7 @@ export function AutosyncCard({ t, uiT, settings, busy, pendingMerge, onToggleAut
   // 的旧错误会被当成当前结论继续展示；判据现在收在 autosyncFailureMessage 一处。
   const failureMessage = settings.autosync !== null ? autosyncFailureMessage(settings.autosync) : null
   const lastMessage = failureMessage === null ? null : redact(failureMessage)
+  const encryptNoticeKey = encryptAutosyncNoticeKey(settings.encrypt)
   /** 开关的 id：段头右侧的开关没有可点文字，靠 aria-label 命名；行内的开关由 htmlFor 绑标签 */
   const enableId = useId()
   const realtimeId = useId()
@@ -136,6 +137,12 @@ export function AutosyncCard({ t, uiT, settings, busy, pendingMerge, onToggleAut
           onChange={onToggleAutosync}
         />
       </div>
+      {/* F 项：开启加密时在自动同步段也明确提示需改手动，不让开关行为与实际情况静默脱节。 */}
+      {encryptNoticeKey !== null && (
+        <span className={css.hint + ' ' + css.warnText + ' ' + css.settingsNote} style={{ marginBottom: 8 }}>
+          {t(encryptNoticeKey)}
+        </span>
+      )}
       {/* 待裁决（P2）：挂在段头之下、策略项之上 —— 它是「当前有事等你」，不是可配置项。 */}
       {pendingMerge !== undefined && pendingMerge.sections.length > 0 && (
         <div className={css.statRow} style={{ marginBottom: 8 }}>

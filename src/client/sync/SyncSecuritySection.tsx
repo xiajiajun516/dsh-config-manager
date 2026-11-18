@@ -22,7 +22,7 @@ import { useId } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Button, Switch } from '../common/ui.tsx'
-import type { ChannelSyncState } from './sync-view.ts'
+import { encryptAutosyncNoticeKey, type ChannelSyncState } from './sync-view.ts'
 import type { SyncChannelSettingsPatch } from '../../ui/sync-settings-view.ts'
 import css from '../config-manager.module.css'
 
@@ -102,6 +102,12 @@ export function SyncSecuritySection({ t, settings, onToggleEncrypt, onToggleIncl
             {settings.encryptPasswordSaved && (
               <span className={css.hint + ' ' + css.warnText + ' ' + css.settingsNote}>{t('mode.passwordClearNotice')}</span>
             )}
+            {(() => {
+              const noticeKey = encryptAutosyncNoticeKey(settings.encrypt)
+              return noticeKey !== null
+                ? <span className={css.hint + ' ' + css.warnText + ' ' + css.settingsNote}>{t(noticeKey)}</span>
+                : null
+            })()}
             {settings.encryptPassword !== '' && settings.encryptPassword !== settings.encryptPasswordConfirm && (
               <span className={css.formError + ' ' + css.settingsNote}>{t('mode.passwordMismatch')}</span>
             )}
