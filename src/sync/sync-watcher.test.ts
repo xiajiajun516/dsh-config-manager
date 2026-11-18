@@ -11,7 +11,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
-import { SyncWatcher } from './sync-watcher.ts';
+import {
+  SyncWatcher,
+  WATCH_REATTACH_BASE_MS,
+  WATCH_REATTACH_MAX_ATTEMPTS,
+  WATCH_REATTACH_MAX_DELAY_MS,
+} from './sync-watcher.ts';
 import { buildWatchTargets, type WatchTarget } from './watch-scope.ts';
 import type { Logger } from '../utils/logger.ts';
 
@@ -35,7 +40,7 @@ function makeHarness(targets: readonly WatchTarget[], opts: { failOn?: string } 
   const listeners: FakeListener[] = [];
   const handles: Array<{ absPath: string; closed: boolean }> = [];
   const flushes: string[][] = [];
-  const timers: Array<() => void> = [];
+  const timers: Array<{ fn: () => void; ms: number }> = [];
   let nowMs = 10_000;
   const { log, warns, debugs } = makeLogger();
   const watcher = new SyncWatcher({
@@ -51,7 +56,7 @@ function makeHarness(targets: readonly WatchTarget[], opts: { failOn?: string } 
       return { close: () => { h.closed = true; } };
     },
     now: () => nowMs,
-    setTimer: (fn) => { timers.push(fn); return timers.length as unknown as ReturnType<typeof setTimeout>; },
+    setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length as unknown as ReturnType<typeof setTimeout>; },
     clearTimer: () => undefined,
   });
   /** 触发某目录上的原生事件（按绝对路径找监听句柄）。 */
@@ -63,7 +68,7 @@ function makeHarness(targets: readonly WatchTarget[], opts: { failOn?: string } 
   const runTimers = (): void => {
     const pending = [...timers];
     timers.length = 0;
-    for (const t of pending) t();
+    for (const t of pending) t.fn();
   };
   return { watcher, listeners, handles, flushes, timers, fire, runTimers, warns, debugs, setNow: (v: number) => { nowMs = v; } };
 }
@@ -194,4 +199,71 @@ test('未 start 时 setTargets 只记目标、不挂监听', () => {
   h.watcher.setTargets(TARGETS);
   assert.equal(h.watcher.attachmentCount(), 0);
   assert.equal(h.watcher.isStarted(), false);
+});
+
+test('E2：挂载失败后按指数退避有界重挂，上限用尽停止轮询；目标出现后重挂恢复实时监听，flush 亦可顺带补挂', () => {
+  let missing = true;
+  const listeners: FakeListener[] = [];
+  const flushes: string[][] = [];
+  const delays: number[] = [];
+  const timers: Array<() => void> = [];
+  const { log } = makeLogger();
+  const watcher = new SyncWatcher({
+    homeDir: HOME,
+    targets: TARGETS,
+    log,
+    onFlush: (changed) => { flushes.push([...changed]); },
+    watchFactory: (absPath, o, fn) => {
+      if (missing && absPath === skillsAbs) throw new Error('ENOENT');
+      listeners.push({ absPath, recursive: o.recursive, fn });
+      return { close: () => undefined };
+    },
+    setTimer: (fn, ms) => { delays.push(ms); timers.push(fn); return timers.length as unknown as ReturnType<typeof setTimeout>; },
+    clearTimer: () => undefined,
+  });
+
+  watcher.start();
+  assert.equal(watcher.attachmentCount(), TARGETS.length - 1);
+  // 第 1 次失败目录恢复出现：重挂成功即解脱、不再继续排重挂定时器
+  missing = false;
+  assert.equal(timers.length, 1);
+  assert.equal(delays[0], WATCH_REATTACH_BASE_MS);
+  const firstTimer = timers.shift()!;
+  firstTimer();
+  assert.equal(watcher.attachmentCount(), TARGETS.length, '重挂成功必须补齐全部目标');
+  assert.equal(timers.length, 0, '重挂成功后不再排新定时器');
+
+  const skillsListener = listeners.find((l) => l.absPath === skillsAbs);
+  assert.ok(skillsListener !== undefined);
+  skillsListener!.fn('change', path.join('foo', 'SKILL.md'));
+  const debounceTimer = timers.shift()!;
+  debounceTimer();
+  assert.deepEqual(flushes, [['skills/foo/SKILL.md']], '补挂后的目标事件可正常触发同步');
+  watcher.stop();
+
+  // 场景 2：持续缺失 → 严格遵守指数退避与 WATCH_REATTACH_MAX_ATTEMPTS 上限（禁止无限轮询）；
+  // 上限用尽后，另一次 flush 顺带补挂仍可自愈。
+  missing = true;
+  delays.length = 0;
+  timers.length = 0;
+  flushes.length = 0;
+  listeners.length = 0;
+  watcher.start();
+  for (let i = 0; i < WATCH_REATTACH_MAX_ATTEMPTS; i += 1) {
+    const fn = timers.shift();
+    assert.ok(fn !== undefined, `第 ${i + 1} 次重挂定时器应已排好`);
+    fn!();
+  }
+  assert.equal(timers.length, 0, '达到 WATCH_REATTACH_MAX_ATTEMPTS 后必须停止定时重挂，禁止无限轮询');
+  assert.equal(delays.length, WATCH_REATTACH_MAX_ATTEMPTS);
+  assert.ok(delays.every((d) => d <= WATCH_REATTACH_MAX_DELAY_MS), '退避不得超过上限');
+  assert.equal(delays[1], WATCH_REATTACH_BASE_MS * 2);
+
+  // 目标后来创建：任意已挂载目标 flush 后顺带补挂成功
+  missing = false;
+  const settingsListener = listeners.find((l) => l.absPath === path.dirname(settingsAbs));
+  settingsListener!.fn('change', 'settings.yaml');
+  watcher.flushNow();
+  assert.equal(watcher.attachmentCount(), TARGETS.length, 'flush 后应顺带补挂之前失败的目标');
+  watcher.stop();
 });

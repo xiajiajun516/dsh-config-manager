@@ -104,3 +104,14 @@ export function cloudSecretRefName(provider: string): string {
   if ((CLOUD_SYNC_PROVIDERS as readonly string[]).includes(provider)) return CLOUD_SECRET_REFS[provider as CloudSyncProvider];
   return 'DSH_CONFIG_MANAGER_SYNC_' + provider.toUpperCase() + '_SECRET_ACCESS_KEY';
 }
+
+/**
+ * 自动同步策略三件套的跨端共享默认值（**唯一声明处**，E3）：
+ * 宿主 `sync/autosync-config.ts` 与客户端 `sync-view.ts` / `AutosyncCard.tsx` 共用此处，
+ * 避免两处手写副本悄悄漂移（例如宿主 default='ask' 而前端回落 'local'）。
+ */
+export type AutosyncAutoApplyTier = 'low' | 'medium';
+export type AutosyncConflictPolicy = 'ask' | 'local';
+export const DEFAULT_AUTOSYNC_REALTIME = true;
+export const DEFAULT_AUTOSYNC_AUTO_APPLY_TIER: AutosyncAutoApplyTier = 'medium';
+export const DEFAULT_AUTOSYNC_CONFLICT_POLICY: AutosyncConflictPolicy = 'ask';

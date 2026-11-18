@@ -68,8 +68,9 @@ export function buildWatchTargets(input: WatchScopeInput): WatchTarget[] {
   return [
     // settings / providers / ui：同一个 settings.yaml 的顶层 namespace
     { relPath: 'settings.yaml', kind: 'file', recursive: false, sections: ['settings', 'providers', 'ui'] },
-    // prompts / mcp：两层组合 patch 的 home 层
+    // prompts / mcp：两层组合 patch 的 home 层 + MCP 连接器独立存储（src/adapters/mcp.ts:257）
     { relPath: 'cordis.patch.yml', kind: 'file', recursive: false, sections: ['prompts', 'mcp'] },
+    { relPath: 'storages/mcp_connector.json', kind: 'file', recursive: false, sections: ['mcp'] },
     // agentInstructions：home 根 AGENTS.md
     { relPath: 'AGENTS.md', kind: 'file', recursive: false, sections: ['agentInstructions'] },
     // prompts / mcp / plugins：两层组合 patch 的 profile 层 + pnpm 工作区声明 + profile manifest

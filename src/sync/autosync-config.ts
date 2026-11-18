@@ -21,6 +21,21 @@ import { channelMap } from './sync-config.ts';
 import type { SyncTransportType } from './sync-config.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
+import {
+  DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
+  DEFAULT_AUTOSYNC_CONFLICT_POLICY,
+  DEFAULT_AUTOSYNC_REALTIME,
+  type AutosyncAutoApplyTier,
+  type AutosyncConflictPolicy,
+} from '../utils/shared-constants.ts';
+
+export {
+  DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
+  DEFAULT_AUTOSYNC_CONFLICT_POLICY,
+  DEFAULT_AUTOSYNC_REALTIME,
+  type AutosyncAutoApplyTier,
+  type AutosyncConflictPolicy,
+};
 
 export const AUTOSYNC_CONFIG_FILE = 'sync-autosync.json';
 export const AUTOSYNC_CONFIG_SCHEMA_VERSION = 2;
@@ -33,9 +48,6 @@ export const DEFAULT_AUTOSYNC_INTERVAL: AutosyncInterval = '30m';
 
 /** 缺省启动触发最小间隔阈值（5 分钟，防频繁重启反复同步） */
 export const DEFAULT_STARTUP_MIN_INTERVAL_MS = 5 * 60 * 1000;
-
-/** 缺省开启「本地改动即时触发」（真·自动同步；关闭后退回纯定时器） */
-export const DEFAULT_AUTOSYNC_REALTIME = true;
 
 /**
  * 缺省远端轮询间隔（realtime 开启时与本地监听并行：本地改动即时上行，远端改动最迟 5 分钟内下行）。
@@ -53,30 +65,6 @@ export const MIN_AUTOSYNC_REMOTE_CHECK_MS = 15 * 1000;
 
 /** 远端轮询间隔上限（60 min）：比这更慢就不该叫「实时」了 */
 export const MAX_AUTOSYNC_REMOTE_CHECK_MS = 60 * 60 * 1000;
-
-/** 自动应用的最高风险等级（low = 只有低风险分区自动落盘；medium = 中风险 plugins/mcp 也自动落盘） */
-export type AutosyncAutoApplyTier = 'low' | 'medium';
-
-/** 缺省自动应用等级：medium（用户拍板：plugins/mcp 的中风险改动也要真自动，否则「同步所有改动」是假的） */
-export const DEFAULT_AUTOSYNC_AUTO_APPLY_TIER: AutosyncAutoApplyTier = 'medium';
-
-/**
- * 双侧都改（真冲突）时的自动裁决策略：
- *  - 'ask'   ：缺省 —— 保留冲突待人工裁决，冲突期间**零写入**（下行不动、上行不 force）；
- *  - 'local' ：用户显式选中才生效 —— **保留本机并推上去**（VS Code 风格）：本机版本成为新的
- *              远端最新，被覆盖的远端版本仍留在远端历史快照里，随时可回滚。
- *
- * SYN-05 为什么把缺省从 'local' 改成 'ask'：'local' 缺省会在「首轮」与「远端刚出现新快照」
- * 这两个高危时刻静默用本机覆盖远端最新（用户根本没看见那段远端改动就被盖掉）。缺省必须选
- * **安全且可逆**的一侧 = ask；想覆盖必须自己选，且首轮 / 远端有新快照时仍降级为 ask（forced）。
- *
- * 刻意**不提供** 'remote'：采用远端需要走 applyMergeResolutions，那条路径会整体应用所有
- * 可决断分区、绕过 risk.ts 的风险分级（audit-sync sync-F5），与「分区逐档放行」冲突。
- */
-export type AutosyncConflictPolicy = 'ask' | 'local';
-
-/** 缺省冲突策略：ask（冲突待人工裁决；显式写过 local 的旧配置仍按 local 生效） */
-export const DEFAULT_AUTOSYNC_CONFLICT_POLICY: AutosyncConflictPolicy = 'ask';
 
 /** 最近一次自动同步执行状态 */
 export type AutosyncRunStatus = 'success' | 'skipped' | 'failed' | 'partial';

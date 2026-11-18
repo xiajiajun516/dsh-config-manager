@@ -14,8 +14,15 @@ import type {
   ApplyItemsResponse, AutosyncInterval, AutosyncStatusResponse, GithubPollResponse, SyncConfirmItem, SyncSelectionPayload,
   SyncItemAdoption, SyncSectionInfo, SyncSnapshotLite, SyncStatusResponse,
 } from './sync-api.ts';
-// 通道枚举的唯一声明处（**零依赖**，可被浏览器半运行时 import）：加一条通道只改这里一处。
-import { SYNC_CHANNELS } from '../../utils/shared-constants.ts';
+// 通道枚举与自动同步默认值的唯一声明处（**零依赖**，可被浏览器半运行时 import）：前后端同源不漂移。
+import {
+  DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
+  DEFAULT_AUTOSYNC_CONFLICT_POLICY,
+  DEFAULT_AUTOSYNC_REALTIME,
+  SYNC_CHANNELS,
+  type AutosyncAutoApplyTier,
+  type AutosyncConflictPolicy,
+} from '../../utils/shared-constants.ts';
 // zh 源目录按**值**引入：本文件的渲染模型（UiT 字典不含 syncflow.* 键）需要为「回滚未完成」
 // 这类 sync 命名空间文案取词；组件可经 syncText 参数注入自己的翻译器（缺省 = zh 源）。
 import { en as syncEnCatalog, zh as syncZhCatalog, type SyncKey } from './sync-locales.ts';
@@ -1226,4 +1233,15 @@ export function autosyncLastCheckText(
     return null;
   }
   return t('sync.autosyncCheckedAt', { time: formatDateTime(status.lastRunAt) });
+}
+
+/** E3：界面展示的自动同步策略默认值直接复用跨端唯一常量，禁止写死第二份。 */
+export function autosyncEffectiveOptions(
+  autosync: Pick<AutosyncStatusResponse, 'realtime' | 'autoApplyTier' | 'conflictPolicy'> | null | undefined,
+): { realtime: boolean; autoApplyTier: AutosyncAutoApplyTier; conflictPolicy: AutosyncConflictPolicy } {
+  return {
+    realtime: autosync?.realtime ?? DEFAULT_AUTOSYNC_REALTIME,
+    autoApplyTier: autosync?.autoApplyTier ?? DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
+    conflictPolicy: autosync?.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY,
+  };
 }

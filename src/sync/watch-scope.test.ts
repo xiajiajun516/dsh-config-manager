@@ -32,6 +32,7 @@ test('buildWatchTargets：默认 profile=web，覆盖全部分区的落盘位置
   for (const expected of [
     'settings.yaml',
     'cordis.patch.yml',
+    'storages/mcp_connector.json',
     'AGENTS.md',
     'profiles/web/cordis.patch.yml',
     'profiles/web/pnpm-workspace.yaml',
@@ -49,6 +50,11 @@ test('buildWatchTargets：默认 profile=web，覆盖全部分区的落盘位置
   }
   // 分区可见性：诊断要能说出「这条路径为什么被监听」
   for (const t of targets) assert.ok(t.sections.length > 0, t.relPath + ' 必须声明承载的分区');
+  assert.deepEqual(
+    targets.find((t) => t.relPath === 'storages/mcp_connector.json')?.sections,
+    ['mcp'],
+    'E1：MCP 连接器存储必须纳入 mcp 分区监听',
+  );
   const covered = new Set(targets.flatMap((t) => [...t.sections]));
   for (const id of ['settings', 'providers', 'ui', 'prompts', 'mcp', 'plugins', 'skills', 'agentPresets', 'agentInstructions', 'self']) {
     assert.ok(covered.has(id as never), '分区 ' + id + ' 没有任何监听路径');
@@ -87,6 +93,7 @@ test('buildWatchTargets：绝不监听 sessions / 工作副本 / 自身状态（
 test('toHomeRelPath：home 内给 posix 相对路径，home 外与交叉盘给 null', () => {
   assert.equal(toHomeRelPath(HOME, path.join(HOME, 'skills', 'a', 'SKILL.md')), 'skills/a/SKILL.md');
   assert.equal(toHomeRelPath(HOME, path.join(HOME, 'settings.yaml')), 'settings.yaml');
+  assert.equal(toHomeRelPath(HOME, path.join(HOME, 'storages', 'mcp_connector.json')), 'storages/mcp_connector.json');
   assert.equal(toHomeRelPath(HOME, HOME), null, 'home 自身没有相对路径');
   assert.equal(toHomeRelPath(HOME, path.join(HOME, '..', 'other', 'x.json')), null, 'home 外一律 null');
 });
@@ -104,6 +111,7 @@ test('isNoiseRelPath：只吞依赖树 / .git / 原子写临时文件（宁可�
   }
   for (const real of [
     'settings.yaml',
+    'storages/mcp_connector.json',
     'AGENTS.md',
     'skills/nodejs-testing/SKILL.md',
     'profiles/web/patches/fix.patch',

@@ -15,8 +15,8 @@ import type { UiT } from '../../ui/i18n.ts'
 import { Badge, Switch } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import {
-  autosyncFailureMessage, autosyncIntervalMs, autosyncLastCheckText, autosyncSkipDetail, autosyncStatusText,
-  computeAutosyncCountdown, formatIntervalDuration,
+  autosyncEffectiveOptions, autosyncFailureMessage, autosyncIntervalMs, autosyncLastCheckText, autosyncSkipDetail,
+  autosyncStatusText, computeAutosyncCountdown, formatIntervalDuration,
 } from './sync-view.ts'
 // 展示文本渲染前统一脱敏（与 ErrorBanner/ReportView 同规矩）
 import { redact } from '../../security/redaction.ts'
@@ -93,10 +93,8 @@ export function AutosyncCard({ t, uiT, settings, busy, pendingMerge, onToggleAut
   /** 真·自动同步的三个策略项（realtime / 自动应用等级 / 冲突策略）；只传要改的字段 */
   onUpdateOptions: (patch: { realtime?: boolean; autoApplyTier?: AutosyncAutoApplyTier; conflictPolicy?: AutosyncConflictPolicy }) => void
 }) {
-  // 三件套读自宿主状态（缺省值集中在这里，与宿主 DEFAULT_AUTOSYNC_* 的口径一致）
-  const realtime = settings.autosync?.realtime ?? true
-  const autoApplyTier: AutosyncAutoApplyTier = settings.autosync?.autoApplyTier ?? 'medium'
-  const conflictPolicy: AutosyncConflictPolicy = settings.autosync?.conflictPolicy ?? 'local'
+  // 三件套读自宿主状态（缺省值经 autosyncEffectiveOptions 复用跨端唯一常量 DEFAULT_AUTOSYNC_*）
+  const { realtime, autoApplyTier, conflictPolicy } = autosyncEffectiveOptions(settings.autosync)
   const autosyncText = settings.autosync !== null ? autosyncStatusText(settings.autosync, uiT) : t('autosync.statusNever')
   const lastCheckText = settings.autosync !== null ? autosyncLastCheckText(settings.autosync, uiT) : null
   /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期）—— elapsedMs 先经本地推进，见 hook 注释 */

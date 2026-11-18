@@ -44,6 +44,18 @@ export type WatchFactory = (
 export const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
 /** 缺省自写回声窗口：resume 后这段时间内的事件一律忽略。 */
 export const DEFAULT_WATCH_QUIET_MS = 2000;
+/**
+ * 监听挂载失败后的有界重挂初始退避（10s）：目标文件/目录可能在首次使用或删除重建后才落盘，
+ * 给文件系统一个短暂窗口收敛后再重挂，避免启动瞬时高频重连。
+ */
+export const WATCH_REATTACH_BASE_MS = 10_000;
+/** 有界重挂退避上限（5min = 300_000ms）：封顶到默认远端轮询节奏量级，绝不长期高频扫盘。 */
+export const WATCH_REATTACH_MAX_DELAY_MS = 5 * 60 * 1000;
+/**
+ * 单次生命周期内的有界重挂最大尝试次数（6 次，10s→20s→40s→80s→160s→300s 共约 10 分钟）：
+ * 达到上限后停止定时器空转（禁止无限轮询），后续只在其他目标 flush 时顺带补挂。
+ */
+export const WATCH_REATTACH_MAX_ATTEMPTS = 6;
 
 export interface SyncWatcherOptions {
   /** `$DSH_HOME` 绝对路径 */
@@ -55,6 +67,12 @@ export interface SyncWatcherOptions {
   onFlush: (changed: readonly string[]) => void;
   debounceMs?: number;
   quietAfterSuspendMs?: number;
+  /** 重挂初始退避（测试可注入；缺省 WATCH_REATTACH_BASE_MS） */
+  reattachBaseMs?: number;
+  /** 重挂退避上限（测试可注入；缺省 WATCH_REATTACH_MAX_DELAY_MS） */
+  reattachMaxDelayMs?: number;
+  /** 重挂最大尝试次数（测试可注入；缺省 WATCH_REATTACH_MAX_ATTEMPTS） */
+  reattachMaxAttempts?: number;
   watchFactory?: WatchFactory;
   /** 时间源 / 计时器（测试注入） */
   now?: () => number;
@@ -77,6 +95,9 @@ export class SyncWatcher {
   private readonly onFlush: (changed: readonly string[]) => void;
   private readonly debounceMs: number;
   private readonly quietAfterSuspendMs: number;
+  private readonly reattachBaseMs: number;
+  private readonly reattachMaxDelayMs: number;
+  private readonly reattachMaxAttempts: number;
   private readonly watchFactory: WatchFactory;
   private readonly now: () => number;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -84,8 +105,11 @@ export class SyncWatcher {
 
   private targets: readonly WatchTarget[];
   private attachments: Attachment[] = [];
+  private failedTargets: WatchTarget[] = [];
   private pending: Set<string> = new Set();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private reattachTimer: ReturnType<typeof setTimeout> | null = null;
+  private reattachAttempts = 0;
   private started = false;
   private suspended = false;
   private quietUntil = 0;
@@ -97,6 +121,9 @@ export class SyncWatcher {
     this.onFlush = opts.onFlush;
     this.debounceMs = opts.debounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS;
     this.quietAfterSuspendMs = opts.quietAfterSuspendMs ?? DEFAULT_WATCH_QUIET_MS;
+    this.reattachBaseMs = opts.reattachBaseMs ?? WATCH_REATTACH_BASE_MS;
+    this.reattachMaxDelayMs = opts.reattachMaxDelayMs ?? WATCH_REATTACH_MAX_DELAY_MS;
+    this.reattachMaxAttempts = opts.reattachMaxAttempts ?? WATCH_REATTACH_MAX_ATTEMPTS;
     this.watchFactory = opts.watchFactory ?? defaultWatchFactory;
     this.now = opts.now ?? (() => Date.now());
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
@@ -126,6 +153,9 @@ export class SyncWatcher {
     this.suspended = false;
     this.quietUntil = 0;
     this.clearPendingTimer();
+    this.clearReattachTimer();
+    this.failedTargets = [];
+    this.reattachAttempts = 0;
     this.pending.clear();
     for (const a of this.attachments) {
       try {
@@ -171,10 +201,18 @@ export class SyncWatcher {
   }
 
   private attachAll(): void {
-    for (const target of this.targets) this.attach(target);
+    this.clearReattachTimer();
+    this.failedTargets = [];
+    this.reattachAttempts = 0;
+    for (const target of this.targets) {
+      if (!this.attach(target)) this.failedTargets.push(target);
+    }
+    if (this.failedTargets.length > 0 && this.reattachMaxAttempts > 0) {
+      this.scheduleReattach();
+    }
   }
 
-  private attach(target: WatchTarget): void {
+  private attach(target: WatchTarget): boolean {
     const abs = targetAbsPath(this.homeDir, target);
     const isDir = target.kind === 'dir';
     const watchedDir = isDir ? abs : path.dirname(abs);
@@ -185,9 +223,42 @@ export class SyncWatcher {
       });
       this.attachments.push({ target, watchedDir, fileBase, handle });
       this.log.debug(`自动同步监听已挂载：${target.relPath}`, { watchedDir });
+      return true;
     } catch (err) {
-      // 路径不存在 / 平台不支持：不阻断启动，兜底是定时器
+      // 路径不存在 / 平台不支持：先记进待重挂清单由有界退避或 flush 顺带补挂；兜底仍是定时器
       this.log.debug(`自动同步监听未挂载：${target.relPath}`, { error: err instanceof Error ? err.message : String(err) });
+      return false;
+    }
+  }
+
+  private scheduleReattach(): void {
+    if (!this.started || this.failedTargets.length === 0) return;
+    if (this.reattachAttempts >= this.reattachMaxAttempts) return;
+    if (this.reattachTimer !== null) return;
+    const delayMs = Math.min(this.reattachMaxDelayMs, this.reattachBaseMs * (2 ** this.reattachAttempts));
+    this.reattachTimer = this.setTimer(() => {
+      this.reattachTimer = null;
+      this.retryUnattached({ fromTimer: true });
+    }, delayMs);
+  }
+
+  private retryUnattached(opts: { fromTimer: boolean }): void {
+    if (!this.started || this.failedTargets.length === 0) return;
+    const stillFailed: WatchTarget[] = [];
+    for (const target of this.failedTargets) {
+      if (!this.attach(target)) stillFailed.push(target);
+    }
+    this.failedTargets = stillFailed;
+    if (stillFailed.length === 0) {
+      this.reattachAttempts = 0;
+      this.clearReattachTimer();
+      return;
+    }
+    if (opts.fromTimer) {
+      this.reattachAttempts += 1;
+      if (this.reattachAttempts < this.reattachMaxAttempts) {
+        this.scheduleReattach();
+      }
     }
   }
 
@@ -234,12 +305,20 @@ export class SyncWatcher {
     } catch (err) {
       this.log.warn('自动同步监听回调失败', { error: err instanceof Error ? err.message : String(err) });
     }
+    // 其他已挂目标触发 flush 后，顺带检查未挂载清单（即便退避上限已用尽仍可低成本自愈）。
+    if (this.failedTargets.length > 0) this.retryUnattached({ fromTimer: false });
   }
 
   private clearPendingTimer(): void {
     if (this.timer === null) return;
     this.clearTimer(this.timer);
     this.timer = null;
+  }
+
+  private clearReattachTimer(): void {
+    if (this.reattachTimer === null) return;
+    this.clearTimer(this.reattachTimer);
+    this.reattachTimer = null;
   }
 }
 

@@ -9,13 +9,18 @@ import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync
 import type { SectionId } from '../../schema/types.ts'
 import type { AutosyncStatusResponse, GithubPollResponse, SyncSectionInfo, SyncStatusResponse } from './sync-api.ts'
 import {
-  autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeSyncButtons, computeSyncStatus,
-  DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState, formatDateTime, formatIntervalDuration, formatLastSync,
-  autosyncFailureMessage, autosyncSkipDetail,
+  autosyncEffectiveOptions, autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeSyncButtons,
+  computeSyncStatus, DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState, formatDateTime, formatIntervalDuration,
+  formatLastSync, autosyncFailureMessage, autosyncSkipDetail,
   githubPollMessage, initialSyncSections, kindLabel, normalizeSessionsLimit, privateRepoHint,
   pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
   severityLabel, summarizePullChanges, syncSectionGroups, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
+import {
+  DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
+  DEFAULT_AUTOSYNC_CONFLICT_POLICY,
+  DEFAULT_AUTOSYNC_REALTIME,
+} from '../../sync/autosync-config.ts'
 import type { SyncTextFn } from './sync-view.ts'
 import { en as syncEn, zh as syncZh } from './sync-locales.ts'
 import { zhUiT } from '../../ui/i18n.ts'
@@ -596,4 +601,24 @@ test('sync-view: autosyncFailureMessage —— 只有本轮失败才渲染错误
   assert.equal(autosyncFailureMessage({ lastRunStatus: 'failed', lastRunMessage: '' }), null);
   assert.equal(autosyncFailureMessage({ lastRunStatus: 'failed' }), null);
   assert.equal(autosyncFailureMessage({}), null);
+});
+
+test('E3：客户端 autosyncEffectiveOptions 回落默认值必须与宿主 DEFAULT_AUTOSYNC_* 完全一致', () => {
+  const fromNull = autosyncEffectiveOptions(null);
+  assert.equal(fromNull.realtime, DEFAULT_AUTOSYNC_REALTIME);
+  assert.equal(fromNull.autoApplyTier, DEFAULT_AUTOSYNC_AUTO_APPLY_TIER);
+  assert.equal(fromNull.conflictPolicy, DEFAULT_AUTOSYNC_CONFLICT_POLICY);
+  assert.equal(fromNull.conflictPolicy, 'ask', '缺失时绝不能回落成 local');
+
+  // 宿主已写明字段时原样透传
+  const overridden = autosyncEffectiveOptions({
+    realtime: false,
+    autoApplyTier: 'low',
+    conflictPolicy: 'local',
+  });
+  assert.deepEqual(overridden, {
+    realtime: false,
+    autoApplyTier: 'low',
+    conflictPolicy: 'local',
+  });
 });
