@@ -2145,4 +2145,108 @@ test('Group D（P0-2）：upToDate 空轮不洗白 failed 状态与连续失败�
   assert.equal(saved.lastSuccessAt, '2026-11-18T10:25:00.000Z');
 });
 
+test('I 项：单轮自动同步（远端有新快照 + 本地有改动）复用本地导出，未改动分区最多 export 一次且写盘分区按需失效', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-autosync-round-cache-'));
+  try {
+    const devA = makeContext('win32', 'C:\\Users\\alice');
+    devA.settings.ns.set('general', { value: { theme: 'light' }, revision: 1, secrets: [] });
+    await devA.fs.writeFile('AGENTS.md', new TextEncoder().encode('# base rules\n'));
+    // devB 初始注册同 namespace（供 settings importer 写入）但取不同值，拉取 initPlan 后建立同一祖先基线
+    const devB = makeContext('win32', 'C:\\Users\\alice');
+    devB.settings.ns.set('general', { value: { theme: 'init' }, revision: 0, secrets: [] });
+
+    const adaptersA = createAdapters({ namespaces: ['general'] });
+    const adaptersB = createAdapters({ namespaces: ['general'] });
+    const transport = new E2eTransport();
+    const stateB = path.join(tmp, 'state-b');
+    await fs.mkdir(stateB, { recursive: true });
+
+    const engineA = new SyncEngine({
+      ctx: devA,
+      transport,
+      stateDir: path.join(tmp, 'state-a'),
+      adapters: adaptersA,
+      sections: ['settings', 'agentInstructions', 'plugins'],
+      importer: new Importer({ ctx: devA, adapters: adaptersA, snapshotStore: new MemSnapshotStore() }),
+      now: () => new Date('2026-11-18T12:00:00.000Z'),
+    });
+    await engineA.push({ force: true });
+
+    // 计数包装 adaptersB 各个 adapter.export（直接覆写实例属性，保留适配器类原型方法供 Importer 使用）
+    const exportCounts = new Map<string, number>();
+    for (const adapter of adaptersB) {
+      const origExport = adapter.export.bind(adapter);
+      adapter.export = async (...args: Parameters<typeof adapter.export>) => {
+        exportCounts.set(adapter.id, (exportCounts.get(adapter.id) ?? 0) + 1);
+        return origExport(...args);
+      };
+    }
+
+    const engineB = new SyncEngine({
+      ctx: devB,
+      transport,
+      stateDir: stateB,
+      localSnapshotsDir: path.join(tmp, 'local-snaps-b'),
+      adapters: adaptersB,
+      sections: ['settings', 'agentInstructions', 'plugins'],
+      importer: new Importer({ ctx: devB, adapters: adaptersB, snapshotStore: new MemSnapshotStore() }),
+      now: () => new Date('2026-11-18T12:05:00.000Z'),
+    });
+    // devB 先拉一次并以 useRemote 建好同一起点基线
+    const initPlan = await engineB.merge();
+    const initReport = await engineB.applyMergeResolutions(
+      initPlan.sections
+        .filter((s) => s.decision === 'conflict')
+        .map((s) => ({ id: s.id, action: 'useRemote' as const })),
+    );
+    assert.equal(initReport.ok, true, 'initReport: ' + JSON.stringify(initReport));
+    assert.deepEqual(initReport.pendingConflicts, [], 'init pending: ' + JSON.stringify(initReport));
+
+    // devA 改 settings 并推送远端新快照；devB 本机只改 agentInstructions；plugins 两端均未写 →
+    // 触发「远端有新 + 本地有改」一轮完整双向同步
+    devA.settings.ns.set('general', { value: { theme: 'dark' }, revision: 2, secrets: [] });
+    await engineA.push({ force: true });
+    await devB.fs.writeFile('AGENTS.md', new TextEncoder().encode('# local updated rules\n'));
+
+    exportCounts.clear();
+    let cfg: AutosyncConfig = {
+      enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: true,
+    };
+    const scheduler = new AutoSyncScheduler({
+      syncDir: stateB,
+      host: { log: nullLogger() },
+      makeSyncEngine: () => engineB,
+      msg: (k: string) => k,
+      runs: new RunRegistry(),
+      now: () => new Date('2026-11-18T12:10:00.000Z'),
+      readConfig: async (_channel: SyncTransportType) => cfg,
+      writeConfig: async (_channel: SyncTransportType, next: AutosyncConfig) => { cfg = next; },
+      readSyncConfigFn: async (_channel: SyncTransportType) =>
+        ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://example.com/repo.git' } }) as SyncConfig,
+      readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+      appendHistoryFn: async () => {},
+      setTimer: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      clearTimer: () => {},
+      minTriggerGapMs: 0,
+    });
+
+    const res = await scheduler.runOnce('git', { reason: 'local-change' });
+    assert.equal(res.direction, 'both', 'unexpected direction: ' + JSON.stringify(res));
+    assert.ok(Boolean(res.pushedSnapshotId), '本地改动必须推上远端: ' + JSON.stringify(res));
+    assert.equal((devB.settings.ns.get('general')?.value as { theme?: string } | undefined)?.theme, 'dark', '远端 settings 改动必须正常写盘');
+    assert.equal(
+      exportCounts.get('plugins'),
+      1,
+      `未被 applyMergePlan 写入的 plugins 整轮（hasLocalChanges + merge + push）只允许 export 1 次，实测=${exportCounts.get('plugins')}`,
+    );
+    assert.equal(
+      exportCounts.get('settings'),
+      3,
+      `被 applyMergePlan 写入的 settings 仅在写入前 1 次 + exportAppliedSections 1 次 + 失效后 push 1 次，实测=${exportCounts.get('settings')}`,
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 

@@ -74,6 +74,7 @@ import type { MergePlan } from './merge.ts';
 import type { SyncApplyPlan } from './risk.ts';
 import { SyncWatcher } from './sync-watcher.ts';
 import { buildWatchTargets } from './watch-scope.ts';
+import { RoundExportCache } from './round-export-cache.ts';
 
 /** 间隔 → ms 换算（§4.3） */
 export function intervalToMs(interval: AutosyncInterval): number {
@@ -643,8 +644,10 @@ export class AutoSyncScheduler {
     // 远端轮询轮跳过本地导出（reason='remote-poll'）：本地改动由 realtime 监听（local-change 触发）
     // 与 30 分钟兜底 interval 负责；这里每 60s 再跑一次全量导出 = 白跑 plugins 的 npm pack
     // （真机单插件 44.7s/轮）。判定口径不变 —— 真要比对时比的仍是载荷字节，不做任何近似。
+    const preflightCache = new RoundExportCache();
     const preflight = await this.detectPhase(channel, cfg, nowIso, historyId, {
       localCheck: opts.reason !== 'remote-poll',
+      exportCache: preflightCache,
     });
     if (preflight.kind === 'skip') {
       this.running = false;
@@ -713,11 +716,16 @@ export class AutoSyncScheduler {
       // P0（2026-11-14 真机事故）：锁内重跑必须与预检同口径传 localCheck。
       // 此前这里漏传 → 60s 远端轮询在锁内又跑了一遍全量本地导出（plugins 的 npm pack，
       // 实测单插件 44.7s/轮），预检省下的开销全被这一步还回去。
+      const activeCache = releaseLock === null ? preflightCache : new RoundExportCache();
       const phase = releaseLock === null
         ? preflight
-        : await this.detectPhase(channel, cfg, nowIso, historyId, { localCheck: opts.reason !== 'remote-poll' });
+        : await this.detectPhase(channel, cfg, nowIso, historyId, {
+            localCheck: opts.reason !== 'remote-poll',
+            exportCache: activeCache,
+          });
       if (phase.kind === 'skip') return phase.result;
       const { engine, remoteNew, localDirty, firstRun } = phase;
+      const executeSyncedPhases = async (): Promise<AutosyncRunResult> => {
 
       let appliedSections: SectionId[] = [];
       // audit-sync sync-F5：被风险分级扣下、需人工确认的分区（medium/high）。在 Phase A 赋值、
@@ -1060,6 +1068,10 @@ export class AutoSyncScheduler {
       if (pulledConflicted.length > 0) await this.recordPendingMerge(engine, pulledConflicted);
       await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
       return result;
+      };
+      return typeof (engine as Partial<SyncEngine>).withRoundExportCache === 'function'
+        ? await engine.withRoundExportCache(executeSyncedPhases, activeCache)
+        : await executeSyncedPhases();
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       const result: AutosyncRunResult = {
@@ -1115,7 +1127,7 @@ export class AutoSyncScheduler {
      * localCheck=false = 本轮只回答「远端有没有新快照」，不跑本地导出（60s 远端轮询专用）。
      * 本地是否改动由 realtime 监听与兜底 interval 负责；这不是近似判定 —— 需要比对时比的仍是载荷字节。
      */
-    opts: { localCheck?: boolean } = {},
+    opts: { localCheck?: boolean; exportCache?: RoundExportCache } = {},
   ): Promise<AutosyncDetectOutcome> {
     // 读该通道 sync-config：按通道判定「已配置」——git 看 git.repoUrl、webdav 看 webdav.url。
     // SEC-03：「未配置」有两种成因 —— 真的没配，或存过的地址被白名单拒掉（读侧丢弃）。
@@ -1200,7 +1212,11 @@ export class AutoSyncScheduler {
     // 列表拿不到（网络失败）时 remoteMetas 为 null → 检测自己再 list 一次，行为与改造前一致
     const remoteNew = await this.detectRemoteNew(engine, remoteMetas ?? undefined);
     // 关掉本地检测时 localDirty 恒 false：远端也没变 → 立刻 upToDate，一次导出都不跑。
-    const localDirty = opts.localCheck === false ? false : await this.detectLocalChange(engine);
+    const localDirty = opts.localCheck === false
+      ? false
+      : (opts.exportCache !== undefined && typeof (engine as Partial<SyncEngine>).withRoundExportCache === 'function'
+          ? await engine.withRoundExportCache(() => this.detectLocalChange(engine), opts.exportCache)
+          : await this.detectLocalChange(engine));
     // SYN-05：首轮（从未跑过）与「远端有新快照」是覆盖风险最高的两个时刻 —— 由
     // resolveConflictPushPolicy 统一把这两处的 ask 标成 forced。
     const firstRun = (cfg.lastSuccessAt === undefined || cfg.lastSuccessAt === '')

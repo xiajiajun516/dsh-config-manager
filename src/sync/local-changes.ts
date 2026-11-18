@@ -6,7 +6,7 @@
  * comparableContent()，实测见 docs/evidence/sync-channel.md）。散在引擎里既没法单测，也没人敢改。
  */
 import { sanitizeSectionData } from '../core/section-sanitize.ts';
-import type { ConfigAdapter, HostContext, SecretScanner } from '../core/types.ts';
+import type { ConfigAdapter, ExportSection, HostContext, SecretScanner } from '../core/types.ts';
 import { isFileSection } from '../schema/config.ts';
 import type { SectionData } from '../schema/types.ts';
 import { hashSection } from './sync-state.ts';
@@ -20,14 +20,20 @@ import type { SyncState } from './sync-state.ts';
  * 只读本地导出 + sync-state，不碰远端。
  */
 export async function hasLocalSectionChanges(args: {
-  state: SyncState; adapters: readonly ConfigAdapter[]; ctx: HostContext; scanner: SecretScanner;
+  state: SyncState;
+  adapters: readonly ConfigAdapter[];
+  ctx: HostContext;
+  scanner: SecretScanner;
+  exportSection?: (adapter: ConfigAdapter) => Promise<ExportSection>;
 }): Promise<boolean> {
-  const { state, adapters, ctx, scanner } = args;
+  const { state, adapters, ctx, scanner, exportSection } = args;
   if (Object.keys(state.sections).length === 0) return true;
   for (const adapter of adapters) {
     let section;
     try {
-      section = await adapter.export(ctx, { includeSecrets: false });
+      section = await (exportSection !== undefined
+        ? exportSection(adapter)
+        : adapter.export(ctx, { includeSecrets: false }));
     } catch {
       continue;
     }

@@ -27,7 +27,7 @@ import { Importer } from '../core/importer.ts';
 import { DEFAULT_ROLLBACK_ON_ERROR } from '../core/import-defaults.ts';
 // issue #91：只读预览与基线 hash 的口径判定（本地源插件在预览里不会被 npm pack）
 import type {
-  ConfigAdapter, ExportSection, GlobalConflictStrategy, HostContext,
+  ConfigAdapter, ExportOptions, ExportSection, GlobalConflictStrategy, HostContext,
   ImportAnalysis, ImportPlan, ImportResult, PathMapping, PlanItem, PlanItemKind, RollbackReport, SecretScanner,
 } from '../core/types.ts';
 import { isFileSection } from '../schema/config.ts';
@@ -35,6 +35,7 @@ import type { Platform, SectionData, SectionId } from '../schema/types.ts';
 import { CURRENT_SCHEMA_VERSION } from '../schema/versions.ts';
 import { buildSnapshotZip } from './snapshot-zip.ts';
 import { buildConflictIsolatedSnapshot, hasLocalDirtyTarget } from './partial-conflict-push.ts';
+import { RoundExportCache } from './round-export-cache.ts';
 import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
 import { writeSnapshotToDir } from './layout.ts';
@@ -573,6 +574,21 @@ export class SyncEngine {
   private readonly deletePlugins: boolean;
   /** 本插件自己的包名（永不跟随删除；'' = 不设防） */
   private readonly selfPluginName: string;
+  /** I 项：单轮自动同步作用域内的本地导出缓存（null = 停用，外部手动 API 不走缓存）。 */
+  private roundExportCache: RoundExportCache | null = null;
+
+  /** I 项：在给定单轮缓存作用域内执行 `fn`（自动清理）。 */
+  async withRoundExportCache<T>(fn: () => Promise<T>, cache = new RoundExportCache()): Promise<T> {
+    const prev = this.roundExportCache;
+    this.roundExportCache = cache;
+    try { return await fn(); } finally { this.roundExportCache = prev; }
+  }
+
+  private exportSectionCached(adapter: ConfigAdapter, opts: ExportOptions): Promise<ExportSection> {
+    return this.roundExportCache !== null
+      ? this.roundExportCache.getOrExport(adapter, this.ctx, opts)
+      : adapter.export(this.ctx, opts);
+  }
 
   constructor(opts: SyncEngineOptions) {
     if (opts.ctx === null || typeof opts.ctx !== 'object') throw new Error(zhMsg('sync.missingCtx'));
@@ -847,7 +863,7 @@ export class SyncEngine {
     for (const adapter of targets) {
       let section: ExportSection;
       try {
-        section = await adapter.export(this.ctx, {
+        section = await this.exportSectionCached(adapter, {
           includeSecrets,
           // 可选分区（sessions）：显式勾选清单 > 「最新 N 个」上限（其余分区零变化）
           ...this.sessionExportOptions(adapter.id, opts.sessions),
@@ -1443,7 +1459,13 @@ export class SyncEngine {
    */
   async hasLocalChanges(): Promise<boolean> {
     const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
-    return hasLocalSectionChanges({ state, adapters: this.candidateAdapters(), ctx: this.ctx, scanner: this.scanner });
+    return hasLocalSectionChanges({
+      state,
+      adapters: this.candidateAdapters(),
+      ctx: this.ctx,
+      scanner: this.scanner,
+      exportSection: (a) => this.exportSectionCached(a, { includeSecrets: false }),
+    });
   }
 
   /**
@@ -1567,7 +1589,7 @@ export class SyncEngine {
     for (const adapter of this.adapters.filter((a) => localIds.has(a.id))) {
       let section: ExportSection;
       try {
-        section = await adapter.export(this.ctx, { includeSecrets: false });
+        section = await this.exportSectionCached(adapter, { includeSecrets: false });
       } catch {
         continue;
       }
@@ -1952,6 +1974,7 @@ export class SyncEngine {
         snapshotBinding: opts.snapshotBinding,
       });
       if (!result.ok) {
+        this.roundExportCache?.clear();
         // 兜底回滚：把「是否完整」与失败项一并回传（绝不吞掉，也绝不把部分回滚说成整体回滚）
         const rb = await rollbackForFailure(this.ctx, snapshot, store, this.adapters)
         // 失败路径不再写 review-queue（§7.4）：历史 skipped/failed 标记由上层（路由/调度器）写入。
@@ -1978,6 +2001,8 @@ export class SyncEngine {
       //    **基线必须以「实际落地的本地导出」为准（F-2，2026-10）**：写回时 adapter 会自增本机侧字段
       //    （如 settings.namespaces[*].revision），而 merged 携带的是**远端快照里的值**；用它记基线
       //    会让下一轮 merge 判「本地也改了」+「远端也改了」→ both-modified 冲突 → 每轮重复冲突。
+      // I 项：已写盘分区必须从本轮导出缓存失效，使后续基线重导出与推送读到最新状态；未写入分区继续复用。
+      this.roundExportCache?.invalidate(pluginStep.removals.length > 0 ? [...appliedIds, 'plugins'] : appliedIds);
       const landed = await this.exportAppliedSections(appliedIds);
       if (landed === null) {
         // 重新导出失败 = 无法证明「基线 == 本机现状」→ **不推进基线**（远端指针保持原值，
