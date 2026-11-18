@@ -350,6 +350,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
    * 一个弹窗，页面只剩一行摘要）。瞬态 UI：改动在弹窗内即时生效并持久化，关闭即完成。
    */
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<'content' | 'settings'>('content')
   /**
    * P0-3：会话单元清单（逐会话勾选的数据源）。
    *
@@ -393,8 +394,9 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
    * 打开同步设置弹窗：同样先切到该通道 —— 弹窗内的勾选/会话点名/加密与密码都写进**该通道**的切片。
    * （§8 的关键修正：这些设置属于通道，不是全局一节。）
    */
-  const openSyncSettingsFor = (channel: SyncChannel): void => {
+  const openSyncSettingsFor = (channel: SyncChannel, tab: 'content' | 'settings' = 'content'): void => {
     switchChannel(channel)
+    setSettingsTab(tab)
     setSettingsOpen(true)
   }
 
@@ -1237,16 +1239,12 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     return (
       <>
         <SyncChannelEntryCard
-          t={t}
-          channel={channel}
-          statusInfo={state.statusInfo}
-          remoteReady={ready}
-          repoUrl={state.repoUrl}
-          webdavUrl={state.webdavUrl}
-          s3Endpoint={state.s3Endpoint}
-          gistId={state.gistId}
+          t={t} channel={channel} statusInfo={state.statusInfo} remoteReady={ready}
+          repoUrl={state.repoUrl} webdavUrl={state.webdavUrl} s3Endpoint={state.s3Endpoint} gistId={state.gistId}
           onOpen={() => { openChannelDialogFor(channel) }}
           onClear={() => { setClearTarget(channel) }}
+          onReviewMerge={() => { void runSyncSmart(channel) }}
+          onOpenAutosync={() => { openSyncSettingsFor(channel, 'settings') }}
           expanded={ready ? isChannelExpanded(channel) : undefined}
           contentId={ready ? channelContentId(channel) : undefined}
           onToggleExpanded={ready ? () => { toggleChannelExpanded(channel) } : undefined}
@@ -1420,11 +1418,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               页面只留一行摘要。内含三个页签：「同步内容」（分区 + 会话点名）/「自动同步」
               （整块复用 AutosyncCard）/「加密与密码」；通道卡只保留快照行与两枚方向按钮。 */}
           <SyncSettingsDialog
-            open={settingsOpen}
-            t={t}
-            cmT={cmT}
-            uiT={uiT}
-            sectionName={sectionName}
+            open={settingsOpen} initialTab={settingsTab}
+            t={t} cmT={cmT} uiT={uiT} sectionName={sectionName}
             catalog={state.catalog}
             sections={chState.syncSections}
             sessionsLimit={chState.sessionsLimit}

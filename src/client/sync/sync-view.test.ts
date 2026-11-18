@@ -9,8 +9,8 @@ import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync
 import type { SectionId } from '../../schema/types.ts'
 import type { AutosyncStatusResponse, GithubPollResponse, SyncSectionInfo, SyncStatusResponse } from './sync-api.ts'
 import {
-  autosyncEffectiveOptions, autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeSyncButtons,
-  computeSyncStatus, DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState, encryptAutosyncNoticeKey, formatDateTime,
+  autosyncEffectiveOptions, autosyncIntervalMs, channelAutosyncBadgeView, computeAutosyncCountdown, computeGithubLoginView, computeSyncButtons,
+  computeSyncStatus, DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState, effectiveAutosyncCycleMs, encryptAutosyncNoticeKey, formatDateTime,
   formatIntervalDuration, formatLastSync, autosyncFailureMessage, autosyncSkipDetail,
   githubPollMessage, initialSyncSections, kindLabel, normalizeSessionsLimit, privateRepoHint,
   pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
@@ -20,6 +20,7 @@ import {
   DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
   DEFAULT_AUTOSYNC_CONFLICT_POLICY,
   DEFAULT_AUTOSYNC_REALTIME,
+  DEFAULT_AUTOSYNC_REMOTE_CHECK_MS,
 } from '../../sync/autosync-config.ts'
 import type { SyncTextFn } from './sync-view.ts'
 import { en as syncEn, zh as syncZh } from './sync-locales.ts'
@@ -629,4 +630,58 @@ test('F 项：encryptAutosyncNoticeKey 开启加密返回提示键，未开启�
   assert.equal(encryptAutosyncNoticeKey(undefined), null);
   assert.ok((syncZh['mode.encryptAutosyncNotice'] ?? '').includes('手动'));
   assert.match(syncEn['mode.encryptAutosyncNotice'] ?? '', /manual/i);
+});
+
+test('H 项：effectiveAutosyncCycleMs 在 realtime 下取 interval 与 remoteCheckMs 较小值，关闭时用 interval', () => {
+  assert.equal(
+    effectiveAutosyncCycleMs({ interval: '30m', realtime: true, remoteCheckMs: undefined }),
+    DEFAULT_AUTOSYNC_REMOTE_CHECK_MS,
+    '默认 interval=30m + realtime=true 时下次轮询是 5m 而非 30m',
+  );
+  assert.equal(
+    effectiveAutosyncCycleMs({ interval: '5m', realtime: true, remoteCheckMs: 10 * 60 * 1000 }),
+    5 * 60 * 1000,
+    'interval 更短时取 interval',
+  );
+  assert.equal(
+    effectiveAutosyncCycleMs({ interval: '30m', realtime: false, remoteCheckMs: 60 * 1000 }),
+    30 * 60 * 1000,
+    'realtime 关闭时忽略 remoteCheckMs',
+  );
+  assert.equal(
+    effectiveAutosyncCycleMs({ interval: '30m', realtime: true, remoteCheckMs: 1000 }),
+    15 * 1000,
+    '过短的 remoteCheckMs 受下限 15s 夹取',
+  );
+});
+
+test('H 项：channelAutosyncBadgeView 通道卡直接透出自动同步状态与激活通道 pendingMerge 动作', () => {
+  const baseStatus = {
+    ok: true,
+    configured: true,
+    transport: 'git' as unknown as SyncStatusResponse['transport'],
+    credentialConfigured: true,
+    credentialWritable: true,
+    sectionCount: 1,
+    pendingMerge: { sections: ['settings', 'mcp'], since: '2026-11-18T10:00:00Z' },
+    autosyncByChannel: {
+      git: autosyncStatus({ enabled: true, lastRunStatus: 'failed', consecutiveFailures: 2 }),
+      webdav: autosyncStatus({ enabled: true, lastRunStatus: 'success' }),
+      s3: autosyncStatus({ enabled: false }),
+      gist: autosyncStatus({ enabled: false }),
+    },
+  } as unknown as SyncStatusResponse;
+
+  const gitView = channelAutosyncBadgeView('git', baseStatus);
+  assert.deepEqual(gitView.badges, [
+    { kind: 'error', key: 'channel.autosyncFailed' },
+    { kind: 'warn', key: 'channel.pendingMerge', params: { n: '2' } },
+  ]);
+  assert.equal(gitView.showMergeAction, true);
+  assert.equal(gitView.showAutosyncAction, true);
+
+  const webdavView = channelAutosyncBadgeView('webdav', baseStatus);
+  assert.deepEqual(webdavView.badges, [{ kind: 'ok', key: 'channel.autosyncOn' }]);
+  assert.equal(webdavView.showMergeAction, false, '非激活通道不得错误挂上激活通道的 pendingMerge');
+  assert.equal(webdavView.showAutosyncAction, false);
 });

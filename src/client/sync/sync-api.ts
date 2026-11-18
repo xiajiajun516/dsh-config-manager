@@ -90,6 +90,8 @@ export interface SyncStatusResponse {
   /** sync-state.sections 条目数 */
   sectionCount: number;
   transport?: { type: string; ref: string };
+  /** 当前 sync-state 记录的上次同步传输通道（与 host GET /sync/status 对齐） */
+  lastTransport?: { type: string; ref: string };
   /** 上次选择的同步通道（磁盘 ui-prefs.json；UI 回填优先于此，localStorage 仅兜底） */
   lastSyncChannel?: SyncTransportType;
   /** 可同步分区目录（「高级/自定义导出」勾选列表；host adapters 唯一事实源，只含 portable） */
@@ -699,6 +701,14 @@ export interface AutosyncHistoryEntry {
   /** 本次 pull 来源快照 id */
   pulledSnapshotId?: string;
   error?: string;
+  /** 本轮下行的用户可见告警（被保住的脱敏叶子 / 被扣下的叶级冲突） */
+  warnings?: string[];
+  /** 被保留待裁决的叶级冲突所在分区 */
+  heldSections?: string[];
+  /** SYN-05：冲突策略被强制降级为 ask */
+  forced?: boolean;
+  /** SEC-03：配置因安全白名单被拒绝时的原因 */
+  configIssue?: string;
   notifiedAt?: string;
   /** 本次触发时的连续失败计数 */
   failureCountAtRun: number;

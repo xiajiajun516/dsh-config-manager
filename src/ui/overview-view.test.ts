@@ -146,6 +146,18 @@ test('buildOverviewMetrics: 同步 配置状态', () => {
   assert.equal(failMany.metaKey, 'meta.autosyncFailCount')
   assert.deepEqual(failMany.metaParams, { count: '3' })
   assert.equal(failMany.metaTone, 'warn')
+
+  // H 项：存在 pendingMerge 时 sync 指标透出待裁决分区数
+  const pendingMetric = buildOverviewMetrics(baseInputs({
+    sync: {
+      configured: true,
+      lastSyncAt: '2026-09-10T10:00:00Z',
+      pendingMerge: { sections: ['settings', 'mcp'], since: '2026-09-10T10:05:00Z' },
+    },
+  }))[3]!
+  assert.equal(pendingMetric.metaKey, 'meta.autosyncPending')
+  assert.deepEqual(pendingMetric.metaParams, { n: '2' })
+  assert.equal(pendingMetric.metaTone, 'warn')
 })
 
 /* ---------------- 健康判定 ---------------- */
@@ -176,6 +188,20 @@ test('overviewHealth: SAFE MODE 优先 error；全空 warn；正常 ok', () => {
   }))
   assert.equal(autosyncFail.kind, 'warn')
   assert.equal(autosyncFail.textKey, 'health.autosyncFailed')
+  assert.equal(autosyncFail.action, 'sync')
+
+  const pendingMergeHealth = overviewHealth(baseInputs({
+    backups: [{ name: 'a.zip', sizeBytes: 1, mtimeMs: NOW, source: 'manual' }],
+    snapshots: [{ createdAt: '2026-09-10T00:00:00Z', entryCount: 1 }],
+    schedule: { enabled: true, lastRunStatus: 'ok' },
+    sync: {
+      configured: true,
+      pendingMerge: { sections: ['settings'], since: '2026-09-10T10:00:00Z' },
+    },
+  }))
+  assert.equal(pendingMergeHealth.kind, 'warn')
+  assert.equal(pendingMergeHealth.textKey, 'health.autosyncPending')
+  assert.equal(pendingMergeHealth.action, 'sync-merge')
 
   /* 有备份、但自动备份是关的 → 仍要 warn：状态条不能与脚下「Auto backup Off」并列报健康 */
   const autoOff = overviewHealth(baseInputs({

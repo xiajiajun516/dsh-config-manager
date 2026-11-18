@@ -48,6 +48,10 @@ export interface AutosyncHistoryEntry {
   warnings?: string[];
   /** issue #136：被保留待裁决的叶级冲突所在分区。 */
   heldSections?: SectionId[];
+  /** SYN-05：因首次推送或远端领先而被强制降级为 ask（用户需确认） */
+  forced?: boolean;
+  /** SEC-03：被白名单拒绝导致回退「未配置」的原因说明 */
+  configIssue?: string;
   /** 连续失败 3 次通知时间（ISO-8601 UTC） */
   notifiedAt?: string;
   /** 本次触发时的连续失败计数 */

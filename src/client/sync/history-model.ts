@@ -151,6 +151,14 @@ export interface AutosyncHistoryRow {
   conflictedSections?: string[];
   /** 实际应用的分区 id。 */
   appliedSections?: string[];
+  /** 本轮下行用户可见告警（被保住的脱敏叶子 / 被扣下的叶级冲突）。 */
+  warnings?: string[];
+  /** 被保留待裁决的叶级冲突所在分区。 */
+  heldSections?: string[];
+  /** SYN-05：因首次推送或远端领先被强制降级为 ask。 */
+  forced?: boolean;
+  /** SEC-03：配置被安全白名单拒绝时的说明。 */
+  configIssue?: string;
   error?: string;
   notifiedAt?: string;
   /** 是否有关联的跳过分区明细可展开。 */
@@ -227,11 +235,18 @@ export function projectAutosyncEntry(entry: AutosyncHistoryEntry, t: SyncTransla
     skipReasonText: entry.skipReason !== undefined ? describeSkipReason(entry.skipReason, t) : undefined,
     conflictedSections: entry.conflictedSections,
     appliedSections: entry.appliedSections,
+    warnings: entry.warnings,
+    heldSections: entry.heldSections,
+    forced: entry.forced,
+    configIssue: entry.configIssue,
     error: entry.error,
     notifiedAt: entry.notifiedAt,
     hasDetail:
       (entry.conflictedSections !== undefined && entry.conflictedSections.length > 0) ||
       (entry.appliedSections !== undefined && entry.appliedSections.length > 0) ||
+      (entry.heldSections !== undefined && entry.heldSections.length > 0) ||
+      (entry.warnings !== undefined && entry.warnings.length > 0) ||
+      entry.configIssue !== undefined ||
       entry.error !== undefined,
   };
 }

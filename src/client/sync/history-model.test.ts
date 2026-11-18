@@ -133,11 +133,29 @@ test('projectAutosyncEntry：摘要行 + 可展开明细（冲突分区 / 应用
   assert.equal(row.hasDetail, true);
 });
 
-test('projectAutosyncEntry：无冲突/无应用/无错误 → hasDetail=false', () => {
+test('projectAutosyncEntry：无冲突/无应用/无错误/无告警 → hasDetail=false', () => {
   const row = projectAutosyncEntry(autosyncEntry({
     conflictedSections: undefined, appliedSections: undefined, error: undefined,
+    warnings: undefined, heldSections: undefined, configIssue: undefined,
   }), zhT);
   assert.equal(row.hasDetail, false);
+});
+
+test('H 项：projectAutosyncEntry 透传 warnings / heldSections / forced / configIssue 并正确置位 hasDetail', () => {
+  const withWarnings = projectAutosyncEntry(autosyncEntry({
+    status: 'partial',
+    conflictedSections: undefined,
+    appliedSections: undefined,
+    warnings: ['settings.apiKey sanitized'],
+    heldSections: ['mcp'],
+    forced: true,
+    configIssue: 'host rejected',
+  }), zhT);
+  assert.deepEqual(withWarnings.warnings, ['settings.apiKey sanitized']);
+  assert.deepEqual(withWarnings.heldSections, ['mcp']);
+  assert.equal(withWarnings.forced, true);
+  assert.equal(withWarnings.configIssue, 'host rejected');
+  assert.equal(withWarnings.hasDetail, true);
 });
 
 test('formatDateTime：合法 ISO → 本地格式；空/非法回退', () => {

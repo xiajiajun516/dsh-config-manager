@@ -15,8 +15,8 @@ import type { UiT } from '../../ui/i18n.ts'
 import { Badge, Switch } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import {
-  autosyncEffectiveOptions, autosyncFailureMessage, autosyncIntervalMs, autosyncLastCheckText, autosyncSkipDetail,
-  autosyncStatusText, computeAutosyncCountdown, encryptAutosyncNoticeKey, formatIntervalDuration,
+  autosyncEffectiveOptions, autosyncFailureMessage, autosyncLastCheckText, autosyncSkipDetail,
+  autosyncStatusText, computeAutosyncCountdown, effectiveAutosyncCycleMs, encryptAutosyncNoticeKey, formatIntervalDuration,
 } from './sync-view.ts'
 // 展示文本渲染前统一脱敏（与 ErrorBanner/ReportView 同规矩）
 import { redact } from '../../security/redaction.ts'
@@ -103,7 +103,7 @@ export function AutosyncCard({ t, uiT, settings, busy, pendingMerge, onToggleAut
     : null
   const advancingElapsedMs = useAdvancingElapsedMs(snapshotElapsedMs)
   const autosyncCountdownMs = advancingElapsedMs !== null && settings.autosync !== null
-    ? computeAutosyncCountdown(advancingElapsedMs, autosyncIntervalMs(settings.autosync.interval))
+    ? computeAutosyncCountdown(advancingElapsedMs, effectiveAutosyncCycleMs(settings.autosync))
     : null
   // issue #79：本轮为什么没同步 / 失败了什么，必须看得见 —— 此前只写进 info 级日志
   // （默认日志级别 warn），界面恒无提示，用户只能去翻 sync-autosync.json。

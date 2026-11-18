@@ -47,6 +47,8 @@ export interface OverviewSyncLite {
   lastSyncAt?: string
   /** 当前激活通道的自动同步状态（缺省 = 旧接口未提供；仅用于失败可见性，未提供不臆测） */
   autosync?: OverviewAutosyncLite
+  /** 等人裁决的冲突分区（存在且非空 = 必须透出待裁决入口） */
+  pendingMerge?: { sections: string[]; since: string }
 }
 
 /** 迁移历史条目最小形状（结构兼容 core/migration-history.ts StoredMigrationHistoryEntry 子集）。 */
@@ -88,6 +90,7 @@ export type OverviewMetaKey =
   | 'meta.syncOff'
   | 'meta.autosyncFail'
   | 'meta.autosyncFailCount'
+  | 'meta.autosyncPending'
   | 'meta.never'
 
 export interface OverviewMetric {
@@ -225,6 +228,7 @@ export function buildOverviewMetrics(inputs: OverviewInputs): OverviewMetric[] {
     const autosyncFailed = sync.configured
       && sync.autosync?.enabled === true
       && sync.autosync.lastRunStatus === 'failed'
+    const pendingCount = sync.configured ? (sync.pendingMerge?.sections.length ?? 0) : 0
     const failCount = sync.autosync?.consecutiveFailures ?? 0
     syncMetric = {
       key: 'sync',
@@ -235,13 +239,17 @@ export function buildOverviewMetrics(inputs: OverviewInputs): OverviewMetric[] {
         ? 'meta.syncOff'
         : autosyncFailed
           ? (failCount >= 2 ? 'meta.autosyncFailCount' : 'meta.autosyncFail')
-          : lastSyncMs !== null
-            ? 'meta.syncOn'
-            : 'meta.never',
+          : pendingCount > 0
+            ? 'meta.autosyncPending'
+            : lastSyncMs !== null
+              ? 'meta.syncOn'
+              : 'meta.never',
       metaParams: autosyncFailed
         ? (failCount >= 2 ? { count: String(failCount) } : {})
-        : (lastSyncMs !== null ? { time: String(lastSyncMs) } : {}),
-      metaTone: autosyncFailed ? 'warn' : 'neutral',
+        : pendingCount > 0
+          ? { n: String(pendingCount) }
+          : (lastSyncMs !== null ? { time: String(lastSyncMs) } : {}),
+      metaTone: autosyncFailed || pendingCount > 0 ? 'warn' : 'neutral',
     }
   }
 
@@ -255,7 +263,9 @@ export type OverviewHealthKind = 'ok' | 'warn' | 'error'
 export interface OverviewHealth {
   kind: OverviewHealthKind
   /** UI 渲染 key（`overview.health.*`）。 */
-  textKey: 'health.ok' | 'health.noBackup' | 'health.scheduleFailed' | 'health.autosyncFailed' | 'health.autoBackupOff' | 'health.recovery'
+  textKey: 'health.ok' | 'health.noBackup' | 'health.scheduleFailed' | 'health.autosyncFailed' | 'health.autosyncPending' | 'health.autoBackupOff' | 'health.recovery'
+  /** 可点击跳转的目标（存在时健康条变成可点入口，直达修复/裁决页） */
+  action?: 'recovery' | 'sync' | 'sync-merge'
 }
 
 /**
@@ -263,17 +273,15 @@ export interface OverviewHealth {
  * 1. SAFE MODE 激活（有未解决恢复事项）→ error（最高优先，需用户处理）；
  * 2. 已加载且备份与快照均为空 → warn「尚无任何备份」（新装机引导场景）；
  * 3. 定时备份开启但上次运行失败 → warn；
- * 4. 远程同步已配置且自动同步开启但上次结论为 failed → warn（不因定时备份关闭或后续空轮被掩盖）；
- * 5. 手上已有备份、但定时备份是关的 → warn「自动备份已关闭」（2026-11-01 视觉 pass 新增：
- *    此前关闭档不判定，于是「All healthy」与「Auto backup Off / Backups 1」同屏并列，
- *    状态条给出的结论与它脚下的指标自相矛盾 —— 一页只在回答「现在安全吗」，
- *    在没有任何后续保护时报健康等于放弃这个结论）；
- * 6. 其余 → ok。
+ * 4. 远程同步已配置且自动同步开启但上次结论为 failed → warn（直达同步页）；
+ * 5. 远程同步已配置且存在待裁决冲突（pendingMerge）→ warn（直达合并裁决）；
+ * 6. 手上已有备份、但定时备份是关的 → warn「自动备份已关闭」；
+ * 7. 其余 → ok。
  * 数据未加载（null）不降级健康状态（避免加载闪红）。
  */
 export function overviewHealth(inputs: OverviewInputs): OverviewHealth {
   if (inputs.recoveryRequired === true) {
-    return { kind: 'error', textKey: 'health.recovery' }
+    return { kind: 'error', textKey: 'health.recovery', action: 'recovery' }
   }
   if (inputs.backups !== null && inputs.snapshots !== null
     && inputs.backups.length === 0 && inputs.snapshots.length === 0) {
@@ -284,7 +292,10 @@ export function overviewHealth(inputs: OverviewInputs): OverviewHealth {
   }
   if (inputs.sync !== null && inputs.sync.configured && inputs.sync.autosync?.enabled === true
     && inputs.sync.autosync.lastRunStatus === 'failed') {
-    return { kind: 'warn', textKey: 'health.autosyncFailed' }
+    return { kind: 'warn', textKey: 'health.autosyncFailed', action: 'sync' }
+  }
+  if (inputs.sync !== null && inputs.sync.configured && (inputs.sync.pendingMerge?.sections.length ?? 0) > 0) {
+    return { kind: 'warn', textKey: 'health.autosyncPending', action: 'sync-merge' }
   }
   if (inputs.schedule !== null && !inputs.schedule.enabled) {
     return { kind: 'warn', textKey: 'health.autoBackupOff' }

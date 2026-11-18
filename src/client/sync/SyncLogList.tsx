@@ -24,6 +24,7 @@ import { Badge, Button, Card, Empty, SectionTitle } from '../common/ui.tsx'
 import { RefreshIcon } from '../common/Icon.tsx'
 import { SkeletonTable } from '../common/Skeleton.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
+import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
 
 export interface SyncLogListProps {
@@ -174,13 +175,15 @@ function AutosyncRow({ entry, t, sectionName }: { entry: AutosyncHistoryEntry; t
             <Badge kind="info">{row.direction}</Badge>
             {' '}
             <Badge kind={row.badgeKind}>{row.status}</Badge>
+            {row.forced === true && <>{' '}<Badge kind="warn">{t('history.autosyncForced')}</Badge></>}
             {entry.pushedSnapshotId !== undefined && <>{' · '}{t('history.autosyncPush')} <span className={css.mono} title={entry.pushedSnapshotId}>{midEllipsis(entry.pushedSnapshotId)}</span></>}
             {entry.pulledSnapshotId !== undefined && <>{' · '}{t('history.autosyncPull')} <span className={css.mono} title={entry.pulledSnapshotId}>{midEllipsis(entry.pulledSnapshotId)}</span></>}
           </span>
-          {/* 第二行小字：跳过原因 / 错误（信息保留，但不挤在主行里） */}
+          {/* 第二行小字：跳过原因 / 错误 / 配置被拒说明（展示前统一脱敏，避免密钥碎片漏出） */}
           {row.skipReasonText !== undefined && <span className={css.hint}>{row.skipReasonText}</span>}
+          {row.configIssue !== undefined && <span className={css.hint}>{t('history.autosyncConfigIssue', { issue: redact(row.configIssue) })}</span>}
           {/* 错误正文已经在这行显示，不再挂一份同样的 title（同一句话的第二种副本） */}
-          {row.error !== undefined && <span className={css.hint}>{t('history.autosyncError', { error: '' })}{row.error}</span>}
+          {row.error !== undefined && <span className={css.hint}>{t('history.autosyncError', { error: '' })}{redact(row.error)}</span>}
         </div>
         {row.hasDetail && (
           <details>
@@ -194,6 +197,14 @@ function AutosyncRow({ entry, t, sectionName }: { entry: AutosyncHistoryEntry; t
                   </div>
                 </div>
               )}
+              {row.heldSections !== undefined && row.heldSections.length > 0 && (
+                <div>
+                  <span className={css.fieldLabel}>{t('history.autosyncHeldSections', { sections: '' })}</span>
+                  <div className={css.statRow}>
+                    {row.heldSections.map((sid) => <Badge key={sid} kind="warn">{sectionName !== undefined ? sectionName(sid) : sid}</Badge>)}
+                  </div>
+                </div>
+              )}
               {row.appliedSections !== undefined && row.appliedSections.length > 0 && (
                 <div>
                   <span className={css.fieldLabel}>{t('history.autosyncApplied', { sections: '' })}</span>
@@ -201,6 +212,15 @@ function AutosyncRow({ entry, t, sectionName }: { entry: AutosyncHistoryEntry; t
                     {row.appliedSections.map((sid) => <Badge key={sid} kind="ok">{sectionName !== undefined ? sectionName(sid) : sid}</Badge>)}
                   </div>
                 </div>
+              )}
+              {row.warnings !== undefined && row.warnings.length > 0 && (
+                <div>
+                  <span className={css.fieldLabel}>{t('history.autosyncWarnings')}</span>
+                  {row.warnings.map((w, idx) => <div key={idx} className={css.hint}>{redact(w)}</div>)}
+                </div>
+              )}
+              {row.configIssue !== undefined && (
+                <div className={css.hint}>{t('history.autosyncConfigIssue', { issue: redact(row.configIssue) })}</div>
               )}
             </div>
           </details>

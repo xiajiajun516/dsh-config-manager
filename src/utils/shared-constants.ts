@@ -115,3 +115,14 @@ export type AutosyncConflictPolicy = 'ask' | 'local';
 export const DEFAULT_AUTOSYNC_REALTIME = true;
 export const DEFAULT_AUTOSYNC_AUTO_APPLY_TIER: AutosyncAutoApplyTier = 'medium';
 export const DEFAULT_AUTOSYNC_CONFLICT_POLICY: AutosyncConflictPolicy = 'ask';
+
+/** 远端轮询默认 / 边界间隔（H 项：客户端倒计时与宿主调度器共用唯一源，realtime=true 时按它算倒计时） */
+export const DEFAULT_AUTOSYNC_REMOTE_CHECK_MS = 5 * 60 * 1000;
+export const MIN_AUTOSYNC_REMOTE_CHECK_MS = 15 * 1000;
+export const MAX_AUTOSYNC_REMOTE_CHECK_MS = 60 * 60 * 1000;
+
+/** 远端轮询间隔夹取（非数字 / 越界一律回落到边界值，绝不写入 NaN）。 */
+export function clampRemoteCheckMs(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_AUTOSYNC_REMOTE_CHECK_MS;
+  return Math.min(MAX_AUTOSYNC_REMOTE_CHECK_MS, Math.max(MIN_AUTOSYNC_REMOTE_CHECK_MS, Math.round(value)));
+}

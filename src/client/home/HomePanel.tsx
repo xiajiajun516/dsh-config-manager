@@ -330,6 +330,11 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
   const navMetric = (key: OverviewMetricKey): void => {
     // 「定时备份」就在本页 ⇒ 不跳页，直接开设置弹窗（§7 的定案）
     if (key === 'schedule') { setScheduleOpen(true); return }
+    // H 项：同步段若有待裁决冲突，直达同步页并拉起合并裁决（不只是切过去）
+    if (key === 'sync' && (data.sync?.pendingMerge?.sections.length ?? 0) > 0) {
+      navMerge()
+      return
+    }
     const target = METRIC_TARGET[key]
     runStore.patch(target.sourceFilter !== undefined
       ? { panel: target.panel, library: { sourceFilter: target.sourceFilter } }
@@ -385,7 +390,7 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
       ? (m.valueKey === 'state.on' ? t('overview.state.on') : t('overview.state.off'))
       : m.value
     let dim: string | null = null
-    if (m.metaKey === 'meta.scheduleFail' || m.metaKey === 'meta.autosyncFail' || m.metaKey === 'meta.autosyncFailCount') {
+    if (m.metaKey === 'meta.scheduleFail' || m.metaKey === 'meta.autosyncFail' || m.metaKey === 'meta.autosyncFailCount' || m.metaKey === 'meta.autosyncPending') {
       dim = renderMetaShort(m.metaKey, m.metaParams['time'] !== undefined ? Number(m.metaParams['time']) : null, t, m.metaParams)
     } else if (m.key === 'backups' && m.metaParams['time'] !== undefined) {
       dim = renderRelTime(Number(m.metaParams['time']), t)
@@ -440,15 +445,25 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
       )}
       {/* 1. 状态条：健康点 + 指标段（可点击，名词在前） */}
       <div className={css.statStrip} data-tone={health.kind === 'ok' ? undefined : health.kind}>
-        {recoveryRequired ? (
-          /* 有待处理恢复事项：健康段本身即入口，直达备份页「事故恢复」 */
+        {health.action !== undefined ? (
+          /* 有待处理恢复事项 / 自动同步失败 / 待裁决冲突：健康段本身即入口，直达目标页或拉起裁决 */
           <button
             type="button"
             className={`${css.statHealth} ${css.statHealthAction}`}
-            title={t('overview.health.recoveryAction')}
-            onClick={navRecovery}
+            title={t(
+              health.action === 'recovery'
+                ? 'overview.health.recoveryAction'
+                : health.action === 'sync-merge'
+                  ? 'overview.health.autosyncPendingAction'
+                  : 'overview.health.autosyncAction',
+            )}
+            onClick={() => {
+              if (health.action === 'recovery') navRecovery()
+              else if (health.action === 'sync-merge') navMerge()
+              else runStore.patch({ panel: 'sync' })
+            }}
           >
-            <StatusDot kind="error" />
+            <StatusDot kind={health.kind === 'error' ? 'error' : 'warn'} />
             {t(`overview.${health.textKey}`)}
           </button>
         ) : (
@@ -657,6 +672,7 @@ function renderMetaShort(
     case 'meta.syncOff': return t('overview.meta.syncOff')
     case 'meta.autosyncFail': return t('overview.meta.autosyncFail')
     case 'meta.autosyncFailCount': return t('overview.meta.autosyncFailCount', { count: params['count'] ?? '0' })
+    case 'meta.autosyncPending': return t('overview.meta.autosyncPending', { n: params['n'] ?? '0' })
     case 'meta.never': return t('overview.meta.never')
   }
 }

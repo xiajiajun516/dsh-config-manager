@@ -10,11 +10,11 @@ import { ExpandChevron } from '../common/Icon.tsx'
 import type { SyncStatusResponse } from './sync-api.ts'
 import type { SyncChannel } from './sync-view.ts'
 import { formatSyncStatusTimestamp, formatSyncUrlPreview, workdirStateKey, workdirStateBadgeKind } from '../../ui/sync-settings-view.ts'
-import { needsGitToken, SYNC_CHANNEL_LABEL_KEY } from './sync-view.ts'
+import { channelAutosyncBadgeView, needsGitToken, SYNC_CHANNEL_LABEL_KEY } from './sync-view.ts'
 import css from '../config-manager.module.css'
 
 /** 同步通道入口卡：通道名（标题）+ 配置状态 + 状态事实行 + 打开配置弹窗 + 断开该通道配置。 */
-export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repoUrl, webdavUrl, s3Endpoint, gistId, onOpen, onClear, expanded, contentId, onToggleExpanded }: {
+export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repoUrl, webdavUrl, s3Endpoint, gistId, onOpen, onClear, onReviewMerge, onOpenAutosync, expanded, contentId, onToggleExpanded }: {
   t: TranslateNS<'config-manager-sync'>
   channel: SyncChannel
   statusInfo: SyncStatusResponse | null
@@ -28,6 +28,10 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
   onOpen: () => void
   /** 请求断开该通道（未配置时按钮不渲染）；确认与执行由壳层负责（本卡不发请求） */
   onClear: () => void
+  /** H 项：有待裁决冲突时直达合并裁决视图 */
+  onReviewMerge?: () => void
+  /** H 项：自动同步失败时打开通道的设置弹窗并定位「设置」页签 */
+  onOpenAutosync?: () => void
   /**
    * v3 §2.2-3：通道卡可折叠（4 个通道全展开远超 564×720 画布）。
    * 未配置的通道走矮态、没有可折叠内容 —— 调用方只在 remoteReady 时传这三个 prop。
@@ -42,6 +46,7 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
   const workdirKey = channel === 'git' ? workdirStateKey(statusInfo?.workDir) : null
   const workdirKind = workdirStateBadgeKind(workdirKey)
   const showWorkdirBadge = workdirKind === 'warn'
+  const autosyncView = channelAutosyncBadgeView(channel, statusInfo)
   /** 事实行里的「当前远端」预览：按通道取那个真正标识远端的字段（gist 用 id，没有 URL） */
   const previewRemote = channel === 'webdav'
     ? webdavUrl
@@ -103,6 +108,10 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
         {showWorkdirBadge && workdirKey !== null && workdirKind !== null && (
           <Badge kind={workdirKind}>{t(workdirKey)}</Badge>
         )}
+        {/* H 项：自动同步运行态与待裁决冲突在通道入口卡直接可见（不缩在折叠设置弹窗内） */}
+        {autosyncView.badges.map((b, idx) => (
+          <Badge key={idx} kind={b.kind}>{t(b.key, b.params)}</Badge>
+        ))}
       </div>
       {/* 远端地址（Workbench：给硬事实）。
           配置状态只由上面那排徽章表达：同一张卡里用「徽章 + 事实行」两处说同一件事，
@@ -129,6 +138,16 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
         <Button variant="danger" onClick={onClear}>
           {t('channel.clear')}
         </Button>
+        {autosyncView.showMergeAction && onReviewMerge !== undefined && (
+          <Button variant="ghost" onClick={onReviewMerge}>
+            {t('channel.resolveConflict')}
+          </Button>
+        )}
+        {autosyncView.showAutosyncAction && onOpenAutosync !== undefined && (
+          <Button variant="ghost" onClick={onOpenAutosync}>
+            {t('channel.openAutosync')}
+          </Button>
+        )}
         {onToggleExpanded !== undefined && (
           <>
             <span className={css.statusSpacer} />

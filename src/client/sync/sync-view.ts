@@ -16,9 +16,11 @@ import type {
 } from './sync-api.ts';
 // 通道枚举与自动同步默认值的唯一声明处（**零依赖**，可被浏览器半运行时 import）：前后端同源不漂移。
 import {
+  clampRemoteCheckMs,
   DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
   DEFAULT_AUTOSYNC_CONFLICT_POLICY,
   DEFAULT_AUTOSYNC_REALTIME,
+  DEFAULT_AUTOSYNC_REMOTE_CHECK_MS,
   SYNC_CHANNELS,
   type AutosyncAutoApplyTier,
   type AutosyncConflictPolicy,
@@ -1243,6 +1245,81 @@ export function autosyncEffectiveOptions(
     realtime: autosync?.realtime ?? DEFAULT_AUTOSYNC_REALTIME,
     autoApplyTier: autosync?.autoApplyTier ?? DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
     conflictPolicy: autosync?.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY,
+  };
+}
+
+/**
+ * H 项：AutosyncCard 实际「下一次检查/同步」周期（ms）。
+ *
+ * `realtime=true` 时调度器每 `clampRemoteCheckMs(remoteCheckMs)`（默认 5m）轮询远端，
+ * 与 `interval`（默认 30m）并行 —— 下一次真正会跑检查的时间取两者较小值；仅看 `interval`
+ * 会在 realtime 下显示「约 30 分钟后」但实际 5 分钟后已运行。
+ */
+export function effectiveAutosyncCycleMs(
+  autosync: Pick<AutosyncStatusResponse, 'interval' | 'realtime' | 'remoteCheckMs'>,
+): number {
+  const fallbackMs = autosyncIntervalMs(autosync.interval);
+  const realtime = autosync.realtime ?? DEFAULT_AUTOSYNC_REALTIME;
+  if (!realtime) return fallbackMs;
+  const pollMs = clampRemoteCheckMs(autosync.remoteCheckMs ?? DEFAULT_AUTOSYNC_REMOTE_CHECK_MS);
+  return Math.min(fallbackMs, pollMs);
+}
+
+export interface ChannelAutosyncBadge {
+  kind: 'ok' | 'warn' | 'error';
+  key: SyncKey;
+  params?: Record<string, string>;
+}
+
+export interface ChannelAutosyncView {
+  badges: ChannelAutosyncBadge[];
+  showMergeAction: boolean;
+  showAutosyncAction: boolean;
+}
+
+/** 从 statusInfo 中解析当前激活通道名（兼容 runtime string 与旧类型 `{ type }`）。 */
+function activeTransportOf(statusInfo: SyncStatusResponse | null): string | undefined {
+  if (statusInfo === null) return undefined;
+  const raw = statusInfo.transport as unknown;
+  if (typeof raw === 'string') return raw;
+  if (raw !== null && typeof raw === 'object' && typeof (raw as { type?: unknown }).type === 'string') {
+    return (raw as { type: string }).type;
+  }
+  return statusInfo.lastTransport?.type;
+}
+
+/**
+ * H 项：同步页通道卡片的自动同步与待裁决投影（纯函数，单测可测）。
+ * 只认当前通道的 `autosyncByChannel[channel]` 与激活通道上的 `pendingMerge`。
+ */
+export function channelAutosyncBadgeView(
+  channel: SyncChannel,
+  statusInfo: SyncStatusResponse | null,
+): ChannelAutosyncView {
+  const badges: ChannelAutosyncBadge[] = [];
+  const autosync = statusInfo?.autosyncByChannel?.[channel];
+  const activeChannel = activeTransportOf(statusInfo);
+  const pendingCount = activeChannel === channel ? (statusInfo?.pendingMerge?.sections.length ?? 0) : 0;
+  let showAutosyncAction = false;
+  if (autosync?.enabled === true) {
+    if (autosync.lastRunStatus === 'failed') {
+      badges.push({ kind: 'error', key: 'channel.autosyncFailed' });
+      showAutosyncAction = true;
+    } else if (pendingCount === 0 && autosync.lastRunStatus === 'partial') {
+      badges.push({ kind: 'warn', key: 'channel.autosyncPartial' });
+    } else if (pendingCount === 0 && autosync.lastRunStatus === 'skipped' && autosync.lastRunSkipReason !== undefined && autosync.lastRunSkipReason !== 'upToDate') {
+      badges.push({ kind: 'warn', key: 'channel.autosyncSkipped' });
+    } else {
+      badges.push({ kind: 'ok', key: 'channel.autosyncOn' });
+    }
+  }
+  if (pendingCount > 0) {
+    badges.push({ kind: 'warn', key: 'channel.pendingMerge', params: { n: String(pendingCount) } });
+  }
+  return {
+    badges,
+    showMergeAction: pendingCount > 0,
+    showAutosyncAction,
   };
 }
 

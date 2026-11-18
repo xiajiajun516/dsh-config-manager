@@ -50,13 +50,15 @@ type SyncSettingsTab = 'content' | 'settings'
  * 勾选与开关**即时生效并持久化**（与导出选择器一致的弹窗语义），因此底部只有「完成」——
  * 没有「取消」（取消会让用户以为改动被丢弃）。
  */
-export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, deletePlugins, sessionNode, sessionPending, sessionFailed, busy, settings, pendingMerge, onToggleSection, onSessionsLimit, onSessionsInclude, onToggleDeletePlugins, onToggleAutosync, onUpdateAutosyncInterval, onUpdateAutosyncOptions, onToggleEncrypt, onToggleIncludeSecrets, onPatchSettings, onPersistEncryptPassword, onPersistDecryptPassword, onClearSavedPassword, onClose }: {
+export function SyncSettingsDialog({ open, initialTab, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, deletePlugins, sessionNode, sessionPending, sessionFailed, busy, settings, pendingMerge, onToggleSection, onSessionsLimit, onSessionsInclude, onToggleDeletePlugins, onToggleAutosync, onUpdateAutosyncInterval, onUpdateAutosyncOptions, onToggleEncrypt, onToggleIncludeSecrets, onPatchSettings, onPersistEncryptPassword, onPersistDecryptPassword, onClearSavedPassword, onClose }: {
   t: TranslateNS<'config-manager-sync'>
   /** ui 命名空间的翻译器（UiT）：分区描述与分组说明的**字典键**由它解析（英文界面零中文） */
   uiT: UiT
   /** config-manager 命名空间的翻译器：ContentPicker 的搜索/全选/合计文案来自它 */
   cmT: TranslateNS<'config-manager'>
   open: boolean
+  /** 弹窗打开时定位到的初始页签（缺省回落 'content'；失败直达 'settings' 用） */
+  initialTab?: SyncSettingsTab
   sectionName: (id: SectionId) => string
   catalog: SyncSectionOption[]
   sections: readonly SectionId[]
@@ -97,10 +99,13 @@ export function SyncSettingsDialog({ open, t, cmT, uiT, sectionName, catalog, se
   /** 内容页内的两个视图：分区目录 / 会话逐项勾选（同一 Modal，不嵌套第二个遮罩） */
   const [view, setView] = useState<'sections' | 'sessions'>('sections')
   useEffect(() => {
-    if (open) return
-    setTab('content')
-    setView('sections')
-  }, [open])
+    if (!open) {
+      setTab('content')
+      setView('sections')
+      return
+    }
+    if (initialTab !== undefined) setTab(initialTab)
+  }, [open, initialTab])
 
   const sessionIds = (sessionNode?.units ?? []).map((u) => u.id)
   const sessionNodes: SelectionSection[] = sessionNode === undefined ? [] : [sessionNode]
