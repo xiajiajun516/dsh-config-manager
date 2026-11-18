@@ -11,8 +11,11 @@
  *   并不存在的本地 id」→ hasNewRemoteSnapshot() 恒判「远端有新生」，每轮白跑 list + download + merge。
  *   传入 `''` 表示「远端 id 未知」——宁可留空，也不要把本地 id 冒充成远端 id。
  *
- * **issue #140 / G-44**：`opts.remoteSections` 是**远端观测**（远端快照自己携带的分区哈希），
+ * **issue #140 / G-44（C 组更新）**：`opts.remoteSections` 是**远端观测**（远端快照自己携带的分区哈希），
  * 与传入的 `sections`（本机观测，用来算 hasLocalChanges 的基线）是两个不同来源。
+ * `push()` 传入刚上传的明文分区哈希；`merge() -> applyMergePlan()` 在非加密且指针前进时也必须传入
+ * 本次合并所用远端快照的 `remoteSections`（而不是由 `landed` 本机观测推导，否则既违反 G-44，缺传又会
+ * 触发下方指针变更分支 `delete state.lastRemoteSections` 导致退化回 id 比较）。
  * 早先的事故正是「一参两用」：拿本机 hash 当远端现状，判定就永远自洽、永远看不出远端真的变了。
  */
 import type { Platform, SectionData, SectionId } from '../schema/types.ts';

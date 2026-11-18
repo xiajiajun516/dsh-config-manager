@@ -842,10 +842,10 @@ export class AutoSyncScheduler {
           });
           const forcePush = pushDecision.force;
           const forcedMark = pushDecision.forcedAsk ? { forced: true as const } : {};
-          // issue #146：本轮**仍未裁决**的分区（分区级冲突 + 下行被扣下的叶级冲突）绝不上行。
+          // issue #146 / C组：本轮**仍未裁决**的分区（分区级冲突 + 风险分级扣下 + 下行叶级冲突）绝不上行。
           // 冲突分区在 Phase B 被有意跳过（绝不写本地），但推送侧原本照样导出本机版本 ——
           // 真机事故里 plugins 就这样被 30 → 28 → 26 一路压小。force = 用户明确「用本机覆盖远端」，不扣。
-          const heldUp = forcePush ? [] : [...new Set([...conflictedSections, ...heldLeafSections])];
+          const heldUp = forcePush ? [] : [...new Set([...conflictedSections, ...deferredSections, ...heldLeafSections])];
           // 先落盘待裁决：引擎推送成功时只在**已有记录**上保留 since，本轮首次判出的冲突要靠这里写下来。
           const pendingRecorded = heldUp.length > 0;
           if (pendingRecorded) await this.recordPendingMerge(engine, heldUp);
@@ -868,8 +868,8 @@ export class AutoSyncScheduler {
             const message = pushReport.message ?? engineMsg('sync.autosyncPushFailed');
             // issue #136：下行自身的告警/待裁决与「推送被冲突挡下」合并进同一条记录，
             // 不因上行受阻就把下行的事实抹掉。
-            const blockedConflicted = [...new Set([...conflictedSections, ...heldLeafSections])];
-            const blockedDegraded = downlinkWarnings.length > 0 || heldLeafSections.length > 0;
+            const blockedConflicted = [...new Set([...conflictedSections, ...deferredSections, ...heldLeafSections])];
+            const blockedDegraded = downlinkWarnings.length > 0 || heldLeafSections.length > 0 || deferredSections.length > 0;
             const conflictResult: AutosyncRunResult = {
               status: blockedConflicted.length > 0 || blockedDegraded ? 'partial' : 'skipped',
               direction: appliedSections.length ? 'both' : 'push',
@@ -893,7 +893,7 @@ export class AutoSyncScheduler {
             });
             // 冲突分区落成待裁决（P2）：首页与同步页据此给出裁决入口。推送前已写过就不再写一次
             // （重复写会按 lastMergedRemoteSnapshotId 重算 since，抹掉首次判出冲突的时间）。
-            if (!pendingRecorded) await this.recordPendingMerge(engine, conflictedSections);
+            if (!pendingRecorded) await this.recordPendingMerge(engine, blockedConflicted);
             await this.writeFinalConfig(cfg, conflictResult, nowIso, historyId, channel);
             return conflictResult;
           }
@@ -951,11 +951,11 @@ export class AutoSyncScheduler {
           // 两类降级必须分开说：只有「叶级冲突被扣下」才是冲突待裁决；
           // 纯告警（插件没装上、undo 有残留等）与冲突无关，套上 'conflict' 会让
           // 界面上出现「跳过原因：冲突」「另有 N 个分区待确认」，而 conflictedSections 是空的。
-          const heldDegraded = heldLeafSections.length > 0;
+          const heldDegraded = heldLeafSections.length > 0 || deferredSections.length > 0;
           // 引擎告警（分区导出失败 / 非 portable 跳过 / 扣下说明）同样要上屏：静默少推比失败更糟。
           const allWarnings = [...downlinkWarnings, ...pushWarnings];
           // 引擎 push 回传的告警（provider namespace 未配置、目录为空…）是常规事实噪声，只上屏不降级；
-          // 状态降级只认「有分区被扣下」与下行冲突 —— 否则每轮都变成 partial，用户就学不会 partial 的含义。
+          // 状态降级只认「有分区被扣下（叶级冲突 / 风险分级扣下）」与下行冲突 —— 否则每轮都变成 partial，用户就学不会 partial 的含义。
           const degraded = downlinkWarnings.length > 0 || heldDegraded;
           const finalPartial = partial || degraded || allConflicted;
           // 一个分区都没上行 = 「成功但跳过」，不是「成功」也不是「失败」（#146 验收口径②）。
@@ -964,8 +964,8 @@ export class AutoSyncScheduler {
             : finalPartial ? ('partial' as const) : ('success' as const);
           const finalSkipReason = skipReason
             ?? (heldDegraded ? ('conflict' as const) : degraded ? ('warning' as const) : undefined);
-          // 扣下的叶级冲突所在分区也要出现在「待处理分区」里（与分区级冲突合并去重）
-          const finalConflicted = [...new Set([...reportedConflicted, ...heldLeafSections])];
+          // 扣下的叶级冲突 / 风险扣下所在分区也要出现在「待处理分区」里（与分区级冲突合并去重）
+          const finalConflicted = [...new Set([...reportedConflicted, ...deferredSections, ...heldLeafSections])];
           const result: AutosyncRunResult = {
             status: finalStatus,
             direction: appliedSections.length ? 'both' : 'push',
@@ -1013,8 +1013,8 @@ export class AutoSyncScheduler {
 
       // 本轮下行被冲突挡下、且没有可上行内容（本地无改动）→ 如实 skipped/conflict。
       if (conflictedSections.length > 0) {
-        // issue #136：被扣下的叶级冲突也算「待处理分区」（与分区级冲突同列）。
-        const skipConflicted = [...new Set([...conflictedSections, ...heldLeafSections])];
+        // issue #136 / C组：被扣下的叶级冲突与风险分级扣下分区也一并落 pendingMerge，与分区级冲突同列。
+        const skipConflicted = [...new Set([...conflictedSections, ...deferredSections, ...heldLeafSections])];
         const conflictResult: AutosyncRunResult = {
           status: 'skipped', direction: 'pull', skipReason: 'conflict',
           conflictedSections: skipConflicted, historyId, consecutiveFailures: 0,
@@ -1027,18 +1027,20 @@ export class AutoSyncScheduler {
           ...(downlinkWarnings.length > 0 ? { warnings: downlinkWarnings } : {}),
           ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
         });
-        await this.recordPendingMerge(engine, conflictedSections);
+        await this.recordPendingMerge(engine, skipConflicted);
         await this.writeFinalConfig(cfg, conflictResult, nowIso, historyId, channel);
         return conflictResult;
       }
 
       // 仅远端合并（无本地改动可推）：只做 pull 合并（不上传），或远端无新生且本地无改动（已在上方 upToDate 短路上）。
-      // issue #136：纯下行的告警/待裁决同样算「没全做完」—— 终态不得写成 success。
-      const degraded = downlinkWarnings.length > 0 || heldLeafSections.length > 0;
+      // issue #136 / C组：纯下行的告警 / 风险扣下（deferredSections）/ 叶级冲突（heldLeafSections）同样算「没全做完」——
+      // 终态不得写成 success，且被扣下分区必须落 pendingMerge（否则基线推进 + lastRemoteSections 保留会让被扣分区永不重提）。
+      const heldOrDeferred = deferredSections.length > 0 || heldLeafSections.length > 0;
+      const degraded = downlinkWarnings.length > 0 || heldOrDeferred;
       const pulledConflicted = [...new Set([...deferredSections, ...heldLeafSections])];
       const pullSkipReason = !degraded && appliedSections.length === 0
         ? ('unchanged' as const)
-        : degraded ? ('conflict' as const) : undefined;
+        : heldOrDeferred ? ('conflict' as const) : degraded ? ('warning' as const) : undefined;
       const result: AutosyncRunResult = {
         status: degraded ? 'partial' : 'success', direction: 'pull', appliedSections,
         ...(pullSkipReason !== undefined ? { skipReason: pullSkipReason } : {}),
@@ -1055,6 +1057,7 @@ export class AutoSyncScheduler {
         ...(heldLeafSections.length > 0 ? { heldSections: heldLeafSections } : {}),
         createdAt: nowIso, failureCountAtRun: 0,
       });
+      if (pulledConflicted.length > 0) await this.recordPendingMerge(engine, pulledConflicted);
       await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
       return result;
     } catch (err) {
@@ -1212,6 +1215,7 @@ export class AutoSyncScheduler {
    */
   private async recordPendingMerge(engine: SyncEngine, sections: SectionId[]): Promise<void> {
     if (sections.length === 0) return;
+    if (typeof (engine as Partial<SyncEngine>).recordPendingMerge !== 'function') return;
     try {
       await engine.recordPendingMerge(sections);
     } catch (err) {

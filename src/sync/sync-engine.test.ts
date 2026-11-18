@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { SyncEngine, MAX_REMOTE_SNAPSHOTS } from './sync-engine.ts';
-import type { SyncApplyPlan } from './risk.ts';
+import { classifyMergePlan, type SyncApplyPlan } from './risk.ts';
 import { hashSection, loadSyncState, saveSyncState, SYNC_STATE_FILE, SYNC_STATE_SCHEMA_VERSION } from './sync-state.ts';
 import { buildAutoApplyPlan } from './autosync-scheduler.ts';
 import { decryptSectionsPayload } from './snapshot-crypto.ts';
@@ -4029,3 +4029,37 @@ test('issue #140 (f) G-44：recordBaseline 指针变了却没给远端观测 →
 function localHashOf(state: { sections: Record<string, { hash: string }> }): string {
   return state.sections['settings']!.hash;
 }
+
+test('Group C(c): merge + applyMergePlan 保留远端分区哈希观测（lastRemoteSections）；同内容新 id 快照不触发下载合并', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-c-remote-obs-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] });
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc'), extra: { now: tickingNow() } });
+    // 设备 B 先推基线，再设远端出现「同 id 不同内容」或设备 A 推的新版
+    await engine.push({ snapshotId: 'sync-base' });
+    const remoteSnap = remoteSettingsSnapshot('sync-remote-1', 'light', 5);
+    seedRemoteSnapshot(transport, remoteSnap);
+
+    const mergePlan = await engine.merge();
+    const split = classifyMergePlan(mergePlan, { firstSync: false });
+    const report = await engine.applyMergePlan(split);
+    assert.equal(report.ok, true);
+
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'sync-remote-1');
+    assert.ok(state.lastRemoteSections !== undefined, 'applyMergePlan 后绝不能把 lastRemoteSections 删掉');
+    assert.deepEqual(state.lastRemoteSections, computeSnapshotMeta(remoteSnap).sections, 'lastRemoteSections 必须是远端快照本身的分区哈希');
+
+    // 远端再推一个「新 id 但分区内容完全相同」的快照 → hasNewRemoteSnapshot() 必须判 false
+    const twinRemote: SyncSnapshot = { ...remoteSnap, id: 'sync-remote-twin', createdAt: '2026-08-17T12:00:00.000Z' };
+    seedRemoteSnapshot(transport, twinRemote);
+    const downloadsBefore = transport.calls.filter((c) => c === 'download').length;
+    assert.equal(await engine.hasNewRemoteSnapshot(), false, '保留了 lastRemoteSections 后，同内容新快照不再触发下载合并');
+    assert.equal(transport.calls.filter((c) => c === 'download').length, downloadsBefore);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});

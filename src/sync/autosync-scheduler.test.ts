@@ -2000,4 +2000,59 @@ test('P2 反向控制：干净的成功轮不写待裁决（不能凭空挂一�
   assert.deepEqual(recorded, []);
 });
 
+test('Group C(a): autoApplyTier=low 纯下行扣下中风险分区 → pendingMerge 落盘 + partial(conflict) + 历史 conflictedSections 含该分区', async () => {
+  const cfg: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0,
+    autoApplyTier: 'low',
+  };
+  const recorded: string[][] = [];
+  const applied: string[][] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote'], ['plugins', 'useRemote']]),
+    applyMergePlan: async (plan: { autoApply: MergeSectionResult[] }) => {
+      const ids = plan.autoApply.map((s) => s.id);
+      applied.push(ids);
+      return { ok: true, applied: ids, restoreId: 'r1', rolledBack: false, review: [], warnings: [] };
+    },
+    push: async () => { throw new Error('纯下行轮不应 push'); },
+    recordPendingMerge: async (sections: readonly string[]) => { recorded.push([...sections]); return null; },
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine: engine as unknown as SyncEngine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.deepEqual(applied, [['settings']]);
+  assert.equal(result.status, 'partial', 'deferredSections 非空时纯下行轮绝不能报 success');
+  assert.equal(result.skipReason, 'conflict');
+  assert.deepEqual(result.conflictedSections, ['plugins']);
+  assert.deepEqual(recorded, [['plugins']], '纯下行扣下的 deferredSections 必须写入 pendingMerge');
+  const hist = getEntries().find((e) => e.status === 'partial');
+  assert.deepEqual(hist?.conflictedSections, ['plugins']);
+  assert.equal(hist?.skipReason, 'conflict');
+});
+
+test('Group C(b): 启动轮纯下行扣下叶级冲突（heldLeafSections）→ pendingMerge 必有记录', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const recorded: string[][] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote'], ['plugins', 'useRemote']]),
+    applyMergePlan: async () => ({
+      ok: true,
+      applied: ['settings'] as never,
+      restoreId: 'r1',
+      rolledBack: false,
+      review: [{ id: 'patch:line-a', sectionId: 'plugins' as never, kind: 'key' as const, description: '叶级冲突' }],
+      warnings: ['有 1 个叶级冲突未裁决（分区：plugins）'],
+    }),
+    recordPendingMerge: async (sections: readonly string[]) => { recorded.push([...sections]); return null; },
+  };
+  const { scheduler } = makeScheduler({ cfg, engine: engine as unknown as SyncEngine, history: [] });
+  const result = await scheduler.runOnce('git', { startup: true, reason: 'startup' });
+  assert.equal(result.status, 'partial');
+  assert.equal(result.skipReason, 'conflict');
+  assert.deepEqual(recorded, [['plugins']], '启动轮扣下的叶级冲突必须进 pendingMerge');
+});
+
 

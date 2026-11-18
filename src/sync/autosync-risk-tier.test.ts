@@ -65,6 +65,7 @@ test('sync-F5：autoApplyTier=low → medium 风险分区（plugins）仍必须�
   };
   const entries: AutosyncHistoryEntry[] = [];
   const appliedPlans: string[][] = [];
+  const recordedPending: string[][] = [];
   const engine = {
     merge: async (): Promise<MergePlan> => ({ sections: [section('settings', 'useRemote'), section('plugins', 'useRemote')] }),
     applyMergePlan: async (plan: { autoApply: MergeSectionResult[] }) => {
@@ -72,6 +73,7 @@ test('sync-F5：autoApplyTier=low → medium 风险分区（plugins）仍必须�
       return { ok: true, applied: plan.autoApply.map((s) => s.id), restoreId: 'r1', rolledBack: false, review: [], warnings: [] };
     },
     push: async () => ({ ok: true, snapshotId: 'snap-1', sections: [] as never, warnings: [] }),
+    recordPendingMerge: async (secs: readonly string[]) => { recordedPending.push([...secs]); return null; },
   };
   const scheduler = new AutoSyncScheduler({
     syncDir: '/tmp',
@@ -93,5 +95,7 @@ test('sync-F5：autoApplyTier=low → medium 风险分区（plugins）仍必须�
   const withSections = entries.find((e) => (e.conflictedSections ?? []).length > 0);
   assert.ok(withSections !== undefined, '被扣下的分区必须写进历史（可见，不静默）');
   assert.deepEqual(withSections!.conflictedSections, ['plugins']);
-  assert.equal(result.status, 'success', '扣下中风险分区不等于整轮失败');
+  assert.equal(result.status, 'partial', '扣下中风险分区终态不得是 success（给 partial + skipReason）');
+  assert.equal(result.skipReason, 'conflict');
+  assert.deepEqual(recordedPending, [['plugins']], '扣下分区必须同步写进 pendingMerge');
 });

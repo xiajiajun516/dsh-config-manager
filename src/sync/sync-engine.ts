@@ -67,7 +67,7 @@ import {
   recordPendingMerge as persistPendingMerge,
   writeMergeBaseline as persistMergeBaseline,
 } from './pending-merge.ts';
-import type { PendingMerge, SyncState } from './sync-state.ts';
+import type { PendingMerge, SectionHashes, SyncState } from './sync-state.ts';
 import { pendingMergeAfterPush, resolveHeldSections, resolvePushTargets, type PushTargets } from './push-skip.ts';
 import { memoAsync } from '../utils/async-once.ts';
 import { hasLocalSectionChanges } from './local-changes.ts';
@@ -534,6 +534,13 @@ export class SyncEngine {
    * 每次 merge() 重设；merge 失败/远端为空时置 null（= 远端 id 未知）。
    */
   private lastMergedRemoteSnapshotId: string | null = null;
+  /**
+   * 最近一次 merge() 命中的**远端快照各分区哈希**（G-44，C 组修复）：
+   * 紧随其后的 applyMergePlan() 推进 lastSnapshotId 时必须同时传给 recordBaseline.remoteSections，
+   * 否则 baseline-record 会在指针变化时 `delete state.lastRemoteSections`，使下轮远端同内容检测退化回比 id。
+   * 加密快照或远端为空时恒为 undefined。
+   */
+  private lastMergedRemoteSections: SectionHashes | undefined = undefined;
   /**
    * 最近一次 merge() 命中的**远端**快照的 sourceHome（issue #45 跨机重定基）。
    * applyMergePlan 构造临时 ZIP 时把它写进 manifest.sourceHome，Importer 才会生成
@@ -1520,6 +1527,7 @@ export class SyncEngine {
     const metas = await this.transport.list();
     if (metas.length === 0) {
       this.lastMergedRemoteSnapshotId = null;
+      this.lastMergedRemoteSections = undefined;
       this.lastMergedRemoteSourceHome = '';
       this.lastMergedPathMappings = [];
       // 远端为空：清掉全部缓存（绝不把上一轮的输入留在内存里被后续调用误用）
@@ -1534,6 +1542,16 @@ export class SyncEngine {
     await this.prepareSnapshot(remote, opts.password);
     // issue #107：记下远端快照是否加密 —— applyMergePlan 据此决定祖先副本也落密文
     this.lastMergedRemoteEncrypted = remote.manifest.encrypted === true;
+    // C 组（G-44）：在墓碑剔除之前保存本次远端快照的分区哈希观测（仅非加密快照）；
+    // applyMergePlan 据此保留 state.lastRemoteSections，绝不拿本机 landed 哈希冒充。
+    const matchedMeta = metas.find((m) => m.id === targetId);
+    if (this.lastMergedRemoteEncrypted || isEncryptedSections(remote.sections)) {
+      this.lastMergedRemoteSections = undefined;
+    } else if (matchedMeta !== undefined && Object.keys(matchedMeta.sections).length > 0) {
+      this.lastMergedRemoteSections = { ...matchedMeta.sections };
+    } else {
+      this.lastMergedRemoteSections = hashSections(remote.sections as Partial<Record<SectionId, SectionData>>);
+    }
     // P1-5：按远端墓碑剔除已删除的会话（三方合并的 remote 侧同样不许复活）
     stripTombstonedSessionsInPlace(remote);
     // 本次合并的远端基准（P0-7）：紧随其后的 applyMergePlan() 用它写基线远端指针
@@ -1856,6 +1874,8 @@ export class SyncEngine {
    */
   async applyMergePlan(apply: SyncApplyPlan, opts: {
     remoteSnapshotId?: string;
+    /** 本次应用对应的远端快照分区哈希观测（G-44）；缺省自动取最近一次 merge() 的观测。 */
+    remoteSections?: SectionHashes;
     snapshotBinding?: TransactionSnapshotContext;
     /**
      * issue #45：路径映射。缺省 = 复用最近一次 merge() 记下的用户映射；
@@ -1988,8 +2008,13 @@ export class SyncEngine {
           ...(pluginStep.removals.length === 0 ? {} : { pluginRemovals: pluginStep.removals, needsRestart: true }),
         };
       }
+      const targetRemoteId = opts.remoteSnapshotId ?? this.lastMergedRemoteSnapshotId ?? '';
+      const sameMergeTarget = opts.remoteSnapshotId === undefined || opts.remoteSnapshotId === this.lastMergedRemoteSnapshotId;
+      const resolvedRemoteSections = opts.remoteSections
+        ?? (opts.preserveAncestor !== true && sameMergeTarget ? this.lastMergedRemoteSections : undefined);
       await this.recordBaseline(tempSnapshot.id, landed, undefined, {
-        remoteSnapshotId: opts.remoteSnapshotId ?? this.lastMergedRemoteSnapshotId ?? '',
+        remoteSnapshotId: targetRemoteId,
+        ...(resolvedRemoteSections !== undefined ? { remoteSections: resolvedRemoteSections } : {}),
         ...(opts.preserveAncestor !== undefined ? { preserveAncestor: opts.preserveAncestor } : {}),
         ...(opts.pendingMerge !== undefined ? { pendingMerge: opts.pendingMerge } : {}),
         ...(opts.ancestorPassword !== undefined ? { ancestorPassword: opts.ancestorPassword } : {}),
