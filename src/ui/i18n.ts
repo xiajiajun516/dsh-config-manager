@@ -194,6 +194,8 @@ export const uiZh = {
   // 自动同步（方案 A：宿主后台调度）
   'sync.autosyncNever': '从未运行',
   'sync.autosyncLastRun': '上次运行：{time}',
+  'sync.autosyncCheckedUpToDate': '已检查（无变化）· {time}',
+  'sync.autosyncCheckedAt': '最近检查：{time}',
   'sync.autosyncSuccess': '成功',
   'sync.autosyncSkipped': '已跳过',
   'sync.autosyncFailed': '失败',
@@ -699,6 +701,8 @@ export const uiEn: Record<UiTextKey, string> = {
   'sync.importFailed': 'Import failed (rolled back)',
   'sync.autosyncNever': 'Never run',
   'sync.autosyncLastRun': 'Last run: {time}',
+  'sync.autosyncCheckedUpToDate': 'Checked (up to date) · {time}',
+  'sync.autosyncCheckedAt': 'Last check: {time}',
   'sync.autosyncSuccess': 'Success',
   'sync.autosyncSkipped': 'Skipped',
   'sync.autosyncFailed': 'Failed',

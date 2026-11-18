@@ -469,6 +469,8 @@ export async function buildAutosyncStatus(dir: string, channel: SyncTransportTyp
     autoApplyTier: cfg.autoApplyTier ?? DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
     conflictPolicy: cfg.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY,
     ...(cfg.lastRunAt !== undefined ? { lastRunAt: cfg.lastRunAt } : {}),
+    ...(cfg.lastCheckStatus !== undefined ? { lastCheckStatus: cfg.lastCheckStatus } : {}),
+    ...(cfg.lastSyncAt !== undefined ? { lastSyncAt: cfg.lastSyncAt } : {}),
     ...(cfg.lastRunStatus !== undefined ? { lastRunStatus: cfg.lastRunStatus } : {}),
     ...(failureMessage !== undefined ? { lastRunMessage: failureMessage } : {}),
     // issue #79：跳过原因以**码**回传（界面本地化）；不再只留在 info 级日志里
@@ -498,6 +500,8 @@ export async function buildAutosyncStatusByChannel(dir: string): Promise<Record<
       autoApplyTier: cfg.autoApplyTier ?? DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
       conflictPolicy: cfg.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY,
       ...(cfg.lastRunAt !== undefined ? { lastRunAt: cfg.lastRunAt } : {}),
+      ...(cfg.lastCheckStatus !== undefined ? { lastCheckStatus: cfg.lastCheckStatus } : {}),
+      ...(cfg.lastSyncAt !== undefined ? { lastSyncAt: cfg.lastSyncAt } : {}),
       ...(cfg.lastRunStatus !== undefined ? { lastRunStatus: cfg.lastRunStatus } : {}),
       ...(failureMessage !== undefined ? { lastRunMessage: failureMessage } : {}),
       ...(cfg.lastRunSkipReason !== undefined ? { lastRunSkipReason: cfg.lastRunSkipReason } : {}),
@@ -526,6 +530,8 @@ export interface AutosyncStatusResponse {
   /** 双侧都改时的策略（缺省 local：保留本机并推上去） */
   conflictPolicy: AutosyncConflictPolicy
   lastRunAt?: string
+  lastCheckStatus?: 'upToDate' | AutosyncRunStatus
+  lastSyncAt?: string
   lastRunStatus?: AutosyncRunStatus
   lastRunMessage?: string
   /** issue #79：本轮跳过的**结构化原因码**（界面按码取字典；语言在渲染那一刻解析） */

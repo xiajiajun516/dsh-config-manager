@@ -104,19 +104,29 @@ export interface AutosyncConfig {
   autoApplyTier?: AutosyncAutoApplyTier;
   /** 双侧都改时的自动裁决策略（缺省 local：保留本机并推上去） */
   conflictPolicy?: AutosyncConflictPolicy;
-  /** 连续失败计数（用于通知判定） */
+  /** 连续失败计数（真实失败轮递增，真实成功/非空轮清零；upToDate 与 mutation-locked 绝不清零） */
   consecutiveFailures: number;
   /**
-   * 最近一次自动同步**检查时间**（ISO-8601 UTC；含 upToDate 空轮、跳过、失败、成功等每一轮）；
+   * 最近一次自动同步**检查时间**（ISO-8601 UTC；含 upToDate 空轮、跳过、失败、成功等每一轮均刷新）；
    * ''/undefined = 从未检查。启动触发不再使用本字段节流（见 lastSuccessAt）。
    */
   lastRunAt?: string;
+  /**
+   * 最近一次检查的结果 snapshot：`'upToDate'`（本次检查无变化）或真实同步状态。
+   * 仅作 check 组事实记录：upToDate 空轮不覆写「最近一次真实同步结论」字段组，藉本字段区分「从未检查」与「已检查无变化」。
+   */
+  lastCheckStatus?: 'upToDate' | AutosyncRunStatus;
+  /**
+   * 最近一次**真实同步结论**的时间（ISO-8601 UTC；仅真实同步/失败/非 upToDate 跳过写入）；
+   * upToDate 空轮绝不刷新本字段（防止失败状态与真实结论时间被空轮检查覆盖）。
+   */
+  lastSyncAt?: string;
   /**
    * 最近一次自动同步**真实成功同步时间**（ISO-8601 UTC；upToDate 空轮、skipped、partial、failed 均不刷新）。
    * 用途：`shouldTriggerStartupRun` 的重启节流基线；读不到（旧配置 / 从未成功同步）视为从未成功（立即跑启动轮）。
    */
   lastSuccessAt?: string;
-  /** 最近一次自动同步执行状态 */
+  /** 最近一次真实同步执行状态（upToDate 空轮不覆写，防止 failed 被洗白） */
   lastRunStatus?: AutosyncRunStatus;
   lastRunMessage?: string;
   /**
@@ -176,6 +186,16 @@ function parseV1Channel(obj: Record<string, unknown>): AutosyncConfig {
     cfg.conflictPolicy = obj['conflictPolicy'];
   }
   if (typeof obj['lastRunAt'] === 'string' && obj['lastRunAt'] !== '') cfg.lastRunAt = obj['lastRunAt'];
+  if (
+    obj['lastCheckStatus'] === 'upToDate'
+    || obj['lastCheckStatus'] === 'success'
+    || obj['lastCheckStatus'] === 'skipped'
+    || obj['lastCheckStatus'] === 'failed'
+    || obj['lastCheckStatus'] === 'partial'
+  ) {
+    cfg.lastCheckStatus = obj['lastCheckStatus'];
+  }
+  if (typeof obj['lastSyncAt'] === 'string' && obj['lastSyncAt'] !== '') cfg.lastSyncAt = obj['lastSyncAt'];
   if (typeof obj['lastSuccessAt'] === 'string' && obj['lastSuccessAt'] !== '') cfg.lastSuccessAt = obj['lastSuccessAt'];
   if (typeof obj['lastRunStatus'] === 'string' && (obj['lastRunStatus'] === 'success' || obj['lastRunStatus'] === 'skipped' || obj['lastRunStatus'] === 'failed' || obj['lastRunStatus'] === 'partial')) {
     cfg.lastRunStatus = obj['lastRunStatus'];
@@ -322,6 +342,8 @@ function toChannelPayload(cfg: AutosyncConfig): Record<string, unknown> {
     conflictPolicy: cfg.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY,
   };
   if (cfg.lastRunAt !== undefined && cfg.lastRunAt !== '') payload['lastRunAt'] = cfg.lastRunAt;
+  if (cfg.lastCheckStatus !== undefined) payload['lastCheckStatus'] = cfg.lastCheckStatus;
+  if (cfg.lastSyncAt !== undefined && cfg.lastSyncAt !== '') payload['lastSyncAt'] = cfg.lastSyncAt;
   if (cfg.lastSuccessAt !== undefined && cfg.lastSuccessAt !== '') payload['lastSuccessAt'] = cfg.lastSuccessAt;
   if (cfg.lastRunStatus !== undefined) payload['lastRunStatus'] = cfg.lastRunStatus;
   if (cfg.lastRunMessage !== undefined && cfg.lastRunMessage !== '') payload['lastRunMessage'] = cfg.lastRunMessage;

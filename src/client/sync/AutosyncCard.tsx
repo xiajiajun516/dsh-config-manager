@@ -15,8 +15,8 @@ import type { UiT } from '../../ui/i18n.ts'
 import { Badge, Switch } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import {
-  autosyncFailureMessage, autosyncIntervalMs, autosyncSkipDetail, autosyncStatusText, computeAutosyncCountdown,
-  formatIntervalDuration,
+  autosyncFailureMessage, autosyncIntervalMs, autosyncLastCheckText, autosyncSkipDetail, autosyncStatusText,
+  computeAutosyncCountdown, formatIntervalDuration,
 } from './sync-view.ts'
 // 展示文本渲染前统一脱敏（与 ErrorBanner/ReportView 同规矩）
 import { redact } from '../../security/redaction.ts'
@@ -98,6 +98,7 @@ export function AutosyncCard({ t, uiT, settings, busy, pendingMerge, onToggleAut
   const autoApplyTier: AutosyncAutoApplyTier = settings.autosync?.autoApplyTier ?? 'medium'
   const conflictPolicy: AutosyncConflictPolicy = settings.autosync?.conflictPolicy ?? 'local'
   const autosyncText = settings.autosync !== null ? autosyncStatusText(settings.autosync, uiT) : t('autosync.statusNever')
+  const lastCheckText = settings.autosync !== null ? autosyncLastCheckText(settings.autosync, uiT) : null
   /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期）—— elapsedMs 先经本地推进，见 hook 注释 */
   const snapshotElapsedMs = settings.autosync !== null && settings.autosync.elapsedMs >= 0
     ? settings.autosync.elapsedMs
@@ -227,6 +228,11 @@ export function AutosyncCard({ t, uiT, settings, busy, pendingMerge, onToggleAut
             <Badge kind={settings.autosync?.lastRunStatus === 'failed' ? 'error' : settings.autosync?.lastRunStatus === 'skipped' ? 'warn' : 'info'}>
               {autosyncText}
             </Badge>
+            {lastCheckText !== null && (
+              <Badge kind="info">
+                {lastCheckText}
+              </Badge>
+            )}
             {autosyncCountdownMs !== null && settings.autosyncEnabled && (
               <Badge kind="info">
                 {autosyncCountdownMs <= 0

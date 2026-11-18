@@ -7,8 +7,8 @@ import assert from 'node:assert/strict'
 
 import type { ApplyItemsResponse, AutosyncStatusResponse, SyncConfirmItem } from './sync-api.ts'
 import {
-  applyItemsReportView, autosyncIntervalMs, autosyncStatusText, buildAdoptions, confirmListSummary,
-  computeAutosyncCountdown, GIST_LARGE_SECTION_HINT_KEY, gistSessionsRiskKey, hasBulkDecidable,
+  applyItemsReportView, autosyncIntervalMs, autosyncLastCheckText, autosyncStatusText, buildAdoptions,
+  confirmListSummary, computeAutosyncCountdown, GIST_LARGE_SECTION_HINT_KEY, gistSessionsRiskKey, hasBulkDecidable,
   isBulkDecidable, isReviewItem, isToolchainChangeItem,
   keepLocalAll, needsGitToken, reviewItems, summarizeConfirmItems, useRemoteAll,
 } from './sync-view.ts'
@@ -286,10 +286,21 @@ test('sync-view: autosyncStatusText 覆盖未运行 / 各状态', () => {
   assert.match(autosyncStatusText(ran, zhUiT), /成功/)
   const failed: AutosyncStatusResponse = {
     enabled: true, interval: '30m', consecutiveFailures: 3, elapsedMs: 0,
-    lastRunAt: '2026-08-17T10:00:00.000Z', lastRunStatus: 'failed', lastRunMessage: '认证失败',
+    lastRunAt: '2026-08-17T10:05:00.000Z', lastSyncAt: '2026-08-17T10:00:00.000Z',
+    lastRunStatus: 'failed', lastRunMessage: '认证失败',
   }
   assert.match(autosyncStatusText(failed, zhUiT), /失败/)
   assert.match(autosyncStatusText(failed, zhUiT), /连续失败 3 次/)
+  // P0-2：状态徽章引用的应是 lastSyncAt（10:00），而检查时间另通过 autosyncLastCheckText 展示（10:05）
+  assert.ok(autosyncLastCheckText(failed, zhUiT)?.includes('最近检查：'), '后续检查时间单独可见')
+  // P0-2：仅跑过 upToDate 检查、尚无真实同步结论 → 如实报已检查（无变化），不报「成功」也不报「从未运行」
+  const checkedOnly: AutosyncStatusResponse = {
+    enabled: true, interval: '30m', consecutiveFailures: 0, elapsedMs: 0,
+    lastRunAt: '2026-08-17T10:05:00.000Z', lastCheckStatus: 'upToDate',
+  }
+  const checkedText = autosyncStatusText(checkedOnly, zhUiT)
+  assert.match(checkedText, /已检查（无变化）/)
+  assert.doesNotMatch(checkedText, /成功|从未运行/)
 })
 
 /* ---------------------- 诚实性：整体回滚「未完成」必须单独成态 ---------------------- */

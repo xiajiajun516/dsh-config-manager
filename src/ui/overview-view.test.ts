@@ -133,6 +133,19 @@ test('buildOverviewMetrics: 同步 配置状态', () => {
   const off = buildOverviewMetrics(baseInputs({ sync: { configured: false } }))[3]!
   assert.equal(off.valueKey, 'state.off')
   assert.equal(off.metaKey, 'meta.syncOff')
+
+  const failOne = buildOverviewMetrics(baseInputs({
+    sync: { configured: true, lastSyncAt: '2026-09-10T10:00:00Z', autosync: { enabled: true, lastRunStatus: 'failed', consecutiveFailures: 1 } },
+  }))[3]!
+  assert.equal(failOne.metaKey, 'meta.autosyncFail')
+  assert.equal(failOne.metaTone, 'warn')
+
+  const failMany = buildOverviewMetrics(baseInputs({
+    sync: { configured: true, lastSyncAt: '2026-09-10T10:00:00Z', autosync: { enabled: true, lastRunStatus: 'failed', consecutiveFailures: 3 } },
+  }))[3]!
+  assert.equal(failMany.metaKey, 'meta.autosyncFailCount')
+  assert.deepEqual(failMany.metaParams, { count: '3' })
+  assert.equal(failMany.metaTone, 'warn')
 })
 
 /* ---------------- 健康判定 ---------------- */
@@ -154,6 +167,15 @@ test('overviewHealth: SAFE MODE 优先 error；全空 warn；正常 ok', () => {
   }))
   assert.equal(scheduleFail.kind, 'warn')
   assert.equal(scheduleFail.textKey, 'health.scheduleFailed')
+
+  const autosyncFail = overviewHealth(baseInputs({
+    backups: [{ name: 'a.zip', sizeBytes: 1, mtimeMs: NOW, source: 'manual' }],
+    snapshots: [{ createdAt: '2026-09-10T00:00:00Z', entryCount: 1 }],
+    schedule: { enabled: true, lastRunStatus: 'ok' },
+    sync: { configured: true, autosync: { enabled: true, lastRunStatus: 'failed', consecutiveFailures: 2 } },
+  }))
+  assert.equal(autosyncFail.kind, 'warn')
+  assert.equal(autosyncFail.textKey, 'health.autosyncFailed')
 
   /* 有备份、但自动备份是关的 → 仍要 warn：状态条不能与脚下「Auto backup Off」并列报健康 */
   const autoOff = overviewHealth(baseInputs({

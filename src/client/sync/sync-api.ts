@@ -645,6 +645,8 @@ export interface AutosyncStatusResponse {
   /** 双侧都改时的策略（缺省 local：保留本机并推上去） */
   conflictPolicy?: AutosyncConflictPolicy;
   lastRunAt?: string;
+  lastCheckStatus?: 'upToDate' | AutosyncRunStatus;
+  lastSyncAt?: string;
   lastRunStatus?: AutosyncRunStatus;
   lastRunMessage?: string;
   /**

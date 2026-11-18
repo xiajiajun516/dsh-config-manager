@@ -116,7 +116,7 @@ export const SELF_IMPORT_BLOCKED_CODE = "self-import-blocked";
  * 少一个都会让 self 分区的 hashSection 每轮翻新（issue #119）。
  */
 type RunStateKeyOf<T> = {
-  [K in keyof T]-?: K extends 'consecutiveFailures' | 'lastSuccessAt' | `lastRun${string}` ? K : never;
+  [K in keyof T]-?: K extends 'consecutiveFailures' | 'lastSuccessAt' | 'lastSyncAt' | 'lastCheckStatus' | `lastRun${string}` ? K : never;
 }[keyof T];
 
 type SchedulerRunStateKey = RunStateKeyOf<AutosyncConfig> | RunStateKeyOf<BackupScheduleConfig>;
@@ -130,6 +130,8 @@ type SchedulerRunStateKey = RunStateKeyOf<AutosyncConfig> | RunStateKeyOf<Backup
  */
 const VOLATILE_RUN_STATE_KEY_LIST = [
   'lastRunAt',
+  'lastCheckStatus',
+  'lastSyncAt',
   'lastSuccessAt',
   'lastRunStatus',
   'lastRunMessage',

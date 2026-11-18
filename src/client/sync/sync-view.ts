@@ -1184,20 +1184,46 @@ export function autosyncFailureMessage(
   const message = status.lastRunMessage
   return message === undefined || message === '' ? null : message
 }
-/** 自动同步状态行的可读文案（未运行 / 上次状态 / 连续失败计数）。 */
+/** 自动同步状态行的可读文案（未运行 / 仅检查无变化 / 上次真实同步状态 / 连续失败计数）。 */
 export function autosyncStatusText(status: AutosyncStatusResponse, t: UiT): string {
-  if (status.lastRunAt === undefined || status.lastRunAt === '' || status.lastRunStatus === undefined) {
-    return t('sync.autosyncNever');
+  // P0-2：最近一次「真实同步结论」可能早于最近一次 upToDate 检查时间 —— 状态徽章只引用
+  // 真实结论时间 lastSyncAt（旧配置缺省回落 lastRunAt），绝不把后续空轮时间当成成功/失败时间。
+  if (status.lastRunStatus !== undefined) {
+    const statusText = status.lastRunStatus === 'success'
+      ? t('sync.autosyncSuccess')
+      : status.lastRunStatus === 'skipped'
+        ? t('sync.autosyncSkipped')
+        : status.lastRunStatus === 'partial'
+          ? t('sync.autosyncPartial')
+          : t('sync.autosyncFailed');
+    const conclusionAt = status.lastSyncAt !== undefined && status.lastSyncAt !== ''
+      ? status.lastSyncAt
+      : status.lastRunAt;
+    const base = conclusionAt !== undefined && conclusionAt !== ''
+      ? ` · ${t('sync.autosyncLastRun', { time: formatDateTime(conclusionAt) })}`
+      : '';
+    const fail = status.consecutiveFailures > 0 ? ` · ${t('sync.autosyncFailCount', { n: String(status.consecutiveFailures) })}` : '';
+    return `${statusText}${base}${fail}`;
   }
-  const statusText = status.lastRunStatus === 'success'
-    ? t('sync.autosyncSuccess')
-    : status.lastRunStatus === 'skipped'
-      ? t('sync.autosyncSkipped')
-      : status.lastRunStatus === 'partial'
-        ? t('sync.autosyncPartial')
-        : t('sync.autosyncFailed');
-  const time = formatDateTime(status.lastRunAt);
-  const base = t('sync.autosyncLastRun', { time });
-  const fail = status.consecutiveFailures > 0 ? ` · ${t('sync.autosyncFailCount', { n: String(status.consecutiveFailures) })}` : '';
-  return `${statusText} · ${base}${fail}`;
+  // 从未产生真实同步变化，但已跑过 upToDate 检查：如实报「已检查（无变化）」，不写「成功」也不写「从未运行」。
+  if (status.lastRunAt !== undefined && status.lastRunAt !== '') {
+    return t('sync.autosyncCheckedUpToDate', { time: formatDateTime(status.lastRunAt) });
+  }
+  return t('sync.autosyncNever');
+}
+
+/**
+ * 若最近一次检查时间（lastRunAt）晚于最近一次真实同步结论时间（lastSyncAt），
+ * 返回可单独展示的检查时间提示；否则返回 null（不重复刷同一个时间戳）。
+ */
+export function autosyncLastCheckText(
+  status: Pick<AutosyncStatusResponse, 'lastRunAt' | 'lastSyncAt' | 'lastRunStatus'>,
+  t: UiT,
+): string | null {
+  if (status.lastRunStatus === undefined) return null;
+  if (status.lastRunAt === undefined || status.lastRunAt === '') return null;
+  if (status.lastSyncAt === undefined || status.lastSyncAt === '' || status.lastRunAt === status.lastSyncAt) {
+    return null;
+  }
+  return t('sync.autosyncCheckedAt', { time: formatDateTime(status.lastRunAt) });
 }

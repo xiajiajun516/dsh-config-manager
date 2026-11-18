@@ -239,5 +239,19 @@ test('Group B(c): 缺少 lastSuccessAt 的旧 v1/v2 sync-autosync.json 读入不
     assert.equal(git.enabled, true);
     assert.equal(git.lastRunAt, '2026-11-10T10:00:00.000Z');
     assert.equal(git.lastSuccessAt, undefined);
+    assert.equal(git.lastSyncAt, undefined);
+    assert.equal(git.lastCheckStatus, undefined);
+
+    // P0-2：lastSyncAt 与 lastCheckStatus 读写往返
+    await writeAutosyncConfig(dir, 'git', {
+      ...git,
+      lastRunAt: '2026-11-10T10:05:00.000Z',
+      lastCheckStatus: 'upToDate',
+      lastSyncAt: '2026-11-10T10:00:00.000Z',
+    });
+    const roundtrip = await readAutosyncConfig(dir, 'git');
+    assert.equal(roundtrip.lastRunAt, '2026-11-10T10:05:00.000Z');
+    assert.equal(roundtrip.lastCheckStatus, 'upToDate');
+    assert.equal(roundtrip.lastSyncAt, '2026-11-10T10:00:00.000Z');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

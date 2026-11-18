@@ -1154,7 +1154,9 @@ test('双通道：git/webdav 同时 enabled → 各自独立排期；runOnce 写
   const result = await scheduler.runOnce('webdav');
   assert.equal(result.status, 'success', 'webdav 通道照常执行');
   assert.deepEqual(configs.git, gitBefore, 'git 通道配置未被 webdav 运行改变');
-  assert.equal(configs.webdav.lastRunStatus, 'success', 'webdav 通道写入自己的运行状态');
+  assert.equal(configs.webdav.lastCheckStatus, 'upToDate', 'webdav 通道记录本次检查状态为 upToDate');
+  assert.ok(configs.webdav.lastRunAt, 'webdav 通道写入自己的检查时间');
+  assert.equal(configs.webdav.lastRunStatus, undefined, 'upToDate 空轮不得写入真实同步结论');
 });
 test('审计 P5-2：一条通道到点只重排它自己，不得连带清掉另一条通道的定时器', async () => {
   const configs = {} as Record<SyncTransportType, AutosyncConfig>;
@@ -2053,6 +2055,94 @@ test('Group C(b): 启动轮纯下行扣下叶级冲突（heldLeafSections）→ 
   assert.equal(result.status, 'partial');
   assert.equal(result.skipReason, 'conflict');
   assert.deepEqual(recorded, [['plugins']], '启动轮扣下的叶级冲突必须进 pendingMerge');
+});
+
+test('Group D（P0-2）：upToDate 空轮不洗白 failed 状态与连续失败计数；3 连败告警照常触发；真实成功后才清零', async () => {
+  let nowMs = Date.parse('2026-11-18T10:00:00.000Z');
+  const warnings: string[] = [];
+  let shouldFail = true;
+  let dirty = true;
+  const cfg: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: true,
+  };
+  let saved = cfg;
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => dirty,
+    push: async () => {
+      if (shouldFail) throw new Error('502 Bad Gateway');
+      return { ok: true, snapshotId: 'snap-ok', sections: [] as never, warnings: [] };
+    },
+  };
+  const logger = {
+    level: 'info' as const,
+    debug: () => {},
+    info: () => {},
+    warn: (m: string) => { warnings.push(m); },
+    error: () => {},
+  };
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp',
+    host: { log: logger },
+    makeSyncEngine: () => engine as unknown as SyncEngine,
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(nowMs),
+    readConfig: async () => saved,
+    writeConfig: async (_ch, c) => { saved = c; },
+    readSyncConfigFn: async () => ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } }),
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+  });
+
+  // 第 1 次真实失败（T0）
+  const r1 = await scheduler.runOnce('git', { reason: 'local-change' });
+  assert.equal(r1.status, 'failed');
+  assert.equal(saved.lastRunStatus, 'failed');
+  assert.equal(saved.consecutiveFailures, 1);
+  assert.equal(saved.lastRunMessage, '502 Bad Gateway');
+  assert.equal(saved.lastSyncAt, '2026-11-18T10:00:00.000Z');
+
+  // 第 1 次 remote-poll 空轮（T0 + 5m）：localCheck=false → upToDate
+  nowMs += 5 * 60_000;
+  const poll1 = await scheduler.runOnce('git', { reason: 'remote-poll' });
+  assert.equal(poll1.skipReason, 'upToDate');
+  assert.equal(poll1.consecutiveFailures, 1);
+  assert.equal(saved.lastRunAt, '2026-11-18T10:05:00.000Z', '检查时间刷新');
+  assert.equal(saved.lastCheckStatus, 'upToDate');
+  assert.equal(saved.lastSyncAt, '2026-11-18T10:00:00.000Z', '真实结论时间保持失败那一刻');
+  assert.equal(saved.lastRunStatus, 'failed', 'upToDate 空轮不得洗白 failed');
+  assert.equal(saved.lastRunMessage, '502 Bad Gateway', '错误原文必须保留');
+  assert.equal(saved.consecutiveFailures, 1, '连续失败计数不得归零');
+
+  // 第 2 次失败（T0 + 10m）+ 第 2 次 remote-poll（T0 + 15m）
+  nowMs += 5 * 60_000;
+  await scheduler.runOnce('git', { reason: 'local-change' });
+  assert.equal(saved.consecutiveFailures, 2);
+  nowMs += 5 * 60_000;
+  await scheduler.runOnce('git', { reason: 'remote-poll' });
+  assert.equal(saved.consecutiveFailures, 2);
+  assert.equal(saved.lastRunStatus, 'failed');
+  assert.equal(warnings.length, 0, '2 连败尚未达告警阈值');
+
+  // 第 3 次失败（T0 + 20m）→ 跨过空轮后仍顺利累计到 3 并触发告警
+  nowMs += 5 * 60_000;
+  await scheduler.runOnce('git', { reason: 'local-change' });
+  assert.equal(saved.consecutiveFailures, 3);
+  assert.ok(warnings.some((w) => w.includes('连续失败 3 次')), '跨空轮 3 连败必须触发告警: ' + JSON.stringify(warnings));
+
+  // 第 4 次：网络恢复且真实 push 成功（T0 + 25m）→ 清零失败计数、恢复 success
+  nowMs += 5 * 60_000;
+  shouldFail = false;
+  dirty = true;
+  const okRun = await scheduler.runOnce('git', { reason: 'local-change' });
+  assert.equal(okRun.status, 'success');
+  assert.equal(okRun.consecutiveFailures, 0);
+  assert.equal(saved.lastRunStatus, 'success');
+  assert.equal(saved.consecutiveFailures, 0);
+  assert.equal(saved.lastRunMessage, '');
+  assert.equal(saved.lastSyncAt, '2026-11-18T10:25:00.000Z');
+  assert.equal(saved.lastSuccessAt, '2026-11-18T10:25:00.000Z');
 });
 
 

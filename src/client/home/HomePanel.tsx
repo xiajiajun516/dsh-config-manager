@@ -47,6 +47,7 @@ import {
   overviewFirstSteps,
   overviewHealth,
   relTime,
+  type OverviewMetaKey,
   type OverviewMetricKey,
 } from '../../ui/overview-view.ts'
 import { Badge, Banner, Button, Card, StatusDot, Stepper } from '../common/ui.tsx'
@@ -384,8 +385,8 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
       ? (m.valueKey === 'state.on' ? t('overview.state.on') : t('overview.state.off'))
       : m.value
     let dim: string | null = null
-    if (m.metaKey === 'meta.scheduleFail') {
-      dim = renderMetaShort(m.metaKey, m.metaParams['time'] !== undefined ? Number(m.metaParams['time']) : null, t)
+    if (m.metaKey === 'meta.scheduleFail' || m.metaKey === 'meta.autosyncFail' || m.metaKey === 'meta.autosyncFailCount') {
+      dim = renderMetaShort(m.metaKey, m.metaParams['time'] !== undefined ? Number(m.metaParams['time']) : null, t, m.metaParams)
     } else if (m.key === 'backups' && m.metaParams['time'] !== undefined) {
       dim = renderRelTime(Number(m.metaParams['time']), t)
     }
@@ -640,9 +641,10 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
 
 /** 指标段附注完整文案（告警语义保留前缀）。 */
 function renderMetaShort(
-  metaKey: 'meta.lastBackup' | 'meta.noBackup' | 'meta.scheduleOn' | 'meta.scheduleOff' | 'meta.scheduleFail' | 'meta.syncOn' | 'meta.syncOff' | 'meta.never',
+  metaKey: OverviewMetaKey,
   timeMs: number | null,
   t: TranslateNS<'config-manager'>,
+  params: Readonly<Record<string, string>> = {},
 ): string {
   const time = timeMs !== null ? renderRelTime(timeMs, t) : ''
   switch (metaKey) {
@@ -653,6 +655,8 @@ function renderMetaShort(
     case 'meta.scheduleFail': return t('overview.meta.scheduleFail')
     case 'meta.syncOn': return t('overview.meta.syncOn', { time })
     case 'meta.syncOff': return t('overview.meta.syncOff')
+    case 'meta.autosyncFail': return t('overview.meta.autosyncFail')
+    case 'meta.autosyncFailCount': return t('overview.meta.autosyncFailCount', { count: params['count'] ?? '0' })
     case 'meta.never': return t('overview.meta.never')
   }
 }

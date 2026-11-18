@@ -36,9 +36,17 @@ export interface OverviewScheduleLite {
 }
 
 /** 同步状态最小形状（结构兼容 client/sync-api.ts SyncStatusResponse 子集）。 */
+export interface OverviewAutosyncLite {
+  enabled: boolean
+  lastRunStatus?: 'success' | 'skipped' | 'failed' | 'partial'
+  consecutiveFailures?: number
+}
+
 export interface OverviewSyncLite {
   configured: boolean
   lastSyncAt?: string
+  /** 当前激活通道的自动同步状态（缺省 = 旧接口未提供；仅用于失败可见性，未提供不臆测） */
+  autosync?: OverviewAutosyncLite
 }
 
 /** 迁移历史条目最小形状（结构兼容 core/migration-history.ts StoredMigrationHistoryEntry 子集）。 */
@@ -78,6 +86,8 @@ export type OverviewMetaKey =
   | 'meta.scheduleFail'
   | 'meta.syncOn'
   | 'meta.syncOff'
+  | 'meta.autosyncFail'
+  | 'meta.autosyncFailCount'
   | 'meta.never'
 
 export interface OverviewMetric {
@@ -206,12 +216,16 @@ export function buildOverviewMetrics(inputs: OverviewInputs): OverviewMetric[] {
     }
   }
 
-  // 远程同步：已配置/未配置状态 + 上次同步
+  // 远程同步：已配置/未配置状态 + 上次同步（自动同步启用且上次结论为 failed 时透出故障而非平静显示「已配置」）
   let syncMetric: OverviewMetric
   if (sync === null) {
     syncMetric = { key: 'sync', kind: 'state', value: '', valueKey: undefined, metaKey: null, metaParams: {}, metaTone: 'neutral' }
   } else {
     const lastSyncMs = isoToMs(sync.lastSyncAt)
+    const autosyncFailed = sync.configured
+      && sync.autosync?.enabled === true
+      && sync.autosync.lastRunStatus === 'failed'
+    const failCount = sync.autosync?.consecutiveFailures ?? 0
     syncMetric = {
       key: 'sync',
       kind: 'state',
@@ -219,11 +233,15 @@ export function buildOverviewMetrics(inputs: OverviewInputs): OverviewMetric[] {
       valueKey: sync.configured ? 'state.on' : 'state.off',
       metaKey: !sync.configured
         ? 'meta.syncOff'
-        : lastSyncMs !== null
-          ? 'meta.syncOn'
-          : 'meta.never',
-      metaParams: lastSyncMs !== null ? { time: String(lastSyncMs) } : {},
-      metaTone: 'neutral',
+        : autosyncFailed
+          ? (failCount >= 2 ? 'meta.autosyncFailCount' : 'meta.autosyncFail')
+          : lastSyncMs !== null
+            ? 'meta.syncOn'
+            : 'meta.never',
+      metaParams: autosyncFailed
+        ? (failCount >= 2 ? { count: String(failCount) } : {})
+        : (lastSyncMs !== null ? { time: String(lastSyncMs) } : {}),
+      metaTone: autosyncFailed ? 'warn' : 'neutral',
     }
   }
 
@@ -237,7 +255,7 @@ export type OverviewHealthKind = 'ok' | 'warn' | 'error'
 export interface OverviewHealth {
   kind: OverviewHealthKind
   /** UI 渲染 key（`overview.health.*`）。 */
-  textKey: 'health.ok' | 'health.noBackup' | 'health.scheduleFailed' | 'health.autoBackupOff' | 'health.recovery'
+  textKey: 'health.ok' | 'health.noBackup' | 'health.scheduleFailed' | 'health.autosyncFailed' | 'health.autoBackupOff' | 'health.recovery'
 }
 
 /**
@@ -245,11 +263,12 @@ export interface OverviewHealth {
  * 1. SAFE MODE 激活（有未解决恢复事项）→ error（最高优先，需用户处理）；
  * 2. 已加载且备份与快照均为空 → warn「尚无任何备份」（新装机引导场景）；
  * 3. 定时备份开启但上次运行失败 → warn；
- * 4. 手上已有备份、但定时备份是关的 → warn「自动备份已关闭」（2026-11-01 视觉 pass 新增：
+ * 4. 远程同步已配置且自动同步开启但上次结论为 failed → warn（不因定时备份关闭或后续空轮被掩盖）；
+ * 5. 手上已有备份、但定时备份是关的 → warn「自动备份已关闭」（2026-11-01 视觉 pass 新增：
  *    此前关闭档不判定，于是「All healthy」与「Auto backup Off / Backups 1」同屏并列，
  *    状态条给出的结论与它脚下的指标自相矛盾 —— 一页只在回答「现在安全吗」，
  *    在没有任何后续保护时报健康等于放弃这个结论）；
- * 5. 其余 → ok。
+ * 6. 其余 → ok。
  * 数据未加载（null）不降级健康状态（避免加载闪红）。
  */
 export function overviewHealth(inputs: OverviewInputs): OverviewHealth {
@@ -262,6 +281,10 @@ export function overviewHealth(inputs: OverviewInputs): OverviewHealth {
   }
   if (inputs.schedule !== null && inputs.schedule.enabled && inputs.schedule.lastRunStatus === 'failed') {
     return { kind: 'warn', textKey: 'health.scheduleFailed' }
+  }
+  if (inputs.sync !== null && inputs.sync.configured && inputs.sync.autosync?.enabled === true
+    && inputs.sync.autosync.lastRunStatus === 'failed') {
+    return { kind: 'warn', textKey: 'health.autosyncFailed' }
   }
   if (inputs.schedule !== null && !inputs.schedule.enabled) {
     return { kind: 'warn', textKey: 'health.autoBackupOff' }

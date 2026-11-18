@@ -681,12 +681,12 @@ export class AutoSyncScheduler {
             status: 'skipped',
             skipReason: lockSkipToken(lk.reason),
             createdAt: nowIso,
-            failureCountAtRun: 0,
+            failureCountAtRun: cfg.consecutiveFailures,
           });
           finishRun();
           return {
             status: 'skipped', direction: 'none', skipReason: lockSkipToken(lk.reason), historyId,
-            consecutiveFailures: 0,
+            consecutiveFailures: cfg.consecutiveFailures,
           };
         }
         releaseLock = lk.release;
@@ -701,10 +701,10 @@ export class AutoSyncScheduler {
           // acquire 本身抛错（锁目录 IO/权限）：既不是「被占」也不是「残留」，如实报不可用。
           skipReason: lockSkipToken('unavailable'),
           createdAt: nowIso,
-          failureCountAtRun: 0,
+          failureCountAtRun: cfg.consecutiveFailures,
         });
         finishRun();
-        return { status: 'skipped', direction: 'none', skipReason: lockSkipToken('unavailable'), historyId, consecutiveFailures: 0 };
+        return { status: 'skipped', direction: 'none', skipReason: lockSkipToken('unavailable'), historyId, consecutiveFailures: cfg.consecutiveFailures };
       }
     }
     try {
@@ -1188,14 +1188,16 @@ export class AutoSyncScheduler {
       && (cfg.lastRunAt === undefined || cfg.lastRunAt === '');
 
     // 两端都无变化 → 什么都不做，记为 upToDate（不重复拉取/不空转）。
+    // P0-2：upToDate 空轮不得洗白上一轮真实同步结论（failed 状态、错误信息、连续失败计数）；
+    // 只刷新检查时间 lastRunAt 与检查态 lastCheckStatus（见 writeFinalConfig）。
     if (!remoteNew && !localDirty) {
       const result: AutosyncRunResult = {
         status: 'success', direction: 'none', skipReason: 'upToDate', historyId,
-        consecutiveFailures: 0,
+        consecutiveFailures: cfg.consecutiveFailures,
       };
       await this.appendHistory(channel, {
         direction: 'both', status: 'success', skipReason: 'upToDate',
-        createdAt: nowIso, failureCountAtRun: 0,
+        createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures,
       });
       await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
       return { kind: 'skip', result };
@@ -1230,6 +1232,17 @@ export class AutoSyncScheduler {
     historyId: string,
     channel: SyncTransportType,
   ): Promise<void> {
+    // P0-2：upToDate 空轮只更新「最近一次检查」字段组（lastRunAt + lastCheckStatus），
+    // 原样保留「最近一次真实同步结论」字段组（lastSyncAt / lastSuccessAt / lastRunStatus /
+    // lastRunMessage / lastRunSkipReason / lastRunSkipCount / lastRunHistoryId / consecutiveFailures）。
+    if (result.status === 'success' && result.skipReason === 'upToDate') {
+      await this.writeConfig(channel, {
+        ...base,
+        lastRunAt: nowIso,
+        lastCheckStatus: 'upToDate',
+      });
+      return;
+    }
     const skipReason = result.status === 'failed' ? undefined : result.skipReason;
     const countsConflicts = skipReason === 'conflict' || skipReason === 'conflict-kept-local';
     const skipCount = !countsConflicts || result.conflictedSections === undefined
@@ -1240,6 +1253,8 @@ export class AutoSyncScheduler {
     await this.writeConfig(channel, {
       ...base,
       lastRunAt: nowIso,
+      lastCheckStatus: result.status,
+      lastSyncAt: nowIso,
       ...(lastSuccessAt !== undefined && lastSuccessAt !== '' ? { lastSuccessAt } : {}),
       lastRunStatus: result.status,
       consecutiveFailures: result.consecutiveFailures,
