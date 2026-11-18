@@ -26,7 +26,7 @@
 
 调度器内部的四类触发面（另加一次启动触发）：
 
-- **启动触发**：`start()` 排完定时器就立刻对每个 enabled 通道跑一轮 `startupRuns()`（受各自 `startupMinIntervalMs` 约束，`src/sync/autosync-scheduler.ts:278`、`:425-432`）——「刚开宿主就同步」来自这里，不是定时器。
+- **启动触发**：`start()` 排完定时器就立刻对每个 enabled 通道跑一轮 `startupRuns()`（改按「上一次成功同步时间 `lastSuccessAt`」与各自 `startupMinIntervalMs` 判定；`lastRunAt` 仅作上次检查时间，`upToDate` 空轮不刷新 `lastSuccessAt`）。启动轮支持先合并下行、并在保留 SYN-05 冲突降级的前提下上行离线期间的本地改动。
 - **每通道定时器**：按通道各排各的 interval，改动某通道只重排该通道（`src/sync/autosync-scheduler.ts:336-355`）。
 - **本地改动监听**：`realtimeChannels` 驱动 watcher，回调里对每个 realtime 通道 `trigger('local-change')`（`:398-412`、`:417-421`）。
 - **远端轮询**：`remoteTimers`（缺省 5 min，2026-11-09 由 60 s 上调；见 `src/sync/autosync-config.ts:41`）。本地改动的即时性由文件监听负责，远端新快照晚 5 分钟发现不影响上行。

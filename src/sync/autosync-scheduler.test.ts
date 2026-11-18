@@ -709,18 +709,126 @@ test('#146（follow-up）：引擎回 skipped:all-conflicted → 台账不得记
   assert.equal(skipped.status, 'skipped', '一个分区都没上行 = 成功但跳过（不是 failed，也不是 success）');
   assert.equal(skipped.skipReason, 'all-conflicted');
 });
-test('runOnce: startup 变体 → 只做 pull 合并，不上传', async () => {
+test('runOnce: startup 变体（本地无改动）→ 只做 pull 合并，不上传', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
   const pushCalls: string[] = [];
   const engine = {
+    hasLocalChanges: async () => false,
     merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
     applyMergePlan: async () => ({ ok: true, applied: ['settings'], restoreId: 'r1', rolledBack: false, review: [], warnings: [] }),
     push: async () => { pushCalls.push('push'); return { ok: true, snapshotId: 'x', sections: [] as never, warnings: [] }; },
   };
   const { scheduler } = makeScheduler({ cfg, engine, history: [] });
   const result = await scheduler.runOnce('git', { startup: true });
-  assert.equal(result.direction, 'pull', 'startup 不上传');
-  assert.equal(pushCalls.length, 0, 'startup 变体不调用 push');
+  assert.equal(result.direction, 'pull', '本地无改动时不上传');
+  assert.equal(pushCalls.length, 0, '本地无改动不调用 push');
+});
+
+test('Group B(a): remote-poll upToDate 只刷 lastRunAt 不刷 lastSuccessAt；重启仍跑启动轮', async () => {
+  const MIN = 60_000;
+  let nowMs = Date.parse('2026-11-18T12:00:00.000Z');
+  let gitCfg: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 5 * MIN, consecutiveFailures: 0, realtime: false,
+    lastSuccessAt: new Date(nowMs - 10 * MIN).toISOString(),
+  };
+  let mergeCount = 0;
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => { mergeCount += 1; return makeMergePlan([]); },
+  };
+  const s1 = new AutoSyncScheduler({
+    syncDir: '/tmp/b-a1',
+    host: { log: nullLogger() },
+    makeSyncEngine: () => engine as unknown as SyncEngine,
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(nowMs),
+    readConfig: async (ch) => (ch === 'git' ? gitCfg : { enabled: false, interval: '30m', startupMinIntervalMs: 5 * MIN, consecutiveFailures: 0, realtime: false }),
+    writeConfig: async (ch, c) => { if (ch === 'git') gitCfg = c; },
+    readSyncConfigFn: async () => ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } }),
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+  });
+  const emptyPoll = await s1.runOnce('git', { reason: 'remote-poll' });
+  assert.equal(emptyPoll.skipReason, 'upToDate');
+  assert.equal(gitCfg.lastRunAt, new Date(nowMs).toISOString(), 'lastRunAt 必须记录上次检查时间');
+  assert.equal(gitCfg.lastSuccessAt, new Date(nowMs - 10 * MIN).toISOString(), 'upToDate 空轮不得刷新 lastSuccessAt');
+
+  // 1 分钟后重启宿主（远低于 5 分钟 startupMinIntervalMs，但距 lastSuccessAt 已超 11 分钟）
+  nowMs += 60_000;
+  let startupRan = false;
+  const s2 = new AutoSyncScheduler({
+    syncDir: '/tmp/b-a2',
+    host: { log: nullLogger() },
+    makeSyncEngine: () => ({
+      hasNewRemoteSnapshot: async () => { startupRan = true; return false; },
+      hasLocalChanges: async () => false,
+      merge: async (): Promise<MergePlan> => { mergeCount += 1; return makeMergePlan([]); },
+    }) as unknown as SyncEngine,
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(nowMs),
+    readConfig: async (ch) => (ch === 'git' ? gitCfg : { enabled: false, interval: '30m', startupMinIntervalMs: 5 * MIN, consecutiveFailures: 0, realtime: false }),
+    writeConfig: async (ch, c) => { if (ch === 'git') gitCfg = c; },
+    readSyncConfigFn: async () => ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } }),
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: () => 0 as unknown as ReturnType<typeof setTimeout>,
+    clearTimer: () => {},
+  });
+  s2.start();
+  await new Promise((r) => setTimeout(r, 20));
+  s2.stop();
+  assert.equal(startupRan, true, '空轮后 1 分钟重启必须仍执行启动检查（按 lastSuccessAt 节流）');
+  assert.equal(mergeCount, 0);
+});
+
+test('Group B(b): 启动轮 localDirty 时真的 push，且遇冲突仍受 SYN-05 降级 ask（绝不隐式 force）', async () => {
+  // 1) 无冲突：启动轮应合并远端后立即上行离线本地改动，并刷新 lastSuccessAt
+  const cfgClean: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const pushCalls1: Array<{ force?: boolean } | undefined> = [];
+  const engine1 = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => true,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
+    applyMergePlan: async () => ({ ok: true, applied: ['settings'] as never, restoreId: 'r1', rolledBack: false, review: [], warnings: [] }),
+    push: async (opts?: { force?: boolean }) => {
+      pushCalls1.push(opts);
+      return { ok: true, snapshotId: 'snap-startup-up', sections: ['settings', 'skills'] as never, warnings: [] };
+    },
+  };
+  const h1 = makeScheduler({ cfg: cfgClean, engine: engine1, history: [] });
+  const r1 = await h1.scheduler.runOnce('git', { startup: true, reason: 'startup' });
+  assert.equal(r1.status, 'success');
+  assert.equal(r1.direction, 'both');
+  assert.equal(r1.pushedSnapshotId, 'snap-startup-up');
+  assert.equal(pushCalls1.length, 1, '启动轮离线改动必须触发 push');
+  assert.equal(pushCalls1[0]?.force, undefined, '绝不隐式 force');
+  assert.ok(h1.getConfig().lastSuccessAt, '真实同步成功后必须记录 lastSuccessAt');
+
+  // 2) 冲突 + 显式 local：启动轮仍强制降级 ask（SYN-05 forcedAsk）
+  const cfgLocal: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0,
+    conflictPolicy: 'local', lastSuccessAt: '2026-11-01T10:00:00.000Z',
+  };
+  const pushCalls2: Array<{ force?: boolean } | undefined> = [];
+  const engine2 = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => true,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'conflict']]),
+    push: async (opts?: { force?: boolean }) => {
+      pushCalls2.push(opts);
+      return { ok: false, snapshotId: '', sections: [] as never, warnings: [], conflict: true, message: '远端已推进' };
+    },
+  };
+  const h2 = makeScheduler({ cfg: cfgLocal, engine: engine2, history: [] });
+  const r2 = await h2.scheduler.runOnce('git', { startup: true, reason: 'startup' });
+  assert.equal(pushCalls2.length, 1);
+  assert.equal(pushCalls2[0]?.force, undefined, '启动轮遇冲突+remoteNew 时绝不绕过 SYN-05');
+  assert.equal(r2.forced, true, '必须记录 forced=true');
+  assert.equal(r2.skipReason, 'conflict');
+  assert.equal(h2.getConfig().lastSuccessAt, '2026-11-01T10:00:00.000Z', '冲突跳过不得刷新 lastSuccessAt');
 });
 
 test('runOnce: 连续两次执行不再 skip(conflict)（run 完成收尾）', async () => {

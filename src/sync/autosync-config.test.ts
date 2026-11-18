@@ -23,6 +23,7 @@ test('writeAutosyncConfig + readAutosyncConfig：写入 → 读回字段一致�
       startupMinIntervalMs: 300000,
       consecutiveFailures: 2,
       lastRunAt: '2026-08-16T12:00:00.000Z',
+      lastSuccessAt: '2026-08-16T11:30:00.000Z',
       lastRunStatus: 'skipped',
       lastRunMessage: '有冲突项，跳过',
       lastRunHistoryId: 'hist-1',
@@ -33,6 +34,7 @@ test('writeAutosyncConfig + readAutosyncConfig：写入 → 读回字段一致�
     assert.equal(cfg.startupMinIntervalMs, 300000);
     assert.equal(cfg.consecutiveFailures, 2);
     assert.equal(cfg.lastRunAt, '2026-08-16T12:00:00.000Z');
+    assert.equal(cfg.lastSuccessAt, '2026-08-16T11:30:00.000Z');
     assert.equal(cfg.lastRunStatus, 'skipped');
     assert.equal(cfg.lastRunMessage, '有冲突项，跳过');
     assert.equal(cfg.lastRunHistoryId, 'hist-1');
@@ -216,4 +218,26 @@ test('issue #105 建议 4：shouldRunOnEnable —— 只有「关→开」且已
   // 从未跑过 / 时间读不出：当作「很久没跑」→ 跑
   assert.equal(shouldRunOnEnable({ enabled: false }, { ...base, lastRunAt: undefined }, now), true);
   assert.equal(shouldRunOnEnable({ enabled: false }, { ...base, lastRunAt: 'garbage' }, now), true);
+});
+
+test('Group B(c): 缺少 lastSuccessAt 的旧 v1/v2 sync-autosync.json 读入不报错且回退 undefined', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-autosync-legacy-'));
+  try {
+    // v2 旧格式：只有 lastRunAt，无 lastSuccessAt
+    await fs.writeFile(
+      path.join(dir, AUTOSYNC_CONFIG_FILE),
+      JSON.stringify({
+        schemaVersion: 2,
+        channels: {
+          git: { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, lastRunAt: '2026-11-10T10:00:00.000Z', lastRunStatus: 'success' },
+          webdav: { enabled: false, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 },
+        },
+      }),
+      'utf8',
+    );
+    const git = await readAutosyncConfig(dir, 'git');
+    assert.equal(git.enabled, true);
+    assert.equal(git.lastRunAt, '2026-11-10T10:00:00.000Z');
+    assert.equal(git.lastSuccessAt, undefined);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

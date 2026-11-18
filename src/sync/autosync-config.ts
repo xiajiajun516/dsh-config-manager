@@ -106,8 +106,16 @@ export interface AutosyncConfig {
   conflictPolicy?: AutosyncConflictPolicy;
   /** 连续失败计数（用于通知判定） */
   consecutiveFailures: number;
-  /** 最近一次自动同步执行时间（ISO-8601 UTC）；''/undefined = 从未执行 */
+  /**
+   * 最近一次自动同步**检查时间**（ISO-8601 UTC；含 upToDate 空轮、跳过、失败、成功等每一轮）；
+   * ''/undefined = 从未检查。启动触发不再使用本字段节流（见 lastSuccessAt）。
+   */
   lastRunAt?: string;
+  /**
+   * 最近一次自动同步**真实成功同步时间**（ISO-8601 UTC；upToDate 空轮、skipped、partial、failed 均不刷新）。
+   * 用途：`shouldTriggerStartupRun` 的重启节流基线；读不到（旧配置 / 从未成功同步）视为从未成功（立即跑启动轮）。
+   */
+  lastSuccessAt?: string;
   /** 最近一次自动同步执行状态 */
   lastRunStatus?: AutosyncRunStatus;
   lastRunMessage?: string;
@@ -168,6 +176,7 @@ function parseV1Channel(obj: Record<string, unknown>): AutosyncConfig {
     cfg.conflictPolicy = obj['conflictPolicy'];
   }
   if (typeof obj['lastRunAt'] === 'string' && obj['lastRunAt'] !== '') cfg.lastRunAt = obj['lastRunAt'];
+  if (typeof obj['lastSuccessAt'] === 'string' && obj['lastSuccessAt'] !== '') cfg.lastSuccessAt = obj['lastSuccessAt'];
   if (typeof obj['lastRunStatus'] === 'string' && (obj['lastRunStatus'] === 'success' || obj['lastRunStatus'] === 'skipped' || obj['lastRunStatus'] === 'failed' || obj['lastRunStatus'] === 'partial')) {
     cfg.lastRunStatus = obj['lastRunStatus'];
   }
@@ -313,6 +322,7 @@ function toChannelPayload(cfg: AutosyncConfig): Record<string, unknown> {
     conflictPolicy: cfg.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY,
   };
   if (cfg.lastRunAt !== undefined && cfg.lastRunAt !== '') payload['lastRunAt'] = cfg.lastRunAt;
+  if (cfg.lastSuccessAt !== undefined && cfg.lastSuccessAt !== '') payload['lastSuccessAt'] = cfg.lastSuccessAt;
   if (cfg.lastRunStatus !== undefined) payload['lastRunStatus'] = cfg.lastRunStatus;
   if (cfg.lastRunMessage !== undefined && cfg.lastRunMessage !== '') payload['lastRunMessage'] = cfg.lastRunMessage;
   // 空串/undefined 一律不写 → 本轮成功时，上一轮的跳过码/旧消息在文件里被真正清掉（issue #79）

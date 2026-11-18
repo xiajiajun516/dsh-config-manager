@@ -90,16 +90,16 @@ export function intervalToMs(interval: AutosyncInterval): number {
 }
 
 /**
- * 启动触发下载合并且满足阈值（now - lastRunAt >= startupMinIntervalMs）？
- * lastRunAt 为 undefined（从未运行）→ true。
+ * 启动触发检查并满足阈值（now - lastSuccessAt >= startupMinIntervalMs）？
+ * lastSuccessAt 为 undefined / '' / 不可解析（从未成功同步或旧配置无该字段）→ true（立即跑启动轮）。
  */
 export function shouldTriggerStartupRun(
-  lastRunAt: string | undefined,
+  lastSuccessAt: string | undefined,
   startupMinIntervalMs: number,
   nowMs: number = Date.now(),
 ): boolean {
-  if (lastRunAt === undefined || lastRunAt === '') return true;
-  const lastMs = Date.parse(lastRunAt);
+  if (lastSuccessAt === undefined || lastSuccessAt === '') return true;
+  const lastMs = Date.parse(lastSuccessAt);
   if (Number.isNaN(lastMs)) return true;
   return nowMs - lastMs >= startupMinIntervalMs;
 }
@@ -172,7 +172,7 @@ export function resolveConflictPushPolicy(args: {
  * reason 只进日志，用来说明这一轮是被谁叫醒的（排障时能区分「定时兜底」与「真有事发生」）。
  */
 export interface AutosyncRunOptions {
-  /** true = 启动触发变体：只做下行合并，不上传。 */
+  /** true = 启动触发轮次（支持先下行合并，再在无越权冲突策略保护下推送离线本地改动）。 */
   startup?: boolean;
   /** 触发来源：interval / remote-poll / local-change / manual / startup / enable-toggle。 */
   reason?: string;
@@ -549,7 +549,7 @@ export class AutoSyncScheduler {
     for (const channel of this.realtimeChannels) this.trigger(channel, 'local-change');
   }
 
-  /** 启动触发下载合并（每个 enabled 通道；受各自 startupMinIntervalMs 阈值约束）。 */
+  /** 启动触发同步（每个 enabled 通道；受各自 lastSuccessAt 与 startupMinIntervalMs 阈值约束）。 */
   private async startupRuns(): Promise<void> {
     // 通道清单唯一来源 = SYNC_CHANNELS（此前同一数组在本文件写了两遍：漏改一处即某通道永不排期）
     const channels = SYNC_CHANNELS;
@@ -557,8 +557,8 @@ export class AutoSyncScheduler {
       try {
         const cfg = await this.readConfig(channel);
         if (!cfg.enabled) continue; // 该通道总开关关闭 → 启动触发不执行
-        if (!shouldTriggerStartupRun(cfg.lastRunAt, cfg.startupMinIntervalMs, this.now().getTime())) {
-          this.host.log.info(`自动同步启动触发跳过（${channel}）：距上次运行未达阈值`);
+        if (!shouldTriggerStartupRun(cfg.lastSuccessAt, cfg.startupMinIntervalMs, this.now().getTime())) {
+          this.host.log.info(`自动同步启动触发跳过（${channel}）：距上次成功同步未达阈值`);
           continue;
         }
         await this.runOnce(channel, { startup: true, reason: 'startup' });
@@ -571,7 +571,7 @@ export class AutoSyncScheduler {
   /**
    * 执行一次指定通道的自动同步（§6.1）。
    * @param channel - 同步通道（git / webdav；各自独立的配置与运行状态）
-   * @param opts.startup - true 表示启动触发变体（只做 Phase A+B，不做 Phase C push）
+   * @param opts.startup - true 表示启动触发（支持先合并下行，再按冲突策略保护上行离线本地改动）
    */
   async runOnce(channel: SyncTransportType, opts: AutosyncRunOptions = {}): Promise<AutosyncRunResult> {
     const result = await this.runOnceInternal(channel, opts);
@@ -815,8 +815,9 @@ export class AutoSyncScheduler {
         }
       }
 
-      // Phase C: push 上传（完整双向）—— 仅当本地真有改动才上传（§3.1）；startup 变体不上传。
-      if (!opts.startup && localDirty) {
+      // Phase C: push 上传（完整双向 + 启动轮离线本地改动上行）—— 仅当本地真有改动才上传（§3.1）；
+      // 冲突策略与 SYN-05 高危闸（firstRun / remoteNew 强制降级 ask）同口径约束，绝不隐式 force。
+      if (localDirty) {
         try {
           /**
            * 冲突策略（conflictPolicy，缺省 'ask'）：
@@ -1010,7 +1011,7 @@ export class AutoSyncScheduler {
         }
       }
 
-      // 本轮下行被冲突挡下、且没有可上行内容（startup 变体 / 本地无改动）→ 如实 skipped/conflict。
+      // 本轮下行被冲突挡下、且没有可上行内容（本地无改动）→ 如实 skipped/conflict。
       if (conflictedSections.length > 0) {
         // issue #136：被扣下的叶级冲突也算「待处理分区」（与分区级冲突同列）。
         const skipConflicted = [...new Set([...conflictedSections, ...heldLeafSections])];
@@ -1031,7 +1032,7 @@ export class AutoSyncScheduler {
         return conflictResult;
       }
 
-      // startup 变体 / 仅远端合并：只做 pull 合并（不上传），或远端无新生且本地无改动（已在上方 upToDate 短路上）。
+      // 仅远端合并（无本地改动可推）：只做 pull 合并（不上传），或远端无新生且本地无改动（已在上方 upToDate 短路上）。
       // issue #136：纯下行的告警/待裁决同样算「没全做完」—— 终态不得写成 success。
       const degraded = downlinkWarnings.length > 0 || heldLeafSections.length > 0;
       const pulledConflicted = [...new Set([...deferredSections, ...heldLeafSections])];
@@ -1180,7 +1181,8 @@ export class AutoSyncScheduler {
     const localDirty = opts.localCheck === false ? false : await this.detectLocalChange(engine);
     // SYN-05：首轮（从未跑过）与「远端有新快照」是覆盖风险最高的两个时刻 —— 由
     // resolveConflictPushPolicy 统一把这两处的 ask 标成 forced。
-    const firstRun = cfg.lastRunAt === undefined || cfg.lastRunAt === '';
+    const firstRun = (cfg.lastSuccessAt === undefined || cfg.lastSuccessAt === '')
+      && (cfg.lastRunAt === undefined || cfg.lastRunAt === '');
 
     // 两端都无变化 → 什么都不做，记为 upToDate（不重复拉取/不空转）。
     if (!remoteNew && !localDirty) {
@@ -1229,9 +1231,12 @@ export class AutoSyncScheduler {
     const skipCount = !countsConflicts || result.conflictedSections === undefined
       ? undefined
       : result.conflictedSections.length;
+    const isRealSuccess = result.status === 'success' && result.skipReason !== 'upToDate';
+    const lastSuccessAt = isRealSuccess ? nowIso : base.lastSuccessAt;
     await this.writeConfig(channel, {
       ...base,
       lastRunAt: nowIso,
+      ...(lastSuccessAt !== undefined && lastSuccessAt !== '' ? { lastSuccessAt } : {}),
       lastRunStatus: result.status,
       consecutiveFailures: result.consecutiveFailures,
       // 历史被压掉的轮次没有新记录 id —— 保留上一条真记录的 id，绝不指向不存在的条目。
