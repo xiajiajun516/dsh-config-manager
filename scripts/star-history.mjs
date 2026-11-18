@@ -112,17 +112,35 @@ function buildSeries(stamps) {
 }
 
 /**
- * 左轴刻度：用户口径是「每次都 +100」，不是取整家族（299 颗星会被切成 125 的刻度）。
- * 所以按整百递增，只有星数涨到画不下（>6 格）才升档到 200/500/1000，绝不出现 125 这种刻度。
+ * 左轴口径（用户定的，别改成「取整家族」）：
+ *   1. 上限永远是 100 的整数倍；
+ *   2. 上限至少比当前星数高 TOTAL_HEADROOM —— 362 颗星 → 462 → 500。
+ * 刻度间隔只负责画得下：整百起步，超过 6 格才升档到 200/500/1000，
+ * 所以刻度值仍是整数，上限仍是 100 的倍数（升档只改间隔，不改上限口径）。
  */
-function totalScale(max) {
-  const steps = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]
-  for (const step of steps) {
-    const top = Math.ceil(Math.max(max, step) / step) * step
+export const TOTAL_HEADROOM = 100
+const TOTAL_STEPS = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]
+
+export function totalScale(total) {
+  const base = Math.max(total, 0) + TOTAL_HEADROOM
+  for (const step of TOTAL_STEPS) {
+    const top = Math.ceil(Math.max(base, step) / step) * step
     if (top / step <= 6) return { step, top }
   }
-  const step = steps[steps.length - 1]
-  return { step, top: Math.ceil(max / step) * step }
+  const step = TOTAL_STEPS[TOTAL_STEPS.length - 1]
+  return { step, top: Math.ceil(base / step) * step }
+}
+
+/**
+ * 右轴口径：刻度是整数，且与左轴共用同一组水平线（格数 = intervals，由左轴决定）。
+ * 峰值最多占图高 1/DAILY_HEADROOM（62.5%），给「明天再涨一波」留余量；
+ * 不留余量时单日爆发会把虚线顶到边框，图上只剩噪声看不出趋势。
+ */
+export const DAILY_HEADROOM = 1.6
+
+export function dailyScale(peak, intervals) {
+  const step = Math.max(1, Math.ceil((Math.max(peak, 0) * DAILY_HEADROOM) / intervals))
+  return { step, top: step * intervals }
 }
 
 const r2 = (n) => Math.round(n * 100) / 100
@@ -147,12 +165,12 @@ function render(series, theme, repo) {
   const p = PALETTE[theme]
   const { days, total, lastDay } = series
   const n = days.length
-  const { step: totalStep, top: maxTotal } = totalScale(days[n - 1].cumulative)
+  const { step: totalStep, top: maxTotal } = totalScale(total)
   const intervals = Math.round(maxTotal / totalStep)
-  // 右侧留出余量：不加余量时单日爆发会把整条虚线拉到顶，图只看得到噪声、看不出趋势。
-  // 步长取整到整数格，右轴标签才是整数、且与左轴共用同一条网格线。
-  const dailyStep = Math.max(1, Math.ceil((Math.max(...days.map((d) => d.added)) * 1.55) / intervals))
-  const maxDaily = dailyStep * intervals
+  // 单日新增口径见 dailyScale：峰值只占 62.5% 图高，留出的余量就是「右轴容量」。
+  const peakIndex = days.reduce((best, d, i) => (d.added > days[best].added ? i : best), 0)
+  const peak = days[peakIndex].added
+  const { step: dailyStep, top: maxDaily } = dailyScale(peak, intervals)
   const xAt = (i) => (n === 1 ? PAD_L : PAD_L + (i / (n - 1)) * PLOT_W)
   const yTotal = (v) => PAD_T + PLOT_H - (v / maxTotal) * PLOT_H
   const yDaily = (v) => PAD_T + PLOT_H - (v / maxDaily) * PLOT_H
@@ -184,8 +202,6 @@ function render(series, theme, repo) {
   }).join('\n')
 
   // 单日新增只标最高那一根：读者一眼看到的应该是「高峰有多高」，而不是自己数格子。
-  const peakIndex = days.reduce((best, d, i) => (d.added > days[best].added ? i : best), 0)
-  const peak = days[peakIndex].added
   const peakY = yDaily(peak)
   const peakX = xAt(peakIndex)
   const peakLabel = String(peak)
@@ -276,8 +292,12 @@ async function main() {
   for (const w of written) console.log(`  ${w.changed ? (DRY_RUN ? '会更新' : '已更新') : '无变化'}: ${w.file}`)
 }
 
-main().catch((err) => {
-  console.error(`生成星标图失败：${err && err.message ? err.message : err}`)
-  console.error('已有 SVG 未被修改。')
-  process.exitCode = 1
-})
+// 供测试 import 时必须不触发取数：只有被直接当脚本运行时才跑 main。
+const invokedDirectly = Boolean(process.argv[1]) && resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase()
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error(`生成星标图失败：${err && err.message ? err.message : err}`)
+    console.error('已有 SVG 未被修改。')
+    process.exitCode = 1
+  })
+}
