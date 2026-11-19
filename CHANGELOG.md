@@ -32,6 +32,18 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🔧 变更 · Changed
+
+- **增强自动同步的可观测性、边界明示与局部改动监听**：首页健康状态条、同步页通道卡片与同步历史现已直接透出自动同步失败与待裁决冲突入口并展示告警与降级明细，开启实时同步时的倒计时改为与实际轮询周期一致；加密选项与分区设置页明确提示加密快照和仅手动同步的分区不会参与后台自动同步，界面默认策略与后台「保留冲突待确认」保持一致，且本地改动监听现已覆盖到工具连接器存储且在监听器异常退化后能有限重试重挂。
+  **Improved auto-sync visibility, explicit boundary notices, and file-watch coverage**: the Home health strip, channel cards, and sync history now surface direct actions for failed runs and pending conflicts along with run warnings and forced-review badges, while aligning the live countdown with the active poll interval; encryption and section settings clearly explain that encrypted snapshots and manual-only sections are excluded from background auto sync; UI defaults now match the ask-on-conflict policy; and local file watching covers MCP connector storage and reattaches with bounded backoff after errors.
+
+### 🐛 修复 · Fixed
+
+- **修复后台自动同步断网误锁插件与重启后漏同步的问题**：可重试的网络断开、超时、服务端异常与认证失败不再把插件全局锁死成只读保护状态（半回滚与无法定性的错误仍严格阻断写入）；启动同步判定改为追踪上一次真实成功同步而非最近一次无变化空检查，同时放开启动轮在冲突策略保护下推送离线期间的本地改动，并防止后续无变化检查掩盖失败状态、计数或历史诊断文案。
+  **Fixed false read-only lockouts and missed startup syncs in background auto sync**: retryable network, timeout, server, and authentication failures no longer lock the whole plugin in durable read-only safe mode (while incomplete rollbacks and unproved errors still block writes); startup sync throttling now uses the last genuine sync timestamp instead of empty check runs and pushes offline local edits under conflict protection; and subsequent no-op polls no longer mask prior failure status, counts, or overview warnings.
+- **修复自动同步扣下冲突无入口、阻塞无冲突推送与重复开销的问题**：纯下行或启动轮因风险分级或细粒度冲突扣下的分区不再静默记为成功且统一进入待裁决并保留远端内容指纹；个别分区仍在等待冲突裁决时，未冲突本地改动仍可继续上行推送，且后台轮询不会反复整包重下同一份已知冲突快照；同一轮后台同步复用未修改分区的本地导出结果，连续失败按指数退避节流后台重试（上限 1 小时），短暂环境锁冲突挂起的本地改动也会自动排队补推。
+  **Fixed lost conflict review state, blocked clean pushes, and redundant round work in auto sync**: sections held back during pull or startup runs due to risk tier or leaf conflicts now enter pending conflict review with non-success status and preserved remote hashes; non-conflicting local edits can push while other sections remain held for review and identical pending remote snapshots are no longer re-downloaded every poll; unchanged local exports are reused within a single sync round; consecutive failures apply capped exponential backoff up to one hour; and local edits deferred by a busy environment lock retry automatically.
+
 ## [0.10.0] - 2026-11-15
 
 > **整个插件换过界面之后，救急台和迁移流程也补齐了**：离线救急台（`dcm web`）重排信息架构、换新色板并给出操作反馈，保留策略有了自己的位置；从别的 agent 迁移失败时能一键拿到转换提示词，命令面板（`⌘K`）直达回滚台账，长清单按批展开。同步这边，插件按名字逐条合并、还在等裁决的分区不再悄悄上行，导入插件配置也不再让插件自己的设置页报「配置已被覆盖」。
