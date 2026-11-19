@@ -78,13 +78,14 @@ import {
   buildSelectionRequest, buildSyncChannelBody, buildSyncConfigBody, buildSyncPushBody,
   channelBackfillFromStatus, channelRemoteReady, computeEncryptInvalid, encryptToggle,
   githubPollDecision, hasSelectedSections, includeSecretsToggle, isGithubFlowInFlight, pickSyncPrimary, resolveInitialChannel,
-  needsSessionInventory, saveQueueOnFlush, saveQueueOnRequest, saveQueueOnSettled, toggleSectionSelection,
+  needsSessionInventory, saveQueueOnFlush, saveQueueOnRequest, saveQueueOnSettled, syncChannelSkeletonPlan, toggleSectionSelection,
   validateCloudForm, DEFAULT_S3_PROVIDER,
   SYNC_CONFIG_SAVE_DEBOUNCE_MS,
 } from '../../ui/sync-settings-view.ts'
-import type { CloudFormIssue, SaveQueueState, SyncFormSnapshot } from '../../ui/sync-settings-view.ts'
+import type { CloudFormIssue, SaveQueueState, SyncChannelSkeletonPlan, SyncFormSnapshot } from '../../ui/sync-settings-view.ts'
 // t42 物理拆分：渲染段各自成文件（本领域目录平铺，不新增子目录），主文件只做装配
 import { SyncChannelEntryCard } from './SyncChannelEntryCard.tsx'
+import { SyncChannelSection } from './SyncChannelSection.tsx'
 import { AddChannelCard } from './AddChannelCard.tsx'
 import { ChannelConfigDialog } from './ChannelConfigDialog.tsx'
 import { ChannelClearConfirmDialog } from './ChannelClearConfirmDialog.tsx'
@@ -1354,14 +1355,14 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     )
   }
 
+  const channelSkeleton: SyncChannelSkeletonPlan | null = state.loading && state.statusInfo === null ? syncChannelSkeletonPlan({ form: formOf(state), channel: state.channel }) : null
   /* ------------------------------------------------ 渲染 */
   return (
     <div className={css.viewBody}>
       <SectionTitle title={t('section.label')} tooltip={t('section.description')} />
 
-          {/* M-16：页面级加载失败就地提示（此前 loadError 只写不读，宿主不可达时整页显示
-              「未配置」假象）。此处保留可就地重试的 ErrorBanner —— 它是**页面是否可用**
-              的前提条件，必须常驻到用户重试成功，不能交给会自动消失的 Toast。 */}
+          {/* M-16：页面级加载失败就地提示（此前 loadError 只写不读，宿主不可达时整页显示「未配置」假象）。
+              ErrorBanner 必须常驻到重试成功 —— 它是**页面是否可用**的前提，不能交给会自动消失的 Toast。 */}
           {state.loadError !== null && (
             <ErrorBanner
               error={t('load.failed') + t('common.labelSeparator') + redact(state.loadError)}
@@ -1373,12 +1374,15 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
 
           {/* 2026-11-14 用户要求：页面只留**已配置**的通道卡，其余通道收进末尾那张「添加通道」卡
               （点开选通道 → 进配置弹窗）。此前四张恒显示、理由是「配完 Git 找不到 WebDAV 会被当成
-              bug」；那条理由现在由 AddChannelCard 承接 —— 只要还有未配置通道，它就常驻页面末尾。 */}
-          {renderChannelCard('git')}
-          {renderChannelCard('webdav')}
-          {renderChannelCard('s3')}
-          {renderChannelCard('gist')}
-          <AddChannelCard t={t} channels={SYNC_CHANNEL_ORDER.filter((c) => !remoteReadyOf(c))} onPick={openChannelDialogFor} />
+              bug」；那条理由现在由 AddChannelCard 承接 —— 只要还有未配置通道，它就常驻页面末尾。
+              2026-11-19：首屏（首次加载、未拿到 status）交给 SyncChannelSection 铺真实尺寸骨架。 */}
+          <SyncChannelSection skeleton={channelSkeleton} label={t('common.loading')}>
+            {renderChannelCard('git')}
+            {renderChannelCard('webdav')}
+            {renderChannelCard('s3')}
+            {renderChannelCard('gist')}
+            <AddChannelCard t={t} channels={SYNC_CHANNEL_ORDER.filter((c) => !remoteReadyOf(c))} onPick={openChannelDialogFor} />
+          </SyncChannelSection>
           {/* 通道配置弹窗（渲染段拆到 ChannelConfigDialog，t42）：只配置**打开它的那条通道**，弹窗内不提供切换 */}
           <ChannelConfigDialog
             open={channelOpen}

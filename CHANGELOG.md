@@ -39,6 +39,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **修复远程同步页加载时通道区域闪跳的问题**：通道卡片与「添加通道」入口在数据返回前先以同等高度、同等结构的占位块顶上，加载完成后原地换装，页面不再上下跳动。
+  **Fixed the layout jump when the remote sync page loads**: channel cards and the "add channel" entry are now held by same-size placeholders until data arrives, so content swaps in place instead of shoving the page around.
 - **修复后台自动同步断网误锁插件与重启后漏同步的问题**：可重试的网络断开、超时、服务端异常与认证失败不再把插件全局锁死成只读保护状态（半回滚与无法定性的错误仍严格阻断写入）；启动同步判定改为追踪上一次真实成功同步而非最近一次无变化空检查，同时放开启动轮在冲突策略保护下推送离线期间的本地改动，并防止后续无变化检查掩盖失败状态、计数或历史诊断文案。
   **Fixed false read-only lockouts and missed startup syncs in background auto sync**: retryable network, timeout, server, and authentication failures no longer lock the whole plugin in durable read-only safe mode (while incomplete rollbacks and unproved errors still block writes); startup sync throttling now uses the last genuine sync timestamp instead of empty check runs and pushes offline local edits under conflict protection; and subsequent no-op polls no longer mask prior failure status, counts, or overview warnings.
 - **修复自动同步扣下冲突无入口、阻塞无冲突推送与重复开销的问题**：纯下行或启动轮因风险分级或细粒度冲突扣下的分区不再静默记为成功且统一进入待裁决并保留远端内容指纹；个别分区仍在等待冲突裁决时，未冲突本地改动仍可继续上行推送，且后台轮询不会反复整包重下同一份已知冲突快照；同一轮后台同步复用未修改分区的本地导出结果，连续失败按指数退避节流后台重试（上限 1 小时），短暂环境锁冲突挂起的本地改动也会自动排队补推。

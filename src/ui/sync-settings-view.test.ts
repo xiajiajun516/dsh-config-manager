@@ -20,7 +20,7 @@ import {
   isGithubFlowInFlight, resolveInitialChannel, saveQueueOnFlush, saveQueueOnRequest, saveQueueOnSettled,
   toggleSectionSelection, SYNC_CONFIG_SAVE_DEBOUNCE_MS,
   // 云端点通道（t12）：表单校验与请求体组装
-  channelRemoteReady, cloudFieldIssues, cloudFormFromStatus, validateCloudApiBaseUrl, validateCloudBucket,
+  channelRemoteReady, syncChannelSkeletonPlan, cloudFieldIssues, cloudFormFromStatus, validateCloudApiBaseUrl, validateCloudBucket,
   validateCloudEndpoint, validateCloudForm, validateCloudPrefix, validateCloudRegion, validateGistForm,
   validateGistId, validateS3Form, DEFAULT_S3_PROVIDER, S3_PROVIDERS,
   // issue #79：工作副本自检 → 状态 / 入口判定
@@ -613,3 +613,62 @@ test('issue #115：pickSyncPrimary —— 只有远端确证零快照才让「�
   assert.equal(pickSyncPrimary({ workDir: { facts: { ahead: 0, remoteSnapshots: 0 } } }, 'webdav'), 'sync');
   assert.equal(pickSyncPrimary({ workDir: { facts: { ahead: 0, remoteSnapshots: 0 } } }, 's3'), 'sync');
 });
+
+/* ------------------------------------------------- 首屏通道区骨架（2026-11-19） */
+
+test('首屏骨架：零配置 → 只有「添加通道」行，且不铺任何卡', () => {
+  const plan = syncChannelSkeletonPlan({
+    form: form({ repoUrl: '   ', webdavUrl: '', s3Endpoint: '', gistId: '' }),
+    channel: 'git',
+  })
+  assert.deepEqual(plan.cards, [], '没配任何通道就不铺卡（骨架不假装有内容）')
+  assert.equal(plan.expanded, null)
+  assert.equal(plan.addRow, true, '四个通道都没配 → 添加通道行必然出现')
+})
+
+test('首屏骨架：git 已配置且是活跃通道 → 一张展开卡 + 添加通道行', () => {
+  const plan = syncChannelSkeletonPlan({
+    form: form({ channel: 'git', repoUrl: 'https://github.com/u/r.git', webdavUrl: '' }),
+    channel: 'git',
+  })
+  assert.deepEqual(plan.cards, ['git'])
+  assert.equal(plan.expanded, 'git', '活跃通道缺省展开（与真实渲染 isChannelExpanded 同一条）')
+  assert.equal(plan.addRow, true)
+})
+
+test('首屏骨架：git + webdav 都已配置、活跃通道是 webdav → 两张卡只展开 webdav', () => {
+  const plan = syncChannelSkeletonPlan({
+    form: form({ channel: 'webdav', repoUrl: 'https://github.com/u/r.git', webdavUrl: 'https://dav.example.com/dav' }),
+    channel: 'webdav',
+  })
+  assert.deepEqual(plan.cards, ['git', 'webdav'], '顺序恒为 SYNC_CHANNELS 顺序（与真实渲染一致）')
+  assert.equal(plan.expanded, 'webdav', '只有活跃通道那张带展开体（四张全展开会超画布）')
+})
+
+test('首屏骨架：活跃通道没配置 → 不展开任何卡（不铺会消失的展开体）', () => {
+  const plan = syncChannelSkeletonPlan({
+    form: form({ channel: 'webdav', repoUrl: 'https://github.com/u/r.git', webdavUrl: '   ' }),
+    channel: 'webdav',
+  })
+  assert.deepEqual(plan.cards, ['git'])
+  assert.equal(plan.expanded, null)
+})
+
+test('首屏骨架：四通道全部就绪 → 不再有添加通道行', () => {
+  const plan = syncChannelSkeletonPlan({
+    form: form({
+      channel: 'gist',
+      repoUrl: 'https://github.com/u/r.git',
+      webdavUrl: 'https://dav.example.com/dav',
+      s3Endpoint: 'https://s3.example.com',
+      s3Region: 'us-east-1',
+      s3Bucket: 'bucket',
+      s3AccessKeyId: 'AKID',
+      gistId: '0123456789abcdef',
+    }),
+    channel: 'gist',
+  })
+  assert.deepEqual(plan.cards, ['git', 'webdav', 's3', 'gist'])
+  assert.equal(plan.expanded, 'gist')
+  assert.equal(plan.addRow, false, 'AddChannelCard 在零未配置通道时不渲染（channels.length === 0 → null）')
+})

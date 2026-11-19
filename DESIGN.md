@@ -383,6 +383,14 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   `SkeletonRows` 是**紧凑行**骨架：单行高度对齐真实行（产物库/回退点 52px，图标 20px、
   标题 38% / 说明 24% / 右侧动作 56×20），用于「行结构已知的密集列表」—— 行高对齐后
   数据到货不跳变，因此优先于 `SkeletonList` 的通用卡片块。
+  **区域骨架 = 真实容器类的镜像**（2026-11-19，同步页通道区首个案例
+  `client/sync/SyncChannelSkeleton.tsx`）：当整块内容由**多个已知组件**拼成
+  （通道卡 = `.card` + `.cardTitleRow` + `.statRow` + `.factGrid` + `.actionRowTop` + 折叠体），
+  骨架**照抄那套容器类**、只把文字与控件换成等高的 `.skc*` 占位块，不要另画一套灰条
+  —— 盒模型（内边距 / 行距 / 间隙 / 按钮高度）与真实内容逐项同源，换装时高度才真的不变。
+  「铺几张卡、哪张带展开体、有没有附加行」由 `src/ui/` 的**纯函数**给（与真实渲染共用同一条
+  `channelRemoteReady` 判据，可单测），组件层只做映射；判不了形态的通道**宁可不铺**，
+  也不铺一张随后被拆掉的假卡（骨架建了又消失比没有骨架更晃）。
   **判据（硬）**：页面 / 面板 / 弹窗**正文**的首次加载**一律骨架**，不得只留一个居中转圈
   （用户会先看到空页面再整页跳变；2026-10 全站统一过一次）。`Spinner` 只剩三种场合 ——
   按钮内联（`Button loading`）、`.pickerOverlay` 这类**读取遮罩**、以及
@@ -1379,6 +1387,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 | 产物库·拉取下载（D-04） | `.pullMeta` `.pullStatus` `.pullBadge` `.pullName` `.pullTrack` `.pullBar` | 状态与文件名同排（文件名等宽省略）；标题行「同步中」徽章；复用 `.progressIndeterminate` 做不定态进度（宿主无分区级进度，禁编百分比） |
 | 迁移咨询（D-03） | `.consultWillApply` `.consultDimensionRow` `.consultDimensionName` `.consultDimensionScroll` `.reasonLine::before` | 维度名纯文本 + 分数按档位分色（`consultScoreBadgeKind`）；建议依据行首 3px 圆点；维度区去共享滚框形态只留滚动 |
 | 内容选择器（D-14b） | `.pickerToolbarCount` | 工具条末尾常驻「已选 N / M」（`picker.selectedOf` + `pickerSummary.totalUnits`），合计仍在页脚 |
+| 同步·通道区首屏骨架（2026-11-19） | `.skcCardTitle` `.skcInline` `.skcBadge` `.skcFactLabel` `.skcFactValue` `.skcBtn` `.skcIconSm` `.skcIcon` `.skcGroupLabel` `.skcCategoryDesc` `.skcSelect` `.skcAddIcon` `.skcAddLabel` `.skcAddHint` | `SyncChannelSkeleton` 的占位块：**只给宽高**（+ 圆角），颜色与 shimmer 全来自 `.skeletonBar`；容器一律复用真实类（`.card`/`.cardTitleRow`/`.statRow`/`.factGrid`/`.actionRowTop`/`.syncChannelBody`/`.collapseInner`/`.sectionPickerRow`/`.actionRow[data-split]`/`.snapshotPickerRow`/`.addChannelCard`），高度取自行盒（`.section` 的 `line-height: 1.5` × 各档字号 ⇒ 11px→16.5、12px→18、12.5px→18.75；控件 28、徽章 19、`.iconBtn[data-size='sm']` 18）。**这一组不声明颜色与字号**（`css-token-guard` / `css-scale-guard` 恒定通过，也避免出现第二个色系） |
 | 原语·弹性开关（2026-11-14） | `.switchRoot` `.switchRootDisabled` `.switchInput` `.switchTrack` `.switchKnob` | `common/ui.tsx` 的 `Switch`：32×18 轨道 + 12px 圆点，拨动时圆点用 CSS `transition` 弹簧滑到另一端（240ms、`cubic-bezier(.34,1.28,.6,1)` 过冲约 0.4px，轨道 `overflow: hidden` 把过冲裁在胶囊内 —— 撞边挤压，不是露到轨道外）；**只动 `transform`，且不上 keyframes** ——（a）`left`/`width` 是布局属性，逐帧改会重排掉帧；（b）浏览器在 click 当帧就翻好 `input.checked`，而 React 的提交晚一帧，keyframes 只能从 0% 重播 ⇒ 圆点先瞬移到终点再倒回来（左右横跳），且中段位移钉死只放大 `scaleX` 会读出「中途停顿」（实测 `.tmp/switch-probe.html`：keyframes 版首帧 16 → 0.9 → 1.9…、8px 处停 6 帧；transition 版 0 → 1.4 → … 单调到 16）；仍是原生 `<input type=checkbox role=switch>` + `opacity:0` 覆盖层，键盘/`label htmlFor`/`disabled` 语义全部由浏览器给；挂载首帧不播动画（transition 不从初始样式计算触发），`prefers-reduced-motion` 下退化为瞬时切换 |
 | 环境 | `.duRowNote` `.duRowPolicy` `.cleanupLines` `.cleanupScope` `.cleanupOption` `.cleanupAction` | 磁盘占用每分区一行（名称·过期量·占用·策略），文件数并入 `title`；清理块三行一套（清什么 / 连带回收过期备份 / 释放多少 + 按钮）：统一 6px 行距、体量徽章**紧跟它管辖的那句文案**、卡右缘只留一颗按钮。改前三行各自是 `.actionRow[data-inline]`（`margin:0`）⇒ 零行距、勾选框贴上一行下沿，且两枚徽章一枚靠文字一枚被 spacer 顶到右缘，读成两种摆法 |
 | 恢复 | `.recoveryEmptyBar` `.factBox` | 空态条；事实格带框（与 `.factGrid` 同类名并联，不新增包裹层） |

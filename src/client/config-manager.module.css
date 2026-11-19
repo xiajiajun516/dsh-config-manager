@@ -1972,6 +1972,94 @@ body {
   height: 20px;
 }
 
+/* —— 通道区首屏骨架（client/sync/SyncChannelSkeleton.tsx）——
+   形状由**真实容器类**给出（.card / .cardTitleRow / .statRow / .factGrid / .actionRowTop /
+   .syncChannelBody / .sectionPickerRow / .snapshotPickerRow / .addChannelCard 原样复用），
+   这里只补每个「文字 / 控件」占位块的宽高。高度取自真实元素的**行盒**：
+   .section 的 line-height: 1.5 是数字（按各自 font-size 相乘）⇒ 11px 文本 16.5px、
+   12px 文本 18px、12.5px 文本 18.75px；控件沿用 §3 的三档高度（--cm-h-md / 28px）
+   与 .badge 的 19px。于是骨架卡与真实卡的每一行同高 —— 数据到货时页面不抖。 */
+.skcCardTitle {
+  width: 78px;
+  height: 16.5px;
+  border-radius: var(--cm-r-2);
+}
+
+.skcInline {
+  width: 120px;
+  height: 16.5px;
+}
+
+.skcBadge {
+  width: 62px;
+  height: 19px;
+  border-radius: var(--cm-r-pill);
+}
+
+.skcFactLabel {
+  width: 48px;
+  height: 16.5px;
+}
+
+.skcFactValue {
+  width: 62%;
+  height: 18px;
+}
+
+/* 动作行 / 摘要行里的按钮位：与 Button（md = 28px）同高 */
+.skcBtn {
+  width: 64px;
+  height: var(--cm-h-md);
+}
+
+/* 折叠箭头位：与 .iconBtn[data-size='sm']（18px）同尺寸 */
+.skcIconSm {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--cm-r-1);
+}
+
+/* 快照行的两枚 28px 图标按钮（刷新 / 只读自检） */
+.skcIcon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--cm-r-2);
+}
+
+.skcGroupLabel {
+  width: 40px;
+  height: 16.5px;
+}
+
+.skcCategoryDesc {
+  width: 88px;
+  height: 16.5px;
+}
+
+/* 快照下拉位：与 .selectTrigger 同高、撑满所在事实格 */
+.skcSelect {
+  width: 100%;
+  height: var(--cm-h-md);
+}
+
+/* 「添加通道」行：图标 14px（Icon size=14）、标题 12.5px 行盒、右端通道清单 11px 行盒 */
+.skcAddIcon {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--cm-r-1);
+}
+
+.skcAddLabel {
+  width: 64px;
+  height: 18.75px;
+}
+
+.skcAddHint {
+  margin-left: auto;
+  width: 46%;
+  height: 16.5px;
+}
+
 /* 指标段的「值」占位（首页状态条）：首屏数据没到时用一条骨架替代 <b> 的数字，
    宽度只够表达「这里会有一个数」，高度与数值行一致。 */
 .statValueSkeleton {

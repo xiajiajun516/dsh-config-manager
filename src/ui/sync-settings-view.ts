@@ -531,6 +531,42 @@ export function channelRemoteReady(form: SyncFormSnapshot): boolean {
   return validateCloudForm(form).length === 0
 }
 
+/* ------------------------------------------------- 通道区首屏骨架（形状预判） */
+
+/**
+ * 首屏通道区骨架的形状（2026-11-19 用户要求：骨架必须是**真实尺寸**的填充符，
+ * 数据到货后页面不抖）。
+ *
+ * 判据与真实渲染**共用同一条** `channelRemoteReady`：git / webdav 看持久化地址是否非空，
+ * s3 / gist 看表单是否能通过校验。因此骨架铺几张卡、哪张带展开体、还要不要「添加通道」行，
+ * 与 status 到货后的版面逐项对应 —— 不靠猜，也不铺会凭空消失的假卡。
+ *
+ * 已知边界（**故意不猜**）：首帧只有持久化过的 git / webdav 表单可用，s3 / gist 的字段要等
+ * /sync/status 回填 ⇒ 这两条通道即使已配置，首帧也只按「未配置」处理（它们会在数据到货时
+ * 插入，而不是先出现再消失）。宁少铺一张，也不让用户看到骨架建了又拆。
+ */
+export interface SyncChannelSkeletonPlan {
+  /** 预判为「已配置」的通道（顺序 = SYNC_CHANNELS，与真实渲染顺序一致） */
+  cards: SyncChannelName[]
+  /** 预判展开的那张卡（真实渲染缺省只展开当前活跃通道；不在 cards 里时为 null） */
+  expanded: SyncChannelName | null
+  /** 是否预判「添加通道」行会出现（仍有未配置的通道） */
+  addRow: boolean
+}
+
+/** 首屏骨架形状：入参 = 当前表单快照 + 活跃通道（数据到货后缺省展开它）。 */
+export function syncChannelSkeletonPlan(input: {
+  form: SyncFormSnapshot
+  channel: SyncChannelName
+}): SyncChannelSkeletonPlan {
+  const cards = SYNC_CHANNELS.filter((ch) => channelRemoteReady({ ...input.form, channel: ch }))
+  return {
+    cards,
+    expanded: cards.includes(input.channel) ? input.channel : null,
+    addRow: cards.length < SYNC_CHANNELS.length,
+  }
+}
+
 /**
  * push / 预览的完整请求体 = 通道鉴权 + 分区选择 + 加密选项。安全不变量：
  * - **sessions 必须显式放行**：只有勾选了 sessions 才携带 `sessions`（否则会话绝不随同步上行）；
