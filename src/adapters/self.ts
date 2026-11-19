@@ -140,6 +140,7 @@ const VOLATILE_RUN_STATE_KEY_LIST = [
   // issue #119：跳过码每轮在「写入 / 清空」之间翻转，与 lastRunAt 同性质，漏剔即每轮真推快照
   'lastRunSkipReason',
   'lastRunSkipCount',
+  'lastRunNextRetryAt',
 ] as const satisfies readonly SchedulerRunStateKey[];
 
 const VOLATILE_RUN_STATE_KEYS: ReadonlySet<string> = new Set(VOLATILE_RUN_STATE_KEY_LIST);

@@ -123,6 +123,8 @@ export interface AutosyncConfig {
   lastRunSkipCount?: number;
   /** 最近一次自动同步触发的同步历史条目 id */
   lastRunHistoryId?: string;
+  /** J 项：连续失败后的下次允许后台重试时刻（ISO-8601 UTC；成功/手动配置变更清空） */
+  lastRunNextRetryAt?: string;
 }
 
 /** 全通道配置视图（v2 文件直接读取；status 路由一次返回两个通道的状态）。 */
@@ -184,6 +186,9 @@ function parseV1Channel(obj: Record<string, unknown>): AutosyncConfig {
     cfg.lastRunSkipCount = obj['lastRunSkipCount'];
   }
   if (typeof obj['lastRunHistoryId'] === 'string') cfg.lastRunHistoryId = obj['lastRunHistoryId'];
+  if (typeof obj['lastRunNextRetryAt'] === 'string' && obj['lastRunNextRetryAt'] !== '') {
+    cfg.lastRunNextRetryAt = obj['lastRunNextRetryAt'];
+  }
   return cfg;
 }
 
@@ -276,6 +281,7 @@ export function clearLastRunResult(cfg: AutosyncConfig): AutosyncConfig {
   delete next.lastRunMessage;
   delete next.lastRunSkipReason;
   delete next.lastRunSkipCount;
+  delete next.lastRunNextRetryAt;
   return next;
 }
 
@@ -326,6 +332,7 @@ function toChannelPayload(cfg: AutosyncConfig): Record<string, unknown> {
   if (cfg.lastRunSkipReason !== undefined && cfg.lastRunSkipReason !== '') payload['lastRunSkipReason'] = cfg.lastRunSkipReason;
   if (cfg.lastRunSkipCount !== undefined) payload['lastRunSkipCount'] = cfg.lastRunSkipCount;
   if (cfg.lastRunHistoryId !== undefined && cfg.lastRunHistoryId !== '') payload['lastRunHistoryId'] = cfg.lastRunHistoryId;
+  if (cfg.lastRunNextRetryAt !== undefined && cfg.lastRunNextRetryAt !== '') payload['lastRunNextRetryAt'] = cfg.lastRunNextRetryAt;
   return payload;
 }
 

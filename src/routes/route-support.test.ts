@@ -26,6 +26,7 @@ test('buildAutosyncStatus：回传最近检查组（lastRunAt/lastCheckStatus）
     lastRunStatus: 'failed',
     lastRunMessage: '502 Bad Gateway',
     lastRunHistoryId: 'autosync-h1',
+    lastRunNextRetryAt: '2026-11-18T10:20:00.000Z',
   }
   await writeAutosyncConfig(dir, 'git', cfg)
 
@@ -37,6 +38,7 @@ test('buildAutosyncStatus：回传最近检查组（lastRunAt/lastCheckStatus）
   assert.equal(single.lastRunMessage, '502 Bad Gateway')
   assert.equal(single.consecutiveFailures, 2)
   assert.equal(single.lastRunHistoryId, 'autosync-h1')
+  assert.equal(single.lastRunNextRetryAt, '2026-11-18T10:20:00.000Z')
 
   const byChannel = await buildAutosyncStatusByChannel(dir)
   assert.equal(byChannel.git.lastRunStatus, 'failed')

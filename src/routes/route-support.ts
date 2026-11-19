@@ -479,6 +479,7 @@ export async function buildAutosyncStatus(dir: string, channel: SyncTransportTyp
     consecutiveFailures: cfg.consecutiveFailures,
     elapsedMs,
     ...(cfg.lastRunHistoryId !== undefined ? { lastRunHistoryId: cfg.lastRunHistoryId } : {}),
+    ...(cfg.lastRunNextRetryAt !== undefined ? { lastRunNextRetryAt: cfg.lastRunNextRetryAt } : {}),
   }
 }
 
@@ -509,6 +510,7 @@ export async function buildAutosyncStatusByChannel(dir: string): Promise<Record<
       consecutiveFailures: cfg.consecutiveFailures,
       elapsedMs,
       ...(cfg.lastRunHistoryId !== undefined ? { lastRunHistoryId: cfg.lastRunHistoryId } : {}),
+      ...(cfg.lastRunNextRetryAt !== undefined ? { lastRunNextRetryAt: cfg.lastRunNextRetryAt } : {}),
     }
   }
   const out = {} as Record<SyncTransportType, AutosyncStatusResponse>
@@ -541,6 +543,7 @@ export interface AutosyncStatusResponse {
   consecutiveFailures: number
   elapsedMs: number
   lastRunHistoryId?: string
+  lastRunNextRetryAt?: string
 }
 
 /**

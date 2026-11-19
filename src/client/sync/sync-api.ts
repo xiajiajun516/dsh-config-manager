@@ -663,6 +663,8 @@ export interface AutosyncStatusResponse {
   /** 距上次自动同步已过 ms（host 计算，供 UI 倒计时/立即触发判断） */
   elapsedMs: number;
   lastRunHistoryId?: string;
+  /** 连续失败后的下次允许后台重试时刻（ISO-8601 UTC） */
+  lastRunNextRetryAt?: string;
 }
 
 /** POST /sync/autosync 请求体（transport 指定目标通道；git/webdav 各自独立）。 */

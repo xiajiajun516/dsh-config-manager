@@ -75,6 +75,15 @@ import type { SyncApplyPlan } from './risk.ts';
 import { SyncWatcher } from './sync-watcher.ts';
 import { buildWatchTargets } from './watch-scope.ts';
 import { RoundExportCache } from './round-export-cache.ts';
+import {
+  DEFAULT_LOCK_RETRY_BASE_MS,
+  MAX_LOCK_RETRY_ATTEMPTS,
+  computeLockRetryDelayMs,
+  computeNextRetryIso,
+  effectiveTimerDelayMs,
+  isScheduledTriggerDuringBackoff,
+  isTransientLockSkipReason,
+} from './autosync-backoff.ts';
 
 /** 间隔 → ms 换算（§4.3） */
 export function intervalToMs(interval: AutosyncInterval): number {
@@ -258,6 +267,8 @@ export interface AutoSyncSchedulerOptions {
   makeWatcher?: (opts: WatcherFactoryOptions) => SyncWatcher;
   /** 触发合并窗口（ms）：连续保存/连续远端探测只跑一轮。缺省 3000。 */
   minTriggerGapMs?: number;
+  /** J 项：短暂环境锁阻塞后补偿重试基础延迟（ms；缺省 DEFAULT_LOCK_RETRY_BASE_MS=15s，测试可注入小值） */
+  lockRetryDelayMs?: number;
   /**
    * 读磁盘上仍在等裁决的分区（issue #146 F9）。缺省读 `<syncDir>/sync-state.json` 的 pendingMerge，
    * 与 SyncEngine 的 stateDir 同源（装配处两处都是 syncDir）；测试注入内存实现，免碰真实文件。
@@ -309,7 +320,14 @@ export class AutoSyncScheduler {
   private readonly profile: string | undefined;
   private readonly makeWatcher: ((opts: WatcherFactoryOptions) => SyncWatcher) | undefined;
   private readonly minTriggerGapMs: number;
+  private readonly lockRetryBaseMs: number;
   private readonly readPendingMerge: () => Promise<readonly SectionId[]>;
+  /** J 项：内存中缓存各通道的退避截止时间，供 trigger() 同步过滤后台轮询 */
+  private readonly nextRetryAtMs = new Map<SyncTransportType, number>();
+  /** J 项：因短暂环境锁阻塞（mutation-locked）而未落定的脏通道，待定时重试或下轮轮询补扫 */
+  private readonly pendingDirtyChannels = new Set<SyncTransportType>();
+  private readonly lockRetryTimers = new Map<SyncTransportType, ReturnType<typeof setTimeout>>();
+  private readonly lockRetryAttempts = new Map<SyncTransportType, number>();
   /** SEC-03：已 warn 过的「地址被拒」成因（键 = 通道 + 成因文本），进程内去重。 */
   private readonly reportedConfigIssues = new Set<string>();
   private stopped = false;
@@ -345,6 +363,7 @@ export class AutoSyncScheduler {
     this.profile = opts.profile;
     this.makeWatcher = opts.makeWatcher ?? defaultMakeWatcher;
     this.minTriggerGapMs = opts.minTriggerGapMs ?? 3000;
+    this.lockRetryBaseMs = opts.lockRetryDelayMs ?? DEFAULT_LOCK_RETRY_BASE_MS;
     this.readPendingMerge = opts.readPendingMerge ?? (async () => {
       try {
         return (await loadSyncState(this.syncDir)).pendingMerge?.sections ?? [];
@@ -406,7 +425,12 @@ export class AutoSyncScheduler {
     this.remoteTimers.clear();
     for (const timer of this.gapTimers.values()) this.clearTimer(timer);
     this.gapTimers.clear();
+    for (const timer of this.lockRetryTimers.values()) this.clearTimer(timer);
+    this.lockRetryTimers.clear();
     this.pendingTriggers.clear();
+    this.pendingDirtyChannels.clear();
+    this.lockRetryAttempts.clear();
+    this.nextRetryAtMs.clear();
     this.watcher?.stop();
     this.watcher = null;
     this.realtimeChannels = [];
@@ -415,7 +439,49 @@ export class AutoSyncScheduler {
   /** 重新加载配置（路由 POST /sync/autosync 后调用；重排所有通道定时器）。 */
   async reload(): Promise<void> {
     if (this.stopped) return;
+    this.nextRetryAtMs.clear();
     this.refreshTimers();
+  }
+
+  private syncRetryCache(channel: SyncTransportType, lastRunNextRetryAt: string | undefined): void {
+    if (lastRunNextRetryAt === undefined || lastRunNextRetryAt === '') {
+      this.nextRetryAtMs.delete(channel);
+      return;
+    }
+    const ms = Date.parse(lastRunNextRetryAt);
+    if (Number.isNaN(ms)) this.nextRetryAtMs.delete(channel);
+    else this.nextRetryAtMs.set(channel, ms);
+  }
+
+  private clearDirtyRetry(channel: SyncTransportType): void {
+    this.pendingDirtyChannels.delete(channel);
+    this.lockRetryAttempts.delete(channel);
+    const existing = this.lockRetryTimers.get(channel);
+    if (existing !== undefined) {
+      this.clearTimer(existing);
+      this.lockRetryTimers.delete(channel);
+    }
+  }
+
+  private scheduleDirtyLockRetry(channel: SyncTransportType): void {
+    this.pendingDirtyChannels.add(channel);
+    if (this.stopped) return;
+    const prevTimer = this.lockRetryTimers.get(channel);
+    if (prevTimer !== undefined) {
+      this.clearTimer(prevTimer);
+      this.lockRetryTimers.delete(channel);
+    }
+    const attempt = (this.lockRetryAttempts.get(channel) ?? 0) + 1;
+    this.lockRetryAttempts.set(channel, attempt);
+    if (attempt > MAX_LOCK_RETRY_ATTEMPTS) return;
+    const delayMs = computeLockRetryDelayMs(this.lockRetryBaseMs, attempt);
+    const timer = this.setTimer(() => {
+      this.lockRetryTimers.delete(channel);
+      if (this.stopped) return;
+      this.trigger(channel, 'local-change');
+    }, delayMs);
+    (timer as unknown as { unref?: () => void })?.unref?.();
+    this.lockRetryTimers.set(channel, timer);
   }
 
   private refreshTimers(): void {
@@ -433,11 +499,19 @@ export class AutoSyncScheduler {
    */
   trigger(channel: SyncTransportType, reason: string = 'manual'): void {
     if (this.stopped) return;
-    if (this.running) {
-      this.pendingTriggers.set(channel, reason);
+    const nowMs = this.now().getTime();
+    if (isScheduledTriggerDuringBackoff(this.nextRetryAtMs.get(channel), nowMs, reason)) {
       return;
     }
-    const waitMs = this.minTriggerGapMs - (this.now().getTime() - (this.lastRunAtMs.get(channel) ?? 0));
+    if (this.running) {
+      if (reason === 'local-change') this.pendingDirtyChannels.add(channel);
+      const prev = this.pendingTriggers.get(channel);
+      if (!(prev === 'local-change' && reason === 'remote-poll')) {
+        this.pendingTriggers.set(channel, reason);
+      }
+      return;
+    }
+    const waitMs = this.minTriggerGapMs - (nowMs - (this.lastRunAtMs.get(channel) ?? 0));
     if (waitMs > 0) {
       if (this.gapTimers.has(channel)) return;
       const timer = this.setTimer(() => {
@@ -465,19 +539,27 @@ export class AutoSyncScheduler {
     for (const channel of SYNC_CHANNELS) this.scheduleChannelTimer(channel);
   }
 
-  /** 单个通道的一次性 interval 排期（触发后只重排这一个通道）。 */
+  /** 单个通道的一次性 interval 排期（触发后只重排这一个通道；失败退避期间拉长到 lastRunNextRetryAt）。 */
   private scheduleChannelTimer(channel: SyncTransportType): void {
     const existing = this.timers.get(channel);
     if (existing !== undefined) this.clearTimer(existing);
     this.timers.delete(channel);
     void this.readConfig(channel).then((cfg) => {
       if (this.stopped || !cfg.enabled) return;
-      const ms = intervalToMs(cfg.interval);
+      this.syncRetryCache(channel, cfg.lastRunNextRetryAt);
+      const ms = effectiveTimerDelayMs(intervalToMs(cfg.interval), cfg.lastRunNextRetryAt, this.now().getTime());
       const timer = this.setTimer(() => {
         // 一次性定时器：触发后立即从表移除，避免 reload() 清理到已失效的句柄
         this.timers.delete(channel);
         if (this.stopped) return;
-        void this.runOnce(channel, { reason: 'interval' })
+        const nowMs = this.now().getTime();
+        const hadDirty = this.pendingDirtyChannels.has(channel);
+        const nextReason = hadDirty ? 'local-change' : 'interval';
+        if (!hadDirty && isScheduledTriggerDuringBackoff(this.nextRetryAtMs.get(channel), nowMs, 'interval')) {
+          this.scheduleChannelTimer(channel);
+          return;
+        }
+        void this.runOnce(channel, { reason: nextReason })
           .catch((err) => {
             this.host.log.error(`自动同步定时触发失败（${channel}）`, { error: err instanceof Error ? err.message : String(err) });
           })
@@ -491,28 +573,34 @@ export class AutoSyncScheduler {
   }
 
   /**
-   * realtime 通道的远端轮询：按 remoteCheckMs（缺省 60s）排一次性定时器。
-   * 轮询只是「叫醒一轮 runOnce」—— 是否真的下载仍由 detectRemoteNew 判定，
-   * 所以哪怕每 60s 叫醒一次，无变化时也只会记一条 upToDate 而不会反复传输。
+   * realtime 通道的远端轮询：按 channel 独立排一次性定时器，不因另一通道触发重置别人，
+   * 并在连续失败时随 lastRunNextRetryAt 指数退避（J 项，避免固定节奏失败风暴）。
    */
   private scheduleRemoteTimers(): void {
     for (const timer of this.remoteTimers.values()) this.clearTimer(timer);
     this.remoteTimers.clear();
-    const channels = SYNC_CHANNELS;
-    for (const channel of channels) {
-      void this.readConfig(channel).then((cfg) => {
-        if (this.stopped || !cfg.enabled || !(cfg.realtime ?? DEFAULT_AUTOSYNC_REALTIME)) return;
-        const ms = clampRemoteCheckMs(cfg.remoteCheckMs ?? DEFAULT_AUTOSYNC_REMOTE_CHECK_MS);
-        const timer = this.setTimer(() => {
-          this.remoteTimers.delete(channel);
-          if (this.stopped) return;
-          this.trigger(channel, 'remote-poll');
-          // 固定节奏：轮询不等本轮跑完就排下一次（trigger 自己负责合并/排队）
-          if (!this.stopped) this.scheduleRemoteTimers();
-        }, ms);
-        this.remoteTimers.set(channel, timer);
-      }).catch(() => { /* 读配置失败静默 */ });
-    }
+    for (const channel of SYNC_CHANNELS) this.scheduleRemoteChannelTimer(channel);
+  }
+
+  private scheduleRemoteChannelTimer(channel: SyncTransportType): void {
+    const existing = this.remoteTimers.get(channel);
+    if (existing !== undefined) this.clearTimer(existing);
+    this.remoteTimers.delete(channel);
+    void this.readConfig(channel).then((cfg) => {
+      if (this.stopped || !cfg.enabled || !(cfg.realtime ?? DEFAULT_AUTOSYNC_REALTIME)) return;
+      this.syncRetryCache(channel, cfg.lastRunNextRetryAt);
+      const baseMs = clampRemoteCheckMs(cfg.remoteCheckMs ?? DEFAULT_AUTOSYNC_REMOTE_CHECK_MS);
+      const ms = effectiveTimerDelayMs(baseMs, cfg.lastRunNextRetryAt, this.now().getTime());
+      const timer = this.setTimer(() => {
+        this.remoteTimers.delete(channel);
+        if (this.stopped) return;
+        const nextReason = this.pendingDirtyChannels.has(channel) ? 'local-change' : 'remote-poll';
+        this.trigger(channel, nextReason);
+        // 固定节奏：只重排当前这一条通道（避免某通道重置别的通道，P5-1 同理）
+        if (!this.stopped) this.scheduleRemoteChannelTimer(channel);
+      }, ms);
+      this.remoteTimers.set(channel, timer);
+    }).catch(() => { /* 读配置失败静默 */ });
   }
 
   /** 按「enabled && realtime」重算监听集合：需要就挂、全关就拆（绝不留下空转句柄）。 */
@@ -644,18 +732,24 @@ export class AutoSyncScheduler {
     // 远端轮询轮跳过本地导出（reason='remote-poll'）：本地改动由 realtime 监听（local-change 触发）
     // 与 30 分钟兜底 interval 负责；这里每 60s 再跑一次全量导出 = 白跑 plugins 的 npm pack
     // （真机单插件 44.7s/轮）。判定口径不变 —— 真要比对时比的仍是载荷字节，不做任何近似。
+    const preflightLocalCheck = opts.reason !== 'remote-poll' || this.pendingDirtyChannels.has(channel);
     const preflightCache = new RoundExportCache();
     const preflight = await this.detectPhase(channel, cfg, nowIso, historyId, {
-      localCheck: opts.reason !== 'remote-poll',
+      localCheck: preflightLocalCheck,
       exportCache: preflightCache,
     });
     if (preflight.kind === 'skip') {
+      if (preflightLocalCheck) this.clearDirtyRetry(channel);
       this.running = false;
       this.watcher?.resume();
       // 空转轮（什么都没传）打上 idle：运行中心据此不为它留卡片（见 core/run-registry 的 isIdleAutosyncRun）。
       finishRun(preflight.result.skipReason === 'upToDate' ? { idle: true } : {});
       return preflight.result;
     }
+
+    const hasPendingLocalDirty = this.pendingDirtyChannels.has(channel)
+      || opts.reason === 'local-change'
+      || (preflight.kind === 'work' && preflight.localDirty);
 
     let releaseLock: (() => Promise<void>) | null = null;
     if (this.mutationLock !== undefined) {
@@ -666,6 +760,11 @@ export class AutoSyncScheduler {
         const lk = await withMutationLock(this.mutationLock, { op: 'autosync', target: channel, isBlocked: this.isBlocked });
         if (lk.context === null) {
           this.running = false;
+          this.watcher?.resume();
+          const skipReason = lockSkipToken(lk.reason);
+          if (hasPendingLocalDirty && isTransientLockSkipReason(skipReason)) {
+            this.scheduleDirtyLockRetry(channel);
+          }
           // issue #27：被挡时按分类告知用户。stale 残留锁「重试不会自愈」，必须显式回收——
           // 这里把与 423 响应同文案的指引写进日志，否则自动同步只会静默跳过，用户无从下手。
           // issue #31：与 backup-scheduler 对齐——非 stale 分类也留一行（不再只对 stale 说话）；
@@ -682,13 +781,13 @@ export class AutoSyncScheduler {
           await this.appendHistory(channel, {
             direction: 'both',
             status: 'skipped',
-            skipReason: lockSkipToken(lk.reason),
+            skipReason,
             createdAt: nowIso,
             failureCountAtRun: cfg.consecutiveFailures,
           });
           finishRun();
           return {
-            status: 'skipped', direction: 'none', skipReason: lockSkipToken(lk.reason), historyId,
+            status: 'skipped', direction: 'none', skipReason, historyId,
             consecutiveFailures: cfg.consecutiveFailures,
           };
         }
@@ -698,16 +797,21 @@ export class AutoSyncScheduler {
         // issue #31 D：acquire 本身抛错（锁目录 IO/权限）也是「被挡」，同样必须留历史 ——
         // 否则用户在历史面板只会看到「自动同步不再更新」，而没有任何一条解释。
         this.running = false;
+        this.watcher?.resume();
+        const skipReason = lockSkipToken('unavailable');
+        if (hasPendingLocalDirty && isTransientLockSkipReason(skipReason)) {
+          this.scheduleDirtyLockRetry(channel);
+        }
         await this.appendHistory(channel, {
           direction: 'both',
           status: 'skipped',
           // acquire 本身抛错（锁目录 IO/权限）：既不是「被占」也不是「残留」，如实报不可用。
-          skipReason: lockSkipToken('unavailable'),
+          skipReason,
           createdAt: nowIso,
           failureCountAtRun: cfg.consecutiveFailures,
         });
         finishRun();
-        return { status: 'skipped', direction: 'none', skipReason: lockSkipToken('unavailable'), historyId, consecutiveFailures: cfg.consecutiveFailures };
+        return { status: 'skipped', direction: 'none', skipReason, historyId, consecutiveFailures: cfg.consecutiveFailures };
       }
     }
     try {
@@ -720,9 +824,10 @@ export class AutoSyncScheduler {
       const phase = releaseLock === null
         ? preflight
         : await this.detectPhase(channel, cfg, nowIso, historyId, {
-            localCheck: opts.reason !== 'remote-poll',
+            localCheck: preflightLocalCheck,
             exportCache: activeCache,
           });
+      if (preflightLocalCheck || phase.kind === 'work') this.clearDirtyRetry(channel);
       if (phase.kind === 'skip') return phase.result;
       const { engine, remoteNew, localDirty, firstRun } = phase;
       const executeSyncedPhases = async (): Promise<AutosyncRunResult> => {
@@ -1269,8 +1374,9 @@ export class AutoSyncScheduler {
   ): Promise<void> {
     // P0-2：upToDate 空轮只更新「最近一次检查」字段组（lastRunAt + lastCheckStatus），
     // 原样保留「最近一次真实同步结论」字段组（lastSyncAt / lastSuccessAt / lastRunStatus /
-    // lastRunMessage / lastRunSkipReason / lastRunSkipCount / lastRunHistoryId / consecutiveFailures）。
+    // lastRunMessage / lastRunSkipReason / lastRunSkipCount / lastRunHistoryId / consecutiveFailures / lastRunNextRetryAt）。
     if (result.status === 'success' && result.skipReason === 'upToDate') {
+      this.syncRetryCache(channel, base.lastRunNextRetryAt);
       await this.writeConfig(channel, {
         ...base,
         lastRunAt: nowIso,
@@ -1285,7 +1391,20 @@ export class AutoSyncScheduler {
       : result.conflictedSections.length;
     const isRealSuccess = result.status === 'success' && result.skipReason !== 'upToDate';
     const lastSuccessAt = isRealSuccess ? nowIso : base.lastSuccessAt;
-    await this.writeConfig(channel, {
+    let nextRetryIso: string | undefined;
+    if (result.status === 'failed' && result.consecutiveFailures > 0) {
+      const nowMs = Date.parse(nowIso);
+      const isRealtime = base.realtime ?? DEFAULT_AUTOSYNC_REALTIME;
+      const pollMs = clampRemoteCheckMs(base.remoteCheckMs ?? DEFAULT_AUTOSYNC_REMOTE_CHECK_MS);
+      const scheduleBaseMs = isRealtime ? Math.min(intervalToMs(base.interval), pollMs) : intervalToMs(base.interval);
+      nextRetryIso = computeNextRetryIso(
+        Number.isNaN(nowMs) ? this.now().getTime() : nowMs,
+        scheduleBaseMs,
+        result.consecutiveFailures,
+      );
+    }
+    this.syncRetryCache(channel, nextRetryIso);
+    const updated: AutosyncConfig = {
       ...base,
       lastRunAt: nowIso,
       lastCheckStatus: result.status,
@@ -1298,7 +1417,13 @@ export class AutoSyncScheduler {
       lastRunMessage: result.error ?? '',
       lastRunSkipReason: skipReason,
       lastRunSkipCount: skipCount,
-    });
+      ...(nextRetryIso === undefined ? {} : { lastRunNextRetryAt: nextRetryIso }),
+    };
+    if (nextRetryIso === undefined) delete updated.lastRunNextRetryAt;
+    await this.writeConfig(channel, updated);
+    if (result.status === 'failed' && !this.stopped && this.remoteTimers.has(channel)) {
+      this.scheduleRemoteChannelTimer(channel);
+    }
   }
 
   /**

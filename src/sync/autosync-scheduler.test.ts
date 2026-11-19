@@ -2249,4 +2249,180 @@ test('I 项：单轮自动同步（远端有新快照 + 本地有改动）复用
   }
 });
 
+test('J 项：连续失败按指数退避拉长定时器与 lastRunNextRetryAt（1h 封顶），恢复成功后清零退避', async () => {
+  let nowMs = Date.parse('2026-11-18T12:00:00.000Z');
+  let shouldFail = true;
+  let pushCalls = 0;
+  const scheduledDelays: number[] = [];
+  const timerCallbacks: Array<{ fn: () => void; ms: number; cleared: boolean }> = [];
+
+  let cfg: AutosyncConfig = {
+    enabled: true,
+    interval: '30m',
+    startupMinIntervalMs: 300_000,
+    consecutiveFailures: 0,
+    realtime: true,
+    remoteCheckMs: 5 * 60_000,
+    // 跳过启动轮以便精确观察定时器和失败退避演变
+    lastSuccessAt: '2026-11-18T11:59:00.000Z',
+  };
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp',
+    host: { log: nullLogger() },
+    makeSyncEngine: () => ({
+      listSnapshots: async () => [],
+      hasNewRemoteSnapshot: async () => false,
+      hasLocalChanges: async () => true,
+      async push() {
+        pushCalls += 1;
+        if (shouldFail) throw new Error('connect ETIMEDOUT');
+        return { ok: true, snapshotId: 'snap-recovered', sections: ['settings'], warnings: [] };
+      },
+    } as unknown as SyncEngine),
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(nowMs),
+    readConfig: async () => cfg,
+    writeConfig: async (_ch, next) => { cfg = next; },
+    readSyncConfigFn: async () => ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://example.com/repo.git' } }) as SyncConfig,
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: (fn, ms) => {
+      const entry = { fn, ms, cleared: false };
+      timerCallbacks.push(entry);
+      scheduledDelays.push(ms);
+      return entry as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimer: (handle) => {
+      (handle as unknown as { cleared: boolean }).cleared = true;
+    },
+    minTriggerGapMs: 0,
+  });
+
+  scheduler.start();
+  await tick();
+  await tick();
+  assert.ok(scheduledDelays.includes(5 * 60_000), '初始 remote-poll 为 5m: ' + JSON.stringify(scheduledDelays));
+
+  // 第 1 次失败（T0）→ 5m * 2 = 10m
+  await scheduler.runOnce('git', { reason: 'local-change' });
+  await tick();
+  assert.equal(cfg.consecutiveFailures, 1);
+  assert.equal(cfg.lastRunNextRetryAt, new Date(nowMs + 10 * 60_000).toISOString());
+  const activePollDelay1 = timerCallbacks.filter((t) => !t.cleared).map((t) => t.ms);
+  assert.ok(activePollDelay1.includes(10 * 60_000), '1 连败后定时器重排为 10m: ' + JSON.stringify(activePollDelay1));
+
+  // 退避窗口内 trigger('remote-poll') 必须被节流，而 manual 照常执行
+  const beforePollCalls = pushCalls;
+  nowMs += 5 * 60_000;
+  scheduler.trigger('git', 'remote-poll');
+  await tick();
+  assert.equal(pushCalls, beforePollCalls, '退避期内不得再跑 remote-poll 形成失败风暴');
+
+  // 推进到第 1 次退避窗口之后再败 3 次：20m → 40m → 60m（1h 封顶）
+  nowMs += 6 * 60_000; // T0 + 11m
+  await scheduler.runOnce('git', { reason: 'manual' });
+  assert.equal(cfg.consecutiveFailures, 2);
+  assert.equal(cfg.lastRunNextRetryAt, new Date(nowMs + 20 * 60_000).toISOString());
+
+  nowMs += 25 * 60_000;
+  await scheduler.runOnce('git', { reason: 'manual' });
+  assert.equal(cfg.consecutiveFailures, 3);
+  assert.equal(cfg.lastRunNextRetryAt, new Date(nowMs + 40 * 60_000).toISOString());
+
+  nowMs += 45 * 60_000;
+  await scheduler.runOnce('git', { reason: 'manual' });
+  assert.equal(cfg.consecutiveFailures, 4);
+  assert.equal(cfg.lastRunNextRetryAt, new Date(nowMs + 60 * 60_000).toISOString(), '连续失败 >=4 次退避封顶 1h');
+
+  // 恢复成功后必须清除退避时间，定时恢复为 5m
+  shouldFail = false;
+  nowMs += 65 * 60_000;
+  const recovered = await scheduler.runOnce('git', { reason: 'manual' });
+  assert.equal(recovered.status, 'success');
+  assert.equal(cfg.consecutiveFailures, 0);
+  assert.equal(cfg.lastRunNextRetryAt, undefined);
+  scheduler.stop();
+});
+
+test('J 项：local-change 撞短暂 mutation-locked 时安排补偿重试并丢不掉脏标志；stale 残留锁不空转', async () => {
+  let lockState: 'LOCKED' | 'ACQUIRED' | 'STALE_LOCK_DETECTED' = 'LOCKED';
+  let localDirty = true;
+  let pushCalls = 0;
+  const retryTimers: Array<{ fn: () => void; ms: number; cleared: boolean }> = [];
+
+  let cfg: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 300_000, consecutiveFailures: 0, realtime: true,
+  };
+  const lockPort = {
+    async acquire() {
+      if (lockState === 'ACQUIRED') {
+        return { state: 'ACQUIRED' as const, token: { ownershipPath: '/tmp/lock', instanceId: 'i1', acquiredAt: 1 } };
+      }
+      if (lockState === 'STALE_LOCK_DETECTED') {
+        return { state: 'STALE_LOCK_DETECTED' as const, token: null };
+      }
+      return { state: 'LOCKED' as const, token: null };
+    },
+    async release() {},
+    validate() { return true; },
+  } as unknown as import('../utils/env-lock.ts').MutationLockPort;
+
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp',
+    host: { log: nullLogger() },
+    mutationLock: lockPort,
+    makeSyncEngine: () => ({
+      listSnapshots: async () => [],
+      hasNewRemoteSnapshot: async () => false,
+      hasLocalChanges: async () => localDirty,
+      async push() {
+        pushCalls += 1;
+        localDirty = false;
+        return { ok: true, snapshotId: 'snap-after-lock', sections: ['settings'], warnings: [] };
+      },
+    } as unknown as SyncEngine),
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date('2026-11-18T12:00:00.000Z'),
+    readConfig: async () => cfg,
+    writeConfig: async (_ch, next) => { cfg = next; },
+    readSyncConfigFn: async () => ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://example.com/repo.git' } }) as SyncConfig,
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: (fn, ms) => {
+      const rec = { fn, ms, cleared: false };
+      retryTimers.push(rec);
+      return rec as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimer: (h) => {
+      (h as unknown as { cleared: boolean }).cleared = true;
+    },
+    minTriggerGapMs: 0,
+    lockRetryDelayMs: 1200,
+  });
+
+  // 1) local-change 撞短暂活跃锁 → skipped(mutation-locked) 且排队 1200ms 补偿重试
+  const lockedRes = await scheduler.runOnce('git', { reason: 'local-change' });
+  assert.equal(lockedRes.skipReason, 'mutation-locked');
+  assert.equal(pushCalls, 0);
+  const firstRetry = retryTimers.find((t) => !t.cleared);
+  assert.ok(firstRetry !== undefined && firstRetry.ms === 1200, '撞活跃锁后必须排 1200ms 补偿定时器');
+
+  // 2) 若远端轮询先到期，也因待补推标志自动升级查本地；此时锁释放 → 一举推上远端并清空补偿标记
+  lockState = 'ACQUIRED';
+  await scheduler.runOnce('git', { reason: 'remote-poll' });
+  assert.equal(pushCalls, 1, 'pendingDirty 存在时即使 remote-poll 也要检查并补推本地改动');
+  assert.equal(retryTimers.every((t) => t.cleared), true, '成功推送后残留锁重试定时器必须清理');
+
+  // 3) stale 残留锁不会空转排补偿定时器
+  retryTimers.length = 0;
+  localDirty = true;
+  lockState = 'STALE_LOCK_DETECTED';
+  const staleRes = await scheduler.runOnce('git', { reason: 'local-change' });
+  assert.equal(staleRes.skipReason, 'mutation-lock-stale');
+  assert.equal(retryTimers.length, 0, 'stale 残留锁不能自愈，绝不空转重试');
+  scheduler.stop();
+});
+
 
