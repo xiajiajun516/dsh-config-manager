@@ -7,6 +7,7 @@
  */
 import type { PlanItem, PlanItemKind } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
+import { sectionMetaOf } from '../../schema/section-registry.ts';
 import type { PullChange, SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts';
 import { DEFAULT_CATEGORIES } from '../../ui/export-flow.ts';
 import { EXPORT_GROUPS, type ExportGroup } from '../../ui/types.ts';
@@ -1263,6 +1264,19 @@ export function effectiveAutosyncCycleMs(
   if (!realtime) return fallbackMs;
   const pollMs = clampRemoteCheckMs(autosync.remoteCheckMs ?? DEFAULT_AUTOSYNC_REMOTE_CHECK_MS);
   return Math.min(fallbackMs, pollMs);
+}
+
+/**
+ * K 项：某分区是否为「仅手动同步」档（syncOptIn === 'manual'，如 sessions / workspaces）。
+ * 注册表来自零依赖 schema/section-registry.ts，客户端与宿主同源，避免选完以为会自动同步。
+ */
+export function isManualOnlySyncSection(id: SectionId): boolean {
+  return sectionMetaOf(id)?.syncOptIn === 'manual';
+}
+
+/** K 项：从用户已勾选分区中筛出「不会随后台自动同步」的仅手动分区。 */
+export function manualSyncOnlySectionIds(sections: readonly SectionId[]): SectionId[] {
+  return sections.filter((id) => isManualOnlySyncSection(id));
 }
 
 export interface ChannelAutosyncBadge {

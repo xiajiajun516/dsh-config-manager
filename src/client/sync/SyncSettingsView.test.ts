@@ -227,3 +227,11 @@ test('F 项：开启加密时安全段与自动同步段都必须渲染人工接
   assert.match(security, /encryptAutosyncNoticeKey\(settings\.encrypt\)/, '安全段开启加密时必须渲染自动同步停用/改手动提示')
   assert.match(autosyncCard, /encryptAutosyncNoticeKey\(settings\.encrypt\)/, '自动同步段开启加密时必须同步提示')
 })
+
+test('K 项：仅手动同步分区（sessions/workspaces）勾选时在内容页与自动同步开关处明示排除范围', () => {
+  const settingsDialog = readSource(fileURLToPath(new URL('./SyncSettingsDialog.tsx', import.meta.url)))
+  assert.match(settingsDialog, /isManualOnlySyncSection\(s\.id\)/, '分区行必须标注「仅手动同步」徽章')
+  assert.match(settingsDialog, /t\('mode\.sectionManualOnly'\)/)
+  assert.match(settingsDialog, /manualSyncOnlySectionIds\(sections\)/)
+  assert.match(settingsDialog, /t\('mode\.manualOnlyAutosyncWarn'/, '内容页与设置页开启自动同步时必须渲染排除警告')
+})

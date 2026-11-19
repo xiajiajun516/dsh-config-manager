@@ -12,7 +12,7 @@ import {
   autosyncEffectiveOptions, autosyncIntervalMs, channelAutosyncBadgeView, computeAutosyncCountdown, computeGithubLoginView, computeSyncButtons,
   computeSyncStatus, DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState, effectiveAutosyncCycleMs, encryptAutosyncNoticeKey, formatDateTime,
   formatIntervalDuration, formatLastSync, autosyncFailureMessage, autosyncSkipDetail,
-  githubPollMessage, initialSyncSections, kindLabel, normalizeSessionsLimit, privateRepoHint,
+  githubPollMessage, initialSyncSections, isManualOnlySyncSection, kindLabel, manualSyncOnlySectionIds, normalizeSessionsLimit, privateRepoHint,
   pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
   severityLabel, summarizePullChanges, syncSectionGroups, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
@@ -684,4 +684,18 @@ test('H 项：channelAutosyncBadgeView 通道卡直接透出自动同步状态�
   assert.deepEqual(webdavView.badges, [{ kind: 'ok', key: 'channel.autosyncOn' }]);
   assert.equal(webdavView.showMergeAction, false, '非激活通道不得错误挂上激活通道的 pendingMerge');
   assert.equal(webdavView.showAutosyncAction, false);
+});
+
+test('K 项：isManualOnlySyncSection / manualSyncOnlySectionIds 从注册表派生仅手动分区（sessions/workspaces）', () => {
+  assert.equal(isManualOnlySyncSection('sessions'), true);
+  assert.equal(isManualOnlySyncSection('workspaces'), true);
+  assert.equal(isManualOnlySyncSection('mcp'), false);
+  assert.equal(isManualOnlySyncSection('settings'), false);
+  assert.deepEqual(
+    manualSyncOnlySectionIds(['settings', 'mcp', 'workspaces', 'sessions']),
+    ['workspaces', 'sessions'],
+  );
+  assert.ok((syncZh['mode.sectionManualOnly'] ?? '').includes('手动'));
+  assert.match(syncEn['mode.sectionManualOnly'] ?? '', /manual/i);
+  assert.doesNotMatch(syncEn['mode.manualOnlyAutosyncWarn'] ?? '', /[\u4e00-\u9fff]/);
 });

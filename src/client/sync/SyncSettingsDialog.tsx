@@ -35,7 +35,7 @@ import {
 } from '../../ui/sync-settings-view.ts'
 import type { SyncChannelSettingsPatch } from '../../ui/sync-settings-view.ts'
 import type { UiT } from '../../ui/i18n.ts'
-import { DEFAULT_SYNC_SESSIONS_LIMIT, syncSectionGroups } from './sync-view.ts'
+import { DEFAULT_SYNC_SESSIONS_LIMIT, isManualOnlySyncSection, manualSyncOnlySectionIds, syncSectionGroups } from './sync-view.ts'
 import type { ChannelSyncState, SyncSectionOption } from './sync-view.ts'
 import { SyncSecuritySection } from './SyncSecuritySection.tsx'
 import { AutosyncCard } from './AutosyncCard.tsx'
@@ -113,6 +113,8 @@ export function SyncSettingsDialog({ open, initialTab, t, cmT, uiT, sectionName,
     sessionIds,
     initialSessionPicks(sessionIds, sessionsInclude, sessionsLimit),
   )
+  const manualOnlySections = manualSyncOnlySectionIds(sections)
+  const manualOnlyNames = manualOnlySections.map((id) => sectionName(id)).join(t('common.listSeparator'))
   /** 「跟随远端删除插件」开关的 id：标签文字点一下就拨动（行式布局里两者不在一个 label 内） */
   const deletePluginsId = useId()
 
@@ -183,6 +185,9 @@ export function SyncSettingsDialog({ open, initialTab, t, cmT, uiT, sectionName,
               onUpdateInterval={onUpdateAutosyncInterval}
               onUpdateOptions={onUpdateAutosyncOptions}
             />
+            {settings.autosyncEnabled && manualOnlySections.length > 0 && (
+              <Banner kind="warn">{t('mode.manualOnlyAutosyncWarn', { sections: manualOnlyNames })}</Banner>
+            )}
             <SyncSecuritySection
               t={t}
               settings={settings}
@@ -246,6 +251,9 @@ export function SyncSettingsDialog({ open, initialTab, t, cmT, uiT, sectionName,
                             {s.portability === 'deviceSpecific' && (
                               <Badge kind="warn">{t('mode.sectionDeviceSpecific')}</Badge>
                             )}
+                            {isManualOnlySyncSection(s.id) && (
+                              <Badge kind="warn">{t('mode.sectionManualOnly')}</Badge>
+                            )}
                             {s.defaultIncluded && <Badge kind="ok">{t('mode.sectionRecommended')}</Badge>}
                           </span>
                         }
@@ -286,6 +294,9 @@ export function SyncSettingsDialog({ open, initialTab, t, cmT, uiT, sectionName,
               </Card>
             ))}
           </div>
+        )}
+        {tab === 'content' && manualOnlySections.length > 0 && (
+          <Banner kind="warn">{t('mode.manualOnlyAutosyncWarn', { sections: manualOnlyNames })}</Banner>
         )}
         {tab === 'content' && sections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
       </Modal.Body>
