@@ -10,7 +10,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  applySessionAttachmentCoupling, childUnitsOf, nestedChildUnitIds,
+  applySessionAttachmentCoupling, childUnitsOf, nestedChildUnitIds, sessionChildUnits,
   applyPluginPendingChecks, buildExportRequest, buildSelectedPlan, defaultSelection, samePendingChecks,
   defaultSelectionFromPlan, effectiveImportPlan, effectiveImportSelection, filterSections,
   filterPluginTree, groupPickState, groupSelectedCount, groupUnits, HIGH_RISK_ADAPTERS, isHighRiskAdapter,
@@ -1186,4 +1186,72 @@ test('G5-UI-4 批量动作（change 缺省）不联动附件：整段勾选不�
 test('G5-UI-5 couplingInventorySections：有会话就必须同时拉附件清单', () => {
   assert.deepEqual(couplingInventorySections(['sessions']), ['sessions', 'workspaces', 'attachments'])
   assert.deepEqual(couplingInventorySections(['skills']), ['skills'], '没有会话时不多拉任何清单')
+});
+
+/* ---------------- A5：会话区里子代理缩进在父对话下面 ---------------- */
+
+const SUB_1 = 'sessions:proj/sess-sub-1'
+const SUB_ORPHAN = 'sessions:proj/sess-orphan'
+
+function subagentTree(): SelectionSection[] {
+  return [
+    {
+      section: 'sessions', count: 4, sizeBytes: 0,
+      units: [
+        { id: SESS_1, label: '父对话', group: 'proj', sizeBytes: 0 },
+        { id: SESS_2, label: '另一个父对话', group: 'proj', sizeBytes: 0 },
+        { id: SUB_1, label: '子代理会话', group: 'proj', sizeBytes: 0, parentSessionId: 'sess-1' },
+        // 父对话不在清单里（被搜索过滤掉 / 不属于本分区）：不许凭空消失，留在顶层
+        { id: SUB_ORPHAN, label: '孤儿子代理', group: 'proj', sizeBytes: 0, parentSessionId: 'sess-missing' },
+      ],
+    },
+    {
+      section: 'attachments', count: 1, sizeBytes: 0,
+      units: [{ id: ATT_A, label: 'image/png', parentUnitIds: [SUB_1], sizeBytes: 0 }],
+    },
+  ]
+}
+
+test('A5-1 sessionChildUnits：子代理会话挂到父对话行下，父行缺失时留在顶层', () => {
+  const nodes = subagentTree()
+  const index = sessionChildUnits(nodes)
+  assert.deepEqual((index.get(SESS_1) ?? []).map((u) => u.id), [SUB_1])
+  assert.equal(index.get(SESS_2), undefined)
+  assert.equal(index.get(SUB_ORPHAN), undefined, '找不到父行的子会话不进索引')
+});
+
+test('A5-2 nestedChildUnitIds：子代理会话与会话附件都不再出现在分区顶层', () => {
+  assert.deepEqual([...nestedChildUnitIds(subagentTree())].sort(), [ATT_A, SUB_1].sort())
+});
+
+/* ---------------- A6：附件随对话自动带上（分区行已从选择器删除） ---------------- */
+
+test('A6-1 勾了对话 ⇒ 导出请求自动带上它的附件（只看归属，不看附件分区是否被勾选）', () => {
+  const nodes = attachmentTree()
+  const sessionsNode = nodes[0]
+  assert.ok(sessionsNode !== undefined)
+  const sel = toggleSection(EMPTY, sessionsNode, true)
+  assert.ok(!sel.sections.includes('attachments'), '基线里附件分区没被勾选')
+  assert.deepEqual(buildExportRequest(sel, nodes), {
+    only: ['sessions', 'attachments'],
+    includeItems: { attachments: [ATT_A, ATT_B] },
+  })
+});
+
+test('A6-2 没有对话被勾选 ⇒ 一条附件都不进导出请求（哪怕 sections 里残留 attachments）', () => {
+  const nodes = attachmentTree()
+  assert.deepEqual(buildExportRequest({ sections: ['attachments'], excluded: [] }, nodes), { only: [] })
+});
+
+test('A6-3 单个附件被取消勾选 ⇒ 白名单里没有它，其余照旧', () => {
+  const nodes = attachmentTree()
+  const sel: Selection = { sections: ['sessions', 'attachments'], excluded: [ATT_B] }
+  assert.deepEqual(buildExportRequest(sel, nodes).includeItems?.attachments, [ATT_A])
+});
+
+test('A6-4 取消一条对话 ⇒ 只被它引用的附件随之退出请求', () => {
+  const nodes = attachmentTree()
+  const sel: Selection = { sections: ['sessions'], excluded: [SESS_1] }
+  // ATT_A 仍被 sess-2 引用（共用），ATT_B 只属于 sess-1 ⇒ 只剩 ATT_A
+  assert.deepEqual(buildExportRequest(sel, nodes).includeItems?.attachments, [ATT_A])
 });

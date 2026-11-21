@@ -222,8 +222,21 @@ export function ExportView({ api, t }: ExportViewProps) {
    * UI-04：页面底部的「本次将导出」数据块（消灭底部空洞 + 不打开弹窗也能核对）。
    * 合计口径与选择器 footer **同源**（同一个 pickerSummary）；构成行只列真正会导出的分区。
    */
-  const composition = pickerNodes.filter((n) => exportRequest.only.includes(n.section))
-  const summary = pickerSummary(pickerValue, pickerNodes)
+  /**
+   * 附件是**推导出来的**（A6：选择器里没有附件分区）：请求里只有被勾选对话引用到的那几个对象。
+   * 合计与构成必须按同一份白名单算 —— 否则界面会拿整库 596 个 / 162 MB 去报一个只带 12 张图的导出。
+   */
+  const attachmentWhitelist = exportRequest.includeItems?.attachments
+  const effectiveNodes: SelectionSection[] = attachmentWhitelist === undefined
+    ? pickerNodes
+    : pickerNodes.map((n) => (n.section === 'attachments'
+      ? { ...n, units: n.units.filter((u) => attachmentWhitelist.includes(u.id)) }
+      : n))
+  const effectiveValue: Selection = exportRequest.only.includes('attachments')
+    ? { sections: [...pickerValue.sections, 'attachments'], excluded: pickerValue.excluded }
+    : pickerValue
+  const composition = effectiveNodes.filter((n) => exportRequest.only.includes(n.section))
+  const summary = pickerSummary(effectiveValue, effectiveNodes)
   /**
    * 逐分区的清单读取状态（F-03）：**未读到的分区绝不显示 0 条目 / 0 B**。
    * 引擎对清单缺失的分区按整体导出处理 —— 显示 0 与真实行为语义相反，

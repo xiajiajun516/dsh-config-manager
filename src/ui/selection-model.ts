@@ -494,6 +494,12 @@ export function buildExportRequest(sel: Selection, nodes: SelectionSection[]): E
   const includeItems: Partial<Record<SectionId, string[]>> = {}
   let partial = false
   for (const node of nodes) {
+    /**
+     * 附件分区不参与这一轮：它没有自己的勾选框，只能由「哪些对话被勾选」推导出来（见下面那段）。
+     * 让它照常走 `sel.sections` 的话，用户把会话整段取消之后附件仍留在 sections 里 —— 包里就会出现
+     * 一堆没有对话引用的图片对象，正是 A6 要消灭的那种「附件分区的独立开关」。
+     */
+    if (node.section === 'attachments') continue
     if (!sel.sections.includes(node.section)) continue
     if (node.units.length === 0) {
       only.push(node.section)
@@ -505,6 +511,37 @@ export function buildExportRequest(sel: Selection, nodes: SelectionSection[]): E
     if (ids.length !== node.units.length) {
       includeItems[node.section] = ids
       partial = true
+    }
+  }
+  /**
+   * 附件没有自己的勾选框（A6：分区行已从选择器删除），它**随被勾选的对话自动带上**。
+   *
+   * 判据是「附件挂在哪条对话下」（宿主算出的 parentUnitIds）与那条对话此刻是否被勾选：
+   * 导出请求因此不再依赖「用户看见过附件分区」这件事 —— 分区行藏起来之后，用户勾一个对话，
+   * 包里仍有它的图片与文件对象，与用户对「备份这个对话」的预期一致。
+   *
+   * 只列**有对话要它**的附件：孤儿对象（没有任何勾选对话引用）一律不进来，避免把整库 596 个
+   * 附件一次性塞进包里（A6 的另一半语义）。用户单独取消某张图（会话行下的子行）时，它就在
+   * `excluded` 里，这里自然被剔掉 —— 白名单只给真正要的 id。
+   */
+  const attachmentsNode = nodes.find((n) => n.section === 'attachments')
+  if (attachmentsNode !== undefined && only.includes('sessions')) {
+    const sessionsNode = nodes.find((n) => n.section === 'sessions')
+    const pickedSessions = new Set(
+      (sessionsNode?.units ?? []).filter((u) => !sel.excluded.includes(u.id)).map((u) => u.id),
+    )
+    if (pickedSessions.size > 0) {
+      const ids = attachmentsNode.units
+        .filter((u) => !sel.excluded.includes(u.id))
+        .filter((u) => (u.parentUnitIds ?? []).some((parent) => pickedSessions.has(parent)))
+        .map((u) => u.id)
+      if (ids.length > 0) {
+        only.push('attachments')
+        // 一律给白名单：即使本次要的正好是清单全集，也把「哪些对象」写死在请求里，
+        // 免得将来清单里多出一个没人引用的孤儿时被整分区口径顺带带走。
+        includeItems.attachments = ids
+        partial = true
+      }
     }
   }
   return partial ? { only, includeItems } : { only }
@@ -790,13 +827,49 @@ export function childUnitsOf(nodes: SelectionSection[]): Map<string, SelectionUn
   return out
 }
 
-/** 已经挂在某父行下面的子单元 id（分区自己那一排不再重复列这些行，否则一个附件会出现两次）。 */
+/**
+ * 会话「父对话 → 子代理会话」的挂载索引（A5）：会话区里子代理不再平铺，而是缩进在父对话行下面。
+ *
+ * 只认**能在同一份清单里找到父行**的子会话：父对话被搜索过滤掉、或不在当前分区时，子会话留在顶层。
+ * 宁可平铺也不让它凭空消失 —— 看不见的单元就是勾不上的单元（勾选与包内容必须一一对应）。
+ */
+export function sessionChildUnits(nodes: SelectionSection[]): Map<string, SelectionUnit[]> {
+  const out = new Map<string, SelectionUnit[]>()
+  const sessions = nodes.filter((n) => n.section === 'sessions').flatMap((n) => n.units)
+  if (sessions.length === 0) return out
+  const byBare = new Map<string, SelectionUnit>()
+  for (const unit of sessions) {
+    const bare = sessionIdOfUnit(unit.id)
+    if (bare !== undefined) byBare.set(sessionIdKey(bare), unit)
+  }
+  for (const unit of sessions) {
+    const parentBare = unit.parentSessionId
+    if (parentBare === undefined) continue
+    const parent = byBare.get(sessionIdKey(parentBare))
+    // 自指（父 == 自己）不挂：坏元数据不能把一行缩进到自己下面
+    if (parent === undefined || parent.id === unit.id) continue
+    const list = out.get(parent.id)
+    if (list === undefined) out.set(parent.id, [unit])
+    else list.push(unit)
+  }
+  return out
+}
+
+/**
+ * 已经挂在某父行下面的子单元 id（分区自己那一排不再重复列这些行，否则一个附件/一条子代理会话会出现两次）。
+ *
+ * 两类来源：跨分区的附件子行（parentUnitIds）与会话区内的子代理会话（parentSessionId）。
+ * 只收**真能找到父行**的那些 —— 与 sessionChildUnits 同一判据，否则单元会既不在顶层、也不在子行。
+ */
 export function nestedChildUnitIds(nodes: SelectionSection[]): Set<string> {
   const out = new Set<string>()
   for (const node of nodes) {
     for (const unit of node.units) {
       if ((unit.parentUnitIds?.length ?? 0) > 0) out.add(unit.id)
     }
+  }
+  for (const children of sessionChildUnits(nodes).values()) {
+    for (const child of children) out.add(child.id)
   }
   return out
 }
@@ -815,8 +888,9 @@ export interface SessionAttachmentChange {
  *     （勾父自动勾上它的子代理会话），那些会话的附件也必须跟着走，否则界面上「会话勾着、附件没勾」；
  *  ② 附件侧的每次改动都走 `toggleUnit()`：分区成员、稀疏排除、取消后「本分区已无选中」的反向收口
  *     都由那一套语义决定，这里不另写一份（写两份必然分叉）；
- *  ③ **批量动作（`change` 缺省）不做附件联动**：勾「历史会话」整个分区是显式整段动作，此时顺手把
- *     附件分区也勾上会让一次点击静默多出上百 MB（本机实测被引用的附件 160 MB）。附件分区有自己的开关。
+ *  ③ **批量动作（`change` 缺省）不做附件联动**：勾「历史会话」整个分区是显式整段动作，此时逐一
+ *     补勾每个会话的附件只会做无谓的庞大写入 —— 而附件本来就不需要独立勾选状态（A6：分区行已删除，
+ *     导出请求按「哪些对话被勾选」推导附件白名单，见 buildExportRequest）。
  */
 export function applySessionAttachmentCoupling(
   before: Selection,

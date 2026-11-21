@@ -106,3 +106,11 @@
 - **归属关系只有宿主能算，所以 `listUnits()` 不许去算它**：`FileCollectionAdapter.listUnits()` 是零 I/O 纯函数，读日志算归属会让它在每次切换分区时扫 230 MB。因此新增可选钩子 `enrichUnits(ctx, units)`，**唯一调用点**是 `/export-preview`；返回 `null`（日志读不出 / 超过 2000 份 / 引用面不可用）时界面退回扁平渲染 —— 算不出归属不等于「这些会话没有附件」。
 - **引用面必须落盘，否则每次导出都重付 7 秒**：本机实测 339 份日志 / 230 MB / 108517 个 zstd 帧，**逐帧解压 6.96 s**（切帧 0.01 s、抽正则 0.27 s —— 成本全在逐帧调用开销），并发 8/16/32 实测无改善（纯 CPU）。落盘缓存 `dsh-config-manager/cache/attachment-refs.v1.json`，键 = 日志相对路径，采信条件是 **`mtime` 与 `size` 同时相等**；任一读不到就整条不用缓存（重扫），`merged.size === 0` 时**不写空文件**（空缓存对下次无用，却会让「有没有缓存」变成误导性观测）。读写失败一律静默降级 —— 缓存只影响速度，不许影响「带哪些附件」。
 - **告警要在算完数字之后再推**：`export.attachmentsAllSessions` 曾把带占位符的文案直接推到 `warnings` 里（`{total}`、`{count}` 原样出现在界面上）。凡带参数的文案，push 点必须在所有参数确定之后；`attachments.test.ts` 的 P1-7 用完整句子钉住它。
+
+## 附件分区为什么从选择器里删掉，以及子代理缩进（G6，2026-11-21）
+
+- **「会话附件」分区整行不渲染，但分区本身还在**：596 条哈希行对用户零信息量，且和挂在会话行下的同一批附件重复。现在 `ContentPicker` 用 `shownNodes = nodes.filter(n => n.section !== 'attachments')` 只控制**渲染**，`nodes` 仍完整传入（子行渲染、导出请求、合计都要它）。删分区（而不是隐藏行）会破坏三处：`buildExportRequest` 推不出白名单、`childUnitsOf` 拿不到父链、`pickerSummary` 少算体积。
+- **导出请求按「哪些对话被勾选」推导附件白名单**：`buildExportRequest` 先跳过 attachments 分区（否则「勾了会话又整段取消」会留下无对话引用的附件），再在末尾按 `parentUnitIds` 与「未排除的 sessions 单元」求交，得到 `includeItems.attachments` 白名单。**一律写死白名单**，不写成「整分区 + 排除项」：将来清单里多出孤儿对象时，整分区口径会把它们一起带走，白名单口径不会。`A6-1..A6-4`（`src/ui/selection-model.test.ts`）钉住这四条：勾满会话 ⇒ only 含 attachments 且白名单两项、只勾附件分区 ⇒ `{ only: [] }`、取消单张 ⇒ 白名单少一项、取消一条会话 ⇒ 只被它引用的附件退出而共用附件留下。
+- **合计必须用同一份白名单算**：`ExportView` 的「本次将导出」用 `effectiveNodes`（attachments 单元按白名单过滤）与 `effectiveValue`（临时把 attachments 视作已选）喂给 `pickerSummary`。否则界面会拿整库 596 个 / 162 MB 去描述一个只带 12 张图的导出 —— 与 §「未读到的分区绝不显示 0」同一条诚实原则的两端。
+- **子代理缩进只展一层，父行缺失就留顶层**：`sessionChildUnits(nodes)` 用 `sessionIdOfUnit + sessionIdKey` 把子会话按 `parentSessionId` 挂到父行；父行不在清单（被搜索过滤 / 不属于本分区）或父即自身时**跳过索引**，子会话留在顶层 —— 收纳可视化的前提是不许让任何一行凭空消失。渲染深度上限 3（会话 → 子代理会话 → 附件），`depth > 0` 时不再向下找会话子行，父链成环也不会栈溢出（`A5-1` / `A5-2` 钉住索引与嵌套集合）。
+
