@@ -41,6 +41,15 @@ async function tmpRoot(tag: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'dcm-' + tag + '-'));
 }
 
+/**
+ * 采样「读盘层自己造的一次性明文目录」。
+ * 读盘层用 `dcm-trae-db-<6位随机>`；本文件各用例的 root 是 `dcm-trae-db-s<N>-<6位随机>`。
+ * 并发跑全量时兄弟用例的 root 也会躺在 tmpdir 里，不滤掉就会把别人的目录算成本这次的残留（偶发误报）。
+ */
+function plaintextTempDirs(names: readonly string[]): string[] {
+  return names.filter((n) => n.startsWith('dcm-trae-db-') && !/^dcm-trae-db-s\d-/.test(n)).sort();
+}
+
 async function supportsSqlite(): Promise<boolean> {
   return (await sqliteCapability()).available;
 }
@@ -163,7 +172,7 @@ test('s1 夹具解出 chat_session / history_v2：会话数与正文条数与明
 test('s2 四类坏输入各给稳定码，且不抛未捕获异常、不留半截明文', async () => {
   if (!await supportsSqlite()) return;
   const root = await tmpRoot('trae-db-s2');
-  const before = (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('dcm-trae-db-'));
+  const before = plaintextTempDirs(await fs.readdir(os.tmpdir()));
   try {
     const plain = path.join(root, 'plain.db');
     makePlainDb(plain);
@@ -206,7 +215,7 @@ test('s2 四类坏输入各给稳定码，且不抛未捕获异常、不留半�
     assert.equal(bigOut.problem?.detail, 'page-size-mismatch');
 
     // 四次失败都不得留下半截明文：临时目录集合必须回到原样
-    const after = (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('dcm-trae-db-'));
+    const after = plaintextTempDirs(await fs.readdir(os.tmpdir()));
     assert.deepEqual(after.sort(), before.sort());
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -216,7 +225,7 @@ test('s2 四类坏输入各给稳定码，且不抛未捕获异常、不留半�
 test('s3 解密产物是 node:sqlite 可只读打开的明文库，且临时目录导入后不存在', async () => {
   if (!await supportsSqlite()) return;
   const root = await tmpRoot('trae-db-s3');
-  const before = (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('dcm-trae-db-'));
+  const before = plaintextTempDirs(await fs.readdir(os.tmpdir()));
   try {
     const plain = path.join(root, 'plain.db');
     makePlainDb(plain);
@@ -237,7 +246,7 @@ test('s3 解密产物是 node:sqlite 可只读打开的明文库，且临时目�
     // 读盘层自己造的一次性目录必须在结束后消失（明文不留在用户可见位置）
     const outcome = await readTraeEncryptedDatabase(enc, { env: envOf(), platform: HOST });
     assert.equal(outcome.sessions.length, 2);
-    const after = (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('dcm-trae-db-'));
+    const after = plaintextTempDirs(await fs.readdir(os.tmpdir()));
     assert.deepEqual(after.sort(), before.sort());
   } finally {
     await fs.rm(root, { recursive: true, force: true });

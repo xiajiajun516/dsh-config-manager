@@ -49,10 +49,13 @@ test('导入体验：宿主 /plan 真的给 sessions 计划项补了会话标题
   const block = routeBlock('path: API.plan,', 3000);
   assert.match(
     block,
-    /applySessionMetaToPlanItems\(\s*plan\.items,\s*await readSessionMetaWithTitles\(host, plan\.items/,
-    '计划项必须经会话元数据富化（聚合缓存 + 逐会话投影），否则导入页只能显示会话目录名',
+    /plan\.items = await annotateSessionsPlanItems\(plan\.items, host\)/,
+    '计划项必须经 annotateSessionsPlanItems 富化（会话标题 + 子代理父子链接），否则导入页只能显示会话目录名',
   );
-  assert.match(block, /catch \{/, '元数据读不到时不得让计划生成失败（退回目录名）');
+  // 兜错下沉到 core/session-meta.ts：读不到元数据不得让计划生成失败（退回目录名 / 不标父级）
+  const metaSource = fsSync.readFileSync(path.join(root, 'src/core/session-meta.ts'), 'utf8');
+  assert.match(metaSource, /export async function annotateSessionsPlanItems/, '富化函数必须留在 core 里（可被单测直接调用）');
+  assert.match(metaSource, /catch \{/, '元数据读不到时不得让计划生成失败（退回目录名）');
 });
 test('issue #39 F1：宿主 /export 真的解析并下发 sessions: { limit }', () => {
   const block = routeBlock('path: API.export,', 20000);

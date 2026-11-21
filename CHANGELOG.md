@@ -28,6 +28,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-21
+
+> **导出和导入都按「一条对话」来看它用到的附件，选择树能整组勾选**：备份只带走对话真正用过的图片与文件（本机 233 MB 里约 30% 是从未被引用的孤儿），附件挂在用到它的那条对话下并显示真实文件名，子代理会话与附件各归一组、能整组勾也能单条取消，勾子行会连带勾上父对话；导入侧同样按对话还原归属，并且在动手前就说清会覆盖掉本机多少条新消息。
+>
+> **Theme**: export and import now organize attachments by the conversation that used them, with checkable groups — backups carry only the images and files your conversations actually referenced (about 30% of this machine's 233 MB was never used), each listed under its conversation by real file name, with subagent sessions and attachments in separate collapsible groups that can be checked or cleared as a whole and a checked child row checking its parent conversation; the import side reconstructs the same grouping and states up front how many newer local messages will be replaced.
+
 ### 🆕 新增 · Added
 
 - **备份只带对话真正用过的附件，选择树里按对话分组并显示文件名**：导出时只收被选中对话引用过的图片与文件对象（不再整库照搬，本机 233 MB 里约 30% 是从未被引用的孤儿）；选择树里附件挂在用到它的那条对话下面，并显示附件的真实文件名（例如 P-01-after.png），不再是一排 image/png 与哈希；勾对话就随包带上它的附件，单张仍能单独取消，同一附件被多条对话用过时只要有一处取消就不再带走，没有任何对话引用的孤儿一律不进包；导入体检会列出「包内被引用但没随包」的附件数，避免恢复完才发现对话里的图全没了。首次展开要扫一遍会话日志（本机约 7 秒），扫过之后缓存在本机，后续打开瞬时。

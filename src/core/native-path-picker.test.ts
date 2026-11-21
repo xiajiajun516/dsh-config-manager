@@ -110,8 +110,9 @@ test('其他平台：直接 unsupported，且根本不 spawn', async () => {
 });
 
 test('defaultSpawner：超时也保留子进程已经吐出的 stderr（排障线索不能丢）', async () => {
-  const script = 'process.stderr.write("boom\\n"); setTimeout(() => {}, 10000)';
-  const exec = await defaultSpawner({ file: process.execPath, args: ['-e', script], env: {}, timeoutMs: 400 });
+  // 用 writeSync：并发跑全量时 Node 启动本身就可能吃掉几百毫秒，异步写会来不及在超时前排空。
+  const script = 'require("fs").writeSync(2, "boom\\n"); setTimeout(() => {}, 10000)';
+  const exec = await defaultSpawner({ file: process.execPath, args: ['-e', script], env: {}, timeoutMs: 1500 });
   assert.equal(exec.code, null);
   assert.match(exec.stderr, /timed out/);
   assert.match(exec.stderr, /boom/);
