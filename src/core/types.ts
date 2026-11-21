@@ -814,6 +814,22 @@ export interface PlanItem {
   sessionIds?: string[];
   /** 本工作区计划项 **path 的 cwd 目录键**（`projectKeyOf(path)`；issue #45 勾选联动第二判据）。 */
   projectKey?: string;
+  /**
+   * 本单元挂在哪些父单元下面（跨分区展示嵌套；**目前只有附件计划项会带**）。
+   *
+   * 与 `ExportUnit.parentUnitIds` 同义，只是数据来源相反：导出侧由 `enrichUnits()` 读**本机**
+   * 会话日志算归属，导入侧由 `AttachmentsAdapter.analyzeImport()` 读**包内** sessions 日志算
+   * （`refsOfLogBytes()` 同一份解析口径）。缺省 = 归属不可知（解析失败 / 无 sessions 分区 / 日志
+   * 超上限），UI 退回扁平渲染；**不在清单里的父 id** 由 UI 过滤掉，不猜归属。
+   */
+  parentUnitIds?: string[];
+  /**
+   * 父对话的会话裸键（只有子代理会话的计划项可能有值）。
+   *
+   * 与 `ExportUnit.parentSessionId` 同义（勾选联动「勾子带父、勾父带子树」）。导入侧由包内
+   * sessions 的分区数据算出；算不出就不设字段（不猜）。
+   */
+  parentSessionId?: string;
   kind: PlanItemKind;
   adapter: SectionId;
   description: string;

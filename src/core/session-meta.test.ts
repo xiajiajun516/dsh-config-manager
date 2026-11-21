@@ -9,8 +9,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { makeContext, MemFs } from '../adapters/test-helpers.ts';
-import type { ExportUnit } from './types.ts';
-import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, applySessionTitles, clearSessionMetaCache, projectKeyOf, readSessionMeta, readSessionMetaWithTitles, sessionBareKeyOf, subagentParentMap } from './session-meta.ts';
+import type { ExportUnit, PlanItem } from './types.ts';
+import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, applySessionParentLinksToPlanItems, applySessionTitles, clearSessionMetaCache, projectKeyOf, readSessionMeta, readSessionMetaWithTitles, sessionBareKeyOf, subagentParentMap } from './session-meta.ts';
 
 const HOME = 'C:\\Users\\alice';
 const UUID_A = '19495390-402b-463d-a4cc-882287c1f04e';
@@ -227,6 +227,29 @@ test('applySessionParentLinks：子代理会话标出父对话（两种目录名
   assert.equal(out[2]!.parentSessionId, undefined, '非 sessions 分区原样透传');
   assert.equal(units[0]!.parentSessionId, undefined, '纯函数：不改原对象');
   assert.deepEqual(applySessionParentLinks(units, new Map()), units, '空映射 → 原样返回');
+});
+
+test('applySessionParentLinksToPlanItems：计划项用 unitId 解析会话目录（id 末段是文件名，直接解析拿不到目录）', () => {
+  const parentOf = new Map([['c1', 'P']]);
+  const items: PlanItem[] = [
+    { id: `sessions:${PROJECT}/session-c1/session.jsonl`, unitId: `sessions:${PROJECT}/session-c1`, adapter: 'sessions', kind: 'Create', description: 'x', severity: 'info' },
+    { id: `sessions:${PROJECT}/session-P/session.jsonl`, unitId: `sessions:${PROJECT}/session-P`, adapter: 'sessions', kind: 'Create', description: 'x', severity: 'info' },
+    { id: `attachments:v1/objects/aa/${'a'.repeat(64)}`, adapter: 'attachments', kind: 'Create', description: 'x', severity: 'info' },
+  ];
+  const out = applySessionParentLinksToPlanItems(items, parentOf);
+  assert.equal(out[0]!.parentSessionId, 'P', '子代理会话的计划项挂上父对话（导入树据此折叠与联动）');
+  assert.equal(out[1]!.parentSessionId, undefined, '父对话本身没有父字段（不编造）');
+  assert.equal(out[2]!.parentSessionId, undefined, '非 sessions 分区原样透传');
+  assert.equal(items[0]!.parentSessionId, undefined, '纯函数：不改原对象');
+  assert.deepEqual(applySessionParentLinksToPlanItems(items, new Map()), items, '空映射 → 原样返回（联动静默失效也不猜）');
+});
+
+test('applySessionParentLinksToPlanItems：没有 unitId 时退回 id（整段路径即会话目录的情况）', () => {
+  const parentOf = new Map([['c1', 'P']]);
+  const items: PlanItem[] = [
+    { id: `sessions:${PROJECT}/session-c1`, adapter: 'sessions', kind: 'Create', description: 'x', severity: 'info' },
+  ];
+  assert.equal(applySessionParentLinksToPlanItems(items, parentOf)[0]!.parentSessionId, 'P');
 });
 
 /* ---------------- 进程内缓存（mtime 失效）----------------

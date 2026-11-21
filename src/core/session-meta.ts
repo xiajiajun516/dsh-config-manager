@@ -351,6 +351,30 @@ export function applySessionParentLinks<T extends { id: string; parentSessionId?
 }
 
 /**
+ * 导入计划项版的 `applySessionParentLinks`：给 sessions 计划项补「父对话」。
+ *
+ * 与导出侧只差一个 id 形状问题：计划项 id 是「分区:相对路径」、末段是**文件名**
+ * （`session.jsonl` / `session.jsonl.zstd`），直接解析拿不到会话目录 → 必须用 `unitId`
+ * （`sessions:<项目键>/<会话目录>`，与附件 `parentUnitIds` 同一口径）。
+ * `parentOf` 由宿主 `sessions.parentRelations()` 经 `subagentParentMap()` 归一化；
+ * 查不到 / 非 sessions 分区一律原样返回（不猜）。
+ */
+export function applySessionParentLinksToPlanItems<
+  T extends { id: string; adapter: string; unitId?: string; parentSessionId?: string },
+>(items: readonly T[], parentOf: ReadonlyMap<string, string> | undefined, sectionId = 'sessions'): T[] {
+  if (parentOf === undefined || parentOf.size === 0) return [...items];
+  return items.map((item) => {
+    if (item.adapter !== sectionId) return item;
+    const [probe] = applySessionParentLinks<{ id: string; parentSessionId?: string }>(
+      [{ id: item.unitId ?? item.id }],
+      parentOf,
+      sectionId,
+    );
+    return probe?.parentSessionId === undefined ? item : { ...item, parentSessionId: probe.parentSessionId };
+  });
+}
+
+/**
  * 给**会话体检行**补上「界面标题」（行上的 `sessionId` = 会话目录名，索引键是裸键 → 查表前必须归一化）。
  *
  * 为什么需要：体检列表此前只显示目录名（`session-20d2722c-…`），用户在同一屏十几条里认不出哪条是自己的

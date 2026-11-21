@@ -182,8 +182,30 @@ export function ContentPicker({
    * 附件分区**仍然在 nodes 里**：会话行下面的附件子行要靠它的单元渲染（parentUnitIds 是宿主算出的
    * 归属），也要靠它出现在导出请求里。只是不给它一行勾选框 —— 附件随对话走，用户不必（也无法）
    * 单独「勾选整个附件库」。
+   *
+   * 唯一例外 = **导入模式下的孤儿附件**（包里带了、却没有任何会话引用它）：它们没有父行可挂，
+   * 藏起来就等于「默认会导入、界面上却看不见也取消不了」。孤儿只会出现在导入包（导出侧按勾选
+   * 会话推导白名单，孤儿永不入包），所以这一行只在 mode==='import' 时存在。
    */
-  const shownNodes = useMemo(() => nodes.filter((n) => n.section !== 'attachments'), [nodes])
+  const shownNodes = useMemo(() => {
+    const out: SelectionSection[] = []
+    for (const node of nodes) {
+      if (node.section !== 'attachments') {
+        out.push(node)
+        continue
+      }
+      if (mode !== 'import') continue
+      const orphans = node.units.filter((unit) => (unit.parentUnitIds ?? []).length === 0)
+      if (orphans.length === 0) continue
+      out.push({
+        ...node,
+        count: orphans.length,
+        sizeBytes: node.units.length === 0 ? 0 : Math.round((node.sizeBytes * orphans.length) / node.units.length),
+        units: orphans,
+      })
+    }
+    return out
+  }, [nodes, mode])
   const visible = useMemo(() => filterSections(shownNodes, query), [shownNodes, query])
   /** 「按插件看」的树：同一份 nodes 的第二个投影（纯函数在 src/ui/selection-model.ts） */
   /** 「按插件看」的完整树（无搜索过滤；纯函数在 src/ui/selection-model.ts） */

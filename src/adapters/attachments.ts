@@ -31,7 +31,8 @@ import {
   saveAttachmentRefCache,
   type AttachmentRefCache,
 } from './attachment-index-cache.ts';
-import type { ExportOptions, ExportUnit, HostContext } from '../core/types.ts';
+import type { ExportOptions, ExportUnit, HostContext, ImportContext, PlanItem } from '../core/types.ts';
+import type { FilesSection } from '../schema/types.ts';
 import { toPosixRel } from './units.ts';
 
 /** 逐批并发读日志的批大小：会话库可能有上千个日志，一次性开满会打爆 libuv 线程池。 */
@@ -118,14 +119,14 @@ export function resetAttachmentsScanCache(): void {
   scanCache = null;
 }
 
-/** 日志文件 → 该文件引用的附件（读不出 / 解不开返回 null，由调用方降级）。 */
-async function refsOfLog(ctx: HostContext, homeRel: string): Promise<Map<string, AttachmentRefMeta> | null> {
-  let bytes: Uint8Array;
-  try {
-    bytes = await ctx.fs.readFile(homeRel);
-  } catch {
-    return null;
-  }
+/**
+ * 日志字节 → 该文件引用的附件（损坏 / 解不开返回 null，由调用方降级）。
+ *
+ * 纯函数是**有意的**：导出侧从本机盘读日志、导入侧从备份包里的同一个文件字节解析 ——
+ * 两条路径共用这一份解析口径。写两份，迟早出现「导出时算得出归属、导入时算不出」，
+ * 界面与包内容又会分叉。
+ */
+export function refsOfLogBytes(bytes: Uint8Array): Map<string, AttachmentRefMeta> | null {
   const out = new Map<string, AttachmentRefMeta>();
   let scan: ReturnType<typeof scanZstdFrames>;
   try {
@@ -164,10 +165,26 @@ async function refsOfLog(ctx: HostContext, homeRel: string): Promise<Map<string,
   return out;
 }
 
+/** 日志文件 → 该文件引用的附件（读不出 / 解不开返回 null，由调用方降级）。 */
+async function refsOfLog(ctx: HostContext, homeRel: string): Promise<Map<string, AttachmentRefMeta> | null> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await ctx.fs.readFile(homeRel);
+  } catch {
+    return null;
+  }
+  return refsOfLogBytes(bytes);
+}
+
 /** 日志的相对路径 → 会话单元裸键（`<projectKey>/<sessionDir>`，与 sessions 单元的 id 同构）。 */
 function unitKeyOfLog(rel: string): string | null {
   const parts = toPosixRel(rel).split('/');
   return parts.length >= 3 ? `${parts[1]}/${parts[2]}` : null;
+}
+
+/** 分区载荷窄化：分析阶段的 `ctx.sections` 是 `unknown`，只认真正的 files 分区（不猜其它形态）。 */
+function isFilesSection(value: unknown): value is FilesSection {
+  return typeof value === 'object' && value !== null && Array.isArray((value as { files?: unknown }).files);
 }
 
 /** 把一份日志的引用并进索引（同一附件被多条会话引用时记多个 owner）。 */
@@ -275,6 +292,66 @@ export class AttachmentsAdapter extends FileCollectionAdapter {
   /** 单元 = 一个附件对象（路径里那段 64 位 hex 反推出的 attachmentId）。 */
   protected override unitIdOf(relativePath: string): string {
     return attachmentIdOfRelPath(toPosixRel(relativePath)) ?? toPosixRel(relativePath);
+  }
+
+  /**
+   * 导入侧富化（2026-11-21 用户要求「导入功能也适配」）：把包内附件对象挂到**引用它的会话**
+   * 下面，并显示会话日志里记下的真实文件名。
+   *
+   * 为什么必须在这一层做：「谁引用过这个附件」只存在于会话日志里。导出侧由 `enrichUnits()`
+   * 读本机盘算归属；导入时目标盘上还没有这些会话，只能读**包内** sessions 分区的日志字节 ——
+   * 同一份 `refsOfLogBytes()` 解析口径，不复刻第二套。归属算得出来，「勾会话带附件」
+   * （`applySessionAttachmentCoupling`）才会自动生效，全选也不会把被引用的附件落下。
+   *
+   * 失败方向与导出侧一致：算不出归属就退回扁平（不填 parentUnitIds），孤儿附件照旧以分区行
+   * 可见可勾，绝不因为一次坏日志把整批附件藏起来，也不拦下导入。
+   */
+  override async analyzeImport(data: FilesSection, ctx: ImportContext): Promise<PlanItem[]> {
+    const items = await super.analyzeImport(data, ctx);
+    if (items.length === 0) return items;
+    const index = this.refsFromPackage(ctx);
+    if (index === null) return items;
+    const prefix = this.id + ':';
+    return items.map((item) => {
+      const ref = item.unitId !== undefined && item.unitId.startsWith(prefix)
+        ? item.unitId.slice(prefix.length)
+        : null;
+      const entry = ref === null ? undefined : index.get(ref);
+      if (ref === null || entry === undefined || entry.units.length === 0) return item;
+      const shortId = shortAttachmentId(ref);
+      const displayName = entry.name ?? entry.mediaType ?? shortId;
+      return {
+        ...item,
+        label: displayName,
+        ...(displayName !== shortId && item.detail === undefined ? { detail: shortId } : {}),
+        parentUnitIds: entry.units.map((key) => `sessions:${key}`),
+      };
+    });
+  }
+
+  /**
+   * 包内引用面：读 `ctx.sections` 里的 sessions 分区（分析阶段已在内存里，不碰盘）。
+   *
+   * 返回 null = 归属不可知，调用方退回扁平：任一引用了附件的日志解不开（半份引用当不得完整），
+   * 或日志条数超出预览上限。降级方向只能往「少嵌套」，绝不能往「少显示」。
+   */
+  private refsFromPackage(ctx: ImportContext): AttachmentRefIndex | null {
+    const sessions = ctx.sections.get('sessions');
+    if (!isFilesSection(sessions)) return null;
+    const logs: Array<{ key: string; data: Uint8Array }> = [];
+    for (const file of sessions.files) {
+      // 分区内相对路径不带 `sessions/` 前缀，补上再走 unitKeyOfLog —— 与导出侧（homeRel）同构。
+      const key = unitKeyOfLog(`sessions/${toPosixRel(file.relativePath)}`);
+      if (key !== null) logs.push({ key, data: file.data });
+    }
+    if (logs.length === 0 || logs.length > ENRICH_MAX_LOGS) return null;
+    const index: AttachmentRefIndex = new Map();
+    for (const log of logs) {
+      const refs = refsOfLogBytes(log.data);
+      if (refs === null) return null;
+      addRefs(index, log.key, refs);
+    }
+    return index;
   }
 
   protected override async restrictUnits(

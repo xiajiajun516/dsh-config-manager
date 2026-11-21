@@ -11,6 +11,8 @@ import { makeContext } from './test-helpers.ts';
 import { ATTACHMENT_CACHE_REL } from './attachment-index-cache.ts';
 import { zhMsg } from '../core/messages.ts';
 import { encodeZstdFrame, zstdAvailable } from '../utils/zstd-frame.ts';
+import type { ImportContext } from '../core/types.ts';
+import type { FilesSection, SectionId } from '../schema/types.ts';
 
 const CAPABLE = zstdAvailable();
 const hex = (ch: string): string => ch.repeat(64);
@@ -263,6 +265,87 @@ test('P1-8 缓存文件损坏 ⇒ 照常重扫并重建（缓存坏不许影响�
     Buffer.from(rebuilt).toString('utf8').includes('"mtimeMs":1000'),
     '重扫后要把缓存重建出来（损坏内容整份丢弃后重写）',
   );
+});
+
+// ── 导入侧：归属与真名由**包内** sessions 日志算出（导出侧读本机盘，口径同一份 refsOfLogBytes） ──
+
+/** 造一个文件分区的载荷（contentHash 留空：目标机没有同名文件时走 Create，不比较哈希）。 */
+function filesSection(files: readonly { relativePath: string; data: Uint8Array }[]): FilesSection {
+  return { version: 1, files: files.map((f) => ({ relativePath: f.relativePath, data: f.data, contentHash: '' })) };
+}
+
+/** 造一个导入上下文：只有 sections 里的 sessions 分区对附件适配器有意义。 */
+function importCtxOf(sessions: FilesSection | undefined): ImportContext {
+  const sections = new Map<SectionId, unknown>();
+  if (sessions !== undefined) sections.set('sessions', sessions);
+  return {
+    sections,
+    target: makeContext('linux', '/home/alice'),
+    targetPlatform: 'linux',
+    msg: zhMsg,
+    log: { debug() {}, info() {}, warn() {}, error() {} },
+  } as unknown as ImportContext;
+}
+
+test('I-1 导入：包内日志能算出归属与真名 ⇒ 计划项带上 parentUnitIds + 真名 + 短哈希', { skip: !CAPABLE }, async () => {
+  const adapter = new AttachmentsAdapter();
+  const pkg = filesSection([{ relativePath: 'v1/objects/aa/' + hex('a'), data: Buffer.from('A') }]);
+  const ctx = importCtxOf(filesSection([
+    { relativePath: 'proj-1/sess-1/session.jsonl', data: logFrameNamed(ID_A, 'P-01-after.png') },
+  ]));
+  const items = await adapter.analyzeImport(pkg, ctx);
+  assert.equal(items.length, 1);
+  const first = items[0]!;
+  assert.equal(first.unitId, 'attachments:' + ID_A, '单元 id 仍与导出侧同一条规则');
+  assert.equal(first.label, 'P-01-after.png', '导入树里显示真名，不再是一串 sha');
+  assert.equal(first.detail, 'sha256:aaaaaaaa…', '短哈希留作次要信息');
+  assert.deepEqual(first.parentUnitIds, ['sessions:proj-1/sess-1'], '挂在用它的那条对话下（与导出侧同一形状）');
+});
+
+test('I-2 导入：同一对象被包内两条会话引用 ⇒ 两个父单元都写上', { skip: !CAPABLE }, async () => {
+  const adapter = new AttachmentsAdapter();
+  const pkg = filesSection([
+    { relativePath: 'v1/objects/aa/' + hex('a'), data: Buffer.from('A') },
+    { relativePath: 'v1/objects/bb/' + hex('b'), data: Buffer.from('BB') },
+  ]);
+  const ctx = importCtxOf(filesSection([
+    { relativePath: 'proj-1/sess-1/session.jsonl', data: logFrame([ID_A, ID_B]) },
+    { relativePath: 'proj-1/sess-2/session.jsonl', data: logFrame([ID_A]) },
+  ]));
+  const items = await adapter.analyzeImport(pkg, ctx);
+  const a = items.find((i) => i.unitId === 'attachments:' + ID_A);
+  assert.deepEqual([...(a?.parentUnitIds ?? [])].sort(), ['sessions:proj-1/sess-1', 'sessions:proj-1/sess-2']);
+});
+
+test('I-3 导入：包内没有 sessions 分区 ⇒ 计划项原样（不猜归属、不造名）', async () => {
+  const adapter = new AttachmentsAdapter();
+  const pkg = filesSection([{ relativePath: 'v1/objects/aa/' + hex('a'), data: Buffer.from('A') }]);
+  const items = await adapter.analyzeImport(pkg, importCtxOf(undefined));
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.parentUnitIds, undefined, '算不出归属就不写字段（不能写成空数组）');
+  assert.equal(items[0]?.label, undefined, '没有日志就没有名字，不编造');
+});
+
+test('I-4 导入：包内日志损坏 ⇒ 计划项原样返回，绝不拿半份当完整', { skip: !CAPABLE }, async () => {
+  const corrupt = Buffer.concat([Buffer.from([0x28, 0xb5, 0x2f, 0xfd]), Buffer.alloc(24, 0x41)]);
+  const adapter = new AttachmentsAdapter();
+  const pkg = filesSection([{ relativePath: 'v1/objects/aa/' + hex('a'), data: Buffer.from('A') }]);
+  const items = await adapter.analyzeImport(pkg, importCtxOf(filesSection([
+    { relativePath: 'proj-1/sess-1/session.jsonl', data: logFrame([ID_A]) },
+    { relativePath: 'proj-1/sess-2/session.jsonl', data: corrupt },
+  ])));
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.parentUnitIds, undefined, '有坏日志就整批不认，不把半个引用面当完整');
+});
+
+test('I-5 导入：日志里没有 name ⇒ 退回 mediaType（与导出侧同一降级）', { skip: !CAPABLE }, async () => {
+  const adapter = new AttachmentsAdapter();
+  const pkg = filesSection([{ relativePath: 'v1/objects/aa/' + hex('a'), data: Buffer.from('A') }]);
+  const items = await adapter.analyzeImport(pkg, importCtxOf(filesSection([
+    { relativePath: 'proj-1/sess-1/session.jsonl', data: logFrame([ID_A]) },
+  ])));
+  assert.equal(items[0]?.label, 'image/png');
+  assert.equal(items[0]?.detail, 'sha256:aaaaaaaa…');
 });
 
 test('P1-9 拿不到 mtime ⇒ 不写缓存（不能靠猜的时间做失效键）', { skip: !CAPABLE }, async () => {

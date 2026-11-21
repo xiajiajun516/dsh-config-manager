@@ -311,6 +311,64 @@ test('sectionsFromPlan：宿主给的展示名/分组优先（sessions 显示会
   assert.equal(units[1]!.label, '--D-P--/u2', '缺 label → 退回 unitLabel，不编造');
   assert.equal(units[1]!.group, 'dsh-config-manager');
 })
+test('sectionsFromPlan：附件的归属/真名/父会话字段原样透传（导入树靠它还原折叠与联动）', () => {
+  const plan: ImportPlan = {
+    items: [
+      item({
+        id: 'attachments:v1/objects/aa/' + 'a'.repeat(64),
+        unitId: 'attachments:sha256:' + 'a'.repeat(64),
+        adapter: 'attachments',
+        label: 'P-01-after.png',
+        detail: 'sha256:aaaaaaaa…',
+        parentUnitIds: ['sessions:proj-1/sess-1'],
+        parentSessionId: 'proj-1/sess-1',
+      }),
+      item({
+        id: 'attachments:v1/objects/bb/' + 'b'.repeat(64),
+        unitId: 'attachments:sha256:' + 'b'.repeat(64),
+        adapter: 'attachments',
+      }),
+    ],
+    globalStrategy: 'merge',
+    pathMappings: [],
+    missingSecrets: [],
+    needsRestart: false,
+    estimatedActions: {} as ImportPlan['estimatedActions'],
+  };
+  const units = sectionsFromPlan(plan)[0]!.units;
+  assert.equal(units[0]!.label, 'P-01-after.png');
+  assert.equal(units[0]!.detail, 'sha256:aaaaaaaa…');
+  assert.deepEqual(units[0]!.parentUnitIds, ['sessions:proj-1/sess-1'], '有归属就带上，UI 才能挂到对话下');
+  assert.equal(units[0]!.parentSessionId, 'proj-1/sess-1', '勾选联动认父会话');
+  assert.equal(units[1]!.parentUnitIds, undefined, '孤儿附件不写空数组，UI 据此按扁平渲染');
+  assert.equal(units[1]!.detail, undefined);
+});
+
+test('导入树：只勾对话（attachments 分区还没进 sections）⇒ 全选也要把被引用附件带上，绝不静默丢图', () => {
+  const plan: ImportPlan = {
+    items: [
+      item({ id: 'sessions:P/u1/session.jsonl', unitId: 'sessions:P/u1', adapter: 'sessions' }),
+      item({
+        id: 'attachments:v1/objects/aa/' + 'a'.repeat(64),
+        unitId: 'attachments:sha256:' + 'a'.repeat(64),
+        adapter: 'attachments',
+        parentUnitIds: ['sessions:P/u1'],
+      }),
+    ],
+    globalStrategy: 'merge',
+    pathMappings: [],
+    missingSecrets: [],
+    needsRestart: false,
+    estimatedActions: {} as ImportPlan['estimatedActions'],
+  }
+  const nodes = sectionsFromPlan(plan)
+  // 修复前的破口：全选只作用于看得见的分区，attachments 行被藏起来 ⇒ 附件项被整片滤掉
+  const sessionsOnly = nodes.filter((n) => n.section === 'sessions')
+  const after = applySessionAttachmentCoupling(selOf([], []), selectAll(sessionsOnly, true), nodes)
+  const kept = buildSelectedPlan(plan, after).items
+  assert.ok(kept.some((i) => i.adapter === 'attachments'), '勾了对话，它用过的附件必须一起进计划')
+})
+
 test('defaultSelectionFromPlan：本地导入默认全勾；市场口径（highRiskDefaultOff）高风险不勾', () => {
   assert.deepEqual(defaultSelectionFromPlan(PLAN).sections, ['skills', 'plugins', 'credentialsStatus'])
   const market = defaultSelectionFromPlan(PLAN, { highRiskDefaultOff: true })

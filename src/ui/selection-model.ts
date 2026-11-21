@@ -1091,7 +1091,13 @@ export function sectionsFromPlan(plan: ImportPlan): SelectionSection[] {
         id: unitId,
         // 宿主给的展示名优先（sessions 的会话标题）；缺省退回单元 id 剥前缀（会话目录名）
         label: item.label ?? unitLabel(unitId, item.adapter),
+        // 副标题（附件的短哈希）：宿主在计划项里给了就透传，缺省不进模型（不能写 undefined 键）
+        ...(item.detail !== undefined ? { detail: item.detail } : {}),
         ...(item.group !== undefined ? { group: item.group } : {}),
+        // 展示嵌套与勾选联动的两个归属字段：导入侧宿主（attachments.analyzeImport）与
+        // sessions 的父会话关系都靠它们 —— 不透传就等于导入树里既没有子行、也没有联动。
+        ...(item.parentUnitIds !== undefined ? { parentUnitIds: item.parentUnitIds } : {}),
+        ...(item.parentSessionId !== undefined ? { parentSessionId: item.parentSessionId } : {}),
         ...(item.sessionIds !== undefined ? { sessionIds: item.sessionIds } : {}),
         ...(item.projectKey !== undefined ? { projectKey: item.projectKey } : {}),
         ...(item.blank === true ? { blank: true } : {}),
