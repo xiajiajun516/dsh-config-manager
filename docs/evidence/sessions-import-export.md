@@ -91,5 +91,5 @@
 - **未配对的会话日志必须参与判定**：本机多出一份代际日志（`session.jsonl.zstd` + `session.v3.jsonl.zstd`）而包内只有一份时，只比同名那份会把「本机整份日志都是新增」误判成 `identical`；现在份数不等一律 `unreadable`（`src/adapters/sessions.ts`）。
 - **空 diffs ≠ 本机没有该会话**：`aggregateSessionRows([])` 返回 `unreadable`（没有可比数据就出不了结论）；`new` 只由「目录形态都探不到」这一条路径直接产出。
 - **引用面缓存必须可证伪**：键 = 每个日志的 `路径:mtime`，**任一条拿不到 mtime 就整批不缓存**，TTL 60 s（导出预览与真实导出各扫一遍 225 MB 日志的代价）；测试用 `resetAttachmentsScanCache()` 隔离，生产失效不依赖它。
-- **降级只改显示级别、不得撤销阻断**：`markSessionVerdicts`（`src/core/session-verdict-plan.ts`）对 `kind==='Error'` 的项**不写** `severity` —— SEC-05 的红标正是「为什么不导」，被降成 warning 会让用户以为只是提醒。
+- **Error 项不降级：severity 只许改显示级别，不得撤销阻断**：`markSessionVerdicts`（`src/core/session-verdict-plan.ts`）的降级条件必须同时满足「`row.verdict` 是 `localAhead` 或 `diverged`」与「计划项 `kind !== 'Error'`」才置 `severity: 'warning'`。`kind==='Error'` 的项**一个字都不写** —— SEC-05 的红标正是「为什么不导」，被降成 warning 会让用户以为只是提醒，而 `sessionVerdict` 仍照写（展示事实与决定去留是两回事）。旧实现无条件覆盖 `severity`，连 `severity: 'error'` 的错误项也会被降级；`src/core/session-verdict-plan.test.ts` 的 P3-P1（`kind:'Error'` + `severity:'error'` + `localAhead` ⇒ 仍是 `'error'`）钉住它。
 - **告警要在算完数字之后再推**：`export.attachmentsAllSessions` 曾把带占位符的文案直接推到 `warnings` 里（`{total}`、`{count}` 原样出现在界面上）。凡带参数的文案，push 点必须在所有参数确定之后；`attachments.test.ts` 的 P1-7 用完整句子钉住它。
