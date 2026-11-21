@@ -29,6 +29,15 @@ function logFrame(ids: readonly string[]): Uint8Array {
   return encodeZstdFrame(Buffer.from(events.join('\n') + '\n', 'utf8'));
 }
 
+/** 一帧带真名的附件引用（宿主真实形状：name 排在对象末尾）。 */
+function logFrameNamed(id: string, name: string | undefined): Uint8Array {
+  const attachment = name === undefined
+    ? { attachmentId: id, mediaType: 'image/png', bytes: 10 }
+    : { attachmentId: id, mediaType: 'image/png', bytes: 10, width: 715, height: 516, name };
+  const event = JSON.stringify({ seq: 0, type: 'message', data: { type: 'image', attachment } });
+  return encodeZstdFrame(Buffer.from(event + '\n', 'utf8'));
+}
+
 /** 造一台「本机库 + 两个会话」的宿主：对象 A/B/C 存在，D 被引用但已不在库里。 */
 async function makeFixture(): Promise<ReturnType<typeof makeContext>> {
   // 引用面缓存是模块级状态（TTL 60s）：每个用例从干净缓存开始，否则用例之间会互相漏气
@@ -167,6 +176,30 @@ test('G5-2 展示名：有 mediaType 用它 + 短哈希作次要信息；没有 
   assert.equal(a?.detail, 'sha256:aaaaaaaa…', '次要信息只留前 8 位，足够分辨不同对象');
 });
 
+test('G5-5 日志里带真名 ⇒ 行标题是真名，短哈希降为次要信息', { skip: !CAPABLE }, async () => {
+  const ctx = await makeFixture();
+  await ctx.fs.writeFile('sessions/proj-1/sess-1/session.jsonl', logFrameNamed(ID_A, 'P-01-after.png'));
+  const adapter = new AttachmentsAdapter();
+  const out = await adapter.export(ctx, { includeSecrets: false });
+  const units = await adapter.enrichUnits(ctx, adapter.listUnits(out));
+  const a = units?.find((u) => u.id === 'attachments:' + ID_A);
+  assert.equal(a?.label, 'P-01-after.png', '有真名就用真名，不再显示 MIME');
+  assert.equal(a?.detail, 'sha256:aaaaaaaa…', '真名与短哈希不同，短哈希仍留作次要信息');
+});
+
+test('G5-6 同一对象先在无 name 的帧出现、后在带 name 的帧出现 ⇒ 保留真名', { skip: !CAPABLE }, async () => {
+  const ctx = await makeFixture();
+  const frames = Buffer.concat([
+    Buffer.from(logFrameNamed(ID_A, undefined)),
+    Buffer.from(logFrameNamed(ID_A, 'P-01-after.png')),
+  ]);
+  await ctx.fs.writeFile('sessions/proj-1/sess-1/session.jsonl', frames);
+  const adapter = new AttachmentsAdapter();
+  const out = await adapter.export(ctx, { includeSecrets: false });
+  const units = await adapter.enrichUnits(ctx, adapter.listUnits(out));
+  assert.equal(units?.find((u) => u.id === 'attachments:' + ID_A)?.label, 'P-01-after.png');
+});
+
 test('G5-3 本机日志损坏 ⇒ 富化返回 null（界面按扁平渲染），绝不猜归属', { skip: !CAPABLE }, async () => {
   const ctx = await makeFixture();
   const corrupt = Buffer.concat([Buffer.from([0x28, 0xb5, 0x2f, 0xfd]), Buffer.alloc(24, 0x41)]);
@@ -225,7 +258,11 @@ test('P1-8 缓存文件损坏 ⇒ 照常重扫并重建（缓存坏不许影响�
   const out = await adapter.export(ctx, { includeSecrets: false });
   assert.equal(out.data.files.length, 3, '损坏的缓存必须被忽略，结果与无缓存一致');
   const rebuilt = await ctx.fs.readFile(ATTACHMENT_CACHE_REL);
-  assert.ok(Buffer.from(rebuilt).toString('utf8').includes('"version":1'), '重扫后要把缓存重建出来');
+  // 不钉版本号（升版本是内部事），钉「真的按当前内容重写了一条」：mtime 原样落盘。
+  assert.ok(
+    Buffer.from(rebuilt).toString('utf8').includes('"mtimeMs":1000'),
+    '重扫后要把缓存重建出来（损坏内容整份丢弃后重写）',
+  );
 });
 
 test('P1-9 拿不到 mtime ⇒ 不写缓存（不能靠猜的时间做失效键）', { skip: !CAPABLE }, async () => {

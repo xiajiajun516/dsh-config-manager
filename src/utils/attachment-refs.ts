@@ -13,18 +13,35 @@
  */
 
 /**
- * 附件引用的锚定形态：JSON 字段 attachmentId 的值，后面**可选**紧跟 mediaType / bytes。
+ * 附件引用的**锚点**：JSON 字段形态的 attachmentId（防误命中的唯一判据，见文件头）。
  *
- * 为什么把后两个字段并进同一个正则：子行要显示「这是什么」，而 64 位 sha 对用户没有信息量。
- * 日志里的形状是 `"attachment":{"attachmentId":"sha256:…","mediaType":"image/jpeg","bytes":123}`，
- * 两个后续字段都按「紧邻」匹配 —— 字段顺序不同或缺失时只是取不到，绝不猜。
+ * 只做定位，不在这里抓字段 —— 宿主写出的附件对象里字段顺序是
+ * `attachmentId → mediaType → bytes → width/height → name`，name 排在最后，
+ * 用「紧邻字段」正则根本抓不到（实测 129 条引用全部带 name，旧正则一条都取不到）。
+ * 因此锚点之后按**有界 JSON 对象窗口**再抓字段，字段顺序无关。
  */
-const ATTACHMENT_REF_FIELD = new RegExp(
-  '"attachmentId"\\s*:\\s*"(sha256:[a-f0-9]{64})"'
-  + '(?:\\s*,\\s*"mediaType"\\s*:\\s*"([A-Za-z0-9.+\\/-]{1,64})")?'
-  + '(?:\\s*,\\s*"bytes"\\s*:\\s*(\\d{1,15}))?',
-  'g',
-);
+const ATTACHMENT_ID_ANCHOR = /"attachmentId"\s*:\s*"(sha256:[a-f0-9]{64})"/g;
+
+/** 锚点向前回退找对象起始的最大距离（宿主字段都在同一对象内，实测 ≤ 200 B）。 */
+const ANCHOR_LOOKBACK = 512;
+
+/**
+ * 对象窗口上限（含对象本身）：宿主附件对象实测 ≤ 400 B（带 width/height/originalDimensions），
+ * 2048 只是防御性上限 —— 超出就取不到字段，绝不为了找 name 扫整份日志。
+ */
+const OBJECT_WINDOW_MAX = 2048;
+
+/** 媒体类型：只认 MIME 形状（带空格/引号的东西不是它，宁可不显示）。 */
+const MEDIA_TYPE_FIELD = /"mediaType"\s*:\s*"([A-Za-z0-9.+/-]{1,64})"/;
+/** 字节数：只认非负整数。 */
+const BYTES_FIELD = /"bytes"\s*:\s*(\d{1,15})/;
+/**
+ * 附件真名（宿主 ImageAttachmentRef.name / FileAttachmentRef.name）。
+ *
+ * 形状限制的理由：这个名字会直接渲染成行标题，所以拒绝控制字符，也拒绝路径分隔符
+ * （宿主声明 name 已剥掉本地路径信息；带分隔符的只能是坏数据或伪造，宁可退回 MIME/短哈希）。
+ */
+const NAME_FIELD = /"name"\s*:\s*"([^"\\/\u0000-\u001f]{1,200})"/;
 
 /** 单段 64 位十六进制（附件在库里的物理目录名/文件名）。 */
 const HEX_SEGMENT = /^[a-f0-9]{64}$/;
@@ -34,34 +51,95 @@ const ID_SHAPE = /^sha256:[a-f0-9]{64}$/;
 
 /** 日志里声明的附件元信息（取不到就是取不到，不猜默认值）。 */
 export interface AttachmentRefMeta {
-  /** 媒体类型（`image/jpeg` 这类；只在字段紧邻时取到） */
+  /** 媒体类型（`image/jpeg` 这类） */
   mediaType?: string
-  /** 字节数（同上） */
+  /** 字节数 */
   bytes?: number
+  /**
+   * 附件真名（用户发出去时的文件名，如 `P-01-after.png`）。
+   *
+   * 这是选择器里附件的**首选展示名**：64 位哈希没有信息量，`image/png` 又让人分不清
+   * 同名类型的两张图。老日志/没有 name 的附件就是取不到 —— 退回 MIME 或短哈希，不编造。
+   */
+  name?: string
 }
 
 /**
- * 从一段会话日志文本里抽取全部被引用的附件，附带日志声明的类型/字节数。
+ * 锚点所在的**那个** JSON 对象的边界（半开区间）；判定不了一律 null。
  *
- * 同一 id 在同一份日志里出现多次时取**第一条**带 mediaType 的记录（同一条消息的重试会把
+ * 为什么要真做括号匹配而不是取「锚点前后固定窗口」：同一行里可能有多个对象
+ * （消息 → 内容数组 → 多个附件），固定窗口会把**上一个对象的 name** 抓给下一个 id ——
+ * 显示成别人的文件名比显示 MIME 更糟。所以先向前找到最近的 `{`（中途遇见 `}` 就说明
+ * 锚点不在对象里），再向后做字符串感知的括号匹配，窗口超限就放弃。
+ */
+function jsonObjectAround(text: string, anchor: number): { start: number; end: number } | null {
+  let start = -1;
+  const from = Math.max(0, anchor - ANCHOR_LOOKBACK);
+  for (let i = anchor - 1; i >= from; i -= 1) {
+    const ch = text.charAt(i);
+    if (ch === '}') return null;
+    if (ch === '{') { start = i; break; }
+  }
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  const limit = Math.min(text.length, start + OBJECT_WINDOW_MAX);
+  for (let i = start; i < limit; i += 1) {
+    const ch = text.charAt(i);
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return { start, end: i + 1 };
+    }
+  }
+  return null;
+}
+
+/** 从一个附件对象的原文里抓字段（字段顺序无关；形状不符 = 取不到）。 */
+function metaOfObject(body: string): AttachmentRefMeta {
+  const out: AttachmentRefMeta = {};
+  const mediaType = MEDIA_TYPE_FIELD.exec(body)?.[1];
+  if (mediaType !== undefined) out.mediaType = mediaType;
+  const rawBytes = BYTES_FIELD.exec(body)?.[1];
+  if (rawBytes !== undefined) {
+    const bytes = Number(rawBytes);
+    if (Number.isSafeInteger(bytes) && bytes >= 0) out.bytes = bytes;
+  }
+  const name = NAME_FIELD.exec(body)?.[1];
+  if (name !== undefined) out.name = name;
+  return out;
+}
+
+/**
+ * 从一段会话日志文本里抽取全部被引用的附件，附带日志声明的类型/字节数/真名。
+ *
+ * 同一 id 在同一份日志里出现多次时逐字段取**第一条**非空声明（同一条消息的重试会把
  * 同一附件写多遍，先到的那条就是用户真正发出去的那次）。
  */
 export function extractAttachmentRefs(text: string): Map<string, AttachmentRefMeta> {
   const out = new Map<string, AttachmentRefMeta>();
   if (text === '') return out;
   // 正则带 g 且有 lastIndex 状态：每次新建实例，避免跨调用串状态。
-  const re = new RegExp(ATTACHMENT_REF_FIELD.source, 'g');
+  const re = new RegExp(ATTACHMENT_ID_ANCHOR.source, 'g');
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
     const id = match[1]!;
     if (!ID_SHAPE.test(id)) continue;
-    const mediaType = match[2];
-    const rawBytes = match[3];
+    const window = jsonObjectAround(text, match.index);
+    const meta = window === null ? {} : metaOfObject(text.slice(window.start, window.end));
     const prev = out.get(id);
-    const bytes = rawBytes === undefined ? undefined : Number(rawBytes);
     out.set(id, {
-      ...(mediaType !== undefined ? { mediaType } : (prev?.mediaType !== undefined ? { mediaType: prev.mediaType } : {})),
-      ...(bytes !== undefined && Number.isFinite(bytes) ? { bytes } : (prev?.bytes !== undefined ? { bytes: prev.bytes } : {})),
+      ...(meta.mediaType !== undefined ? { mediaType: meta.mediaType } : (prev?.mediaType !== undefined ? { mediaType: prev.mediaType } : {})),
+      ...(meta.bytes !== undefined ? { bytes: meta.bytes } : (prev?.bytes !== undefined ? { bytes: prev.bytes } : {})),
+      ...(meta.name !== undefined ? { name: meta.name } : (prev?.name !== undefined ? { name: prev.name } : {})),
     });
   }
   return out;

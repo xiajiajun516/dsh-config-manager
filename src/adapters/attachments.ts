@@ -70,6 +70,8 @@ export interface AttachmentRefEntry {
   units: string[]
   mediaType?: string
   bytes?: number
+  /** 附件真名（日志里声明的原始文件名；取不到就没有，界面退回 MIME/短哈希） */
+  name?: string
 }
 export type AttachmentRefIndex = Map<string, AttachmentRefEntry>;
 
@@ -151,6 +153,7 @@ async function refsOfLog(ctx: HostContext, homeRel: string): Promise<Map<string,
         out.set(id, {
           ...(prev?.mediaType !== undefined ? { mediaType: prev.mediaType } : meta.mediaType !== undefined ? { mediaType: meta.mediaType } : {}),
           ...(prev?.bytes !== undefined ? { bytes: prev.bytes } : meta.bytes !== undefined ? { bytes: meta.bytes } : {}),
+          ...(prev?.name !== undefined ? { name: prev.name } : meta.name !== undefined ? { name: meta.name } : {}),
         });
       }
     } catch {
@@ -178,6 +181,7 @@ function addRefs(index: AttachmentRefIndex, unitKey: string, refs: Map<string, A
     if (!prev.units.includes(unitKey)) prev.units.push(unitKey);
     if (prev.mediaType === undefined && meta.mediaType !== undefined) prev.mediaType = meta.mediaType;
     if (prev.bytes === undefined && meta.bytes !== undefined) prev.bytes = meta.bytes;
+    if (prev.name === undefined && meta.name !== undefined) prev.name = meta.name;
   }
 }
 
@@ -371,13 +375,19 @@ export class AttachmentsAdapter extends FileCollectionAdapter {
       const entry = scanned.index.get(ref);
       if (entry === undefined) return unit;
       const shortId = shortAttachmentId(ref);
+      /**
+       * 展示名三级回落：**真名** → MIME → 短哈希。
+       *
+       * 真名是用户唯一能认出来的东西（`P-01-after.png` 比 `image/png` 有用得多），
+       * 而 64 位哈希对谁都没有信息量。三级都是日志里的既有事实，绝不编「附件 1」这类序号 ——
+       * 序号会随勾选范围变化，用户二次打开时对不上号。
+       */
+      const displayName = entry.name ?? entry.mediaType ?? shortId;
       return {
         ...unit,
-        // 展示名：有 mediaType 用它（image/jpeg 之类），没有就退到短哈希 —— 绝不编造「附件 1」这类序号，
-        // 序号会随勾选范围变化，用户二次打开时对不上号。
-        label: entry.mediaType ?? shortId,
-        // 有 mediaType 时补一行短哈希作次要信息，否则 label 已经是短哈希、不必重复
-        ...(entry.mediaType !== undefined && unit.detail === undefined ? { detail: shortId } : {}),
+        label: displayName,
+        // label 已经是短哈希时不必把同一个值再写一遍
+        ...(displayName !== shortId && unit.detail === undefined ? { detail: shortId } : {}),
         ...(entry.units.length > 0 ? { parentUnitIds: entry.units.map((key) => `sessions:${key}`) } : {}),
       };
     });

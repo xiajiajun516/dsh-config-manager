@@ -41,6 +41,9 @@ export const zh = {
   'picker.locked': '捆绑',
   'picker.lockedHint': '与同组条目必须一起导出（例如 pnpm patch 声明与其补丁文件），取消任一都会整组取消。',
   'picker.selectedOf': '已选 {selected}/{total}',
+  // 会话行下面的两条子树（折叠分组；组行本身不可勾选）
+  'picker.subagentsGroup': '子代理会话',
+  'picker.attachmentsGroup': '附件',
   'picker.fileCount': '{count} 个文件',
   'picker.summary': '将导出 {sections} 个分区 · {units} 个条目 · 约 {size}',
   'picker.loading': '正在读取可导出的条目…',
@@ -127,6 +130,8 @@ export const en: Record<keyof typeof zh, string> = {
   'picker.locked': 'Bundle',
   'picker.lockedHint': 'Must be exported together with its group (e.g. a pnpm patch declaration and its patch file); clearing either clears the whole group.',
   'picker.selectedOf': '{selected}/{total} selected',
+  'picker.subagentsGroup': 'Subagent sessions',
+  'picker.attachmentsGroup': 'Attachments',
   'picker.fileCount': '{count} {count, plural, file|files}',
   'picker.summary': 'Exporting {sections} {sections, plural, section|sections} · {units} {units, plural, item|items} · ~{size}',
   'picker.loading': 'Reading exportable items…',

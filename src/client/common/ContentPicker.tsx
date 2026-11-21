@@ -157,6 +157,18 @@ export function ContentPicker({
    */
   const [expandedPlugins, setExpandedPlugins] = useState<Record<string, boolean>>({})
   /**
+   * 单元行自身的展开态（键 = 单元 id；目前只有会话行会有子行）。**默认折叠** ——
+   * 会话行不再把它下面的子代理会话与附件直接平铺出来（用户要求：对话要有展开/收起 icon）。
+   */
+  const [expandedUnits, setExpandedUnits] = useState<Record<string, boolean>>({})
+  /**
+   * 单元行下**两条子树**的展开态（键 = `<单元id>::subagents` / `<单元id>::attachments`）。默认折叠。
+   *
+   * 为什么子树还要单独一层：一个对话常挂十几条子代理会话 + 十几张图，展开对话就把两类
+   * 混在一起铺开 —— 那正是用户要求改掉的「分不开」。折叠只影响渲染，勾选状态完全不受影响。
+   */
+  const [expandedChildGroups, setExpandedChildGroups] = useState<Record<string, boolean>>({})
+  /**
    * 待补勾队列（键 = 「插件」一级区块或某个插件名）。
    *
    * 为什么需要它：分区清单是**惰性**读取的 —— 勾一级区块/插件时，它名下还有区域没读到（unread），
@@ -284,24 +296,105 @@ export function ContentPicker({
    * 被截断的密钥不再匹配值形状模式而漏网）。
    */
   /**
+   * 单元行下面的一条**子树**（「子代理会话」/「附件」）。
+   *
+   * 组行不是可勾选单元：它只折叠。勾选仍逐条走子行的 toggleUnit —— 选择语义（分区成员、
+   * 稀疏排除、会话↔附件联动、导出请求的附件白名单）完全不需要知道这里多了一层视觉分组。
+   *
+   * @param depth 子行自己的缩进层级（组本身再占一层，见 renderUnitRow 的说明）。
+   */
+  const renderChildGroup = (
+    groupKey: string,
+    title: string,
+    children: readonly SelectionUnit[],
+    depth: number,
+  ): ReactNode => {
+    // 搜索时强制展开：命中的子行藏在折叠节点里会看起来像「没有匹配」（与插件区块同一口径）
+    const open = query.trim() !== '' || expandedChildGroups[groupKey] === true
+    // DOM id 里换成安全字符：单元 id 含 ':' '/'，直接拼进 id 合法但难排查，统一归一化
+    const bodyId = 'picker-child-group-' + groupKey.replace(/[^A-Za-z0-9_-]/g, '_')
+    const picked = children.filter((child) => {
+      const owner = unitSection.get(child.id)
+      return owner !== undefined && unitChecked(value, owner.section, child.id)
+    }).length
+    return (
+      <div key={groupKey} className={css.pickerGroup}>
+        <div className={css.pickerTreeRow}>
+          <button
+            type="button"
+            className={css.iconBtn}
+            data-size="sm"
+            aria-expanded={open}
+            aria-controls={bodyId}
+            aria-label={open ? t('picker.collapse') : t('picker.expand')}
+            title={open ? t('picker.collapse') : t('picker.expand')}
+            onClick={() => { setExpandedChildGroups({ ...expandedChildGroups, [groupKey]: !open }) }}
+          >
+            <ExpandChevron open={open} />
+          </button>
+          <span className={css.categoryItem}>
+            <span className={css.pickerUnitName}>{title}</span>
+            <span className={css.pickerCount}>
+              {t('picker.selectedOf', { selected: String(picked), total: String(children.length) })}
+            </span>
+          </span>
+        </div>
+        <Collapse open={open} id={bodyId}>
+          <div className={css.pickerChildren}>
+            {children.map((child) => {
+              const owner = unitSection.get(child.id)
+              // 找不到所属分区 = 清单自相矛盾：宁可不渲染，也不猜它该按哪个分区勾选
+              return owner === undefined ? null : renderUnitRow(owner, child, depth)
+            })}
+          </div>
+        </Collapse>
+      </div>
+    )
+  }
+
+  /**
    * @param depth 缩进层级：0 = 分区/分组顶层行，≥1 = 挂在父行下面。
-   *   第 0 层同时展开「子代理会话」与「附件」；第 1 层（子代理会话）只再展开它自己的附件；
-   *   附件行没有子行 —— 递归因此最多三层，父链成环也不会栈溢出（界面不能因坏元数据白屏）。
+   *   第 0 层（会话行）展开后不直接铺子行，而是先给两条子树各一行（子代理会话 / 附件）；
+   *   子代理会话行还能再展开它自己的附件 —— 视觉上最多五层，附件行没有子行，
+   *   递归因此有界，父链成环也不会栈溢出（界面不能因坏元数据白屏）。
    */
   const renderUnitRow = (node: SelectionSection, u: SelectionUnit, depth: number): ReactNode => {
     const safeLabel = redact(u.label)
     /**
-     * 挂在**本行下面**的子单元：① 会话区内的子代理会话（A5，只在顶层展开一次）；
+     * 挂在**本行下面**的子单元，按两类分开：① 会话区内的子代理会话（A5，只在顶层展开一次）；
      * ② 跨分区的附件子行（G5，会话行与子代理会话行都展开它们自己的附件）。
+     *
+     * 分成两组而不是拼成一个数组：用户要能一眼看出「这条是子代理、那条是图」，
+     * 混排时两者完全没有区分标志（子代理名与文件名在视觉上同一层级）。
      */
-    const sessionChildren = depth === 0 ? (sessionIndex.get(u.id) ?? []) : []
-    const children = [...sessionChildren, ...(childIndex.get(u.id) ?? [])]
+    const subagents = depth === 0 ? (sessionIndex.get(u.id) ?? []) : []
+    const attachments = childIndex.get(u.id) ?? []
+    const hasChildren = subagents.length > 0 || attachments.length > 0
+    // 搜索时强制展开（与子树同一口径）：否则命中的子行藏在两级折叠里＝看不见
+    const open = hasChildren && (query.trim() !== '' || expandedUnits[u.id] === true)
+    const bodyId = 'picker-unit-children-' + u.id.replace(/[^A-Za-z0-9_-]/g, '_')
     return (
       <Fragment key={u.id}>
       {/* 盒模型与「占位对齐」对每一行一致（勾选框与分组行 chevron 之后的勾选框同一左缘）；
           真正的缩进由父行的 .pickerChildren 提供，不靠这里改盒模型 */}
       <div className={css.pickerUnit + ' ' + css.pickerUnitNested}>
-        <span className={css.pickerChevronSpacer} aria-hidden="true" />
+        {hasChildren ? (
+          <button
+            type="button"
+            className={css.iconBtn}
+            data-size="sm"
+            aria-expanded={open}
+            aria-controls={bodyId}
+            aria-label={open ? t('picker.collapse') : t('picker.expand')}
+            title={open ? t('picker.collapse') : t('picker.expand')}
+            onClick={() => { setExpandedUnits({ ...expandedUnits, [u.id]: !open }) }}
+          >
+            <ExpandChevron open={open} />
+          </button>
+        ) : (
+          /* 没有子行的单元保留占位：勾选框必须与有 chevron 的行**同一左缘**（DESIGN §9.5） */
+          <span className={css.pickerChevronSpacer} aria-hidden="true" />
+        )}
         <Checkbox
           checked={unitChecked(value, node.section, u.id)}
           onChange={(checked) => { commit(toggleUnit(value, nodes, u.id, checked), focusOf(node.section), { unitId: u.id, checked }) }}
@@ -331,15 +424,16 @@ export function ContentPicker({
           }
         />
       </div>
-      {children !== undefined && children.length > 0 && (
-        // 容器自带竖线与缩进（.pickerChildren），层级靠它表达而不是靠行内间距
-        <div className={css.pickerChildren}>
-          {children.map((child) => {
-            const owner = unitSection.get(child.id)
-            // 找不到所属分区 = 这份清单自相矛盾：宁可不渲染，也不猜它该按哪个分区勾选
-            return owner === undefined ? null : renderUnitRow(owner, child, depth + 1)
-          })}
-        </div>
+      {hasChildren && (
+        <Collapse open={open} id={bodyId}>
+          {/* 容器自带竖线与缩进（.pickerChildren），层级靠它表达而不是靠行内间距 */}
+          <div className={css.pickerChildren}>
+            {subagents.length > 0
+              && renderChildGroup(u.id + '::subagents', t('picker.subagentsGroup'), subagents, depth + 1)}
+            {attachments.length > 0
+              && renderChildGroup(u.id + '::attachments', t('picker.attachmentsGroup'), attachments, depth + 1)}
+          </div>
+        </Collapse>
       )}
       </Fragment>
     )

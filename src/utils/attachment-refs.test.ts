@@ -63,6 +63,32 @@ test('attachment-refs(G5): 形状不符的 mediaType 一律不采信，也不因
   assert.equal(refs.get(ID_A)?.bytes, undefined, 'bytes 只认非负整数，"-1" 这种畸形值不采信');
 });
 
+test('attachment-refs(G3): 真名在对象末尾也能取到（字段顺序无关），且不跨对象串名', () => {
+  // 宿主直出的顺序是 attachmentId → mediaType → bytes → width/height → name：真名排在最后，
+  // 旧实现只抓「紧邻 attachmentId 的字段」，因此一条都取不到（这是附件行显示 image/png 的根因）。
+  const text = [
+    '{"attachmentId":"' + ID_A + '","mediaType":"image/png","bytes":10,"width":715,"height":516,"name":"P-01-after.png"}',
+    '{"attachmentId":"' + ID_B + '","mediaType":"image/png","bytes":20}',
+  ].join('\n');
+  const refs = extractAttachmentRefs(text);
+  assert.deepEqual(refs.get(ID_A), { mediaType: 'image/png', bytes: 10, name: 'P-01-after.png' });
+  assert.deepEqual(refs.get(ID_B), { mediaType: 'image/png', bytes: 20 }, '第二个对象没有 name，绝不能继承上一个的真名');
+});
+
+test('attachment-refs(G3): 带路径分隔符 / 引号 / 控制字符的 name 不采信，但引用与 mediaType 保留', () => {
+  for (const name of ['dir/evil.png', 'bad"name.png', 'line\nbreak.png']) {
+    const text = '{"attachmentId":"' + ID_A + '","mediaType":"image/png","name":' + JSON.stringify(name) + '}';
+    const refs = extractAttachmentRefs(text);
+    assert.equal(refs.get(ID_A)?.name, undefined, '会破坏行标题的 name 不得进展示名：' + name);
+    assert.equal(refs.get(ID_A)?.mediaType, 'image/png', '拒绝 name 不得连引用一起丢');
+  }
+});
+
+test('attachment-refs(G3): 中文、空格与点号的真名照收（本机附件名就是这样）', () => {
+  const text = '{"attachmentId":"' + ID_A + '","name":"截图 2026-11-21 20.24.38.png"}';
+  assert.equal(extractAttachmentRefs(text).get(ID_A)?.name, '截图 2026-11-21 20.24.38.png');
+});
+
 test('attachment-refs: 库里三种布局都能由路径反推 id（不硬编码深度）', () => {
   assert.equal(attachmentIdOfRelPath(`v1/objects/aa/${HEX_A}`), ID_A);
   assert.equal(attachmentIdOfRelPath(`v1/file-objects/01/${HEX_B}`), ID_B);

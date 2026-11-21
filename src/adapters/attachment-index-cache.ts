@@ -19,7 +19,14 @@ import type { AttachmentRefMeta } from '../utils/attachment-refs.ts';
 /** 缓存文件位置（DSH home 相对）。放在插件自己的数据目录下，不占宿主的 cache/。 */
 export const ATTACHMENT_CACHE_REL = 'dsh-config-manager/cache/attachment-refs.v1.json';
 
-const CACHE_VERSION = 1;
+/**
+ * v2 = 条目里带附件真名（`name`）。
+ *
+ * 为什么不就地兼容 v1：v1 缓存条目只有 mediaType/bytes，命中后附件行会继续显示
+ * `image/png`，看起来像「新功能没生效」。升版本让旧缓存整份失效、重扫一次（本机约 7 s），
+ * 比重建时逐条补字段更简单，也不会出现「一半真名一半 MIME」的混合状态。
+ */
+const CACHE_VERSION = 2;
 /** 条目上限：超出说明文件被写坏或被别的程序塞了东西，整份丢弃后重建。 */
 const MAX_ENTRIES = 20_000;
 const MAX_META_KEYS = 5_000;
@@ -36,13 +43,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** 单条引用元数据：只认 `mediaType: string` 与 `bytes: 非负整数`，别的键一律不采信。 */
+/** 缓存里的附件真名：与抽取侧同一形状限制（会直接渲染成行标题，拒绝控制字符与路径分隔符）。 */
+const SAFE_NAME = /^[^"\\/\u0000-\u001f]{1,200}$/;
+
+/** 单条引用元数据：只认 `mediaType: string`、`bytes: 非负整数` 与 `name: 安全文件名`，别的键一律不采信。 */
 function metaOf(value: unknown): AttachmentRefMeta {
   if (!isRecord(value)) return {};
   const out: AttachmentRefMeta = {};
   if (typeof value['mediaType'] === 'string') out.mediaType = value['mediaType'];
   const bytes = value['bytes'];
   if (typeof bytes === 'number' && Number.isSafeInteger(bytes) && bytes >= 0) out.bytes = bytes;
+  const name = value['name'];
+  if (typeof name === 'string' && SAFE_NAME.test(name)) out.name = name;
   return out;
 }
 
