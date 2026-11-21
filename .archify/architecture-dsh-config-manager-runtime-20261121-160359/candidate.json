@@ -1,0 +1,405 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "dsh-config-manager — 运行时架构",
+    "subtitle": "DSH 插件：Web GUI 设置页 → 路由围栏 → 引擎 → 分区适配器 → 本机文件；同一引擎供给 Agent 工具、调度器与远端通道",
+    "output": "dsh-config-manager-runtime.html",
+    "locale": "zh-CN",
+    "visual_preset": "signal-flow",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/xiajiajun516/dsh-config-manager.git",
+      "provider": "github",
+      "revision": "842124d2f08c3ef2c07ae3e7a6d0f0a064a14f1e"
+    }
+  },
+  "components": [
+    {
+      "id": "gui",
+      "type": "frontend",
+      "label": "DSH Web GUI 设置页",
+      "sublabel": "settings.section · React",
+      "pos": [
+        30,
+        280
+      ],
+      "size": [
+        130,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/client/index.ts",
+          "line": 1,
+          "end_line": 11,
+          "label": "注册 settings.section"
+        },
+        {
+          "path": "src/client/api.ts",
+          "line": 1,
+          "end_line": 9,
+          "label": "同源 fetch 封装"
+        }
+      ]
+    },
+    {
+      "id": "fence",
+      "type": "security",
+      "label": "路由围栏",
+      "sublabel": "回环放行 · 越界交宿主",
+      "pos": [
+        220,
+        280
+      ],
+      "size": [
+        120,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/routes/kit.ts",
+          "line": 278,
+          "end_line": 281,
+          "label": "requestRejection：唯一围栏口径"
+        },
+        {
+          "path": "src/routes/kit.ts",
+          "line": 290,
+          "end_line": 318,
+          "label": "endpoint()：围栏→白名单→500"
+        }
+      ]
+    },
+    {
+      "id": "routes",
+      "type": "backend",
+      "label": "HTTP 路由表",
+      "sublabel": "82 条 · /api/dsh-config-manager/*",
+      "pos": [
+        390,
+        275
+      ],
+      "size": [
+        150,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/routes/kit.ts",
+          "line": 11,
+          "end_line": 18,
+          "label": "计数：75 域组 + 7 保留"
+        },
+        {
+          "path": "src/routes/index.ts",
+          "line": 25,
+          "end_line": 41,
+          "label": "14 个域组拼装"
+        },
+        {
+          "path": "src/index.ts",
+          "line": 4107,
+          "end_line": 4125,
+          "label": "ctx.effect(registerRoutes)"
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "type": "backend",
+      "label": "引擎核心",
+      "sublabel": "导出 · 导入 · 同步 · 恢复",
+      "pos": [
+        600,
+        272
+      ],
+      "size": [
+        160,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/core/index.ts",
+          "line": 4,
+          "end_line": 23,
+          "label": "Exporter/Importer/Analyzer/restore"
+        },
+        {
+          "path": "src/sync/sync-engine.ts",
+          "line": 1,
+          "end_line": 16,
+          "label": "push/pull 编排，永不带凭据值"
+        }
+      ]
+    },
+    {
+      "id": "adapters",
+      "type": "backend",
+      "label": "分区适配器",
+      "sublabel": "15 个 ConfigAdapter",
+      "pos": [
+        820,
+        280
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/adapters/index.ts",
+          "line": 1,
+          "end_line": 25,
+          "label": "registry 组装"
+        },
+        {
+          "path": "src/adapters/file-collection.ts",
+          "line": 1,
+          "end_line": 12,
+          "label": "文件类分区基类 · 256 MiB 闸门"
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "$DSH_HOME + dataDir",
+      "sublabel": "sessions · settings · exports · snapshots",
+      "pos": [
+        1040,
+        272
+      ],
+      "size": [
+        170,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/index.ts",
+          "line": 3588,
+          "end_line": 3597,
+          "label": "dataDir 与 exports/tmp/snapshots"
+        },
+        {
+          "path": "src/index.ts",
+          "line": 3607,
+          "end_line": 3644,
+          "label": "market/history/boot-state 目录"
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "type": "backend",
+      "label": "Agent 工具面",
+      "sublabel": "9 个模型工具",
+      "pos": [
+        610,
+        110
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/core/model-tools.ts",
+          "line": 1,
+          "end_line": 29,
+          "label": "9 工具 · 凭据值不出入参出参"
+        }
+      ]
+    },
+    {
+      "id": "creds",
+      "type": "security",
+      "label": "DSH 凭据槽",
+      "sublabel": "值永不回读",
+      "pos": [
+        375,
+        105
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/index.ts",
+          "line": 191,
+          "end_line": 191,
+          "label": "inject: settings + credentials"
+        },
+        {
+          "path": "src/adapters/credentials.ts",
+          "line": 1,
+          "end_line": 9,
+          "label": "永不导出值，补录只进内存"
+        }
+      ]
+    },
+    {
+      "id": "sched",
+      "type": "backend",
+      "label": "调度器",
+      "sublabel": "自动同步 · 定时备份 · 缓存清理",
+      "pos": [
+        470,
+        440
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/sync/autosync-scheduler.ts",
+          "line": 280,
+          "end_line": 284,
+          "label": "AutoSyncScheduler"
+        },
+        {
+          "path": "src/sync/backup-scheduler.ts",
+          "line": 117,
+          "end_line": 121,
+          "label": "BackupScheduler"
+        }
+      ]
+    },
+    {
+      "id": "remote",
+      "type": "cloud",
+      "label": "远端通道",
+      "sublabel": "git · WebDAV · S3 · Gist",
+      "pos": [
+        830,
+        440
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/sync/transport.ts",
+          "line": 132,
+          "end_line": 139,
+          "label": "SyncTransport 接口"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "DSH 宿主进程（Cordis fiber）",
+      "wraps": [
+        "fence",
+        "routes",
+        "engine",
+        "adapters",
+        "tools",
+        "creds",
+        "sched",
+        "remote"
+      ],
+      "pad": 24
+    }
+  ],
+  "connections": [
+    {
+      "id": "browser-fetch",
+      "from": "gui",
+      "to": "fence",
+      "label": "fetch API",
+      "variant": "emphasis"
+    },
+    {
+      "id": "fence-allow",
+      "from": "fence",
+      "to": "routes",
+      "label": "放行"
+    },
+    {
+      "id": "route-orchestrate",
+      "from": "routes",
+      "to": "engine",
+      "label": "编排"
+    },
+    {
+      "id": "engine-execute",
+      "from": "engine",
+      "to": "adapters",
+      "label": "执行"
+    },
+    {
+      "id": "adapters-persist",
+      "from": "adapters",
+      "to": "state",
+      "label": "落盘",
+      "variant": "emphasis"
+    },
+    {
+      "id": "tools-reuse",
+      "from": "tools",
+      "to": "engine",
+      "label": "复用引擎",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "creds-read",
+      "from": "creds",
+      "to": "engine",
+      "label": "只读密码槽",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "sched-tick",
+      "from": "sched",
+      "to": "engine",
+      "label": "定时触发",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "engine-upload",
+      "from": "engine",
+      "to": "remote",
+      "label": "upload/download",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "围栏与不变量",
+      "items": [
+        "回环请求永远先放行；回环之外才委托宿主 connection.requestRejection，拿不到委托就退回严格 loopback（403）",
+        "82 条路由全部经 endpoint() 注册：语言缓存失效 → 围栏 → 方法白名单（405）→ try/catch（500）",
+        "凭据值永不回读：导出 includeSecrets 恒 false，工具入参出参不带值，补录密码只在内存"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "一次同步的路径",
+      "items": [
+        "push：createAdapters → SecretScanner → SyncSnapshot（portable）→ transport.upload → sync-state",
+        "pull：list/download → 转 ZIP → analyzeImport → createImportPlan，拿到 planId 后执行才写配置",
+        "写盘统一走 GLOBAL mutation lock：<dataDir>/locks/environment.lock（runWithMutationLock）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "运行前提与降级",
+      "items": [
+        "需要宿主 webServer 服务；读不到只告警，引擎与 Agent 工具仍可用（此时没有 HTTP 面）",
+        "inject = ['settings','credentials']：凭据槽缺失时 credentials 分区降级为状态查询",
+        "自动同步、定时备份、缓存清理挂在宿主 scheduler 上，随插件卸载一起解绑"
+      ]
+    }
+  ]
+}

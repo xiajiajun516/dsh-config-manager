@@ -26,6 +26,7 @@ import {
   type SessionFormatFacts,
 } from '../../ui/session-format-disposition.ts'
 import type { SessionFormatDisposition } from '../../core/types.ts'
+import type { SessionCompareFacts } from '../../ui/session-compare-facts.ts'
 import { ProgressBar } from '../common/ProgressBar.tsx'
 import type { RunProgress } from '../common/progress-view.ts'
 import { ConflictList } from './ConflictList.tsx'
@@ -270,17 +271,28 @@ export function PathMappingStage(props: {
   issues: ImportAnalysis['pathIssues']
   mappings: PathMapping[]
   onMappingsChange: (next: PathMapping[]) => void
+  /** 「导入到 <目录>」（P4；空串 = 不推导） */
+  rootDir: string
+  onRootChange: (next: string) => void
   onBack: () => void
   onNext: () => void
   t: TranslateNS<'config-manager'>
   /** 「选择本机路径」弹窗的数据源（宿主只读列举端点） */
   api: PathBrowsePort
 }) {
-  const { issues, mappings, onMappingsChange, onBack, onNext, t, api } = props
+  const { issues, mappings, onMappingsChange, rootDir, onRootChange, onBack, onNext, t, api } = props
   return (
     <div className={css.viewBody}>
       <SectionTitle title={t('import.paths.title')} tooltip={t('import.paths.hint')} />
-      <PathMappingForm issues={issues} initial={mappings} t={t} onChange={onMappingsChange} api={api} />
+      <PathMappingForm
+        issues={issues}
+        initial={mappings}
+        rootDir={rootDir}
+        onRootChange={onRootChange}
+        t={t}
+        onChange={onMappingsChange}
+        api={api}
+      />
       <div className={css.actionRow}>
         <Button variant="ghost" onClick={onBack}>{t('common.back')}</Button>
         <Button variant="primary" onClick={onNext}>{t('common.next')}</Button>
@@ -387,6 +399,67 @@ export function SessionFormatDispositionField(props: {
   )
 }
 
+/**
+ * 会话逐条比对（P3）的确认页摘要 —— 只回答一句：**这次导入会覆盖掉本机多少新内容**。
+ *
+ * 为什么不做成「每条会话一行」的清单：确认页要让人一眼做决定，明细在下方内容选择器里
+ * （每条会话项已带 verdict 标记）。这里只摆数字：比对了多少、几态各多少、会覆盖多少、
+ * 包内缺哪些附件。facts=null（旧包/未选会话/适配器不提供）时**整块不渲染** ——
+ * 「没比过」绝不能显示成「全部一致」。
+ */
+export function SessionCompareField(props: {
+  facts: SessionCompareFacts | null
+  t: TranslateNS<'config-manager'>
+}) {
+  const { facts, t } = props
+  if (facts === null || facts.compared === 0) return null
+  const { counts, overwrite } = facts
+  const missing = facts.attachmentsMissing
+  return (
+    <Card className={css.optionsCard}>
+      <div className={css.groupLabel}>{t('import.sessionCompare.title')}</div>
+      <div className={css.hint}>
+        {t('import.sessionCompare.summary', {
+          compared: String(facts.compared),
+          identical: String(counts.identical),
+          packAhead: String(counts.packAhead),
+          localAhead: String(counts.localAhead),
+          diverged: String(counts.diverged),
+          fresh: String(counts.fresh),
+        })}
+      </div>
+      {/* 这句是本功能存在的理由：数字必须具体到「几条会话、几条消息」 */}
+      {overwrite.units > 0 && (
+        <Banner kind="warn">
+          {t('import.sessionCompare.overwrite', {
+            units: String(overwrite.units),
+            events: String(overwrite.events),
+          })}
+        </Banner>
+      )}
+      {missing.length > 0 && (
+        <Banner kind="warn">
+          {t('import.sessionCompare.attachmentsMissing', {
+            count: String(missing.length),
+            ids: missing.slice(0, 3).map((id) => id.slice(0, 19)).join(', '),
+          })}
+        </Banner>
+      )}
+      {counts.unreadable > 0 && (
+        <div className={css.hint}>
+          {t('import.sessionCompare.unreadable', { count: String(counts.unreadable) })}
+        </div>
+      )}
+      {facts.skipped > 0 && (
+        <div className={css.hint}>
+          {t('import.sessionCompare.sampled', { compared: String(facts.compared), skipped: String(facts.skipped) })}
+        </div>
+      )}
+      <div className={css.hint}>{t('import.sessionCompare.hint')}</div>
+    </Card>
+  )
+}
+
 /** 确认（最后一道闸门，phase=confirm）。 */
 export function ConfirmStage(props: {
   rollbackOnError: boolean
@@ -405,6 +478,8 @@ export function ConfirmStage(props: {
   sessionFormatBlocked: boolean
   /** skip 处置下**实际未导入**的会话条数（与选择模型同源；>0 时逐条回显） */
   sessionFormatSkipped: number
+  /** P3：逐会话比对摘要（null = 没比对过，整块不渲染） */
+  sessionCompareFacts: SessionCompareFacts | null
   onBack: () => void
   onExecute: () => void
   apiT: UiT
@@ -414,7 +489,7 @@ export function ConfirmStage(props: {
     rollbackOnError, onRollbackChange, isEncrypted, decryptRefs, summary, excludedCount,
     running, nothingSelected, error,
     sessionFormatDisposition, onSessionFormatDispositionChange, sessionFormatFacts, sessionFormatBlocked,
-    sessionFormatSkipped,
+    sessionFormatSkipped, sessionCompareFacts,
     onBack, onExecute, apiT, t,
   } = props
   return (
@@ -453,6 +528,8 @@ export function ConfirmStage(props: {
         {sessionFormatSkipped > 0 && (
           <Banner kind="info">{t('import.sessionFormat.skipped', { count: String(sessionFormatSkipped) })}</Banner>
         )}
+        {/* P3：本机同名会话逐条比对（会覆盖多少 / 包内缺哪些附件） */}
+        <SessionCompareField facts={sessionCompareFacts} t={t} />
         <Checkbox
           checked={rollbackOnError}
           onChange={onRollbackChange}

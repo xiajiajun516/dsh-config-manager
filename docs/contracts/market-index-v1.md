@@ -128,12 +128,12 @@ dsh-config-market/
 
 ## 5. 分区（sections）全集与 config.zip 内部结构
 
-**合法分区 id 全集（17 个）**：
+**合法分区 id 全集（18 个）**：
 
 ```
 settings, ui, providers, plugins, mcp, prompts,
 skills, agentPresets, agentInstructions, workspaces, pluginFiles,
-credentialsStatus, secrets, sessions, self, pluginData, pluginAssets
+credentialsStatus, secrets, sessions, self, pluginData, pluginAssets, attachments
 ```
 
 **config.zip 内部布局**（导出/备份格式 = 插件自身导出产物的格式）：

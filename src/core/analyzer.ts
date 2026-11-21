@@ -30,13 +30,18 @@ import { rollback } from './rollback.ts';
 import { compatibilityReasons, computeCompatibility } from './validator.ts';
 import { msgOf } from './messages.ts';
 import { applyItemResolution } from './conflict-decisions.ts';
+import { workspaceRootMappings } from './import-planning.ts';
+import {
+  markSessionVerdicts, resolveSessionCompare, resolveSessionFormats, sessionCompareWarnings,
+  sessionFormatWarnings, type ResolvedSessionFormats,
+} from './session-analyze.ts';
 import type { MsgFunc } from './messages.ts';
 import {
   ImportNotConfirmedError, ImportUserSkippedError, type ApplyResult, type ConfigAdapter,
   type ExecutedItem, type HostContext, type ImportAnalysis, type ImportContext,
   type ImportDecisions, type ImportPlan, type ImportResult,
-  type FileSystemFacade, type PlanItem, type SessionFormatProbeResult, type TransactionSnapshotContext,
-  type Snapshot, type SnapshotStore,
+  type FileSystemFacade, type PlanItem, type SessionCompareSummary, type SessionFormatProbeResult,
+  type TransactionSnapshotContext, type Snapshot, type SnapshotStore,
 } from './types.ts';
 
 /**
@@ -133,16 +138,6 @@ interface SectionExtraction {
   warnings: string[];
 }
 
-/** 会话格式体检的「已落定」结果（探针 + 本机支持版本；不可判定时整体缺省）。 */
-interface ResolvedSessionFormats {
-  target: number;
-  unreadable: { unitId: string; version: number }[];
-  /** 本次体检真正看过的会话条数（解出 header 的 + 解不出的） */
-  examined: number;
-  /** 因抽样上限未检查的会话条数 */
-  skipped: number;
-}
-
 interface AnalyzedBundle extends Bundle {
   sections: Map<SectionId, unknown>;
   unsupportedSections: string[];
@@ -150,6 +145,8 @@ interface AnalyzedBundle extends Bundle {
   sectionWarnings: string[];
   /** 只算一次：分析、计划项标记、ImportAnalysis 三方共用同一份结果 */
   sessionFormats: ResolvedSessionFormats | null;
+  /** P3：会话逐条比对（同样只跑一次，三方共用；本机读不到会话目录时为 null） */
+  sessionCompare: SessionCompareSummary | null;
   adapterItems: PlanItem[];
   adapterIssues: string[];
 }
@@ -450,65 +447,6 @@ export class Analyzer {
     return { sections, unsupportedSections, unsupportedVersions, warnings };
   }
 
-  /**
-   * 会话格式体检（宿主探针 + 本机支持的版本）—— **每份归档只跑一次**，结果供三方共用：
-   * 分析告警、计划项标记（`formatUnsupported`）、ImportAnalysis 摘要。
-   *
-   * 为什么必须在导入前说：DSH 读会话时对**非本 build 的格式版本直接拒绝**，而会话列表
-   * （`listArtifacts()`）对这种会话是**静默 continue** 的 —— 不报错、不显示，用户只会看到
-   * 「对话没了」。高版本能读低版本（DSH 自带 V0→V4 迁移链），反向不可读，所以只对
-   * 「包里的版本 > 本机支持的版本」告警；本机版本解析不到时**不猜**（宁可不报，也不谎报兼容）。
-   *
-   * 不可判定（无探针 / 无 sessions / 本机版本解析不到 / 探针抛错）一律返回 null。
-   */
-  private resolveSessionFormats(sections: Map<SectionId, unknown>): ResolvedSessionFormats | null {
-    const probe = this.sessionFormatProbe;
-    if (probe === undefined || !sections.has('sessions')) return null;
-    const target = this.ctx.sessionFormatVersion;
-    if (target === undefined) return null;
-    const rows = (sections.get('sessions') as { files?: unknown } | undefined)?.files;
-    if (!Array.isArray(rows)) return null;
-    const files: { relativePath: string; data: Uint8Array }[] = [];
-    for (const row of rows) {
-      const item = row as { relativePath?: unknown; data?: unknown };
-      if (typeof item.relativePath === 'string' && item.data instanceof Uint8Array) {
-        files.push({ relativePath: item.relativePath, data: item.data });
-      }
-    }
-    try {
-      const probed = probe(files);
-      // 只有明确「版本更高」才算读不了；units 缺省（旧探针实现）时退化为空数组（不猜单元）。
-      return {
-        target,
-        unreadable: (probed.units ?? []).filter((unit) => unit.version > target),
-        examined: probed.sampled + probed.unreadable,
-        skipped: probed.skipped,
-      };
-    } catch {
-      // 体检失败绝不拖垮分析，也绝不因此宣称兼容（本条静默，另有导出报告可核对）。
-      return null;
-    }
-  }
-
-  private sessionFormatWarnings(result: ResolvedSessionFormats | null): string[] {
-    if (result === null) return [];
-    const target = result.target;
-    const newer = result.unreadable.map((unit) => unit.version);
-    if (newer.length === 0) return [];
-    const warnings = [this.msg('import.sessionsFormatUnsupported', {
-      count: String(newer.length),
-      newer: String(Math.max(...newer)),
-      target: String(target),
-    })];
-    if (result.skipped > 0) {
-      warnings.push(this.msg('import.sessionsFormatSampled', {
-        sampled: String(result.examined),
-        skipped: String(result.skipped),
-      }));
-    }
-    return warnings;
-  }
-
   private async analyzeBundle(bundle: Bundle): Promise<AnalyzedBundle> {
     const extraction = this.extractSections(bundle);
     const { sections } = extraction;
@@ -545,7 +483,9 @@ export class Analyzer {
     }
 
     // 会话格式体检只跑一次：告警、计划项标记、ImportAnalysis 摘要共用（探针要解首帧，别重复跑）。
-    const sessionFormats = this.resolveSessionFormats(sections);
+    const sessionFormats = resolveSessionFormats(sections, this.sessionFormatProbe, this.ctx.sessionFormatVersion);
+    // P3：同名会话逐条比对（只读；包内日志要解码 → 走 sessions adapter 的字节能力）
+    const sessionCompare = await resolveSessionCompare(sections, this.adapters, this.ctx);
 
     // SEC-05：会落盘的文件分区条目必须在校验表内（表外条目此前照样被原样写进目标目录）。
     // 阻断结果就在计划项自己身上（kind:'Error' + description），不另存一份名单（单一事实）。
@@ -563,9 +503,11 @@ export class Analyzer {
       sectionWarnings: [
         ...extraction.warnings,
         ...(sections.has('sessions') && !sections.has('workspaces') ? [this.msg('import.sessionsWithoutWorkspaces')] : []),
-        ...this.sessionFormatWarnings(sessionFormats),
+        ...sessionFormatWarnings(sessionFormats, this.msg),
+        ...sessionCompareWarnings(sessionCompare, this.msg),
       ],
       sessionFormats,
+      sessionCompare,
       adapterItems,
       adapterIssues,
     };
@@ -727,6 +669,9 @@ export class Analyzer {
             },
           }
         : {}),
+      // P3：逐会话比对摘要（包内同名会话 vs 本机）。缺省 = 没比对（无 sessions 分区 /
+      // 适配器不提供 / 解码失败），UI 不得把「缺省」渲染成「全部一致」。
+      ...(analyzed.sessionCompare !== null ? { sessionCompare: analyzed.sessionCompare } : {}),
     };
   }
 
@@ -758,7 +703,16 @@ export class Analyzer {
     // 用户映射排在其后依次生效（可覆盖本规则），因此这是「默认更安全 + 仍可人工微调」。
     // 只作用于结构化分区的路径叶值；文件集合分区（sessions 的 relativePath）永不被改写（见 applyMappingsToSections）。
     const rebase = rebaseMapping(manifest.sourceHome, this.ctx.homeDir);
-    const effectiveMappings = rebase === undefined ? decisions.pathMappings : [rebase, ...decisions.pathMappings];
+    // P4「导入到 <目录>」：先按用户给的根目录推导每个工作区的落点（重名顺延、按目标平台清洗），
+    // 再拼基础路径重定基与用户映射。**顺序有语义**：applyPrefixMappings 顺序在已改写值上继续匹配，
+    // 段边界命中才生效 —— 根目录规则必须先于 home 重定基，否则工作区路径先被改成「本机 home + 后缀」，
+    // 根目录规则就再也匹配不上原始路径（等于静默失效）。用户手填映射仍在最前：被它命中的源路径不推导
+    // （见 workspaceRootMappings 的 isClaimed），因此「显式优先」不会被这条自动规则覆盖。
+    const rootMappings = workspaceRootMappings(
+      analyzed.sections, decisions.workspaceRoot, this.ctx.platform, decisions.pathMappings,
+    );
+    const baseMappings = rebase === undefined ? decisions.pathMappings : [rebase, ...decisions.pathMappings];
+    const effectiveMappings = rootMappings.length === 0 ? baseMappings : [...rootMappings, ...baseMappings];
     // 先应用映射（PathMapper 先行：applyItem 拿到的已是映射后数据）
     applyMappingsToSections(analyzed.sections, effectiveMappings, this.fileCollectionIds());
 
@@ -790,6 +744,9 @@ export class Analyzer {
       }
     }
 
+    // P3 的落点：把逐条比对结论标到**具体计划项**上（纯附加字段，不改 kind、不拦执行）。
+    markSessionVerdicts(planItems, analyzed.sessionCompare?.rows ?? []);
+
     // 凭据计划项（MissingSecret / Skip）的唯一生成点 —— 规则见 buildCredentialPlanItems 文档。
     await buildCredentialPlanItems(
       planItems, analyzed.sections, opts.decryptedCredentials, this.msg,
@@ -812,7 +769,9 @@ export class Analyzer {
       items: planItems,
       globalStrategy: decisions.strategy,
       pathMappings: planMappings,
-      ...(rebase !== undefined ? { automaticMappings: [rebase] } : {}),
+      ...((rootMappings.length > 0 || rebase !== undefined)
+        ? { automaticMappings: [...rootMappings, ...(rebase === undefined ? [] : [rebase])] }
+        : {}),
       missingSecrets,
       needsRestart,
       estimatedActions,
@@ -1473,8 +1432,8 @@ export class Analyzer {
 // 依赖方向单行：analyzer → import-planning，后者绝不 import 本文件（避免第二个入口环）。
 import {
   applyMappingsToSections, applyTombstoneFilter, buildCredentialPlanItems, detectPathIssues,
-  mergePathMappings, rebaseMapping, reportRollbackToJournal, runSchemaMigration, sessionUnitVersion,
-  usableSecretValue,
+  mergePathMappings, rebaseMapping, reportRollbackToJournal, runSchemaMigration,
+  sessionUnitVersion, usableSecretValue,
 } from './import-planning.ts';
 
 // 对外导入面保持不变（core/index.ts 与既有测试按 './analyzer.ts' 取这三个名字）。

@@ -19,7 +19,9 @@ export type SectionId =
   | 'settings' | 'ui' | 'providers' | 'plugins' | 'mcp' | 'prompts'
   | 'skills' | 'agentPresets' | 'agentInstructions' | 'workspaces' | 'pluginFiles'
   | 'credentialsStatus' | 'secrets' | 'sessions' | 'self'
-  | 'pluginData' | 'pluginAssets';
+  | 'pluginData' | 'pluginAssets'
+  // P1（2026-11-21）：被会话引用过的附件（图片 / 文件对象），只带对话真正用到的
+  | 'attachments';
 
 /** 加密备份的算法参数（非秘密：salt/iv/authTag 仅用于解密与完整性校验） */
 export interface EncryptionInfo {
@@ -295,7 +297,18 @@ export interface WorkspaceRecord {
   updatedAt?: string;
 }
 
-export interface WorkspacesSection { version: 1; workspaces: WorkspaceRecord[]; }
+export interface WorkspacesSection {
+  version: 1;
+  workspaces: WorkspaceRecord[];
+  /**
+   * 归档集（P2）：DSH 的归档集合是**注册表级**的（registry-global），不属于任何一条工作区记录，
+   * 因此挂在这一层。缺省/空 = 备份里没有归档信息（老包），导入侧据此**不做任何归档动作**
+   * —— 绝不「对齐成空集」去反归档别人的会话。
+   *
+   * 只存 id，不存内容：归档是显示状态，会话数据仍在 sessions 分区里。
+   */
+  archivedSessionIds?: string[];
+}
 
 /* —— credentials 状态分区（永不含值） —— */
 

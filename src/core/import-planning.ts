@@ -16,6 +16,8 @@ import type { Manifest, SectionId } from '../schema/types.ts';
 import { migrateToCurrent } from '../migrations/index.ts';
 import { isTombstoned } from '../schema/tombstones.ts';
 import type { Tombstone, TombstoneKind } from '../schema/tombstones.ts';
+import { applyPathMapping } from './path-mapping.ts';
+import { deriveWorkspaceMappings, type WorkspaceTargetInput } from './workspace-root.ts';
 import type { MsgFunc } from './messages.ts';
 import type {
   PathIssue, PathMapping, PlanItem, SkippedTombstone, TransactionSnapshotContext,
@@ -124,6 +126,14 @@ export function rebaseMapping(sourceHome: string | undefined, localHome: string)
  * 哪个适配器在消费它（core 也不得 import 会话字节工具）。键空间对齐因此落在计划生成期。
  */
 export function sessionUnitVersion(byUnit: ReadonlyMap<string, number>, unitId: string): number | undefined {
+  return sessionUnitLookup(byUnit, unitId);
+}
+
+/**
+ * 同一键空间对齐的泛化版（P3 的逐条比对行、格式探针都用它）。
+ * 返回 undefined 表示「两个形态都没命中」——调用方必须把这种情况与「命中但值为空」分开。
+ */
+export function sessionUnitLookup<T>(byUnit: ReadonlyMap<string, T>, unitId: string): T | undefined {
   const direct = byUnit.get(unitId);
   if (direct !== undefined) return direct;
   const prefix = 'sessions:';
@@ -167,6 +177,44 @@ export function applyMappingsToSections(
     if (relevant.length === 0) continue;
     sections.set(sectionId, applyPrefixMappings(data, relevant));
   }
+}
+
+/**
+ * P4：由「导入到 <目录>」推导出工作区路径映射（`workspaceRoot` → `PathMapping[]`）。
+ *
+ * 只产出**已解析**（newPrefix 非空）的映射，且只作用于 workspaces；没有绝对源路径、没有根目录、
+ * 或该源路径已被用户手填映射命中时，一律不产出（显式映射优先，不重复给规则）。
+ *
+ * 为什么放在计划期纯函数里：它只读分析产物（sections 里的 workspaces 载荷）+ 目标平台，
+ * 不碰文件系统，因此 Dry Run 与真导入看到的是同一份推导结果。
+ */
+export function workspaceRootMappings(
+  sections: ReadonlyMap<SectionId, unknown>,
+  rootDir: string | undefined,
+  targetPlatform: string,
+  userMappings: readonly PathMapping[],
+): PathMapping[] {
+  if (rootDir === undefined || rootDir.trim() === '') return [];
+  const data = sections.get('workspaces');
+  if (data === null || typeof data !== 'object') return [];
+  const records = (data as { workspaces?: unknown }).workspaces;
+  if (!Array.isArray(records)) return [];
+  const inputs: WorkspaceTargetInput[] = [];
+  for (const raw of records) {
+    if (raw === null || typeof raw !== 'object') continue;
+    const path = (raw as { path?: unknown }).path;
+    const title = (raw as { title?: unknown }).title;
+    if (typeof path !== 'string') continue;
+    inputs.push({ path, title: typeof title === 'string' ? title : undefined });
+  }
+  // 用户手填映射优先：只把「作用于 workspaces（或未限定分区）」的规则算作已认领
+  const claimed = userMappings.filter(
+    (m) => m.newPrefix !== '' && (m.appliesTo.length === 0 || m.appliesTo.includes('workspaces')),
+  );
+  return deriveWorkspaceMappings(inputs, rootDir, {
+    platform: targetPlatform,
+    isClaimed: (source) => applyPathMapping(source, claimed) !== null,
+  });
 }
 
 /** 路径形态判定：跨平台盘符/UNIX 冲突 → platformMismatch；其余绝对路径 → missing（需映射） */

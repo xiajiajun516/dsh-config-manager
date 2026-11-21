@@ -27,6 +27,7 @@ export const zh = {
   'section.self': '配置管理器设置',
   'section.pluginData': '插件数据目录',
   'section.pluginAssets': '插件大文件',
+  'section.attachments': '会话附件',
   // 视图切换
   'view.about': '关于',
   // 关于页「一键复制环境信息」片段（提 issue 用）：zh 保留双语标题（维护者可读），en 纯英文
@@ -85,6 +86,7 @@ export const en: Record<keyof typeof zh, string> = {
   'section.self': 'Config Manager settings',
   'section.pluginData': 'Plugin data dirs',
   'section.pluginAssets': 'Plugin large files',
+  'section.attachments': 'Session attachments',
   'view.about': 'About',
   'about.snippet.environment': '### Environment',
   'about.releaseNotes.rateLimited': 'GitHub API rate limit exceeded — please try again later, or view the release notes directly on GitHub.',

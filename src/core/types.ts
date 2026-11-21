@@ -284,6 +284,27 @@ export interface WorkspaceFacade {
    * 可选：未实现（或 registry 不可用）时，归位功能只能产出计划、不能落地。
    */
   attachSession?(workspaceId: string, sessionId: string): Promise<void>;
+  /**
+   * 读**注册表级**归档集（P2），对应 DSH `workspaceRegistry.archivedSessionIds`。
+   *
+   * 可选：宿主没暴露（老宿主 / 测试替身）时导出侧不带 `archivedSessionIds` 字段，
+   * 导入侧也不会凭空归档任何会话 —— 「读不到」与「确实为空」必须分开。
+   */
+  listArchivedSessionIds?(): Promise<string[]>;
+  /**
+   * 归档一个会话（P2），对应 DSH `workspaceRegistry.archiveSession()`。
+   *
+   * 宿主自己校验会话存在性（live / 已索引 header / 持久化列表任一命中），不认识就抛。
+   * 插件只负责逐条尝试并把失败原因如实上报，绝不因为归档失败回滚整轮导入。
+   */
+  archiveSession?(sessionId: string): Promise<void>;
+  /**
+   * 按给定顺序重排工作区显示顺序（P2），对应 `workspaceRegistry.insertBefore()`。
+   *
+   * 语义是 DOM insertBefore：宿主只提供「把 A 挪到 B 前面」，所以「变成某个目标顺序」
+   * 由适配器按这个原语推出（后往前落位）。传入不存在的 id 由实现自行跳过。
+   */
+  reorderWorkspaces?(orderedIds: readonly string[]): Promise<void>;
 }
 
 
@@ -778,6 +799,13 @@ export interface PlanItem {
    * → 这一项即使写入成功，用户在 DSH 里也看不到这条对话。UI 据此提供「中止 / 跳过 / 引导升级」。
    */
   formatUnsupported?: { version: number; target: number };
+  /**
+   * P3：本项对应的会话单元**与本机同名会话的逐条比对结论**（只读展示，不改变 kind/conflict）。
+   *
+   * 为什么必须下沉到计划项：用户勾选/取消的是计划项，而「这一条会把本机多出来的 40 条消息
+   * 覆盖掉」这句话只有挂在这一项上才指认得清。缺失 = 未比对（本机没有同名会话 / 未跑比对）。
+   */
+  sessionVerdict?: SessionVerdictFlag;
   conflict?: ConflictDecision;
   pathMapping?: PathMapping;
   missingDependency?: string;
@@ -789,6 +817,61 @@ export interface PlanItem {
 export interface ApplyResult { ok: boolean; message?: string; needsRestart?: boolean; warning?: boolean; }
 
 /* ---------------- 三段式输入输出 ---------------- */
+
+/* ---------------- P3：会话逐条比对（导入前体检） ---------------- */
+
+/**
+ * 同名会话的比对结论。
+ *
+ * - `new`：本机没有这条会话（导入 = 新增，不覆盖任何东西）；
+ * - `identical`：逐条一致（含「只差 bookkeeping 事件」）；
+ * - `packAhead`：包内是本机的延长 → 导入后本机多出 N 条；
+ * - `localAhead`：本机是包内的延长 → **导入会覆盖掉本机多出的 N 条**；
+ * - `diverged`：前缀之后两边都有内容（分叉；导入按包为准）；
+ * - `unreadable`：本机那一份读不出来（日志损坏/门面不可用）→ 不猜，不算一致。
+ */
+export type SessionVerdict = 'new' | 'identical' | 'packAhead' | 'localAhead' | 'diverged' | 'unreadable';
+
+/** 单个会话单元的比对结果（unitId 与计划项同形：`<projectKey>/<会话目录>`）。 */
+export interface SessionCompareRow {
+  unitId: string;
+  verdict: SessionVerdict;
+  /** 包内该单元的事件条数（多份日志累加） */
+  packEvents: number;
+  /** 本机同名单位的事件条数 */
+  localEvents: number;
+  /** 包比本机多出的条数（packAhead / diverged 时给出） */
+  packAheadBy?: number;
+  /** 本机比包多出的条数（localAhead / diverged 时给出；diverged = 会被覆盖掉的条数） */
+  localAheadBy?: number;
+  /** 首个不一致位置（0 起；diverged 时给出） */
+  divergedAt?: number;
+  /** 会话标题（读得到时给；读不到不猜） */
+  title?: string;
+}
+
+/** 体检摘要：逐条明细 + 附件缺口 + 抽样情况。 */
+export interface SessionCompareSummary {
+  /** 真正比对过的会话单元**
+   *  （受条数/字节预算约束；未比对的不进 rows） */
+  rows: SessionCompareRow[];
+  /** 因预算未比对的单元数（>0 时报告必须写明「另有 N 条未比对」） */
+  skipped: number;
+  /** 包内会话日志引用到的附件 id 总数（含重复去重后） */
+  attachmentsReferenced: number;
+  /** 被引用但**包内没有**该对象的附件 id（导入后会显示为缺失） */
+  attachmentsMissing: string[];
+}
+
+/** 计划项上的比对标记（只读展示用；不含本机事件正文）。 */
+export interface SessionVerdictFlag {
+  verdict: SessionVerdict;
+  packEvents: number;
+  localEvents: number;
+  /** 本机比包多出的条数（>0 时 UI 必须明说「会覆盖掉」） */
+  localAheadBy?: number;
+  packAheadBy?: number;
+}
 
 export interface ImportAnalysis {
   valid: boolean;
@@ -848,6 +931,12 @@ export interface ImportAnalysis {
     skipped: number;
   };
   /**
+   * P3：会话逐条比对摘要（可选；包里没有会话 / 本机读不到会话目录时为 undefined）。
+   *
+   * 与 `sessionFormats` 互补：格式体检回答「本机读不读得了」，本字段回答「导入会覆盖掉什么」。
+   */
+  sessionCompare?: SessionCompareSummary;
+  /**
    * 凭据可恢复性摘要（issue #39 Feature 2；**可选字段**，旧调用方零改动）。
    *
    * 目的：让宿主不必自己解开 `security/secrets.enc` 再解析 `.credentials.yaml` 才能
@@ -866,6 +955,14 @@ export interface ImportDecisions {
   strategy: GlobalConflictStrategy;
   resolutions: Record<string, ItemResolution>;
   pathMappings: PathMapping[];
+  /**
+   * P4「导入到 <目录>」：把包内每个工作区放到该目录下的同名子目录里（重名顺延 -2 / -3）。
+   *
+   * 缺省/空 = 不推导（工作区路径仍由基础路径重定基与用户映射决定，行为与改造前一致）。
+   * 推导结果以 PathMapping（appliesTo: ['workspaces']）形式并入计划，排在基础路径重定基**之前**，
+   * 因此它覆盖「导出机 home → 本机 home」的自动重定基；用户手填的工作区映射仍然最优先（被跳过的源路径不推导）。
+   */
+  workspaceRoot?: string;
 }
 
 export interface ImportPlan {
@@ -1321,6 +1418,15 @@ export interface ConfigAdapter<TSection = unknown> {
    * 跳过删除检测（保守方向：宁可漏报删除，绝不误标）。
    */
   listAllUnitIds?(ctx: HostContext): Promise<string[]>;
+
+  /**
+   * 可选：P3「逐条会话比对」——包内会话 vs **本机同名会话**（同名 = 同一 projectKey + 同一会话目录，
+   * 两种目录命名形态都试）。只读、零写入，失败 → null（不猜：读不到就说读不到）。
+   *
+   * 为什么放在适配器而不是 analyzer：解日志要 zstd 帧与首帧能力，那属于会话字节工具
+   * （AGENTS.md 分层纪律：core 不 import 会话字节工具）。纯比对算法在 core/session-compare.ts。
+   */
+  compareSessions?(ctx: HostContext, data: TSection): Promise<SessionCompareSummary | null>;
 
   /** 分析导入数据与目标 DSH 的差异 → 计划项（纯计算，零写入） */
   analyzeImport(data: TSection, ctx: ImportContext): Promise<PlanItem[]>;

@@ -112,6 +112,7 @@ export function useImportWizardController(api: ConfigManagerApi, t: TranslateNS<
   const rollbackOnError = imp.rollbackOnError
   const conflictCollector = imp.conflictCollector
   const pathMappings = imp.pathMappings
+  const workspaceRoot = imp.workspaceRoot
   const secretInputs = imp.secretInputs
   const decryptRefs = imp.decryptRefs
   const isEncrypted = imp.analysis?.encrypted === true
@@ -458,6 +459,7 @@ export function useImportWizardController(api: ConfigManagerApi, t: TranslateNS<
   /** Path Mapping 完成：写入映射 → 下一阶段 */
   const finishPathMapping = (): void => {
     wizard.setPathMappings(pathMappings)
+    wizard.setWorkspaceRoot(workspaceRoot)
     setPhase(nextPhase('path-mapping'))
   }
 
@@ -625,6 +627,7 @@ export function useImportWizardController(api: ConfigManagerApi, t: TranslateNS<
     rollbackOnError,
     conflictCollector,
     pathMappings,
+    workspaceRoot,
     secretInputs,
     decryptRefs,
     isEncrypted,

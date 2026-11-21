@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "D:\\Projects\\personal\\dsh-config-manager\\.archify\\architecture-dsh-config-manager-runtime-20261121-160359\\candidate.json",
+    "sha256": "49ed72cbb68d9d7e6ca44d4b84a93048d4cfa69e8d3751b467b53b01fe03e378",
+    "bytes": 9436
+  },
+  "artifact": {
+    "path": "D:\\Projects\\personal\\dsh-config-manager\\.archify\\architecture-dsh-config-manager-runtime-20261121-160359\\dsh-config-manager-runtime.html",
+    "sha256": "fa8e60c7578e535d0fa81f9d1e0aa83a0244022c9ebc54383e6763ab8f78fc10",
+    "bytes": 853334
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "D:\\Projects\\personal\\dsh-config-manager\\.archify\\architecture-dsh-config-manager-runtime-20261121-160359\\dsh-config-manager-runtime.finalize.json",
+    "summaryReceipt": "D:\\Projects\\personal\\dsh-config-manager\\.archify\\architecture-dsh-config-manager-runtime-20261121-160359\\dsh-config-manager-runtime.finalize-summary.json",
+    "browserCheckReceipt": "D:\\Projects\\personal\\dsh-config-manager\\.archify\\architecture-dsh-config-manager-runtime-20261121-160359\\dsh-config-manager-runtime.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-21T15:05:02.092Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 4451,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

@@ -29,7 +29,10 @@ const CEILINGS: Record<string, number> = {
   // parseSyncBody 家族下沉 route-support.ts；理由与残留见 tech-debt #23。
   // 4135 → 4128（2026-11-07）：环境锁装配（含失败留痕回调）下沉到 core/env-lock-lifecycle.ts 的
   // createHostMutationLock()，降回棘轮之内，不占新额度。
-  'src/index.ts': 4128,
+  // 4128 → 3811（2026-11-21，P1-P4）：工作区/会话存储门面下沉到
+  // src/core/host-workspace-facade.ts（DshWorkspaceFacade）、会话存储形状工具下沉到
+  // src/core/host-session-shapes.ts、readService 下沉到 src/core/host-service.ts。
+  'src/index.ts': 3811,
   // 2213 → 2209（2026-11-14，同步缺陷 P2）：待裁决的纯状态写入下沉到 src/sync/pending-merge.ts，
   // 引擎只留 3 行委托（recordPendingMerge / pendingMergeFor / writeMergeBaseline）。
   'src/sync/sync-engine.ts': 2209,
@@ -40,8 +43,12 @@ const CEILINGS: Record<string, number> = {
   // 2226 → 2245（2026-11-13，审计 P8-1）：stop→start 会留下孤儿发现链（/runs 请求数按链数翻倍），
   // 修法 = 取消时撤回挂起句柄 + 覆盖前清旧句柄（clearWatchTimer 9 行 + 论证注释 4 行），
   // 是真缺陷的修复本体，不是新功能；拆解计划见 tech-debt #25。
-  'src/client/run-store.ts': 2245,
-  'src/core/analyzer.ts': 1481,
+  // 2245 → 2144（2026-11-21，P1-P4）：落盘前的值级脱敏（默认拒绝 + 引用/深度缓存）下沉到
+  // src/client/run-store-redact.ts，导出面不变。
+  'src/client/run-store.ts': 2144,
+  // 1481 → 1440（2026-11-21，P1-P4）：分析期会话体检（格式探针 / 逐条比对 / 计划项标记）
+  // 下沉到 src/core/session-analyze.ts，纯函数 + 显式入参。
+  'src/core/analyzer.ts': 1440,
   'src/client/sync/SyncPanel.tsx': 1590,
   // src/cli/actions.ts 不再登记：2026-11-13 审计修复把只读事实层与写入门下沉到
   // src/cli/control-state.ts / src/cli/write-gates.ts，本文件 1610 → 1355 行，已低于 1400 阈值。

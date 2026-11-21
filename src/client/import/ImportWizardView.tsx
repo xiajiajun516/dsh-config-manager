@@ -39,6 +39,7 @@ import {
   type SessionFormatDisposition,
   type SessionFormatFacts,
 } from '../../ui/session-format-disposition.ts'
+import { sessionCompareFactsFromAnalysis } from '../../ui/session-compare-facts.ts'
 import type { ImportPreviewSummary } from '../../ui/types.ts'
 import type { ImportAnalysis, ImportPlan, ImportResult } from '../../core/types.ts'
 import type { SectionId } from '../../schema/types.ts'
@@ -444,6 +445,7 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
     rollbackOnError,
     conflictCollector,
     pathMappings,
+    workspaceRoot,
     secretInputs,
     decryptRefs,
     isEncrypted,
@@ -492,6 +494,9 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
   const sessionFormatSkipped = sessionFormatDisposition === 'skip'
     ? sessionFormatSkippedItems(imp.plan, selectionValue).length
     : 0
+
+  // P3：逐会话比对事实（口径全在纯函数里；null = 没比对过，确认页整块不渲染）
+  const sessionCompareFacts = sessionCompareFactsFromAnalysis(imp.analysis)
 
   /* ---------- 各步骤渲染 ---------- */
 
@@ -643,6 +648,8 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
         issues={applicableIssues}
         mappings={pathMappings}
         onMappingsChange={(mappings) => { runStore.patch({ import: { pathMappings: mappings } }) }}
+        rootDir={workspaceRoot}
+        onRootChange={(next) => { runStore.patch({ import: { workspaceRoot: next } }) }}
         onBack={() => { setPhase('preview') }}
         onNext={finishPathMapping}
         t={t}
@@ -690,6 +697,7 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
         sessionFormatFacts={sessionFormatFacts}
         sessionFormatBlocked={sessionFormatBlocked}
         sessionFormatSkipped={sessionFormatSkipped}
+        sessionCompareFacts={sessionCompareFacts}
         onBack={() => { setPhase('preview') }}
         onExecute={() => { void execute() }}
         apiT={api.t}

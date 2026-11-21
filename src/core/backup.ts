@@ -146,6 +146,8 @@ const FILE_BASES: Partial<Record<SectionId, string>> = {
   pluginData: '',
   pluginAssets: '',
   sessions: 'sessions',
+  // P1：附件库（宿主 attachments 服务的存储根，$DSH_HOME 内）
+  attachments: 'attachments',
   self: 'dsh-config-manager',
 };
 
@@ -400,6 +402,7 @@ async function engineSnapshotEntry(ctx: HostContext, target: SnapshotTarget): Pr
     case 'pluginData':
     case 'pluginAssets':
     case 'sessions':
+    case 'attachments':
     case 'self': {
       // 门面按分区选：pluginData / pluginAssets 在系统 home 根（见 fsForSection 的说明）
       const fsFacade = fsForSection(ctx, target.adapter);

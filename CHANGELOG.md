@@ -28,6 +28,17 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🆕 新增 · Added
+
+- **备份可以只带对话真正用过的附件，恢复后缺哪些也会提前告诉你**：新增「会话附件」分区，导出时只收被选中对话引用过的图片与文件对象（不再整库照搬，本机 233 MB 的附件里约 30% 是从未被引用的孤儿）；导入体检会列出「包内被引用但没随包」的附件数，避免恢复完才发现对话里的图全没了。
+  **Backups can now carry only the attachments your conversations actually used — and tell you in advance what will be missing**: a new "session attachments" section collects just the images and files referenced by the selected conversations instead of copying the whole store (roughly 30% of this machine's 233 MB is never-referenced leftovers), and the import check reports how many referenced attachments did not travel with the bundle.
+- **导入前逐条比对同名对话，先说清「会覆盖掉本机多少条新消息」**：体检把包内每条对话与本机同名对话逐事件比一遍，给出「一致 / 包内更新 / 本机更新 / 已分叉 / 本机没有 / 读不出」六态与各自的条数；会覆盖或分叉的会明确报出「几条对话、几条消息会被替换」，确认页也照此显示，并说明导入是以备份包为准的恢复而非追加合并。
+  **Same-named conversations are now compared item by item before import, so you know how many newer local messages will be replaced**: the check compares every bundled conversation against its local counterpart event by event and reports identical / newer-in-bundle / newer-here / diverged / not-on-this-machine / unreadable with counts; anything that would be overwritten is called out with the number of conversations and messages, and the confirmation step repeats it while stating that import restores from the bundle rather than appending.
+- **归档状态与工作区显示顺序随备份一起恢复**：导出带上哪些对话在归档里、工作区按什么顺序排列，导入后按原样还原（宿主不支持时只告警，不影响其余导入）。
+  **Archived conversations and workspace ordering now survive a backup**: the archive set and the workspace display order are exported and restored on import, with a warning only (never a failed import) when the host build does not expose the primitive.
+- **导入时可以填「导入到 <目录>」，工作区自动落到该目录下的重名子目录**：填一个根目录即可把那台机器上的工程整体搬到你选的位置（同名自动加 -2 / -3，非法字符按目标系统清洗）；手填的逐条映射优先于自动推导，无需改动既有映射流程。
+  **The import wizard accepts a target directory and derives each workspace path automatically**: point it at a root folder and every bundled workspace lands in a subfolder named after it (duplicates get -2 / -3, illegal characters are cleaned for the target OS); explicit per-workspace mappings still win over the derived ones.
+
 ## [0.11.0] - 2026-11-21
 
 > **保留策略多了「近期全保留」这一档，Windows 上也不再因为运行状态文件写不进去而整个退出**：每天备份的人现在可以「近 N 天全留，更早的再按最近 / 每月 / 每年稀释」，不用再在「丢掉近期历史」和「囤一堆旧副本」之间二选一；记录「这个档案正在运行」的心跳文件被杀软或索引器短暂占用时只重试并记日志，不再把整个应用一起带走。

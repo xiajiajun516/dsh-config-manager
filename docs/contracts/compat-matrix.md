@@ -3,7 +3,7 @@
 > 本文件回答一个问题：**本插件支持哪个 DSH 版本区间，以及 DSH 升级时哪一部分会先破。**
 > 所有断言均标注取证位置（`file:line`）或标记为「未验证」。凡未实际读取文件确认的结论一律不写入本文件。
 
-- 适用插件版本：`dsh-config-manager@0.11.0`（`package.json:3`，与 `src/index.ts` 的 `export const PLUGIN_VERSION` 一致）
+- 适用插件版本：`dsh-config-manager@0.12.0`（`package.json:3`，与 `src/index.ts` 的 `export const PLUGIN_VERSION` 一致）
 - 取证环境：Windows，Node `v24.13.0`，npm `11.19.0`
 - 本机 DSH 部署：`@deepseek-ai/dsh@0.1.5-rc.1`（`D:\Apps\nodejs\node_global\node_modules\@deepseek-ai\dsh\package.json`）
 - 兼容闸取证（2026-09-28，issue #53）：另从 npm 取 `@deepseek-ai/dsh-app-boot@0.2.0-rc.1`、`@deepseek-ai/dsh@0.1.7-rc.2` 与 `@deepseek-ai/dsh@0.2.0-rc.1` 的 tarball 逐字读源码，并用 app-boot 导出的 `evaluatePluginCompatibility` 对**本插件的 manifest** 真跑判定（结果见 §3.3）
@@ -47,7 +47,7 @@ export const inject = ['settings', 'credentials']
 
 | 服务 | 用途 | 缺失时的行为 | 取证位置 |
 |---|---|---|---|
-| `workspaceRegistry` | 工作区记录的列举/建/删/改标题（`workspaces` 分区） | `listRecords()` 返回 `[]`；写入抛 `host.workspaceUnavailable` | `src/index.ts` 的 `function readService`；`DshWorkspaceFacade.registry()`（唯一读取点）；`DshWorkspaceFacade` 的 `listRecords` / `writeRecord` / `removeRecord` / `attachSession` |
+| `workspaceRegistry` | 工作区记录的列举/建/删/改标题（`workspaces` 分区） | `listRecords()` 返回 `[]`；写入抛 `host.workspaceUnavailable` | `src/core/host-service.ts` 的 `readService`；`src/core/host-workspace-facade.ts` 的 `DshWorkspaceFacade.registry()`（唯一读取点）及其 `listRecords` / `writeRecord` / `removeRecord` / `attachSession` / `listArchivedSessionIds` / `archiveSession` / `reorderWorkspaces` |
 | `webServer` | 注册 `/api/dsh-config-manager/*` 全部 HTTP 路由 | 记一条 warn 并 `return`：**路由完全不注册**，引擎能力仍在但浏览器半不可用 | `src/index.ts` 的 `readService<WebServer>(ctx, 'webServer')` 缺失分支（warn + `return`；路由注册见 `src/routes/kit.ts` 的 `registerRoutes`） |
 | `tools` | 注册 9 个 Agent 可调用模型工具（`config_backup` / `config_restore` / `config_sync_push` / `config_sync_preview` / `config_sync_apply` / `config_import_plan` / `config_import_apply` 等） | 记一条 warn 并 `return`，跳过工具注册 | `src/core/model-tools.ts`；`src/core/model-tools.ts:857+`（`defineTool` 薄壳） |
 
@@ -278,7 +278,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 | **R1** | `settings` 服务方法签名（`describe` 返回结构、`replace`/`update` 的 revision 语义）或 `settingsNamespace` 一类导出再次变动 | host 半全部读写路径：13 个 adapter 里的 settings/providers/credentials、回滚、快照 diff | 导出/导入/回滚报 `namespace not found` 或 revision 冲突；`设置` tab 空数据 | `ctx.get('settings')` 是否存在 → `src/index.ts` 的 `class DshSettingsFacade`；`Object.keys(require('@deepseek-ai/dsh-settings'))` 比对 `settingsNamespace` |
 | **R2** | `credentials` 服务方法签名或 `credentialRef` 导出移除 | 同步 token / WebDAV 密码 / GitHub device flow 的槽位读写 | 同步配置保存后 `passwordConfigured` 恒 false；WebDAV/Git 同步鉴权失败 | `src/index.ts` 的 `class DshCredentialsFacade`；`Object.keys(require('@deepseek-ai/dsh-credentials'))` |
 | **R3** | `webServer` 服务名或 `register(route)` 契约变化 | **整个 `/api/dsh-config-manager/*` 路由族** | 设置页能打开但每个操作都失败；host 日志出现 `webServer 服务不可用：跳过 /api/dsh-config-manager 路由注册` | `src/index.ts` 的 `readService<WebServer>(ctx, 'webServer')` 缺失分支（缺服务即打这条 warn）；确认 `ctx.get('webServer')` |
-| **R4** | `workspaceRegistry` 服务名或 `list/get/create/delete` 契约变化 | `workspaces` 分区 | 工作区列表导出为空；导入工作区报 `host.workspaceUnavailable` | `DshWorkspaceFacade.registry()`（服务名硬编码 `'workspaceRegistry'`）；`DshWorkspaceFacade` 的其余方法 |
+| **R4** | `workspaceRegistry` 服务名或 `list/get/create/delete` 契约变化 | `workspaces` 分区 | 工作区列表导出为空；导入工作区报 `host.workspaceUnavailable` | `src/core/host-workspace-facade.ts` 的 `DshWorkspaceFacade.registry()`（服务名硬编码 `'workspaceRegistry'`）及其余方法 |
 | **R5** | `tools` 服务名或 `register(toolDef)` 契约变化 / `defineTool` 签名变化 | 9 个 Agent 模型工具（`config_backup` 等） | Agent 侧工具消失或调用报错；host 日志 `tools 服务不可用：跳过模型工具注册` | `src/core/model-tools.ts`；`src/core/model-tools.test.ts` 复现守卫 |
 | **R6** | `dshHomePath` / `resolveDshHome` 语义变化（`$DSH_HOME` 解析规则、返回路径形态） | 插件数据根、所有文件级读写、快照目录 | 数据写到意外位置；快照/导出列表「看不到刚做的备份」 | `apply()` 内 `resolveDshHome()` / `dshHomePath('dsh-config-manager')`；直接 `console.log(resolveDshHome())` |
 | **R7** | client 运行时 seed 表变化（移除 `react/jsx-runtime`，或 React 升到 19 与 peer `^18.2.0` 冲突） | **整个 client 半**（设置页整块） | 设置页 `config-manager` section 不出现，或页面出现 `client-modules: require("react/jsx-runtime") missed the module table` | 读 `dsh-web-frontend/dist/assets/index-*.js` 里的 seed 表（`by()` 函数，9 项）；读 `dsh-client-modules/lib/client.js:300-309` 的抛错点 |

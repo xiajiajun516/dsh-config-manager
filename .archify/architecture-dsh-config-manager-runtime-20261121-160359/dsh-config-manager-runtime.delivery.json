@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "c9ac42da-0f3c-4993-964d-e53ea077bc5e",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "D:\\Projects\\personal\\dsh-config-manager\\.archify\\architecture-dsh-config-manager-runtime-20261121-160359\\candidate.json",
+  "output": "D:\\Projects\\personal\\dsh-config-manager\\.archify\\architecture-dsh-config-manager-runtime-20261121-160359\\dsh-config-manager-runtime.html",
+  "specification": {
+    "sha256": "49ed72cbb68d9d7e6ca44d4b84a93048d4cfa69e8d3751b467b53b01fe03e378",
+    "bytes": 9436
+  },
+  "artifact": {
+    "sha256": "fa8e60c7578e535d0fa81f9d1e0aa83a0244022c9ebc54383e6763ab8f78fc10",
+    "bytes": 853334
+  }
+}

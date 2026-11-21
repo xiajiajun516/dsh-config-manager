@@ -8,8 +8,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { normalizePath } from '../utils/paths.ts';
 import { zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
-// t6：注册 adapters 域追加目录（本模块只消费注入的 msg，故只引它的注册副作用）。
-import './messages.ts';
+// t6：注册 adapters 域追加目录；导出侧没有注入 msg（HostContext.msg 可选），故用本域 engineMsg。
+import { engineMsg } from './messages.ts';
 import type { WorkspaceRecord, WorkspacesSection } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
@@ -93,12 +93,18 @@ export class WorkspacesAdapter implements ConfigAdapter<WorkspacesSection> {
     const records = await ctx.workspace.listRecords();
     // Phase 1 条目级选择：单元 = 一条工作区记录（id 与导入侧 `workspace:<id>` 一致）
     const allow = options.includeItems?.['workspaces'];
-    const kept = allow === undefined ? records : records.filter((r) => allow.includes(`workspace:${r.id}`));
+    const kept = allow === undefined ? records : records.filter((r) => allow.includes('workspace:' + r.id));
+    const archived = await readArchivedSessionIds(ctx, kept);
     return {
       sectionId: 'workspaces',
-      data: { version: 1, workspaces: kept },
+      data: {
+        version: 1,
+        workspaces: kept,
+        // 宿主没有归档能力 ⇒ 不带字段（「读不到」与「确实为空」必须分开）
+        ...(archived.ids === undefined ? {} : { archivedSessionIds: archived.ids }),
+      },
       counts: { workspaces: kept.length },
-      warnings: [],
+      warnings: archived.warnings,
     };
   }
 
@@ -261,6 +267,10 @@ export class WorkspacesAdapter implements ConfigAdapter<WorkspacesSection> {
         message: note.message,
       });
     }
+    // P2：显示顺序与归档状态都在「工作区与会话都已落地」之后恢复
+    const order = await restoreWorkspaceOrder(ctx, data);
+    if (order !== undefined) results.push(order);
+    results.push(...(await restoreArchiveSet(ctx, data)));
     return results;
   }
 
@@ -448,3 +458,109 @@ async function registerImportedSessions(
   const head = attached > 0 ? ctx.msg('adapter.workspaceSessionsAttached', { count: String(attached) }) : '';
   return { message: compose(head), failed: 0 };
 }
+
+/**
+ * P2：读注册表级归档集，并收窄到「本次真的带着记录的工作区所声明的会话」。
+ *
+ * 收窄的理由：归档集是全局的，用户可能只勾了其中几个工作区。若把这些工作区之外的
+ * 归档 id 也写进包，导入侧就会去归档本机根本不该被这次导入碰到的会话 —— 失败告警还
+ * 会把人引向无关的排查方向。
+ *
+ * 宿主没有该能力 ⇒ ids 为 undefined（调用方据此**不写**字段），与「确实为空」区分开：
+ * 后者要写成 []，让缺字段 = 老包（导入侧不做任何归档动作）这个语义可辨。
+ */
+async function readArchivedSessionIds(
+  ctx: HostContext,
+  kept: readonly WorkspaceRecord[],
+): Promise<{ ids: string[] | undefined; warnings: string[] }> {
+  const read = ctx.workspace.listArchivedSessionIds;
+  if (read === undefined) return { ids: undefined, warnings: [] };
+  try {
+    const raw = await read.call(ctx.workspace);
+    const declared = new Map<string, string>();
+    for (const rec of kept) {
+      for (const sid of rec.sessionIds) {
+        const key = sessionIdKey(sid);
+        if (!declared.has(key)) declared.set(key, sid);
+      }
+    }
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const id of raw) {
+      const key = sessionIdKey(id);
+      const local = declared.get(key);
+      if (local === undefined || seen.has(key)) continue;
+      seen.add(key);
+      ids.push(local);
+    }
+    return { ids, warnings: [] };
+  } catch (error) {
+    return { ids: undefined, warnings: [engineMsg('adapter.workspaceArchiveUnreadable', { msg: reasonOf(error) })] };
+  }
+}
+
+/**
+ * P2：把工作区显示顺序恢复成包里的顺序。
+ *
+ * 顺序不是数据：能力缺失或只有一条时什么都不做，失败也只告警（不该因为排序让整轮导入
+ * 变成「部分失败」）。未知 id 由门面自己过滤。
+ */
+async function restoreWorkspaceOrder(ctx: ImportContext, data: WorkspacesSection): Promise<ApplyResult | undefined> {
+  const reorder = ctx.target.workspace.reorderWorkspaces;
+  if (reorder === undefined) return undefined;
+  const ids = data.workspaces
+    .map((rec) => (rec !== null && typeof rec === 'object' ? rec.id : ''))
+    .filter((id): id is string => typeof id === 'string' && id !== '');
+  if (ids.length < 2) return undefined;
+  try {
+    await reorder.call(ctx.target.workspace, ids);
+    return undefined;
+  } catch (error) {
+    return { ok: false, warning: true, message: ctx.msg('adapter.workspaceReorderFailed', { msg: reasonOf(error) }) };
+  }
+}
+
+/**
+ * P2：把归档集恢复到目标机。
+ *
+ * 缺字段（老包）或空数组 ⇒ 一条动作都不做：绝不「对齐成空集」去反归档。
+ * 宿主没有归档能力 ⇒ 一条 warning（不是静默跳过），因为用户勾了这个能力就该知道没生效。
+ */
+async function restoreArchiveSet(ctx: ImportContext, data: WorkspacesSection): Promise<ApplyResult[]> {
+  const ids = data.archivedSessionIds;
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const archive = ctx.target.workspace.archiveSession;
+  if (archive === undefined) {
+    return [{ ok: false, warning: true, message: ctx.msg('host.workspaceArchiveUnavailable') }];
+  }
+  let archived = 0;
+  const failed: string[] = [];
+  let firstReason = '';
+  for (const id of ids) {
+    if (typeof id !== 'string' || id === '') continue;
+    try {
+      await archive.call(ctx.target.workspace, id);
+      archived += 1;
+    } catch (error) {
+      failed.push(id);
+      if (firstReason === '') firstReason = reasonOf(error);
+    }
+  }
+  const results: ApplyResult[] = [];
+  if (archived > 0) {
+    results.push({ ok: true, message: ctx.msg('adapter.workspaceArchiveRestored', { count: String(archived) }) });
+  }
+  if (failed.length > 0) {
+    results.push({
+      ok: false,
+      warning: true,
+      message: ctx.msg('adapter.workspaceArchiveFailed', {
+        ids: failed.slice(0, 5).join(', '),
+        count: String(failed.length),
+        msg: firstReason,
+      }),
+    });
+  }
+  return results;
+}
+

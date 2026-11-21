@@ -694,3 +694,132 @@ test('ui-F1：真实导入路径 —— 只 applyItem 过的会话参与收尾�
   await adapter.finalizeApply(ctx);
   assert.deepEqual(calls.moves, ['--D-Old-proj--/session-a'], 'finalize 不得搬动用户没勾选的会话');
 });
+
+/* ---------------- P3：导入前逐条比对（compareSessions，只读、零写入） ---------------- */
+
+function events(prefix: string, count: number): string[] {
+  return Array.from({ length: count }, (_, i) => JSON.stringify({ type: prefix + '/step', seq: i, data: { i } }));
+}
+
+function packLogs(
+  entries: { rel: string; lines: string[] }[],
+): { version: 1; files: { relativePath: string; data: Uint8Array; contentHash: string }[] } {
+  return {
+    version: 1,
+    files: entries.map((entry) => ({
+      relativePath: entry.rel,
+      data: Buffer.from(encodeZstdFrame(Buffer.from(entry.lines.join('\n') + '\n', 'utf8'))),
+      contentHash: 'h',
+    })),
+  };
+}
+
+/**
+ * 测试用内存文件系统只认文件（exists = files.has），真实宿主的 exists 对目录返回 true。
+ * compareSessions 用 exists 探「本机有没有同名会话目录」，所以这里补上目录语义，
+ * 否则所有本机会话都会被误判成 new（测试会假绿/假红）。
+ */
+function dirAware(ctx: ReturnType<typeof makeContext>): void {
+  const dirs = new Set<string>();
+  const fs = ctx.fs as {
+    writeFile: (rel: string, data: Uint8Array) => Promise<void>;
+    exists: (rel: string) => Promise<boolean>;
+  };
+  const writeFile = fs.writeFile.bind(ctx.fs);
+  const exists = fs.exists.bind(ctx.fs);
+  fs.writeFile = async (rel, data) => {
+    const parts = rel.split('/');
+    for (let i = 1; i < parts.length; i += 1) dirs.add(parts.slice(0, i).join('/'));
+    await writeFile(rel, data);
+  };
+  fs.exists = async (rel) => dirs.has(rel) || (await exists(rel));
+}
+
+async function writeLocal(ctx: ReturnType<typeof makeContext>, key: string, dir: string, name: string, body: string[] | Uint8Array): Promise<void> {
+  const payload = body instanceof Uint8Array ? body : Buffer.from(body.join('\n') + '\n', 'utf8');
+  await ctx.fs.writeFile('sessions/' + key + '/' + dir + '/' + name, payload);
+}
+
+test('P3：本机是包的前缀 → localAhead（导入会覆盖掉本机多出的消息，必须报数）', async () => {
+  const ctx = makeContext('win32', HOME);
+  dirAware(ctx);
+  await writeLocal(ctx, '--p--', 'sess-1', 'session.jsonl.zstd', events('turn', 3));
+  const section = packLogs([{ rel: '--p--/sess-1/session.jsonl.zstd', lines: events('turn', 2) }]);
+  const summary = await adapter.compareSessions(ctx, section);
+  assert.equal(summary?.rows.length, 1);
+  const row = summary!.rows[0]!;
+  assert.equal(row.verdict, 'localAhead');
+  assert.equal(row.packEvents, 2);
+  assert.equal(row.localEvents, 3);
+  assert.equal(row.localAheadBy, 1);
+});
+
+test('P3：本机没有同名会话 → new（不是 identical，也不能算 unreadable）', async () => {
+  const ctx = makeContext('win32', HOME);
+  dirAware(ctx);
+  const section = packLogs([{ rel: '--p--/sess-9/session.jsonl.zstd', lines: events('turn', 2) }]);
+  const summary = await adapter.compareSessions(ctx, section);
+  assert.equal(summary?.rows[0]?.verdict, 'new');
+  assert.equal(summary?.rows[0]?.localEvents, 0);
+});
+
+test('P3：包内引用了附件 → 计入 attachmentsReferenced 与缺失清单（由 analyzer 与包内条目对账）', async () => {
+  const ctx = makeContext('win32', HOME);
+  dirAware(ctx);
+  const id = 'sha256:' + 'a'.repeat(64);
+  const line = JSON.stringify({ type: 'message', seq: 1, data: { image: { attachmentId: id, mediaType: 'image/png' } } });
+  const section = packLogs([{ rel: '--p--/sess-1/session.jsonl.zstd', lines: [line] }]);
+  const summary = await adapter.compareSessions(ctx, section);
+  assert.equal(summary?.attachmentsReferenced, 1);
+  assert.deepEqual(summary?.attachmentsMissing, [id]);
+});
+
+test('P3：本机日志损坏（有 zstd 魔数却解不开）→ unreadable，绝不当作一致或新增', async () => {
+  const ctx = makeContext('win32', HOME);
+  dirAware(ctx);
+  const broken = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd, 1, 2, 3, 4, 5]);
+  await writeLocal(ctx, '--p--', 'sess-1', 'session.jsonl.zstd', broken);
+  const section = packLogs([{ rel: '--p--/sess-1/session.jsonl.zstd', lines: events('turn', 2) }]);
+  const summary = await adapter.compareSessions(ctx, section);
+  assert.equal(summary?.rows[0]?.verdict, 'unreadable');
+});
+
+test('P3：本机目录在但没有会话日志（只剩 session.lock）→ unreadable', async () => {
+  const ctx = makeContext('win32', HOME);
+  dirAware(ctx);
+  await writeLocal(ctx, '--p--', 'sess-1', 'session.lock', new Uint8Array([1]));
+  const section = packLogs([{ rel: '--p--/sess-1/session.jsonl.zstd', lines: events('turn', 2) }]);
+  const summary = await adapter.compareSessions(ctx, section);
+  assert.equal(summary?.rows[0]?.verdict, 'unreadable');
+});
+
+test('P3：前缀之后两边各有新消息 → diverged 并给出分叉点', async () => {
+  const ctx = makeContext('win32', HOME);
+  dirAware(ctx);
+  const shared = events('turn', 2);
+  await writeLocal(ctx, '--p--', 'sess-1', 'session.jsonl.zstd', [...shared, JSON.stringify({ type: 'turn/local', seq: 2 })]);
+  const section = packLogs([{
+    rel: '--p--/sess-1/session.jsonl.zstd',
+    lines: [...shared, JSON.stringify({ type: 'turn/pack', seq: 2 })],
+  }]);
+  const summary = await adapter.compareSessions(ctx, section);
+  assert.equal(summary?.rows[0]?.verdict, 'diverged');
+  assert.equal(summary?.rows[0]?.divergedAt, 2);
+});
+
+test('P3：包内会话解不开（非 zstd 的乱码）→ 该单元不比，绝不猜成 new', async () => {
+  const ctx = makeContext('win32', HOME);
+  dirAware(ctx);
+  await writeLocal(ctx, '--p--', 'sess-1', 'session.jsonl.zstd', events('turn', 2));
+  const section: { version: 1; files: { relativePath: string; data: Uint8Array; contentHash: string }[] } = {
+    version: 1,
+    files: [{
+      relativePath: '--p--/sess-1/session.jsonl.zstd',
+      data: new Uint8Array([0x28, 0xb5, 0x2f, 0xfd, 9, 9, 9]),
+      contentHash: 'h',
+    }],
+  };
+  const summary = await adapter.compareSessions(ctx, section);
+  assert.equal(summary?.rows.length, 0, '解不出就不产出结论');
+  assert.equal(summary?.skipped, 1, '但要计入未比对，报告里必须写明');
+});

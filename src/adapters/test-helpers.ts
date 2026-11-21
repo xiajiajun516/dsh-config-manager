@@ -185,6 +185,10 @@ export class MemWorkspace implements WorkspaceFacade {
   records = new Map<string, WorkspaceRecord>();
   /** 可选（issue #45）：测试按需注入的会话登记钩子；缺省维持「宿主不支持该能力」的旧行为。 */
   attachSession?: WorkspaceFacade['attachSession'];
+  /** 可选（P2）：归档集读取 / 归档动作 / 显示顺序；缺省 = 宿主不支持（老宿主行为）。 */
+  listArchivedSessionIds?: WorkspaceFacade['listArchivedSessionIds'];
+  archiveSession?: WorkspaceFacade['archiveSession'];
+  reorderWorkspaces?: WorkspaceFacade['reorderWorkspaces'];
   async listRecords(): Promise<WorkspaceRecord[]> { return [...this.records.values()]; }
   async writeRecord(r: WorkspaceRecord): Promise<void> { this.records.set(r.id, r); }
   async removeRecord(id: string): Promise<void> { this.records.delete(id); }
@@ -327,7 +331,7 @@ export function makeManifest(platform = 'win32'): Manifest {
       settings: false, ui: false, providers: false, plugins: false, mcp: false, prompts: false,
       skills: false, agentPresets: false, agentInstructions: false, workspaces: false, pluginFiles: false,
       credentialsStatus: false, secrets: false, sessions: false, self: false,
-      pluginData: false, pluginAssets: false,
+      pluginData: false, pluginAssets: false, attachments: false,
     },
     security: { containsSecrets: false, encrypted: false, encryption: null },
   };

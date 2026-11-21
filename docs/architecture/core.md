@@ -93,9 +93,10 @@ workspaces、credentialsStatus、pluginFiles、pluginData、pluginAssets、self�
    `src/index.ts` 单向 import `buildRoutes()`，经 `makeRouteEnv()` 注入 `pluginVersion`/`starPromptRepoUrl`。加字段要同步改 `src/index.ts:2179` 的
    `RouteEnvInferred`（手写字面类型）。**新增共享工具就放 route-support，别让组文件回指组合根**；守卫 `tests/route/route-support-cycle.test.ts`，
    修复史与验证方式 → `docs/known-issues/tech-debt.md` #1。
-2. **巨型文件**（行数为 2026-10-28 实测）：`src/core/rollback-point.ts` 5980、`src/index.ts` 4379（原 5003，已下沉 route-support）、
-   `src/sync/sync-engine.ts` 2227、`src/client/run-store.ts` 2166、`src/client/recovery/RecoveryPanel.tsx` 1921（棘轮登记 1922）、
-   `src/core/analyzer.ts` 1500（原 1824，导入计划纯函数外提到 `src/core/import-planning.ts` 356）。体量让「改一处要读多少」和 merge 冲突成本线性上升；
+2. **巨型文件**（行数为 2026-11-21 实测）：`src/core/rollback-point.ts` 5980、`src/index.ts` 3811（原 5003，已依次下沉 route-support /
+   `src/core/host-workspace-facade.ts`（`DshWorkspaceFacade`）、`src/core/host-session-shapes.ts`、`src/core/host-service.ts`）、
+   `src/sync/sync-engine.ts` 2199、`src/client/run-store.ts` 2143（落盘脱敏下沉 `src/client/run-store-redact.ts`）、
+   `src/core/analyzer.ts` 1440（导入计划纯函数外提到 `src/core/import-planning.ts`，分析期会话体检外提到 `src/core/session-analyze.ts`）。体量让「改一处要读多少」和 merge 冲突成本线性上升；
    拆分前必须先有对应回归测试，`tests/file-size-ratchet.test.ts` 只许下调上限（上调要在文件头写理由并同步 tech-debt）。
 3. **耦合中枢**（入度最高的模块，改动影响面最大）：`src/schema/types.ts`、`src/core/types.ts`、`src/client/client-types.ts`、`src/security/redaction.ts`、
    `src/foreign/types.ts`、`src/client/common/ui.tsx`、`src/utils/guards.ts`、`src/ui/i18n.ts`。改这些文件的代价不在实现，而在**必须全仓验证**。

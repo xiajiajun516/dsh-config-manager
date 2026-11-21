@@ -401,6 +401,17 @@ export class ImportWizard {
     this.decisions = { ...this.decisions, pathMappings: mappings };
   }
 
+  /**
+   * 设置「导入到 <目录>」（P4）：包内每个工作区落到该目录下的同名子目录（重名顺延 -2 / -3）。
+   *
+   * 只是把用户输入放进决策；推导本身发生在 Host 侧 createImportPlan（纯函数
+   * `workspaceRootMappings`），因此 Dry Run 与真实导入吃到同一份推导结果。
+   * 空串 = 不推导（工作区路径仍由基础路径重定基 / 手填映射决定）。
+   */
+  setWorkspaceRoot(rootDir: string): void {
+    this.decisions = { ...this.decisions, workspaceRoot: rootDir };
+  }
+
   /** 设置秘密补录值（仅内存，绝不持久化） */
   setSecretInputs(inputs: Record<string, string>): void {
     this.secretInputs = inputs;

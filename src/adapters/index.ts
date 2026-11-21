@@ -21,6 +21,7 @@ import { WorkspacesAdapter } from './workspaces.ts';
 import { CredentialsAdapter, type CredentialRefsProvider } from './credentials.ts';
 import { PluginFilesAdapter } from './plugin-files.ts';
 import { SessionsAdapter } from './sessions.ts';
+import { AttachmentsAdapter } from './attachments.ts';
 import { SelfAdapter } from './self.ts';
 import { PluginDataAdapter } from './plugin-data.ts';
 
@@ -73,7 +74,12 @@ export function createAdapters(options: AdapterRegistryOptions = {}): ConfigAdap
   if (options.selfDir !== '') {
     adapters.push(new SelfAdapter(options.selfDir ?? 'dsh-config-manager'));
   }
-  if (options.includeSessions) adapters.push(new SessionsAdapter());
+  if (options.includeSessions) {
+    adapters.push(new SessionsAdapter());
+    // P1：附件必须排在 sessions **之后** —— 它的收集面由「本次选中的会话」决定，
+    // 顺序反了不会报错，只会静默把所有会话都当成「未收窄」的全集。
+    adapters.push(new AttachmentsAdapter());
+  }
   return adapters;
 }
 
@@ -94,6 +100,7 @@ export { WorkspacesAdapter } from './workspaces.ts';
 export { CredentialsAdapter, defaultCredentialRefs } from './credentials.ts';
 export { PluginFilesAdapter, DEFAULT_PLUGIN_FILE_WHITELIST } from './plugin-files.ts';
 export { SessionsAdapter } from './sessions.ts';
+export { AttachmentsAdapter } from './attachments.ts';
 export { SelfAdapter, SELF_CONFIG_FILES } from './self.ts';
 export { PluginDataAdapter, type PluginDataAdapterOptions, type PluginDataEntry } from './plugin-data.ts';
 export { FileCollectionAdapter } from './file-collection.ts';

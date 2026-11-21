@@ -326,7 +326,7 @@ test('S-01 真实 buildManifest 产物满足 schema 声明的全部必需字段�
 test('S-02 sections 恒含全部已知分区 id（规格 §2.5），值均为布尔', () => {
   const m = baselineManifest();
   const keys = Object.keys(m.sections).sort();
-  assert.equal(SECTION_IDS.length, 17, 'SectionId 共 17 个（含无 adapter 的 secrets）');
+  assert.equal(SECTION_IDS.length, 18, 'SectionId 共 18 个（含无 adapter 的 secrets 与 P1 新增的 attachments）');
   assert.deepEqual(keys, [...SECTION_IDS].sort(), 'sections 键集合必须等于 SECTION_IDS');
   for (const key of keys) {
     assert.equal(typeof m.sections[key as (typeof SECTION_IDS)[number]], 'boolean', `sections.${key} 必须是布尔`);

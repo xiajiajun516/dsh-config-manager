@@ -338,3 +338,131 @@ test('ui-F3：workspaces 记录缺 sessionIds 必须在 validate 阶段报错（
   assert.equal((await adapter.validate({ version: 1, workspaces: [{ id: 'ws-1', path: '/p' }] } as never)).valid, false);
   assert.equal((await adapter.validate({ version: 1, workspaces: [null] } as never)).valid, false);
 });
+
+// ── P2：会话归档集 + 工作区显示顺序 ────────────────────────────────────────
+
+/** 构造带 archivedSessionIds 的导入上下文（P2 专用）。 */
+function p2ctx(dst: ReturnType<typeof makeContext>, records: WorkspaceRecord[], archived?: string[]) {
+  const data: WorkspacesSection = {
+    version: 1,
+    workspaces: records,
+    ...(archived === undefined ? {} : { archivedSessionIds: archived }),
+  };
+  const sections = new Map<string, unknown>([['workspaces', data]]);
+  return { ctx: makeImportContext(dst, sections), data };
+}
+
+test('P2-1 导出归档集，并收窄到本次带走的工作区所声明的会话', async () => {
+  const ctx = makeContext('linux', '/home/alice');
+  ctx.workspace.records.set('ws-a', { id: 'ws-a', path: '/home/alice/a', title: 'A', sessionIds: ['session-x', 'session-y'] });
+  ctx.workspace.records.set('ws-b', { id: 'ws-b', path: '/home/alice/b', title: 'B', sessionIds: ['session-z'] });
+  // 归档集是注册表级全局集：既含未选工作区的会话，也含已经不挂工作区的会话
+  ctx.workspace.listArchivedSessionIds = async () => ['session-x', 'session-z', 'session-orphan'];
+  const adapter = new WorkspacesAdapter();
+  const out = await adapter.export(ctx, { includeSecrets: false, includeItems: { workspaces: ['workspace:ws-a'] } });
+  assert.deepEqual(out.data.archivedSessionIds, ['session-x'], '未选工作区的归档会话（会话 z / 孤儿会话）不得写进包里去归档别人机器上的会话');
+  assert.deepEqual(out.warnings, []);
+});
+
+test('P2-2 宿主没有归档能力 ⇒ 不写该字段（「读不到」≠「确实为空」）', async () => {
+  const ctx = makeContext('linux', '/home/alice');
+  ctx.workspace.records.set('ws-a', { id: 'ws-a', path: '/home/alice/a', title: 'A', sessionIds: ['session-x'] });
+  const adapter = new WorkspacesAdapter();
+  const out = await adapter.export(ctx, { includeSecrets: false });
+  assert.equal('archivedSessionIds' in out.data, false, '能力缺失时字段必须缺席（老包语义），不能写成空数组');
+
+  // 有能力且确实为空 → 写空数组（与缺席可辨）
+  ctx.workspace.listArchivedSessionIds = async () => [];
+  const out2 = await adapter.export(ctx, { includeSecrets: false });
+  assert.deepEqual(out2.data.archivedSessionIds, []);
+});
+
+test('P2-3 读归档集失败 ⇒ 不写字段 + 如实告警（导出不因此失败）', async () => {
+  const ctx = makeContext('linux', '/home/alice');
+  ctx.workspace.records.set('ws-a', { id: 'ws-a', path: '/home/alice/a', title: 'A', sessionIds: ['session-x'] });
+  ctx.workspace.listArchivedSessionIds = async () => { throw new Error('EBUSY: storage locked'); };
+  const adapter = new WorkspacesAdapter();
+  const out = await adapter.export(ctx, { includeSecrets: false });
+  assert.equal('archivedSessionIds' in out.data, false);
+  assert.equal(out.warnings.length, 1);
+  assert.match(out.warnings[0] ?? '', /未能读取会话归档集/);
+  assert.match(out.warnings[0] ?? '', /EBUSY/);
+});
+
+test('P2-4 导入收尾恢复归档集（逐个 archiveSession，成功如实计数）', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  const archivedCalls: string[] = [];
+  dst.workspace.archiveSession = async (sessionId: string) => { archivedCalls.push(sessionId); };
+  // sessionIds 留空：本用例只测归档恢复，避免掺进「会话登记」那条结果
+  const { ctx } = p2ctx(dst, [{ ...REC, sessionIds: [] }], ['session-x', 'session-y']);
+  const results = await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.deepEqual(archivedCalls, ['session-x', 'session-y']);
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.ok, true);
+  assert.match(results[0]?.message ?? '', /已恢复 2 个归档会话/);
+});
+
+test('P2-5 宿主没有归档能力 ⇒ 一条警告（不静默跳过）', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  const { ctx } = p2ctx(dst, [{ ...REC }], ['session-x']);
+  const results = await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.ok, false);
+  assert.equal(results[0]?.warning, true, '非致命：不拖垮整轮导入');
+  assert.match(results[0]?.message ?? '', /宿主未暴露会话归档能力/);
+});
+
+test('P2-6 部分归档失败 ⇒ 成功计数 + 失败计数（带前几个 id 与真实原因）', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  dst.workspace.archiveSession = async (sessionId: string) => {
+    if (sessionId === 'session-y') throw new Error('session not found');
+  };
+  const { ctx } = p2ctx(dst, [{ ...REC, sessionIds: [] }], ['session-x', 'session-y', 'session-z']);
+  const results = await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.equal(results.length, 2);
+  assert.equal(results[0]?.ok, true);
+  assert.match(results[0]?.message ?? '', /已恢复 2 个归档会话/);
+  assert.equal(results[1]?.ok, false);
+  assert.equal(results[1]?.warning, true);
+  assert.match(results[1]?.message ?? '', /1 个归档会话未恢复/);
+  assert.match(results[1]?.message ?? '', /session-y/);
+  assert.match(results[1]?.message ?? '', /session not found/);
+});
+
+test('P2-7 老包没有该字段 ⇒ 一条归档动作都不做（绝不「对齐成空集」反归档）', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  let called = 0;
+  dst.workspace.archiveSession = async () => { called += 1; };
+  const { ctx } = p2ctx(dst, [{ ...REC }]);
+  const results = await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.equal(called, 0);
+  assert.deepEqual(results, []);
+});
+
+test('P2-8 导入收尾按包内顺序重排工作区（insertBefore 语义由门面转换）', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  const orderCalls: string[][] = [];
+  dst.workspace.reorderWorkspaces = async (ids: readonly string[]) => { orderCalls.push([...ids]); };
+  const records = [REC, { ...REC, id: 'ws-2', title: 'B', path: '/home/bob/b' }, { ...REC, id: 'ws-3', title: 'C', path: '/home/bob/c' }];
+  const { ctx } = p2ctx(dst, records);
+  await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.deepEqual(orderCalls, [['ws-ops', 'ws-2', 'ws-3']], '按包内记录顺序一次性交给门面');
+});
+
+test('P2-9 顺序恢复失败只告警；单条记录不触发排序调用', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  dst.workspace.reorderWorkspaces = async () => { throw new Error('registry busy'); };
+  const { ctx } = p2ctx(dst, [REC, { ...REC, id: 'ws-2', title: 'B', path: '/home/bob/b' }]);
+  const results = await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.warning, true);
+  assert.match(results[0]?.message ?? '', /工作区显示顺序未恢复/);
+  assert.match(results[0]?.message ?? '', /registry busy/);
+
+  let called = 0;
+  dst.workspace.reorderWorkspaces = async () => { called += 1; };
+  const single = p2ctx(dst, [REC]);
+  assert.deepEqual(await new WorkspacesAdapter().finalizeImport(single.ctx), []);
+  assert.equal(called, 0, '只有一条工作区时没有「顺序」可恢复');
+});
+

@@ -408,6 +408,21 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     // 体量由用户数据主导（可能几百 MB），与 sessions 同理不进「配置状态」采集口径
     configSnapshot: false,
   },
+  attachments: {
+    id: 'attachments',
+    displayName: 'Attachments',
+    group: 'optional',
+    payload: { kind: 'files', filePrefix: 'attachments/' },
+    dataVersion: SECTION_DATA_VERSION,
+    applyOrder: 18,
+    // 图片 / 文件对象是用户私密内容（截图、剪贴板里的文件）⇒ high；恢复只新增不覆盖，冲突走同一套 plan
+    riskTier: 'high',
+    // 附件的绝对位置由本机附件服务决定，且内容与「这台机器上聊过什么」绑定 ⇒ deviceSpecific
+    portability: 'deviceSpecific',
+    syncOptIn: 'off',
+    defaultIncluded: false,
+    configSnapshot: false,
+  },
   pluginAssets: {
     id: 'pluginAssets',
     displayName: 'Plugin large files',

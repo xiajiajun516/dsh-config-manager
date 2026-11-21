@@ -30,6 +30,12 @@ const PATH_ISSUE_LABEL: Record<PathIssue['kind'], Parameters<TranslateNS<'config
 export interface PathMappingFormProps {
   /** 分析结果中的路径问题（每条生成一行映射输入） */
   issues: PathIssue[]
+  /**
+   * 「导入到 <目录>」（P4）：包内每个工作区落到该目录下的同名子目录。
+   * 空串 = 不推导（工作区仍按原路径 / 重定基 / 手填映射落点）。
+   */
+  rootDir: string
+  onRootChange: (next: string) => void
   /** 预置映射（如复用上次导入的映射） */
   initial?: PathMapping[]
   t: TranslateNS<'config-manager'>
@@ -43,9 +49,11 @@ export interface PathMappingFormProps {
  * 路径映射表单：每条 PathIssue 一行（原路径 → 新路径输入框），
  * 留空 = 该路径不映射（unresolved）；填写 = 输出 core PathMapping[]。
  */
-export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappingFormProps) {
+export function PathMappingForm({ issues, initial, rootDir, onRootChange, t, onChange, api }: PathMappingFormProps) {
   // 正在为哪条路径挑目录（oldPrefix 作 key；null = 弹窗关闭）
   const [pickingFor, setPickingFor] = useState<string | null>(null)
+  // 「导入到」那一行自己的一份弹窗状态（与逐条映射的弹窗互斥：同一时刻只开一个）
+  const [pickingRoot, setPickingRoot] = useState(false)
   // draft 状态：issue.value（oldPrefix）→ newPrefix；预置映射合并进 initial 状态
   const [drafts, setDrafts] = useState<Record<string, string>>(() => {
     const out: Record<string, string> = {}
@@ -90,24 +98,31 @@ export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappi
    *
    * 用户在任何一层点取消 ⇒ 什么都不做（不是错误，不弹红条）。
    */
-  const pickFolder = (oldPrefix: string): void => {
-    const startPath = (drafts[oldPrefix] ?? '').trim()
+  const pickFolderInto = (startPath: string, apply: (path: string) => void, fallback: () => void): void => {
     void (async () => {
       const viaHost = api.pickDshPath === undefined ? undefined : await api.pickDshPath()
       if (viaHost?.ok === true) {
-        setNewPrefix(oldPrefix, viaHost.path)
+        apply(viaHost.path)
         return
       }
       if (viaHost?.reason === 'canceled') return
       // 宿主没有该能力（非桌面宿主 / 版本较旧 / 调用抛错）⇒ 换插件自己的原生对话框
       const native = await api.pickNativePath(startPath, t('import.paths.picker.title')).catch(() => null)
       if (native !== null && native.ok) {
-        setNewPrefix(oldPrefix, native.path)
+        apply(native.path)
         return
       }
       if (native !== null && native.reason === 'canceled') return
-      setPickingFor(oldPrefix) // unsupported / failed / 请求失败 → 内置浏览器兜底
+      fallback() // unsupported / failed / 请求失败 → 内置浏览器兜底
     })()
+  }
+
+  const pickFolder = (oldPrefix: string): void => {
+    pickFolderInto((drafts[oldPrefix] ?? '').trim(), (path) => { setNewPrefix(oldPrefix, path) }, () => { setPickingFor(oldPrefix) })
+  }
+
+  const pickRoot = (): void => {
+    pickFolderInto(rootDir.trim(), onRootChange, () => { setPickingRoot(true) })
   }
 
   const unresolved = useMemo(() => {
@@ -116,6 +131,28 @@ export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappi
 
   return (
     <div className={css.pathMappingList}>
+      {/* 导入到 <目录>：一次决定所有工作区落点，因此排在逐条映射之前 */}
+      <div className={css.pathRow}>
+        <div className={css.pathOld}>
+          <div className={css.fieldLabel}>{t('import.paths.root')}</div>
+          <span className={css.pathIssueKind}>{t('import.paths.rootHint')}</span>
+        </div>
+        <div className={css.pathNew}>
+          <div className={css.pathInputRow}>
+            <input
+              className={css.input}
+              value={rootDir}
+              placeholder={t('import.paths.rootPlaceholder')}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => { onRootChange(e.target.value) }}
+            />
+            <IconButton
+              icon={<FolderOpenIcon size={14} />}
+              label={t('import.paths.browse')}
+              onClick={pickRoot}
+            />
+          </div>
+        </div>
+      </div>
       {/* UI-18：留空 = 跳过该路径是**合法**操作（文案本身说明如此），且本页「下一步」不拦截 ——
           因此这里用中性 info 语义而不是 warn（DESIGN.md §9 anti-pattern 3：warn/error 语义色
           不得用于建议性内容；黄色横幅在首屏就会被读成「出错了」）。计数随输入实时更新。 */}
@@ -158,15 +195,17 @@ export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappi
         </div>
       ))}
       <PathPickerDialog
-        open={pickingFor !== null}
+        open={pickingFor !== null || pickingRoot}
         api={api}
         t={t}
-        startPath={pickingFor === null ? '' : (drafts[pickingFor] ?? '')}
+        startPath={pickingRoot ? rootDir.trim() : (pickingFor === null ? '' : (drafts[pickingFor] ?? ''))}
         onPick={(path) => {
-          if (pickingFor !== null) setNewPrefix(pickingFor, path)
+          if (pickingRoot) onRootChange(path)
+          else if (pickingFor !== null) setNewPrefix(pickingFor, path)
+          setPickingRoot(false)
           setPickingFor(null)
         }}
-        onClose={() => { setPickingFor(null) }}
+        onClose={() => { setPickingFor(null); setPickingRoot(false) }}
       />
     </div>
   )

@@ -18,7 +18,13 @@ import { applyPathMapping } from '../core/path-mapping.ts';
 import { toNativePath } from '../utils/paths.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import { readLogHeaderFromBytes, type SessionLogHeader } from '../utils/session-log.ts';
-import type { ApplyResult, ExportOptions, ExportSection, HostContext, ImportContext, PlanItem } from '../core/types.ts';
+import { ZSTD_MAGIC, decodeZstdFrame, scanZstdFrames, zstdAvailable } from '../utils/zstd-frame.ts';
+import { extractAttachmentIds } from '../utils/attachment-refs.ts';
+import { aggregateSessionRows, canonicalEventLines, compareEventStreams } from '../core/session-compare.ts';
+import type {
+  ApplyResult, ExportOptions, ExportSection, HostContext, ImportContext, PlanItem,
+  SessionCompareRow, SessionCompareSummary,
+} from '../core/types.ts';
 import type { FilesSection } from '../schema/types.ts';
 import { toPosixRel } from './units.ts';
 
@@ -45,6 +51,39 @@ const writtenSessionFiles = new WeakMap<ImportContext, number>();
  * → `anyFailed` → 在 `rollbackOnError=true`（向导默认、同步通道恒 true）下**整笔导入回滚**。
  * 与 `writtenSessionFiles` 同样以 ImportContext 为键：宿主每个进程只建一次 adapters。 */
 const writtenSessionUnits = new WeakMap<ImportContext, Set<string>>();
+
+/**
+ * 会话日志字节 → 解码文本；解不出（缺 zstd 能力 / 容器损坏 / 帧撕裂）→ null（不猜）。
+ *
+ * 非 zstd 的明文日志（老代际）按 utf8 直接读：不认魔数就当明文，与附件扫描同一口径。
+ */
+function decodeLogText(bytes: Uint8Array): string | null {
+  const looksZstd = bytes.length >= 4
+    && bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd
+    && ZSTD_MAGIC === 0xfd2fb528;
+  if (!looksZstd) return Buffer.from(bytes).toString('utf8');
+  if (!zstdAvailable()) return null;
+  let frames: { start: number; end: number }[];
+  try {
+    frames = scanZstdFrames(bytes).frames;
+  } catch {
+    return null;
+  }
+  if (frames.length === 0) return null;
+  const parts: string[] = [];
+  for (const frame of frames) {
+    try {
+      parts.push(decodeZstdFrame(bytes.subarray(frame.start, frame.end)).toString('utf8'));
+    } catch {
+      return null;
+    }
+  }
+  return parts.join('\n');
+}
+
+/** 比对预算：条数 + 总字节（体检是分析阶段的附加只读动作，不许把导入前分析拖成分钟级）。 */
+const COMPARE_MAX_UNITS = 200;
+const COMPARE_MAX_BYTES = 64 * 1024 * 1024;
 
 export class SessionsAdapter extends FileCollectionAdapter {
   readonly id = 'sessions' as const;
@@ -448,6 +487,146 @@ export class SessionsAdapter extends FileCollectionAdapter {
         units: orphans.slice(0, 5).join(', '),
       }),
     }];
+  }
+
+  /** 本机同名会话目录（两种命名形态都试）；都没有 → null（= 包内是新增会话）。 */
+  private async localSessionDir(ctx: HostContext, unit: string): Promise<string | null> {
+    const parts = toPosixRel(unit).split('/');
+    const key = parts[0] ?? '';
+    const dir = parts[1] ?? '';
+    if (key === '' || dir === '') return null;
+    const bare = sessionIdKey(dir);
+    const names = dir.startsWith('session-') ? [dir, bare] : ['session-' + bare, bare];
+    for (const name of names) {
+      if (name === '') continue;
+      const rel = this.baseDir + '/' + key + '/' + name;
+      try {
+        if (await ctx.fs.exists(rel)) return rel;
+      } catch {
+        // 探测失败 → 继续试下一个候选形态（不因一次 stat 失败就断言「本机没有」）
+      }
+    }
+    return null;
+  }
+
+  /**
+   * P3「逐条会话比对」：包内会话 vs **本机同名会话**（只读，零写入）。
+   *
+   * 判据（详见 core/session-compare.ts 文件头）：同名 = 同一 projectKey + 同一会话目录
+   * （两种目录命名形态都试）；按**日志文件名**配对比较事件流，同一单元多份日志取最严重结论。
+   *
+   * 三条不猜的边界：
+   *  - 包内日志解不出（容器损坏 / 缺 zstd 能力）→ 该单元不比对，绝不当作「新增」；
+   *  - 本机目录在、但没有任何可配对的日志 → verdict=`unreadable`（不是 new）；
+   *  - 本机读失败 → `unreadable`；只有「目录形态都探不到」才是 `new`。
+   *
+   * 预算：条数与字节双上限（超限的单元计入 skipped，报告必须写明「另有 N 条未比对」）。
+   * 附件引用统计覆盖**全部**可解码单元（缺口数不能因预算被截断而少报）。
+   */
+  async compareSessions(ctx: HostContext, data: FilesSection): Promise<SessionCompareSummary | null> {
+    const files = Array.isArray(data.files) ? data.files : [];
+    if (files.length === 0) return null;
+    const byUnit = new Map<string, { relativePath: string; data: Uint8Array }[]>();
+    for (const file of files) {
+      const rel = toPosixRel(file.relativePath);
+      const name = rel.split('/').pop() ?? '';
+      if (!isSessionLogFileName(name)) continue;
+      const unit = toPosixRel(this.unitIdOf(rel));
+      const list = byUnit.get(unit) ?? [];
+      list.push({ relativePath: rel, data: file.data });
+      byUnit.set(unit, list);
+    }
+    if (byUnit.size === 0) return null;
+    const units = [...byUnit.keys()].sort();
+    const referenced = new Set<string>();
+    const rows: SessionCompareRow[] = [];
+    let skipped = 0;
+    let bytes = 0;
+    for (const unit of units) {
+      const logs = (byUnit.get(unit) ?? []).slice()
+        .sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+      const packStreams: { name: string; lines: string[] }[] = [];
+      let packEvents = 0;
+      // 引用统计与比对共用同一次解码：先解包内日志（预算判断在解码之后，避免「预算刚好用完」漏统计）
+      for (const log of logs) {
+        bytes += log.data.byteLength;
+        const text = decodeLogText(log.data);
+        if (text === null) continue;
+        for (const id of extractAttachmentIds(text)) referenced.add(id);
+        const lines = canonicalEventLines(text);
+        packEvents += lines.length;
+        packStreams.push({ name: log.relativePath.split('/').pop() ?? '', lines });
+      }
+      if (packStreams.length === 0) {
+        // 解不出（容器损坏 / 缺 zstd 能力）：不比对，绝不谎报 new；但必须计入未比对，
+        // 否则报告会静默少一条会话（「没结论」与「比对过且一致」必须分开）。
+        skipped += 1;
+        continue;
+      }
+      if (rows.length >= COMPARE_MAX_UNITS || bytes > COMPARE_MAX_BYTES) {
+        skipped += 1;
+        continue;
+      }
+      const localDir = await this.localSessionDir(ctx, unit);
+      if (localDir === null) {
+        rows.push({ unitId: unit, verdict: 'new', packEvents, localEvents: 0 });
+        continue;
+      }
+      let localNames: string[];
+      try {
+        localNames = (await listFilesDetailed(ctx.fs, localDir)).paths
+          .map((entry) => entry.split(/[\\/]/).pop() ?? '')
+          .filter((name) => isSessionLogFileName(name))
+          .sort();
+      } catch {
+        rows.push({ unitId: unit, verdict: 'unreadable', packEvents, localEvents: 0 });
+        continue;
+      }
+      if (localNames.length === 0) {
+        // 目录在、却没有会话日志：不是「新增」，也不是「一致」——如实说读不出可比对内容
+        rows.push({ unitId: unit, verdict: 'unreadable', packEvents, localEvents: 0 });
+        continue;
+      }
+      const pairs = packStreams.filter((stream) => localNames.includes(stream.name));
+      if (pairs.length === 0) {
+        // 两侧日志名完全不重合（代际命名不同）：只在「各只有一份」时才敢比，否则不猜
+        if (packStreams.length === 1 && localNames.length === 1) {
+          pairs.push({ name: localNames[0] ?? '', lines: packStreams[0]?.lines ?? [] });
+        } else {
+          rows.push({ unitId: unit, verdict: 'unreadable', packEvents, localEvents: 0 });
+          continue;
+        }
+      }
+      const diffs = [];
+      let unreadable = false;
+      for (const pair of pairs) {
+        let localBytes: Uint8Array;
+        try {
+          localBytes = await ctx.fs.readFile(localDir + '/' + pair.name);
+        } catch {
+          unreadable = true;
+          break;
+        }
+        bytes += localBytes.byteLength;
+        const localText = decodeLogText(localBytes);
+        if (localText === null) {
+          unreadable = true;
+          break;
+        }
+        diffs.push(compareEventStreams(pair.lines, canonicalEventLines(localText)));
+      }
+      if (unreadable) {
+        rows.push({ unitId: unit, verdict: 'unreadable', packEvents, localEvents: 0 });
+        continue;
+      }
+      rows.push(aggregateSessionRows(unit, diffs));
+    }
+    return {
+      rows,
+      skipped,
+      attachmentsReferenced: referenced.size,
+      attachmentsMissing: [...referenced].sort(),
+    };
   }
 
   override async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {

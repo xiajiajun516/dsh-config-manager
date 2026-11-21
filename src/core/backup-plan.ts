@@ -87,6 +87,10 @@ export const OFFLINE_EXCLUDED_SECTIONS: readonly SectionId[] = ['pluginData', 'p
  */
 export const OFFLINE_UNAVAILABLE_SECTIONS: readonly SectionId[] = [
   'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts', 'workspaces', 'credentialsStatus',
+  // attachments 属用户数据、且**只允许带被选中会话引用过的对象**（见 adapters/attachments.ts）：
+  // 离线 CLI 本就不收集会话，拿不到引用集合就只剩「整库照搬」—— 正是产品明确不做的行为。
+  // 因此这里显式归入「离线不可用」，让 `--sections attachments` 得到可执行提示（改用 GUI 导出）。
+  'attachments',
 ] as const;
 
 // 加载期自检（注册表派生，t30）：三个离线清单里的 id 必须都是**已注册分区**。
