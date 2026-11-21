@@ -34,7 +34,9 @@ const CEILINGS: Record<string, number> = {
   // src/core/host-session-shapes.ts、readService 下沉到 src/core/host-service.ts。
   // 3811 → 3806（2026-11-21，G5）：预览富化与活跃时间这两段「调适配器钩子 + 兜失败」的逻辑
   // 下沉到 src/core/unit-enrichment.ts，路由只留两行调用。
-  'src/index.ts': 3806,
+  // 3806 → 3796（2026-11-21，导入侧附件）：计划项的「会话标题 + 子代理父子链接」合并到
+  // src/core/session-meta.ts 的 annotateSessionsPlanItems()，路由只留一行调用。
+  'src/index.ts': 3796,
   // 2213 → 2209（2026-11-14，同步缺陷 P2）：待裁决的纯状态写入下沉到 src/sync/pending-merge.ts，
   // 引擎只留 3 行委托（recordPendingMerge / pendingMergeFor / writeMergeBaseline）。
   'src/sync/sync-engine.ts': 2209,

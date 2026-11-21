@@ -122,7 +122,7 @@ import { isPatchLayerRel, profilePatchRel, readEffectivePatchLines, USER_PATCH_F
 import { createLocalPluginPackHook } from './core/local-plugin-host.ts'
 import { ENCRYPTED_CONTAINER_CODE, createEncryptionProvider, readContainerKind, encryptArchive } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
-import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, applySessionParentLinksToPlanItems, readSessionMeta, readSessionMetaWithTitles, subagentParentMap, type SessionMetaIndex } from './core/session-meta.ts'
+import { annotateSessionsPlanItems, applySessionMeta, applySessionParentLinks, readSessionMeta, readSessionMetaWithTitles, subagentParentMap, type SessionMetaIndex } from './core/session-meta.ts'
 import { projectKeyOf, sessionIdKey } from './core/session-select.ts'
 import { PROJECT_KEY_RE, readLogCwdFromBytes, rewriteSessionLogDir } from './utils/session-log.ts'
 import { probeSessionFormats, resolveSessionFormatVersion } from './utils/session-format.ts'
@@ -3145,33 +3145,8 @@ function makeRoutes(deps: RoutesDeps): {
             writeJson(res, 409, blocked)
             return
           }
-          // sessions 计划项：补「会话标题 + 工作区分组」（用户实测：导入页此前只显示会话目录名）。
-          // 只在计划真的含该分区时才读 storages；读不到就保持目录名，绝不让计划生成失败。
-          const facadeOfSessions = host.sessions
-          if (plan.items.some((i) => i.adapter === 'sessions')) {
-            try {
-              plan.items = applySessionMetaToPlanItems(
-                plan.items,
-                await readSessionMetaWithTitles(host, plan.items.filter((item) => item.adapter === 'sessions').map((item) => item.unitId ?? item.id)),
-              )
-            } catch {
-              /* 保持目录名（旧行为） */
-            }
-            // 子代理会话：导入选择器同样要能「勾父带子 / 勾子带父」（与导出页同一份关系、
-            // 同一套 sessionIdKey 归一化）。语义边界：只认**本机**已知的父子关系 —— 包内的
-            // 新会话在本机还不存在，就保持扁平（不猜，宁可少一次联动也不编造归属）。
-            // 计划项 id 是「分区:相对路径」、末段是文件名，所以要用 unitId 去解析会话目录。
-            if (facadeOfSessions?.parentRelations !== undefined) {
-              try {
-                plan.items = applySessionParentLinksToPlanItems(
-                  plan.items,
-                  subagentParentMap(await facadeOfSessions.parentRelations()),
-                )
-              } catch {
-                /* 读不到就不标（与导出页同一降级：宁可不联动，不猜） */
-              }
-            }
-          }
+          // sessions 计划项：会话标题/工作区分组 + 子代理父子链接（读不到就原样，绝不使计划失败）。
+          plan.items = await annotateSessionsPlanItems(plan.items, host)
           writeJson(res, 200, plan)
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })

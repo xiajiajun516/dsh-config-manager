@@ -461,3 +461,33 @@ export function applySessionMeta(
     return diff !== 0 ? diff : (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   });
 }
+
+/**
+ * sessions 计划项的一次性标注：会话标题/工作区分组 + 子代理父子链接（导入选择器的展示与勾选联动）。
+ *
+ * 两条都是「读不到就原样」：宿主不提供 storages 或 parentRelations、解析失败、形状不符 —— 一律保持
+ * 目录名与扁平结构，绝不让计划生成失败，也不凭 id 编造归属（宁可不联动，不猜）。
+ * 语义边界（父子链接）：只认**本机**已知关系，包内新会话在本机还不存在就保持扁平。
+ */
+export async function annotateSessionsPlanItems<
+  T extends { id: string; adapter: string; unitId?: string; label?: string; group?: string; parentSessionId?: string },
+>(items: readonly T[], host: HostContext, sectionId = 'sessions'): Promise<(T & { blank?: boolean })[]> {
+  if (!items.some((item) => item.adapter === sectionId)) return [...items];
+  let out = [...items] as (T & { blank?: boolean })[];
+  try {
+    const ids = out.filter((item) => item.adapter === sectionId).map((item) => item.unitId ?? item.id);
+    out = applySessionMetaToPlanItems(out, await readSessionMetaWithTitles(host, ids), sectionId);
+  } catch {
+    /* 保持目录名（旧行为） */
+  }
+  const relations = host.sessions?.parentRelations;
+  if (relations !== undefined && host.sessions !== undefined) {
+    try {
+      // this 绑定必须留在门面对象上（宿主实现内部读 this 状态）
+      out = applySessionParentLinksToPlanItems(out, subagentParentMap(await relations.call(host.sessions)), sectionId);
+    } catch {
+      /* 读不到就不标 */
+    }
+  }
+  return out;
+}
