@@ -4,6 +4,7 @@ import {
   attachmentIdOfHex,
   attachmentIdOfRelPath,
   extractAttachmentIds,
+  extractAttachmentRefs,
   hexOfAttachmentId,
 } from './attachment-refs.ts';
 
@@ -40,6 +41,26 @@ test('attachment-refs: hex 与 id 双向转换对称，非法输入返回 null',
   assert.equal(hexOfAttachmentId(`sha256:${HEX_A.toUpperCase()}`), null);
   assert.equal(hexOfAttachmentId('sha256:xyz'), null);
   assert.equal(attachmentIdOfHex('abc'), null);
+});
+
+test('attachment-refs(G5): 同趟抽出 mediaType 与字节数（附件行的展示名来源）', () => {
+  const text = [
+    '{"attachmentId":"' + ID_A + '","mediaType":"image/jpeg","bytes":10240}',
+    // 同一个 id 第二次出现但没带 mediaType：保留首个非空声明，不得清空
+    '{"attachmentId":"' + ID_A + '"}',
+  ].join('\n');
+  const refs = extractAttachmentRefs(text);
+  assert.equal(refs.get(ID_A)?.mediaType, 'image/jpeg');
+  assert.equal(refs.get(ID_A)?.bytes, 10240);
+});
+
+test('attachment-refs(G5): 形状不符的 mediaType 一律不采信，也不因此漏掉引用本身', () => {
+  // 宿主直出的 mediaType 是 MIME；带空格或引号的东西不是它，宁可不显示也别渲染出怪字符串
+  const text = '{"attachmentId":"' + ID_A + '","mediaType":"image/png; <script>","bytes":-1}';
+  const refs = extractAttachmentRefs(text);
+  assert.deepEqual([...refs.keys()], [ID_A], '引用本身必须照收');
+  assert.equal(refs.get(ID_A)?.mediaType, undefined);
+  assert.equal(refs.get(ID_A)?.bytes, undefined, 'bytes 只认非负整数，"-1" 这种畸形值不采信');
 });
 
 test('attachment-refs: 库里三种布局都能由路径反推 id（不硬编码深度）', () => {

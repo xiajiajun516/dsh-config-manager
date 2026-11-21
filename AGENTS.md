@@ -120,6 +120,7 @@
 - **面板侧布局归位/重复 id 隔离与离线 CLI 不同**：`apply!==true` 零写入；每次移动后 `reindexSessionHeader` 必须成功，失败搬回并报 `rolledBack`；差异必须写进文案。
 - **两侧诚实**：UI 文案每句都要能被代码逐条证明；「未知」与「确知为空」必须分开；入口扫过后始终可见。
 - **附件分区只带被引用过的对象**：判据只有 `"attachmentId":"sha256:<hex>"`（裸 `sha256:` 正则会误命中粘贴的源码）；降级一律「退回整库 + 告警」，绝不把读不出当作零引用；适配器必须排在 `sessions` 之后（判据 → `docs/evidence/sessions-import-export.md`）。
+- **附件在导出树里挂在会话行下**：跨分区子行只做展示，勾选仍只有一份 `excluded`、批量动作不联动；引用面按 `mtime+size` 落盘缓存（判据 → 同一份证据的 G5 节）。
 - **导入前逐条比对六态**：事件行比对前 JSON 键排序 + `cwd` 值归一成 `<cwd>`（否则跨机必误判 diverged）；解不出 → `skipped`/`unreadable`，绝不猜 `new`，覆盖暴露必须报数。
 - **归档集与工作区顺序交给宿主**：归档集按被选工作区的 `sessionIds` 收窄；缺 `archivedSessionIds` 的老包绝不做归档动作（不「对齐成空集」）；宿主无能力只告警。
 

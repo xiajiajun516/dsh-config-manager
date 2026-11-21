@@ -24,13 +24,29 @@ import { listFilesDetailed } from './link-report.ts';
 import { msgOf } from '../core/messages.ts';
 import './messages.ts';
 import { isSessionLogFileName, normalizeSessionLimit, sessionIdKey } from '../core/session-select.ts';
-import { attachmentIdOfRelPath, extractAttachmentIds } from '../utils/attachment-refs.ts';
+import { attachmentIdOfRelPath, extractAttachmentRefs, type AttachmentRefMeta } from '../utils/attachment-refs.ts';
 import { decodeZstdFrame, scanZstdFrames, zstdAvailable } from '../utils/zstd-frame.ts';
-import type { ExportOptions, HostContext } from '../core/types.ts';
+import {
+  loadAttachmentRefCache,
+  saveAttachmentRefCache,
+  type AttachmentRefCache,
+} from './attachment-index-cache.ts';
+import type { ExportOptions, ExportUnit, HostContext } from '../core/types.ts';
 import { toPosixRel } from './units.ts';
 
 /** 逐批并发读日志的批大小：会话库可能有上千个日志，一次性开满会打爆 libuv 线程池。 */
 const READ_BATCH = 8;
+
+/**
+ * 附件单元的短展示名：`sha256:abcd1234…`。
+ *
+ * 64 位 hex 对用户没有信息量，但完全省略又会让「这张图和那张图」无法区分，
+ * 所以只保留前 8 位 —— 足够在同一会话内分辨，又不至于把哈希塞满整行。
+ */
+function shortAttachmentId(ref: string): string {
+  const hex = ref.startsWith('sha256:') ? ref.slice('sha256:'.length) : ref;
+  return hex.length <= 8 ? ref : `sha256:${hex.slice(0, 8)}…`;
+}
 
 /** 前 4 字节是否为 zstd 帧魔数（小端 0x28 0xb5 0x2f 0xfd）。 */
 function hasZstdMagic(bytes: Uint8Array): boolean {
@@ -43,13 +59,35 @@ function hasZstdMagic(bytes: Uint8Array): boolean {
  * 键 = 每个日志的「路径:mtime」；任何一条拿不到 mtime（宿主没暴露 mtimeMs / stat 失败）就整批不缓存 ——
  * 缓存必须能被证伪，宁可多读一遍，也不交出过期的引用面。
  */
+/**
+ * 引用面索引：attachmentId → 谁用过它（以及日志里声明的类型/字节数）。
+ *
+ * 为什么记「谁」而不只是「有没有」：导出选择器要把附件挂在**使用它的那条会话**下面（G5），
+ * 归属关系只有读会话日志才算得出来；而适配器的 `listUnits()` 是零 I/O 纯函数，拿不到这份关系。
+ */
+export interface AttachmentRefEntry {
+  /** 引用它的会话单元裸键（`<projectKey>/<sessionDir>`，与 sessions 单元 id 同构） */
+  units: string[]
+  mediaType?: string
+  bytes?: number
+}
+export type AttachmentRefIndex = Map<string, AttachmentRefEntry>;
+
 const SCAN_CACHE_TTL_MS = 60_000;
 interface ScanCache {
   key: string;
   at: number;
-  referenced: ReadonlySet<string>;
+  index: AttachmentRefIndex;
 }
 let scanCache: ScanCache | null = null;
+
+/**
+ * 归属扫描的日志条数上限（预览富化用）。
+ *
+ * 富化必须**有界**：它挂在只读预览端点上，超出上限就放弃归属（界面退回扁平渲染），
+ * 绝不让一次预览因为几千个会话日志卡住。真实导出不受这条限制 —— 那里按用户勾选收窄。
+ */
+const ENRICH_MAX_LOGS = 2000;
 
 async function scanKeyOf(ctx: HostContext, logs: readonly string[]): Promise<string | null> {
   const mtime = ctx.fs.mtimeMs;
@@ -78,15 +116,15 @@ export function resetAttachmentsScanCache(): void {
   scanCache = null;
 }
 
-/** 日志文件 → 该文件引用的 attachmentId 集合（读不出 / 解不开返回 null，由调用方降级）。 */
-async function referencedIdsOfLog(ctx: HostContext, homeRel: string): Promise<Set<string> | null> {
+/** 日志文件 → 该文件引用的附件（读不出 / 解不开返回 null，由调用方降级）。 */
+async function refsOfLog(ctx: HostContext, homeRel: string): Promise<Map<string, AttachmentRefMeta> | null> {
   let bytes: Uint8Array;
   try {
     bytes = await ctx.fs.readFile(homeRel);
   } catch {
     return null;
   }
-  const out = new Set<string>();
+  const out = new Map<string, AttachmentRefMeta>();
   let scan: ReturnType<typeof scanZstdFrames>;
   try {
     scan = scanZstdFrames(bytes);
@@ -99,19 +137,128 @@ async function referencedIdsOfLog(ctx: HostContext, homeRel: string): Promise<Se
     // 那会让一次坏日志静默缩小备份范围（用户看到「成功」而图片没进包）。
     if (hasZstdMagic(bytes)) return null;
     // 非 zstd 会话日志（历史明文层级）：直接按文本抽，不用解压。
-    for (const id of extractAttachmentIds(Buffer.from(bytes).toString('utf8'))) out.add(id);
+    for (const [id, meta] of extractAttachmentRefs(Buffer.from(bytes).toString('utf8'))) {
+      out.set(id, { ...meta });
+    }
     return out;
   }
   for (const frame of frames) {
     try {
       const text = decodeZstdFrame(bytes.subarray(frame.start, frame.end)).toString('utf8');
-      for (const id of extractAttachmentIds(text)) out.add(id);
+      for (const [id, meta] of extractAttachmentRefs(text)) {
+        // 同一日志多帧可能重复引用同一附件：保留首个非空声明（后写的重试不该覆盖首次声明）
+        const prev = out.get(id);
+        out.set(id, {
+          ...(prev?.mediaType !== undefined ? { mediaType: prev.mediaType } : meta.mediaType !== undefined ? { mediaType: meta.mediaType } : {}),
+          ...(prev?.bytes !== undefined ? { bytes: prev.bytes } : meta.bytes !== undefined ? { bytes: meta.bytes } : {}),
+        });
+      }
     } catch {
       // 单帧解不开：该文件整体判为不可读（不拿半份引用当「完整」）
       return null;
     }
   }
   return out;
+}
+
+/** 日志的相对路径 → 会话单元裸键（`<projectKey>/<sessionDir>`，与 sessions 单元的 id 同构）。 */
+function unitKeyOfLog(rel: string): string | null {
+  const parts = toPosixRel(rel).split('/');
+  return parts.length >= 3 ? `${parts[1]}/${parts[2]}` : null;
+}
+
+/** 把一份日志的引用并进索引（同一附件被多条会话引用时记多个 owner）。 */
+function addRefs(index: AttachmentRefIndex, unitKey: string, refs: Map<string, AttachmentRefMeta>): void {
+  for (const [id, meta] of refs) {
+    const prev = index.get(id);
+    if (prev === undefined) {
+      index.set(id, { units: [unitKey], ...meta });
+      continue;
+    }
+    if (!prev.units.includes(unitKey)) prev.units.push(unitKey);
+    if (prev.mediaType === undefined && meta.mediaType !== undefined) prev.mediaType = meta.mediaType;
+    if (prev.bytes === undefined && meta.bytes !== undefined) prev.bytes = meta.bytes;
+  }
+}
+
+/** 日志文件的 `mtime + size`（缓存失效键）；读不到任一项返回 null = 该条不缓存。 */
+async function statOfLog(ctx: HostContext, posix: string): Promise<{ mtimeMs: number; size: number } | null> {
+  const info = ctx.fs.statInfo;
+  if (info !== undefined) {
+    try {
+      const got = await info.call(ctx.fs, posix);
+      return got === null ? null : { mtimeMs: got.mtimeMs, size: got.size };
+    } catch {
+      return null;
+    }
+  }
+  const mtimeMs = ctx.fs.mtimeMs;
+  const statSize = ctx.fs.statSize;
+  if (mtimeMs === undefined || statSize === undefined) return null;
+  try {
+    const time = await mtimeMs.call(ctx.fs, posix);
+    const size = await statSize.call(ctx.fs, posix);
+    if (time === null || size === null) return null;
+    return { mtimeMs: time, size };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 逐批读日志建索引；failed = 读不出/解不开的日志条数（>0 时调用方不许当成完整引用面）。
+ *
+ * 每条日志先看持久化缓存（`mtime + size` 都相等才采信），命中就不解压 —— 本机冷启 7 s、
+ * 命中后 0.05 s。缓存与本次结果合并后 best-effort 写回（写失败不影响正确性）。
+ */
+async function scanRefIndex(ctx: HostContext, logs: readonly string[]): Promise<{ index: AttachmentRefIndex; failed: number }> {
+  const index: AttachmentRefIndex = new Map();
+  const cached = await loadAttachmentRefCache(ctx);
+  const merged: AttachmentRefCache = new Map(cached);
+  let failed = 0;
+  for (let i = 0; i < logs.length; i += READ_BATCH) {
+    const batch = logs.slice(i, i + READ_BATCH);
+    const results = await Promise.all(batch.map(async (rel) => {
+      const posix = toPosixRel(rel);
+      const key = unitKeyOfLog(posix);
+      if (key === null) return { key, refs: null, posix: null, stat: null };
+      const stat = await statOfLog(ctx, posix);
+      const prev = cached.get(posix);
+      if (stat !== null && prev !== undefined && prev.mtimeMs === stat.mtimeMs && prev.size === stat.size) {
+        return { key, refs: new Map(Object.entries(prev.refs)), posix, stat };
+      }
+      return { key, refs: await refsOfLog(ctx, posix), posix, stat };
+    }));
+    for (const result of results) {
+      if (result.refs === null || result.key === null) {
+        failed += 1;
+        continue;
+      }
+      addRefs(index, result.key, result.refs);
+      if (result.posix !== null && result.stat !== null) {
+        merged.set(result.posix, { ...result.stat, refs: Object.fromEntries(result.refs) });
+      }
+    }
+  }
+  await saveAttachmentRefCache(ctx, merged);
+  return { index, failed };
+}
+
+/** 扫描结果：成功给索引，失败给告警文案（调用方据此降级到整库 / 退回扁平）。 */
+type RefIndexResult = { ok: true; index: AttachmentRefIndex } | { ok: false; warning: string };
+
+/** 取引用面索引（命中缓存就不重读）。导出与预览富化共用这一条路径，口径不会分叉。 */
+async function loadRefIndex(ctx: HostContext, logs: readonly string[]): Promise<RefIndexResult> {
+  const msg = msgOf(ctx);
+  if (!zstdAvailable() && logs.length > 0) return { ok: false, warning: msg('export.attachmentsNoZstd') };
+  const cacheKey = await scanKeyOf(ctx, logs);
+  const hit = cacheKey !== null && scanCache !== null
+    && scanCache.key === cacheKey && Date.now() - scanCache.at < SCAN_CACHE_TTL_MS ? scanCache : null;
+  if (hit !== null) return { ok: true, index: hit.index };
+  const { index, failed } = await scanRefIndex(ctx, logs);
+  if (failed > 0) return { ok: false, warning: msg('export.attachmentsScanFailed', { count: String(failed) }) };
+  if (cacheKey !== null) scanCache = { key: cacheKey, at: Date.now(), index };
+  return { ok: true, index };
 }
 
 export class AttachmentsAdapter extends FileCollectionAdapter {
@@ -171,31 +318,9 @@ export class AttachmentsAdapter extends FileCollectionAdapter {
     }
 
     // ③ 读日志抽引用（不可读 / 不可解压 ⇒ 整批退回全库，绝不静默少带）
-    if (!zstdAvailable() && logs.length > 0) {
-      return { keep: null, warnings: [msg('export.attachmentsNoZstd')] };
-    }
-    const cacheKey = await scanKeyOf(ctx, logs);
-    const hit = cacheKey !== null && scanCache !== null
-      && scanCache.key === cacheKey && Date.now() - scanCache.at < SCAN_CACHE_TTL_MS ? scanCache : null;
-    const referenced = new Set<string>(hit === null ? [] : hit.referenced);
-    if (hit === null) {
-      let failed = 0;
-      for (let i = 0; i < logs.length; i += READ_BATCH) {
-        const batch = logs.slice(i, i + READ_BATCH);
-        const results = await Promise.all(batch.map((rel) => referencedIdsOfLog(ctx, toPosixRel(rel))));
-        for (const ids of results) {
-          if (ids === null) {
-            failed += 1;
-            continue;
-          }
-          for (const id of ids) referenced.add(id);
-        }
-      }
-      if (failed > 0) {
-        return { keep: null, warnings: [msg('export.attachmentsScanFailed', { count: String(failed) })] };
-      }
-      if (cacheKey !== null) scanCache = { key: cacheKey, at: Date.now(), referenced: new Set(referenced) };
-    }
+    const scanned = await loadRefIndex(ctx, logs);
+    if (!scanned.ok) return { keep: null, warnings: [scanned.warning] };
+    const referenced = new Set<string>(scanned.index.keys());
 
     // ④ 只留「被引用 且 本机确实存在」的对象
     const keep = new Set<string>();
@@ -217,5 +342,44 @@ export class AttachmentsAdapter extends FileCollectionAdapter {
       }));
     }
     return { keep, warnings };
+  }
+
+  /**
+   * 预览富化（G5）：给附件单元补「哪些会话用过它」，选择器据此把附件挂到会话行下面。
+   *
+   * 返回 `null` = 这次算不出归属（日志读不出/解不开、条数超上限）—— 界面按扁平渲染，
+   * **绝不猜归属**：把附件挂错会话，用户会以为「这个包里有那张图」而实际没有。
+   * 未变化的单元原样返回（缺字段 ≠ 空数组：没有归属就是不知道，不是「属于零条会话」）。
+   */
+  async enrichUnits(ctx: HostContext, units: readonly ExportUnit[]): Promise<ExportUnit[] | null> {
+    if (units.length === 0) return [...units];
+    let logs: string[];
+    try {
+      const listing = await listFilesDetailed(ctx.fs, 'sessions');
+      logs = listing.paths.filter((rel) => isSessionLogFileName(toPosixRel(rel).split('/').pop() ?? ''));
+    } catch {
+      return null;
+    }
+    const keyed = logs.filter((rel) => unitKeyOfLog(toPosixRel(rel)) !== null);
+    if (keyed.length === 0) return [...units];
+    if (keyed.length > ENRICH_MAX_LOGS) return null;
+    const scanned = await loadRefIndex(ctx, keyed);
+    if (!scanned.ok) return null;
+    return units.map((unit) => {
+      // 单元 id = attachments:<attachmentId>；剥前缀查索引（形状不符 = 不是附件对象，原样返回）
+      const ref = unit.id.startsWith('attachments:') ? unit.id.slice('attachments:'.length) : unit.id;
+      const entry = scanned.index.get(ref);
+      if (entry === undefined) return unit;
+      const shortId = shortAttachmentId(ref);
+      return {
+        ...unit,
+        // 展示名：有 mediaType 用它（image/jpeg 之类），没有就退到短哈希 —— 绝不编造「附件 1」这类序号，
+        // 序号会随勾选范围变化，用户二次打开时对不上号。
+        label: entry.mediaType ?? shortId,
+        // 有 mediaType 时补一行短哈希作次要信息，否则 label 已经是短哈希、不必重复
+        ...(entry.mediaType !== undefined && unit.detail === undefined ? { detail: shortId } : {}),
+        ...(entry.units.length > 0 ? { parentUnitIds: entry.units.map((key) => `sessions:${key}`) } : {}),
+      };
+    });
   }
 }

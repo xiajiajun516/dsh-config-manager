@@ -133,6 +133,18 @@ export interface ExportUnit {
    */
   group?: string;
   /**
+   * 本单元**挂在哪些父单元下面**（跨分区的展示嵌套；附件单元专用）。
+   *
+   * 用途：导出选择器把附件渲染成「会话行下面的子行」（用户要求：历史会话 > 工作区 > 会话 > 附件）。
+   * 取值是**完整单元 id**（`sessions:<projectKey>/<sessionId>`），由 `enrichUnits()` 在预览期填；
+   * 同一附件被多条会话引用时给出多个父 id（每个父下面都出现一次）。
+   *
+   * 与勾选契约的关系：**纯展示**。子行仍属自己那个分区，勾选照旧落到 `includeItems[父分区]`
+   * ⇒ 导出请求不需要新字段（`buildExportRequest` 只按分区归集 id）。
+   * 缺省 ≠ 空数组：缺省 = 不知道归属（扁平渲染），空数组不该出现（无父的单元不设该字段）。
+   */
+  parentUnitIds?: string[];
+  /**
    * 父对话的会话裸键（`sessionIdKey(目录名)`；**只有 `origin='subagent'` 的子代理会话才有值**）。
    *
    * 用途：导出选择器里的「父 ↔ 子会话」勾选联动（勾父自动勾上它的子代理会话；勾子自动带上父）。
@@ -1390,6 +1402,18 @@ export interface ConfigAdapter<TSection = unknown> {
    *  - 未实现 = 本分区不可细分（UI 只给整体开关，传入白名单一律忽略）。
    */
   listUnits?(section: ExportSection<TSection>): ExportUnit[];
+
+  /**
+   * 可选：**预览富化** —— 给 `listUnits()` 的产物补展示名与跨分区归属（G5 附件子树）。
+   *
+   * 调用点只有一处：`/export-preview` 枚举完单元之后。为什么不能塞进 `listUnits()`：
+   * 那个钩子的契约是**纯函数零 I/O**（id 必须与 `includeItems` 自洽，且预览要能零读盘枚举）；
+   * 归属关系（附件被哪条会话用过）只有读会话日志才算得出来。
+   *
+   * 返回 `null` = 这一次算不出归属，调用方按原样渲染（扁平），**绝不猜**。
+   * 抛错视为同款降级，不得让富化失败连带预览失败。
+   */
+  enrichUnits?(ctx: HostContext, units: readonly ExportUnit[]): Promise<ExportUnit[] | null>;
 
   /**
    * 可选：单元级「最近活跃时间」（毫秒），键 = **会话裸键**（`sessionIdKey(目录名)`）。

@@ -32,7 +32,9 @@ const CEILINGS: Record<string, number> = {
   // 4128 → 3811（2026-11-21，P1-P4）：工作区/会话存储门面下沉到
   // src/core/host-workspace-facade.ts（DshWorkspaceFacade）、会话存储形状工具下沉到
   // src/core/host-session-shapes.ts、readService 下沉到 src/core/host-service.ts。
-  'src/index.ts': 3811,
+  // 3811 → 3806（2026-11-21，G5）：预览富化与活跃时间这两段「调适配器钩子 + 兜失败」的逻辑
+  // 下沉到 src/core/unit-enrichment.ts，路由只留两行调用。
+  'src/index.ts': 3806,
   // 2213 → 2209（2026-11-14，同步缺陷 P2）：待裁决的纯状态写入下沉到 src/sync/pending-merge.ts，
   // 引擎只留 3 行委托（recordPendingMerge / pendingMergeFor / writeMergeBaseline）。
   'src/sync/sync-engine.ts': 2209,

@@ -10,6 +10,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  applySessionAttachmentCoupling, childUnitsOf, nestedChildUnitIds,
   applyPluginPendingChecks, buildExportRequest, buildSelectedPlan, defaultSelection, samePendingChecks,
   defaultSelectionFromPlan, effectiveImportPlan, effectiveImportSelection, filterSections,
   filterPluginTree, groupPickState, groupSelectedCount, groupUnits, HIGH_RISK_ADAPTERS, isHighRiskAdapter,
@@ -638,8 +639,13 @@ test('取消整个工作区分区 → 它的会话也全部取消；没有 sessi
 test('couplingInventorySections：勾了会话就必须把工作区清单一起读（否则联动没有数据可依）', () => {
   assert.deepEqual(couplingInventorySections([]), []);
   assert.deepEqual(couplingInventorySections(['settings']), ['settings']);
-  assert.deepEqual(couplingInventorySections(['sessions']), ['sessions', 'workspaces']);
-  assert.deepEqual(couplingInventorySections(['sessions', 'workspaces']), ['sessions', 'workspaces'], '已有就不重复加');
+  // G5：附件清单同理 —— 会话行下面的附件子树只能由附件分区的 parentUnitIds 渲染
+  assert.deepEqual(couplingInventorySections(['sessions']), ['sessions', 'workspaces', 'attachments']);
+  assert.deepEqual(
+    couplingInventorySections(['sessions', 'workspaces', 'attachments']),
+    ['sessions', 'workspaces', 'attachments'],
+    '已有就不重复加',
+  );
   assert.deepEqual(couplingInventorySections(['workspaces']), ['workspaces'], '反向不加：没勾会话时不需要会话清单');
 });
 
@@ -1101,4 +1107,83 @@ test('选择模型：sectionsFromPreview 透传 group 与 relatedAreas（按插�
   ])
   assert.deepEqual(nodes[0]?.units[0]?.relatedAreas, [{ section: 'pluginData', relPath: '.alpha/runtime', role: 'config' }])
   assert.equal(nodes[1]?.units[0]?.relatedAreas, undefined, '没有声明的单元不得凭空带 relatedAreas')
+});
+
+/* ==================================================================================================
+ * G5：附件挂到用过它的会话下面（跨分区子行 + 勾选联动）
+ *
+ * 断言的三条用户可见语义：
+ *  1. 索引只由 parentUnitIds 决定，渲染与联动共用同一份；
+ *  2. 勾/取消会话连带它的附件，**共用附件任一处取消即不带**；
+ *  3. 批量动作（分区/分组/全选）不联动 —— 一次点击不得静默多带上百 MB。
+ * ================================================================================================ */
+
+const ATT_A = 'attachments:sha256:' + 'a'.repeat(64)
+const ATT_B = 'attachments:sha256:' + 'b'.repeat(64)
+const SESS_1 = 'sessions:proj/sess-1'
+const SESS_2 = 'sessions:proj/sess-2'
+
+/** 两条会话 + 两个附件：A 被两条会话共用，B 只属于 sess-1。 */
+function attachmentTree(): SelectionSection[] {
+  return [
+    {
+      section: 'sessions', count: 2, sizeBytes: 0,
+      units: [
+        { id: SESS_1, label: 'S1', group: 'proj', sizeBytes: 0 },
+        { id: SESS_2, label: 'S2', group: 'proj', sizeBytes: 0 },
+      ],
+    },
+    {
+      section: 'attachments', count: 2, sizeBytes: 0,
+      units: [
+        { id: ATT_A, label: 'image/png', parentUnitIds: [SESS_1, SESS_2], sizeBytes: 0 },
+        { id: ATT_B, label: 'image/png', parentUnitIds: [SESS_1], sizeBytes: 0 },
+      ],
+    },
+  ]
+}
+
+const EMPTY: Selection = { sections: [], excluded: [] }
+
+test('G5-UI-1 childUnitsOf / nestedChildUnitIds：只按 parentUnitIds 建索引', () => {
+  const nodes = attachmentTree()
+  const index = childUnitsOf(nodes)
+  assert.deepEqual((index.get(SESS_1) ?? []).map((u) => u.id), [ATT_A, ATT_B], '共用附件在两个父行下都出现')
+  assert.deepEqual((index.get(SESS_2) ?? []).map((u) => u.id), [ATT_A])
+  assert.deepEqual([...nestedChildUnitIds(nodes)].sort(), [ATT_A, ATT_B], '分区自己那一排不再重复列这两个附件')
+});
+
+test('G5-UI-2 勾会话 ⇒ 连带勾上它的附件（分区成员 + 未被排除）', () => {
+  const nodes = attachmentTree()
+  const after = toggleUnit(EMPTY, nodes, SESS_1, true)
+  const out = applySessionAttachmentCoupling(EMPTY, after, nodes, { unitId: SESS_1, checked: true })
+  assert.ok(out.sections.includes('attachments'))
+  assert.ok(!out.excluded.includes(ATT_A))
+  assert.ok(!out.excluded.includes(ATT_B))
+});
+
+test('G5-UI-3 共用附件：任一处取消会话即不带（shared=each）', () => {
+  const nodes = attachmentTree()
+  const both = toggleUnit(toggleUnit(EMPTY, nodes, SESS_1, true), nodes, SESS_2, true)
+  const withAtt = applySessionAttachmentCoupling(EMPTY, both, nodes, { unitId: SESS_2, checked: true })
+  assert.ok(!withAtt.excluded.includes(ATT_A))
+
+  const unchecked = toggleUnit(withAtt, nodes, SESS_1, false)
+  const out = applySessionAttachmentCoupling(withAtt, unchecked, nodes, { unitId: SESS_1, checked: false })
+  assert.ok(out.excluded.includes(ATT_A), 'sess-1 取消 ⇒ 共用附件不再带走（第二条会话仍勾着也不救回）')
+  assert.ok(out.excluded.includes(ATT_B))
+});
+
+test('G5-UI-4 批量动作（change 缺省）不联动附件：整段勾选不得静默多带附件', () => {
+  const nodes = attachmentTree()
+  const sessionsNode = nodes[0]
+  assert.ok(sessionsNode !== undefined)
+  const after = toggleSection(EMPTY, sessionsNode, true)
+  assert.equal(applySessionAttachmentCoupling(EMPTY, after, nodes), after, '同一份对象原样返回')
+  assert.ok(!after.sections.includes('attachments'))
+});
+
+test('G5-UI-5 couplingInventorySections：有会话就必须同时拉附件清单', () => {
+  assert.deepEqual(couplingInventorySections(['sessions']), ['sessions', 'workspaces', 'attachments'])
+  assert.deepEqual(couplingInventorySections(['skills']), ['skills'], '没有会话时不多拉任何清单')
 });

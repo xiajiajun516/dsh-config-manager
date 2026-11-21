@@ -61,6 +61,14 @@ export interface SelectionUnit {
    */
   parentSessionId?: string
   /**
+   * 本单元挂在哪些父单元下面（跨分区展示嵌套；**目前只有附件单元会带**）。
+   *
+   * 取值 = 完整单元 id（`sessions:<projectKey>/<sessionId>`）。同一附件被多条会话引用时有多个父 id，
+   * 于是它在每个父下面各出现一行（用户选择：一处取消勾选即不带 —— 勾选仍是同一个单元 id，不复制实体）。
+   * 缺省 = 不知道归属（分区里平铺渲染），**不是**空数组。
+   */
+  parentUnitIds?: string[]
+  /**
    * 空白会话（从未提问过；宿主下发的**事实**，只有 sessions 分区可能有值）。
    *
    * 用途：DSH 自己给这类会话的标题是本地化的「新会话」—— 界面据此显示同样的占位名，
@@ -206,6 +214,7 @@ export function sectionsFromPreview(
       ...(u.sessionIds !== undefined ? { sessionIds: u.sessionIds } : {}),
       ...(u.projectKey !== undefined ? { projectKey: u.projectKey } : {}),
       ...(u.parentSessionId !== undefined ? { parentSessionId: u.parentSessionId } : {}),
+      ...(u.parentUnitIds !== undefined && u.parentUnitIds.length > 0 ? { parentUnitIds: u.parentUnitIds } : {}),
       ...(u.blank === true ? { blank: true } : {}),
       // 「按插件看」的树骨架（宿主下发的静态区域清单；缺省 = 该插件没有已知关联）
       ...(u.relatedAreas !== undefined && u.relatedAreas.length > 0 ? { relatedAreas: u.relatedAreas } : {}),
@@ -680,8 +689,17 @@ export type SessionWorkspaceCouplingFocus = 'sessions' | 'workspaces' | 'both'
  * 反向刻意不加（勾着工作区、会话清单没读）：那种状态下会话单元根本不在选择器里，没有需要联动的会话。
  */
 export function couplingInventorySections(sections: readonly SectionId[]): SectionId[] {
-  if (!sections.includes('sessions') || sections.includes('workspaces')) return [...sections]
-  return [...sections, 'workspaces']
+  if (!sections.includes('sessions')) return [...sections]
+  const out = [...sections]
+  // 工作区：会话单元上的 sessionIds / projectKey 是「会话属于哪个工作区」的唯一数据源（见上）
+  if (!out.includes('workspaces')) out.push('workspaces')
+  /**
+   * 附件：会话行下面的附件子树（G5）只能由**附件分区的单元清单**渲染出来 —— 那份清单里的
+   * `parentUnitIds` 是宿主读会话日志算出的归属。不一起拉，界面上就只有光秃秃的会话行，
+   * 用户会以为「这些会话没有附件」（比看不见更糟的失败形态：确信的错误）。
+   */
+  if (!out.includes('attachments')) out.push('attachments')
+  return out
 }
 
 /** 两份选择是否等价（按集合；用于「清单到货后补一次联动」避免无谓写库 / 自激渲染）。 */
@@ -745,6 +763,87 @@ export function applySessionWorkspaceCoupling(
     }
   }
   return next
+}
+
+/* ----------------------------------------------------------------------------------
+   会话 → 附件子树（G5）：附件挂在「用过它的那条会话」下面
+   ---------------------------------------------------------------------------------- */
+
+/**
+ * 父单元 id → 挂在它下面的子单元（渲染与勾选联动共用同一份索引）。
+ *
+ * 子单元可能属于**别的分区**（附件单元属于 attachments、父是 sessions 单元）：这是本仓库里
+ * 唯一的跨分区逐行嵌套，所以索引必须由调用方现算，而不是塞进分区的 `group`（那个只做同分区二级分组，
+ * 且不参与勾选契约）。
+ */
+export function childUnitsOf(nodes: SelectionSection[]): Map<string, SelectionUnit[]> {
+  const out = new Map<string, SelectionUnit[]>()
+  for (const node of nodes) {
+    for (const unit of node.units) {
+      for (const parent of unit.parentUnitIds ?? []) {
+        const list = out.get(parent)
+        if (list === undefined) out.set(parent, [unit])
+        else list.push(unit)
+      }
+    }
+  }
+  return out
+}
+
+/** 已经挂在某父行下面的子单元 id（分区自己那一排不再重复列这些行，否则一个附件会出现两次）。 */
+export function nestedChildUnitIds(nodes: SelectionSection[]): Set<string> {
+  const out = new Set<string>()
+  for (const node of nodes) {
+    for (const unit of node.units) {
+      if ((unit.parentUnitIds?.length ?? 0) > 0) out.add(unit.id)
+    }
+  }
+  return out
+}
+
+/** 一次勾选动作（单元级）；批量动作（分区/分组/全选）不传。 */
+export interface SessionAttachmentChange {
+  unitId: string
+  checked: boolean
+}
+
+/**
+ * 会话 ↔ 附件联动（G5）：勾会话连带它用到的附件，取消会话连带取消，单个附件仍可单独取消。
+ *
+ * 三条设计要点：
+ *  ① **按「实际发生变化的会话」逐条应用**，不只看用户点的那一个：父↔子会话联动会连带翻动别的会话
+ *     （勾父自动勾上它的子代理会话），那些会话的附件也必须跟着走，否则界面上「会话勾着、附件没勾」；
+ *  ② 附件侧的每次改动都走 `toggleUnit()`：分区成员、稀疏排除、取消后「本分区已无选中」的反向收口
+ *     都由那一套语义决定，这里不另写一份（写两份必然分叉）；
+ *  ③ **批量动作（`change` 缺省）不做附件联动**：勾「历史会话」整个分区是显式整段动作，此时顺手把
+ *     附件分区也勾上会让一次点击静默多出上百 MB（本机实测被引用的附件 160 MB）。附件分区有自己的开关。
+ */
+export function applySessionAttachmentCoupling(
+  before: Selection,
+  after: Selection,
+  nodes: SelectionSection[],
+  change?: SessionAttachmentChange,
+): Selection {
+  if (change === undefined) return after
+  const children = childUnitsOf(nodes)
+  if (children.size === 0) return after
+  const sessionUnits = nodes.filter((n) => n.section === 'sessions').flatMap((n) => n.units)
+  if (sessionUnits.length === 0) return after
+  const sectionOf = new Map<string, SectionId>()
+  for (const node of nodes) for (const unit of node.units) sectionOf.set(unit.id, node.section)
+  // 与其它联动函数同口径：稀疏表示下「未排除」不等于「已选」（整个分区没勾时也是未排除）
+  const picked = (state: Selection, unitId: string): boolean => {
+    const section = sectionOf.get(unitId)
+    return section !== undefined && state.sections.includes(section) && !state.excluded.includes(unitId)
+  }
+  let out = after
+  for (const unit of sessionUnits) {
+    const was = picked(before, unit.id)
+    const now = picked(after, unit.id)
+    if (was === now) continue
+    for (const child of children.get(unit.id) ?? []) out = toggleUnit(out, nodes, child.id, now)
+  }
+  return out
 }
 
 export function filterSections(nodes: SelectionSection[], query: string): SelectionSection[] {

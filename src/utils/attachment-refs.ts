@@ -12,8 +12,19 @@
  * /^sha256:([a-f0-9]{64})$/ —— 图片与文件附件共用同一个 id 形状，故一个正则覆盖两类。
  */
 
-/** 附件 id 的锚定形态：必须是 JSON 字段 attachmentId 的值。 */
-const ATTACHMENT_ID_FIELD = /"attachmentId"\s*:\s*"(sha256:[a-f0-9]{64})"/g;
+/**
+ * 附件引用的锚定形态：JSON 字段 attachmentId 的值，后面**可选**紧跟 mediaType / bytes。
+ *
+ * 为什么把后两个字段并进同一个正则：子行要显示「这是什么」，而 64 位 sha 对用户没有信息量。
+ * 日志里的形状是 `"attachment":{"attachmentId":"sha256:…","mediaType":"image/jpeg","bytes":123}`，
+ * 两个后续字段都按「紧邻」匹配 —— 字段顺序不同或缺失时只是取不到，绝不猜。
+ */
+const ATTACHMENT_REF_FIELD = new RegExp(
+  '"attachmentId"\\s*:\\s*"(sha256:[a-f0-9]{64})"'
+  + '(?:\\s*,\\s*"mediaType"\\s*:\\s*"([A-Za-z0-9.+\\/-]{1,64})")?'
+  + '(?:\\s*,\\s*"bytes"\\s*:\\s*(\\d{1,15}))?',
+  'g',
+);
 
 /** 单段 64 位十六进制（附件在库里的物理目录名/文件名）。 */
 const HEX_SEGMENT = /^[a-f0-9]{64}$/;
@@ -21,18 +32,44 @@ const HEX_SEGMENT = /^[a-f0-9]{64}$/;
 /** 严格 id 形状（宿主 FILE_ID_PATTERN 同款）。 */
 const ID_SHAPE = /^sha256:[a-f0-9]{64}$/;
 
-/** 从一段会话日志文本里抽取全部被引用的 attachmentId（去重，保留原始大小写归一后的形态）。 */
-export function extractAttachmentIds(text: string): Set<string> {
-  const out = new Set<string>();
+/** 日志里声明的附件元信息（取不到就是取不到，不猜默认值）。 */
+export interface AttachmentRefMeta {
+  /** 媒体类型（`image/jpeg` 这类；只在字段紧邻时取到） */
+  mediaType?: string
+  /** 字节数（同上） */
+  bytes?: number
+}
+
+/**
+ * 从一段会话日志文本里抽取全部被引用的附件，附带日志声明的类型/字节数。
+ *
+ * 同一 id 在同一份日志里出现多次时取**第一条**带 mediaType 的记录（同一条消息的重试会把
+ * 同一附件写多遍，先到的那条就是用户真正发出去的那次）。
+ */
+export function extractAttachmentRefs(text: string): Map<string, AttachmentRefMeta> {
+  const out = new Map<string, AttachmentRefMeta>();
   if (text === '') return out;
   // 正则带 g 且有 lastIndex 状态：每次新建实例，避免跨调用串状态。
-  const re = new RegExp(ATTACHMENT_ID_FIELD.source, 'g');
+  const re = new RegExp(ATTACHMENT_REF_FIELD.source, 'g');
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
     const id = match[1]!;
-    if (ID_SHAPE.test(id)) out.add(id);
+    if (!ID_SHAPE.test(id)) continue;
+    const mediaType = match[2];
+    const rawBytes = match[3];
+    const prev = out.get(id);
+    const bytes = rawBytes === undefined ? undefined : Number(rawBytes);
+    out.set(id, {
+      ...(mediaType !== undefined ? { mediaType } : (prev?.mediaType !== undefined ? { mediaType: prev.mediaType } : {})),
+      ...(bytes !== undefined && Number.isFinite(bytes) ? { bytes } : (prev?.bytes !== undefined ? { bytes: prev.bytes } : {})),
+    });
   }
   return out;
+}
+
+/** 从一段会话日志文本里抽取全部被引用的 attachmentId（去重；只要 id 的调用方用这个）。 */
+export function extractAttachmentIds(text: string): Set<string> {
+  return new Set(extractAttachmentRefs(text).keys());
 }
 
 /** 合法 attachmentId → 64 位十六进制（不合法返回 null，绝不猜）。 */

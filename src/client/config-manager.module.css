@@ -4555,6 +4555,14 @@ body {
   padding: 4px 0 2px 16px;
 }
 
+/* 分区级说明行（G5：附件已挂到会话行下时的一句交代）。
+   与 .pickerMore 同缩进，但左对齐、用次要色 —— 它是说明，不是可点的入口。 */
+.pickerNote {
+  padding: 2px 0 4px 16px;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .pickerUnitDetail {
   max-width: 220px;
   overflow: hidden;

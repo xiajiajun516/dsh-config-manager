@@ -30,6 +30,7 @@ import {
   selectAll, selectedUnitCount, tailWeightedEllipsis, togglePluginEntry, togglePluginTree, toggleSection,
   toggleUnit, toggleUnitGroup,
   unitChecked, visibleUnits,
+  applySessionAttachmentCoupling, childUnitsOf, nestedChildUnitIds,
   type PluginLeafKind, type Selection, type SelectionSection, type SelectionUnit, type SessionParentChange,
   type SessionWorkspaceCouplingFocus,
 } from '../../ui/selection-model.ts'
@@ -187,6 +188,20 @@ export function ContentPicker({
   const firstTreeSection = treeSectionIds[0]
   const summary = pickerSummary(value, nodes)
   /**
+   * 跨分区子行（G5）：`parentUnitIds` → 「会话行下面的附件行」。
+   *
+   * 归属由宿主读会话日志算出（`enrichUnits`），本组件只负责渲染同一份单元 —— 勾选仍走
+   * toggleUnit(同一 id)，所以导出请求与 `includeItems` 过滤口径一字不改。
+   */
+  const childIndex = useMemo(() => childUnitsOf(nodes), [nodes])
+  const nestedIds = useMemo(() => nestedChildUnitIds(nodes), [nodes])
+  /** 单元 id → 它所属的分区节点（子行要知道自己属于哪个分区才能勾选/计数）。 */
+  const unitSection = useMemo(() => {
+    const map = new Map<string, SelectionSection>()
+    for (const node of nodes) for (const unit of node.units) map.set(unit.id, node)
+    return map
+  }, [nodes])
+  /**
    * 未读到清单的分区数（在途 + 失败，去重；G-02）：> 0 时 footer 合计必须标注
    * 「含未读取分区，实际不少于该值」—— 与导出页卡片同一口径（同一个字典键）。
    */
@@ -205,7 +220,12 @@ export function ContentPicker({
     parentChange?: SessionParentChange,
   ): void => {
     const coupled = applySessionParentCoupling(next, nodes, parentChange)
-    onChange(applySessionWorkspaceCoupling(coupled, nodes, focus))
+    const settled = applySessionWorkspaceCoupling(coupled, nodes, focus)
+    /**
+     * 第三条联动：会话 ↔ 附件（G5）。必须放在最后、并以**点击前**的 value 作基线做差 ——
+     * 父↔子会话联动会连带翻动别的会话，只看 `next` 会漏掉「被连带勾上的子代理会话」的附件。
+     */
+    onChange(applySessionAttachmentCoupling(value, settled, nodes, parentChange))
   }
   /** 该分区属于哪一侧（决定联动方向）：会话侧 / 工作区侧 / 其它（两条都跑）。 */
   const focusOf = (section: SectionId): SessionWorkspaceCouplingFocus => (
@@ -254,8 +274,16 @@ export function ContentPicker({
    */
   const renderUnitRow = (node: SelectionSection, u: SelectionUnit, nested: boolean): ReactNode => {
     const safeLabel = redact(u.label)
+    /**
+     * 挂在**本行下面**的跨分区子单元（G5：会话行 → 附件行）。
+     *
+     * 只展**一层**（`nested` 时不再往下找）：附件自己不会有子行，而宿主一旦给出环
+     * （A 的父是 B、B 的父是 A），递归就是栈溢出 —— 界面不能因为一份坏元数据白屏。
+     */
+    const children = nested ? undefined : childIndex.get(u.id)
     return (
-      <div key={u.id} className={nested ? css.pickerUnit + ' ' + css.pickerUnitNested : css.pickerUnit}>
+      <Fragment key={u.id}>
+      <div className={nested ? css.pickerUnit + ' ' + css.pickerUnitNested : css.pickerUnit}>
         {/* 占位对齐：让单元行的勾选框与分组行（chevron 之后）的勾选框同一左缘 */}
         {nested && <span className={css.pickerChevronSpacer} aria-hidden="true" />}
         <Checkbox
@@ -287,6 +315,17 @@ export function ContentPicker({
           }
         />
       </div>
+      {children !== undefined && children.length > 0 && (
+        // 容器自带竖线与缩进（.pickerChildren），层级靠它表达而不是靠行内间距
+        <div className={css.pickerChildren}>
+          {children.map((child) => {
+            const owner = unitSection.get(child.id)
+            // 找不到所属分区 = 这份清单自相矛盾：宁可不渲染，也不猜它该按哪个分区勾选
+            return owner === undefined ? null : renderUnitRow(owner, child, true)
+          })}
+        </div>
+      )}
+      </Fragment>
     )
   }
 
@@ -630,8 +669,13 @@ export function ContentPicker({
               if (!open && node.unitsUnread === true) onRequestUnits?.(node.section)
               setExpanded({ ...expanded, [node.section]: !open })
             }
+            /**
+             * 已经挂到会话行下面的条目不再在这里重复列（G5）：同一个附件出现两次会被读成
+             * 「有两份」，而取消其中之一其实只影响同一个对象。分区行只留开关与计数。
+             */
+            const ownUnits = node.units.filter((u) => !nestedIds.has(u.id))
             /** 本帧要渲染的单元（按页渐进披露，每页 UNIT_RENDER_LIMIT 条；UI-15） */
-            const units = visibleUnits(node.units, unitPages[node.section] ?? 1)
+            const units = visibleUnits(ownUnits, unitPages[node.section] ?? 1)
             return (
               <Fragment key={node.section}>
                 {groupTitle !== undefined && (
@@ -711,6 +755,13 @@ export function ContentPicker({
                       容器**始终存在**，所以 aria-controls 恒有值。 */}
                   <Collapse open={open} id={unitsId(node.section)}>
                       <div className={css.pickerChildren}>
+                      {/* G5：附件分区的条目已经挂到各自会话行下面，这里只留一句「挂了多少」——
+                          再平铺一遍会被读成「有两份」。整分区开关仍在上面，口径不变。 */}
+                      {node.section === 'attachments' && node.units.length > ownUnits.length && (
+                        <div className={css.pickerNote}>
+                          {t('picker.attachmentNested', { count: String(node.units.length - ownUnits.length) })}
+                        </div>
+                      )}
                       {/* 二级分组（sessions 按工作区聚合）：没有 group 的单元仍走平铺，
                           与改造前的渲染完全一致（skills / pluginFiles 等分区零变化）。
                           级联树语义：展开分区只列出分组，点某个分组的 chevron 才展开那一棵子树

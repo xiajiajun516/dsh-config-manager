@@ -84,6 +84,7 @@ import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
 import { msgOf, zhMsg, type MsgFunc } from './core/messages.ts'
 import { readService } from './core/host-service.ts'
+import { enrichExportUnits, previewActivityTimes } from './core/unit-enrichment.ts'
 import { DshWorkspaceFacade } from './core/host-workspace-facade.ts'
 import {
   ANCESTOR_LOOKUP_MAX_DEPTH, PARENT_RELATIONS_CACHE_TTL_MS, SESSION_STORE_PURPOSE_KEY,
@@ -3007,16 +3008,10 @@ function makeRoutes(deps: RoutesDeps): {
                   items = []
                 }
               }
-              // sessions：单元级活跃时间（会话日志 mtime）—— 元数据缓存没覆盖的会话靠它排序
-              if (adapter.id === 'sessions' && items.length > 0 && adapter.unitActivityTimes !== undefined) {
-                try {
-                  // 预览本趟已 stat 过（statInfo 同时给体积与 mtime）→ 把时间顺带传下去，
-                  // 省掉第二趟逐文件 stat；旧宿主没有 statTimes 时退回原有逐文件 mtimeMs。
-                  sessionActivityTimes = await adapter.unitActivityTimes(host, section, summary?.statTimes)
-                } catch {
-                  sessionActivityTimes = undefined
-                }
-              }
+              // 预览富化（G5）：附件挂在「用它的那条会话」下面（失败退回扁平，见 core/unit-enrichment.ts）
+              items = await enrichExportUnits(host, adapter, items)
+              // sessions：单元级活跃时间（日志 mtime），元数据缓存没覆盖的会话靠它排序
+              if (adapter.id === 'sessions' && items.length > 0) sessionActivityTimes = await previewActivityTimes(host, adapter, section, summary?.statTimes)
               preview.push({ section: adapter.id, count, sizeBytes: size, items })
               totalSize += size
             } catch {
