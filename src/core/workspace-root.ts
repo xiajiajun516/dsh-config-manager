@@ -118,7 +118,11 @@ export function deriveWorkspaceTargets(
       : leafOf(source);
     const base = sanitizeWorkspaceName(rawName === '' ? 'workspace' : rawName, platform);
     let name = base;
-    for (let n = 2; usedNames.has(fold(name)); n += 1) name = `${base}-${n}`;
+    for (let n = 2; usedNames.has(fold(name)); n += 1) {
+      // 后缀也算进上限：base 已截到 MAX_NAME_LENGTH 时直接拼 `-2` 会溢出（Windows 全路径长度敏感）
+      const suffix = `-${n}`;
+      name = `${base.slice(0, MAX_NAME_LENGTH - suffix.length).replace(/[. ]+$/, '')}${suffix}`;
+    }
     usedNames.add(fold(name));
     targets.push({ sourcePath: source, targetPath: `${dir}${sep}${name}`, name });
   }

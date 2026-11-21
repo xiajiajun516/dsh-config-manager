@@ -137,3 +137,16 @@ test('P4-9 映射形态：只作用于 workspaces，from/to 与目标路径一�
   const mappings = deriveWorkspaceMappings([{ path: '/old/proj', title: 'proj' }], '/new', { platform: 'linux' });
   assert.deepEqual(mappings, [{ oldPrefix: '/old/proj', newPrefix: '/new/proj', appliesTo: ['workspaces'] }]);
 });
+
+test('P4-13 重名后缀不得把名字顶过 80 字符上限', () => {
+  const long = 'x'.repeat(120);
+  const targets = deriveWorkspaceTargets(
+    [{ path: '/old/a', title: long }, { path: '/old/b', title: long }],
+    '/new',
+    { platform: 'linux' },
+  );
+  assert.equal(targets.length, 2);
+  assert.equal(targets[0]?.name, 'x'.repeat(80), '未被占用时截到上限');
+  assert.equal(targets[1]?.name, 'x'.repeat(78) + '-2');
+  assert.ok((targets[1]?.name.length ?? 0) <= 80, '加后缀后仍不得超上限');
+});

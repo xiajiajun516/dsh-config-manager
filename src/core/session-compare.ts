@@ -131,7 +131,8 @@ const VERDICT_RANK: Record<SessionVerdict, number> = {
  * 用户关心的是「这一条导入会不会丢东西」，任一份分叉就必须说成会丢。
  */
 export function aggregateSessionRows(unitId: string, diffs: readonly EventStreamDiff[], title?: string): SessionCompareRow {
-  if (diffs.length === 0) return { unitId, verdict: 'new', packEvents: 0, localEvents: 0 };
+  // 没有任何可比数据 ≠「本机没有同名会话」：new 的语义是后者，空输入只能是「读不出/没比过」。
+  if (diffs.length === 0) return { unitId, verdict: 'unreadable', packEvents: 0, localEvents: 0 };
   let worst = diffs[0] as EventStreamDiff;
   let packEvents = 0;
   let localEvents = 0;

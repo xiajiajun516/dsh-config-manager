@@ -439,18 +439,37 @@ test('P2-7 老包没有该字段 ⇒ 一条归档动作都不做（绝不「对�
   assert.deepEqual(results, []);
 });
 
-test('P2-8 导入收尾按包内顺序重排工作区（insertBefore 语义由门面转换）', async () => {
+test('P2-8 导入收尾按包内顺序重排工作区：包内 id 在新机不存在，按 path 对齐真实记录', async () => {
   const dst = makeContext('linux', '/home/bob');
   const orderCalls: string[][] = [];
   dst.workspace.reorderWorkspaces = async (ids: readonly string[]) => { orderCalls.push([...ids]); };
+  // 宿主的 workspaceRegistry.create(path, title) 不接受 id：新机真实记录必然是新 id，
+  // 包内 id 一条都对不上。所以对齐只能靠 path（applyItem 已按映射落盘）。
+  await dst.workspace.writeRecord({ ...REC, id: 'new-1' });
+  await dst.workspace.writeRecord({ ...REC, id: 'new-2', title: 'B', path: '/home/bob/b' });
+  await dst.workspace.writeRecord({ ...REC, id: 'new-3', title: 'C', path: '/home/bob/c' });
   const records = [REC, { ...REC, id: 'ws-2', title: 'B', path: '/home/bob/b' }, { ...REC, id: 'ws-3', title: 'C', path: '/home/bob/c' }];
   const { ctx } = p2ctx(dst, records);
   await new WorkspacesAdapter().finalizeImport(ctx);
-  assert.deepEqual(orderCalls, [['ws-ops', 'ws-2', 'ws-3']], '按包内记录顺序一次性交给门面');
+  assert.deepEqual(orderCalls, [['new-1', 'new-2', 'new-3']], '按包内记录顺序，换成新机的真实 id');
+});
+
+test('P2-10 包内工作区一条都对不上新机记录 ⇒ 如实告警且一次排序都不调', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  let called = 0;
+  dst.workspace.reorderWorkspaces = async () => { called += 1; };
+  const { ctx } = p2ctx(dst, [REC, { ...REC, id: 'ws-2', title: 'B', path: '/home/bob/b' }]);
+  const results = await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.equal(called, 0, '一条都没对齐就不该动宿主顺序');
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.warning, true);
+  assert.match(results[0]?.message ?? '', /没能与新机记录对应上/);
 });
 
 test('P2-9 顺序恢复失败只告警；单条记录不触发排序调用', async () => {
   const dst = makeContext('linux', '/home/bob');
+  await dst.workspace.writeRecord({ ...REC, id: 'new-1' });
+  await dst.workspace.writeRecord({ ...REC, id: 'new-2', title: 'B', path: '/home/bob/b' });
   dst.workspace.reorderWorkspaces = async () => { throw new Error('registry busy'); };
   const { ctx } = p2ctx(dst, [REC, { ...REC, id: 'ws-2', title: 'B', path: '/home/bob/b' }]);
   const results = await new WorkspacesAdapter().finalizeImport(ctx);

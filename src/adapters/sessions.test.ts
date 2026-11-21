@@ -823,3 +823,14 @@ test('P3：包内会话解不开（非 zstd 的乱码）→ 该单元不比，�
   assert.equal(summary?.rows.length, 0, '解不出就不产出结论');
   assert.equal(summary?.skipped, 1, '但要计入未比对，报告里必须写明');
 });
+
+test('P3：本机多出一份代际日志、份数对不上 → unreadable（不许只比同名那份）', async () => {
+  const ctx = makeContext('win32', HOME);
+  dirAware(ctx);
+  const shared = events('turn', 2);
+  await writeLocal(ctx, '--p--', 'sess-1', 'session.jsonl.zstd', shared);
+  await writeLocal(ctx, '--p--', 'sess-1', 'session.v3.jsonl.zstd', [...shared, ...events('extra', 2)]);
+  const section = packLogs([{ rel: '--p--/sess-1/session.jsonl.zstd', lines: shared }]);
+  const summary = await adapter.compareSessions(ctx, section);
+  assert.equal(summary?.rows[0]?.verdict, 'unreadable', '有日志没进比对就不能判 identical');
+});

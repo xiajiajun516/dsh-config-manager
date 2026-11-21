@@ -8,9 +8,11 @@
  * 判据来源：会话日志里的 `"attachmentId":"sha256:<64hex>"`（见 `utils/attachment-refs.ts`）。
  * 只看**日志文本**，不看文件时间、不看最近使用 —— 「用过」是唯一可复现的口径。
  *
- * 收窄范围：默认口径 = 本次导出**选中的会话**（`options.includeItems.sessions`，与
- * sessions adapter 同一份单元 id `<projectKey>/<sessionId>`）。会话分区未选 / 选空 ⇒
- * 本分区一条都不带并告警（附件脱离会话没有意义）。
+ * 收窄范围：`options.includeItems.sessions`（与 sessions adapter 同一份单元 id
+ * `<projectKey>/<sessionId>`）：
+ *  - 空数组（用户把会话分区清空）⇒ 本分区一条都不带并告警（与基类 allow 语义一致）；
+ *  - 键缺省（没指定会话范围）⇒ 按**全部会话**算引用面，并如实告警，
+ *    既不能静默当成「只用了选中会话」，也不能当成「没有附件」。
  * `export.sessions.limit`（最新 N 个）**不重复实现**：那是按 mtime 排序的选择，本分区
  * 不复刻排序规则，而是如实告警「按全部会话收集，未按最新 N 个收窄」——宁可多带。
  *
@@ -23,7 +25,7 @@ import { msgOf } from '../core/messages.ts';
 import './messages.ts';
 import { isSessionLogFileName, normalizeSessionLimit, sessionIdKey } from '../core/session-select.ts';
 import { attachmentIdOfRelPath, extractAttachmentIds } from '../utils/attachment-refs.ts';
-import { ZSTD_MAGIC, decodeZstdFrame, scanZstdFrames, zstdAvailable } from '../utils/zstd-frame.ts';
+import { decodeZstdFrame, scanZstdFrames, zstdAvailable } from '../utils/zstd-frame.ts';
 import type { ExportOptions, HostContext } from '../core/types.ts';
 import { toPosixRel } from './units.ts';
 
@@ -33,8 +35,47 @@ const READ_BATCH = 8;
 /** 前 4 字节是否为 zstd 帧魔数（小端 0x28 0xb5 0x2f 0xfd）。 */
 function hasZstdMagic(bytes: Uint8Array): boolean {
   if (bytes.length < 4) return false;
-  return bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd
-    && ZSTD_MAGIC === 0xfd2fb528;
+  return bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd;
+}
+
+/**
+ * 引用面扫描的短 TTL 缓存：导出预览与真实导出对同一批日志各扫一遍（本机实测 336 个日志 / 225 MB）。
+ * 键 = 每个日志的「路径:mtime」；任何一条拿不到 mtime（宿主没暴露 mtimeMs / stat 失败）就整批不缓存 ——
+ * 缓存必须能被证伪，宁可多读一遍，也不交出过期的引用面。
+ */
+const SCAN_CACHE_TTL_MS = 60_000;
+interface ScanCache {
+  key: string;
+  at: number;
+  referenced: ReadonlySet<string>;
+}
+let scanCache: ScanCache | null = null;
+
+async function scanKeyOf(ctx: HostContext, logs: readonly string[]): Promise<string | null> {
+  const mtime = ctx.fs.mtimeMs;
+  if (mtime === undefined) return null;
+  const parts: string[] = [];
+  for (let i = 0; i < logs.length; i += READ_BATCH) {
+    const batch = logs.slice(i, i + READ_BATCH);
+    const times = await Promise.all(batch.map(async (rel) => {
+      const posix = toPosixRel(rel);
+      try {
+        return `${posix}:${String(await mtime.call(ctx.fs, posix))}`;
+      } catch {
+        return null;
+      }
+    }));
+    for (const part of times) {
+      if (part === null) return null;
+      parts.push(part);
+    }
+  }
+  return parts.join('|');
+}
+
+/** 测试用：清空引用面缓存。生产失效只靠 mtime 键与 TTL，不靠这里。 */
+export function resetAttachmentsScanCache(): void {
+  scanCache = null;
 }
 
 /** 日志文件 → 该文件引用的 attachmentId 集合（读不出 / 解不开返回 null，由调用方降级）。 */
@@ -94,12 +135,15 @@ export class AttachmentsAdapter extends FileCollectionAdapter {
     const present = new Set<string>();
     for (const rel of rels) present.add(this.unitIdOf(this.relPathOf(rel)));
 
-    // ① 选中会话：键缺省 = 全量；空数组 = 该分区一条都不带（与基类 allow 语义一致）。
+    // ① 选中会话：键缺省 = 全量（如实告警）；空数组 = 该分区一条都不带（与基类 allow 语义一致）。
     const sessionAllow = options.includeItems?.['sessions'];
     if (Array.isArray(sessionAllow) && sessionAllow.length === 0) {
       return { keep: new Set<string>(), warnings: [msg('export.attachmentsNoSessions')] };
     }
     const warnings: string[] = [];
+    // 未指定会话范围 = 按**全部会话**算引用面。这条必须连同真实数字一起明说，
+    // 所以推迟到 ④ 之后（届时 keep / present / missing 才齐）。
+    const allSessions = sessionAllow === undefined;
     const limit = normalizeSessionLimit(options.sessions?.limit);
     if (limit !== undefined && limit >= 0 && !Array.isArray(sessionAllow)) {
       warnings.push(msg('export.attachmentsLimitIgnored'));
@@ -130,21 +174,27 @@ export class AttachmentsAdapter extends FileCollectionAdapter {
     if (!zstdAvailable() && logs.length > 0) {
       return { keep: null, warnings: [msg('export.attachmentsNoZstd')] };
     }
-    const referenced = new Set<string>();
-    let failed = 0;
-    for (let i = 0; i < logs.length; i += READ_BATCH) {
-      const batch = logs.slice(i, i + READ_BATCH);
-      const results = await Promise.all(batch.map((rel) => referencedIdsOfLog(ctx, toPosixRel(rel))));
-      for (const ids of results) {
-        if (ids === null) {
-          failed += 1;
-          continue;
+    const cacheKey = await scanKeyOf(ctx, logs);
+    const hit = cacheKey !== null && scanCache !== null
+      && scanCache.key === cacheKey && Date.now() - scanCache.at < SCAN_CACHE_TTL_MS ? scanCache : null;
+    const referenced = new Set<string>(hit === null ? [] : hit.referenced);
+    if (hit === null) {
+      let failed = 0;
+      for (let i = 0; i < logs.length; i += READ_BATCH) {
+        const batch = logs.slice(i, i + READ_BATCH);
+        const results = await Promise.all(batch.map((rel) => referencedIdsOfLog(ctx, toPosixRel(rel))));
+        for (const ids of results) {
+          if (ids === null) {
+            failed += 1;
+            continue;
+          }
+          for (const id of ids) referenced.add(id);
         }
-        for (const id of ids) referenced.add(id);
       }
-    }
-    if (failed > 0) {
-      return { keep: null, warnings: [msg('export.attachmentsScanFailed', { count: String(failed) })] };
+      if (failed > 0) {
+        return { keep: null, warnings: [msg('export.attachmentsScanFailed', { count: String(failed) })] };
+      }
+      if (cacheKey !== null) scanCache = { key: cacheKey, at: Date.now(), referenced: new Set(referenced) };
     }
 
     // ④ 只留「被引用 且 本机确实存在」的对象
@@ -159,6 +209,13 @@ export class AttachmentsAdapter extends FileCollectionAdapter {
       total: String(present.size),
       missing: String(missing),
     }));
+    if (allSessions) {
+      warnings.push(msg('export.attachmentsAllSessions', {
+        count: String(keep.size),
+        total: String(present.size),
+        missing: String(missing),
+      }));
+    }
     return { keep, warnings };
   }
 }

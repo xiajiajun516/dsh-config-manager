@@ -587,12 +587,16 @@ export class SessionsAdapter extends FileCollectionAdapter {
         rows.push({ unitId: unit, verdict: 'unreadable', packEvents, localEvents: 0 });
         continue;
       }
-      const pairs = packStreams.filter((stream) => localNames.includes(stream.name));
-      if (pairs.length === 0) {
-        // 两侧日志名完全不重合（代际命名不同）：只在「各只有一份」时才敢比，否则不猜
-        if (packStreams.length === 1 && localNames.length === 1) {
-          pairs.push({ name: localNames[0] ?? '', lines: packStreams[0]?.lines ?? [] });
+      let pairs = packStreams.filter((stream) => localNames.includes(stream.name));
+      // 未配对的本地日志（本机多出一份代际日志）**必须参与判定**：只比同名文件会把
+      // 「本机整份日志都是新增」误判成 identical / packAhead，从而少报覆盖风险。
+      if (pairs.length < packStreams.length || pairs.length < localNames.length) {
+        if (packStreams.length === localNames.length) {
+          // 份数相同、名字不同（代际命名差异）⇒ 排序后一一对应，两侧内容都进比对
+          const sortedPack = [...packStreams].sort((a, b) => a.name.localeCompare(b.name));
+          pairs = sortedPack.map((stream, index) => ({ name: localNames[index] ?? '', lines: stream.lines }));
         } else {
+          // 份数都对不上（本机多/少一份日志）：无从对应，绝不猜成「一致」
           rows.push({ unitId: unit, verdict: 'unreadable', packEvents, localEvents: 0 });
           continue;
         }

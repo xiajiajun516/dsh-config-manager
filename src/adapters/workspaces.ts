@@ -477,6 +477,8 @@ async function readArchivedSessionIds(
   if (read === undefined) return { ids: undefined, warnings: [] };
   try {
     const raw = await read.call(ctx.workspace);
+    // undefined = 宿主有这个端口但读不到归档集（getter 不存在 / 形状不认识）
+    if (raw === undefined) return { ids: undefined, warnings: [] };
     const declared = new Map<string, string>();
     for (const rec of kept) {
       for (const sid of rec.sessionIds) {
@@ -508,10 +510,35 @@ async function readArchivedSessionIds(
 async function restoreWorkspaceOrder(ctx: ImportContext, data: WorkspacesSection): Promise<ApplyResult | undefined> {
   const reorder = ctx.target.workspace.reorderWorkspaces;
   if (reorder === undefined) return undefined;
-  const ids = data.workspaces
-    .map((rec) => (rec !== null && typeof rec === 'object' ? rec.id : ''))
-    .filter((id): id is string => typeof id === 'string' && id !== '');
-  if (ids.length < 2) return undefined;
+  const want = (data.workspaces ?? []).filter(
+    (rec): rec is WorkspaceRecord => rec !== null && typeof rec === 'object' && typeof rec.path === 'string',
+  );
+  if (want.length < 2) return undefined;
+  // 包内 id 在新机上**不存在**：宿主 workspaceRegistry.create(path, title) 不接受 id，
+  // 新建记录必然是新 id。所以先把包内记录对齐到真实记录再排序 —— path（已过映射，与
+  // applyItem 落盘同源）优先，title 兜底；一条都对不上就如实告警，绝不静默当成功。
+  let actual: WorkspaceRecord[];
+  try {
+    actual = await ctx.target.workspace.listRecords();
+  } catch (error) {
+    return { ok: false, warning: true, message: ctx.msg('adapter.workspaceReorderFailed', { msg: reasonOf(error) }) };
+  }
+  const byPath = new Map<string, string>();
+  const byTitle = new Map<string, string>();
+  for (const rec of actual) {
+    byPath.set(normalizePath(rec.path), rec.id);
+    const title = rec.title ?? '';
+    if (title !== '' && !byTitle.has(title)) byTitle.set(title, rec.id);
+  }
+  const ids: string[] = [];
+  for (const rec of want) {
+    const id = byPath.get(normalizePath(rec.path)) ?? byTitle.get(rec.title ?? '');
+    if (id === undefined || ids.includes(id)) continue;
+    ids.push(id);
+  }
+  if (ids.length < 2) {
+    return { ok: false, warning: true, message: ctx.msg('adapter.workspaceReorderSkipped', { count: String(ids.length) }) };
+  }
   try {
     await reorder.call(ctx.target.workspace, ids);
     return undefined;

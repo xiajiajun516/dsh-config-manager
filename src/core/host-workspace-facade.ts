@@ -88,10 +88,13 @@ export class DshWorkspaceFacade implements WorkspaceFacade {
    * 「宿主没这个能力」与「归档集为空」必须分开：前者返回空数组但不会让导出侧写
    * `archivedSessionIds: []`（导出侧只看能力是否存在决定带不带这个字段）。
    */
-  async listArchivedSessionIds(): Promise<string[]> {
+  async listArchivedSessionIds(): Promise<string[] | undefined> {
     const registry = this.registry()
-    const ids = registry?.archivedSessionIds
-    return Array.isArray(ids) ? ids.map(String) : []
+    // 宿主没暴露 getter ⇒ undefined（「读不到」），**不是**空数组（「确实为空」）：
+    // 返回 [] 会让导出侧写出 `archivedSessionIds: []`，等于对用户声称「这台机器没有归档会话」。
+    if (registry === undefined || registry.archivedSessionIds === undefined) return undefined
+    const ids = registry.archivedSessionIds
+    return Array.isArray(ids) ? ids.map(String) : undefined
   }
 
   /** P2：归档一个会话；宿主未暴露该能力时显式报错（由调用方降级为告警，绝不静默当成功）。 */

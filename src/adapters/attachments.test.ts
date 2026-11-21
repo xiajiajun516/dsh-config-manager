@@ -6,7 +6,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AttachmentsAdapter } from './attachments.ts';
+import { AttachmentsAdapter, resetAttachmentsScanCache } from './attachments.ts';
 import { makeContext } from './test-helpers.ts';
 import { zhMsg } from '../core/messages.ts';
 import { encodeZstdFrame, zstdAvailable } from '../utils/zstd-frame.ts';
@@ -30,6 +30,8 @@ function logFrame(ids: readonly string[]): Uint8Array {
 
 /** 造一台「本机库 + 两个会话」的宿主：对象 A/B/C 存在，D 被引用但已不在库里。 */
 async function makeFixture(): Promise<ReturnType<typeof makeContext>> {
+  // 引用面缓存是模块级状态（TTL 60s）：每个用例从干净缓存开始，否则用例之间会互相漏气
+  resetAttachmentsScanCache();
   const ctx = makeContext('linux', '/home/alice');
   const put = async (rel: string, data: Uint8Array): Promise<void> => { await ctx.fs.writeFile(rel, data); };
   await put('attachments/v1/objects/aa/' + hex('a'), Buffer.from('A'));
@@ -99,4 +101,32 @@ test('P1-6 会话日志帧损坏 ⇒ 退回整库并告警（宁可多带，不�
   const out = await adapter.export(ctx, { includeSecrets: false });
   assert.equal(out.data.files.length, 3, '降级方向 = 整库（3 个对象）');
   assert.ok(out.warnings.some((w) => w.includes(zhMsg('export.attachmentsScanFailed', { count: '1' }))));
+});
+
+test('P1-7 未收窄会话范围 ⇒ 如实告警「按全部会话算引用面」，不静默给出整库', { skip: !CAPABLE }, async () => {
+  const ctx = await makeFixture();
+  const out = await new AttachmentsAdapter().export(ctx, { includeSecrets: false });
+  assert.ok(
+    out.warnings.includes(zhMsg('export.attachmentsAllSessions', { count: '3', total: '3', missing: '1' })),
+    '未指定会话时必须明说范围是全部会话',
+  );
+});
+
+test('P1-8 引用面缓存：mtime 未变则复用，mtime 一变即失效', { skip: !CAPABLE }, async () => {
+  const ctx = await makeFixture();
+  const log = 'sessions/proj-1/sess-1/session.jsonl';
+  ctx.fs.setMtime(log, 1_000);
+  ctx.fs.setMtime('sessions/proj-1/sess-2/session.jsonl', 2_000);
+  const adapter = new AttachmentsAdapter();
+  assert.equal((await adapter.export(ctx, { includeSecrets: false })).data.files.length, 3);
+
+  // 内容改了但 mtime 没变：TTL 内必须继续复用旧引用面（否则缓存没有意义）
+  await ctx.fs.writeFile(log, logFrame([ID_C]));
+  ctx.fs.setMtime(log, 1_000);
+  assert.equal((await adapter.export(ctx, { includeSecrets: false })).data.files.length, 3, '缓存命中：按旧引用面');
+
+  // mtime 变了：缓存必须失效，按新内容重算（A 不再被引用）
+  ctx.fs.setMtime(log, 3_000);
+  const third = await adapter.export(ctx, { includeSecrets: false });
+  assert.equal(third.data.files.length, 2, '只剩 B、C');
 });

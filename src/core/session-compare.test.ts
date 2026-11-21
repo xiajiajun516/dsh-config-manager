@@ -99,8 +99,8 @@ test('P3-9 同单元多份日志取最严重，并汇总条数', () => {
   assert.equal(worst.localEvents, 3);
   assert.equal(worst.localAheadBy, 2);
   assert.equal(worst.divergedAt, 0);
-  // 空 diffs = 本机没有这条会话
-  assert.equal(aggregateSessionRows('proj/sess-2', []).verdict, 'new');
+  // 空 diffs = 没有任何可比数据（≠ 本机没有该会话：那种情况由适配器直接产出 'new'）
+  assert.equal(aggregateSessionRows('proj/sess-2', []).verdict, 'unreadable');
 });
 
 test('P3-10 汇总计数与「会覆盖掉多少」只算 localAhead + diverged', () => {

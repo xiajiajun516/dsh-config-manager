@@ -28,14 +28,14 @@ import { createSnapshot, fsForSection, planItemWritesTarget, resolveFileTarget, 
 import { isCredentialConfigured } from './credential-status.ts';
 import { rollback } from './rollback.ts';
 import { compatibilityReasons, computeCompatibility } from './validator.ts';
-import { msgOf } from './messages.ts';
+import { msgOf, type MsgFunc } from './messages.ts';
 import { applyItemResolution } from './conflict-decisions.ts';
 import { workspaceRootMappings } from './import-planning.ts';
 import {
-  markSessionVerdicts, resolveSessionCompare, resolveSessionFormats, sessionCompareWarnings,
+  resolveSessionCompare, resolveSessionFormats, sessionCompareWarnings,
   sessionFormatWarnings, type ResolvedSessionFormats,
 } from './session-analyze.ts';
-import type { MsgFunc } from './messages.ts';
+import { markSessionVerdicts } from './session-verdict-plan.ts';
 import {
   ImportNotConfirmedError, ImportUserSkippedError, type ApplyResult, type ConfigAdapter,
   type ExecutedItem, type HostContext, type ImportAnalysis, type ImportContext,

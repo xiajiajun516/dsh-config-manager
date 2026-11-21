@@ -84,3 +84,12 @@
 ## 归档集与工作区顺序托管给宿主，缺能力只告警
 
 - **归档状态与显示顺序都随备份恢复，但两者都不是「记录上的字段」**（P2，2026-11-21，宿主 0.1.0-rc.8 实查）：归档集是**注册表级** `workspaceRegistry.archivedSessionIds`（`node_modules/@deepseek-ai/dsh-workspace/lib/types/index.d.ts:116`）+ `archiveSession()`；显示顺序是 `workspaceIds` 的权威序，客户端只能用 `insertBefore(id, beforeId)` 逐对还原（`registry.list()` 的顺序即导出顺序）。**该版本宿主没有 pin/unpin**（全树 grep `pinnedSessionIds|pinSession` 零命中），所以置顶不做，也不写进包里冒充支持。三条硬口径：① 归档集导出时**按被选中工作区声明的 sessionIds 收窄**（全局归档集若带上未勾选工作区的会话，导入会去动本机不该被碰的会话）；② 包里**缺** `archivedSessionIds` = 老包，导入侧**绝不做任何归档动作**，绝不「对齐成空集」反归档；③ 宿主没暴露能力时只产一条 warning（`host.workspaceArchiveUnavailable`），不阻断导入、不谎报成功。
+
+## P1–P4 复审后的六条硬口径（2026-11-21）
+
+- **顺序恢复必须按 path 对齐真实记录，对齐不上就告警**：宿主 `workspaceRegistry.create(path, title)` **不接受 id**，新机记录必然是新 id ⇒ 包内 id 一条都对不上（旧实现直接拿包内 id 调 `insertBefore`，失败被吞，顺序在真机上静默没恢复）。现在先 `listRecords()`，用「已过映射的 path」优先、title 兜底把包内记录映射到真实 id，全部对不上时产 `adapter.workspaceReorderSkipped` 并**一次都不调**宿主。
+- **未配对的会话日志必须参与判定**：本机多出一份代际日志（`session.jsonl.zstd` + `session.v3.jsonl.zstd`）而包内只有一份时，只比同名那份会把「本机整份日志都是新增」误判成 `identical`；现在份数不等一律 `unreadable`（`src/adapters/sessions.ts`）。
+- **空 diffs ≠ 本机没有该会话**：`aggregateSessionRows([])` 返回 `unreadable`（没有可比数据就出不了结论）；`new` 只由「目录形态都探不到」这一条路径直接产出。
+- **引用面缓存必须可证伪**：键 = 每个日志的 `路径:mtime`，**任一条拿不到 mtime 就整批不缓存**，TTL 60 s（导出预览与真实导出各扫一遍 225 MB 日志的代价）；测试用 `resetAttachmentsScanCache()` 隔离，生产失效不依赖它。
+- **降级只改显示级别、不得撤销阻断**：`markSessionVerdicts`（`src/core/session-verdict-plan.ts`）对 `kind==='Error'` 的项**不写** `severity` —— SEC-05 的红标正是「为什么不导」，被降成 warning 会让用户以为只是提醒。
+- **告警要在算完数字之后再推**：`export.attachmentsAllSessions` 曾把带占位符的文案直接推到 `warnings` 里（`{total}`、`{count}` 原样出现在界面上）。凡带参数的文案，push 点必须在所有参数确定之后；`attachments.test.ts` 的 P1-7 用完整句子钉住它。

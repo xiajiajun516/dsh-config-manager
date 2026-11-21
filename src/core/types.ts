@@ -290,7 +290,7 @@ export interface WorkspaceFacade {
    * 可选：宿主没暴露（老宿主 / 测试替身）时导出侧不带 `archivedSessionIds` 字段，
    * 导入侧也不会凭空归档任何会话 —— 「读不到」与「确实为空」必须分开。
    */
-  listArchivedSessionIds?(): Promise<string[]>;
+  listArchivedSessionIds?(): Promise<string[] | undefined>;
   /**
    * 归档一个会话（P2），对应 DSH `workspaceRegistry.archiveSession()`。
    *

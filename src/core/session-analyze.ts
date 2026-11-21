@@ -1,5 +1,6 @@
 /**
- * 分析期的会话体检：格式版本探针、逐条比对、计划项标记 —— 从 analyzer.ts 下沉。
+ * 分析期的会话体检：格式版本探针、逐条比对、解析结果告警 —— 从 analyzer.ts 下沉。
+ * （计划项标记不在这里：它只写展示字段、属于计划期，见 core/session-verdict-plan.ts。）
  *
  * 为什么独立成模块：analyzer 越过体量棘轮（tests/file-size-ratchet.test.ts），而这些函数的
  * 依赖全部由入参给出（探针、适配器表、文案函数、本机支持版本），搬出来不改变任何调用点的
@@ -7,11 +8,10 @@
  */
 import type { SectionId } from '../schema/types.ts';
 import { attachmentIdOfRelPath } from '../utils/attachment-refs.ts';
-import { sessionUnitLookup } from './import-planning.ts';
 import type { MsgFunc } from './messages.ts';
 import { overwriteExposure } from './session-compare.ts';
 import type {
-  ConfigAdapter, HostContext, PlanItem, SessionCompareRow, SessionCompareSummary, SessionFormatProbeResult,
+  ConfigAdapter, HostContext, SessionCompareSummary, SessionFormatProbeResult,
 } from './types.ts';
 
 /** 会话格式体检的「已落定」结果（探针 + 本机支持版本；不可判定时整体缺省）。 */
@@ -156,25 +156,4 @@ export function sessionCompareWarnings(result: SessionCompareSummary | null, msg
   return warnings;
 }
 
-/**
- * P3 的落点：把逐条比对结论标到**具体计划项**上（与格式标记同一个键空间对齐问题）。
- *
- * 标记是纯附加字段：不改 kind、不拦执行 —— 它只回答「这条导入会覆盖掉本机多少新内容」，
- * 决策仍归用户（本插件的导入是「以包为准」，没有只追加模式，所以这里的价值是让覆盖可见）。
- */
-export function markSessionVerdicts(planItems: readonly PlanItem[], rows: readonly SessionCompareRow[]): void {
-  if (rows.length === 0) return;
-  const byUnit = new Map(rows.map((row) => [row.unitId, row]));
-  for (const item of planItems) {
-    const row = sessionUnitLookup(byUnit, item.unitId ?? item.id);
-    if (row === undefined) continue;
-    item.sessionVerdict = {
-      verdict: row.verdict,
-      packEvents: row.packEvents,
-      localEvents: row.localEvents,
-      ...(row.localAheadBy === undefined ? {} : { localAheadBy: row.localAheadBy }),
-      ...(row.packAheadBy === undefined ? {} : { packAheadBy: row.packAheadBy }),
-    };
-    if (row.verdict === 'localAhead' || row.verdict === 'diverged') item.severity = 'warning';
-  }
-}
+
