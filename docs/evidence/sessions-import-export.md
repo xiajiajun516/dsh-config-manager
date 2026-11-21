@@ -83,7 +83,15 @@
 
 ## 归档集与工作区顺序托管给宿主，缺能力只告警
 
-- **归档状态与显示顺序都随备份恢复，但两者都不是「记录上的字段」**（P2，2026-11-21，宿主 0.1.0-rc.8 实查）：归档集是**注册表级** `workspaceRegistry.archivedSessionIds`（`node_modules/@deepseek-ai/dsh-workspace/lib/types/index.d.ts:116`）+ `archiveSession()`；显示顺序是 `workspaceIds` 的权威序，客户端只能用 `insertBefore(id, beforeId)` 逐对还原（`registry.list()` 的顺序即导出顺序）。**该版本宿主没有 pin/unpin**（全树 grep `pinnedSessionIds|pinSession` 零命中），所以置顶不做，也不写进包里冒充支持。三条硬口径：① 归档集导出时**按被选中工作区声明的 sessionIds 收窄**（全局归档集若带上未勾选工作区的会话，导入会去动本机不该被碰的会话）；② 包里**缺** `archivedSessionIds` = 老包，导入侧**绝不做任何归档动作**，绝不「对齐成空集」反归档；③ 宿主没暴露能力时只产一条 warning（`host.workspaceArchiveUnavailable`），不阻断导入、不谎报成功。
+- **归档状态与显示顺序都随备份恢复，但两者都不是「记录上的字段」**（P2，2026-11-21，宿主 0.1.0-rc.8 实查）：归档集是**注册表级** `workspaceRegistry.archivedSessionIds`（`node_modules/@deepseek-ai/dsh-workspace/lib/types/index.d.ts:116`）+ `archiveSession()`；显示顺序是 `workspaceIds` 的权威序，客户端只能用 `insertBefore(id, beforeId)` 逐对还原（`registry.list()` 的顺序即导出顺序）。**该版本（0.1.0-rc.8）宿主没有 pin/unpin**（全树 grep `pinnedSessionIds|pinSession` 零命中），当时的结论是置顶不做、也不写进包里冒充支持；0.2.2-rc.5 补上了 `pinnedSessionIds` / `pinSession` / `unpinSession`，本轮已按同一托管口径支持（见下节「置顶」）。三条硬口径：① 归档集导出时**按被选中工作区声明的 sessionIds 收窄**（全局归档集若带上未勾选工作区的会话，导入会去动本机不该被碰的会话）；② 包里**缺** `archivedSessionIds` = 老包，导入侧**绝不做任何归档动作**，绝不「对齐成空集」反归档；③ 宿主没暴露能力时只产一条 warning（`host.workspaceArchiveUnavailable`），不阻断导入、不谎报成功。
+
+## 置顶随备份恢复：倒序置顶、归档优先（2026-11-21，宿主 0.2.2-rc.5 实查）
+
+- **宿主侧事实**（`D:\Apps\DSH\resources\app\dsh\node_modules\@deepseek-ai\dsh-workspace`，版本 `0.2.2-rc.5`）：`get pinnedSessionIds()` 在 `src/index.ts:439`（`spec.ts:52-63` 声明为 **registry-global pin set in pin order**，默认 `[]`）；`pinSession(sessionId)` 在 `src/index.ts:450` —— 已置顶**幂等返回**（`:454`）、**已归档直接抛** `WorkspaceArchivedSessionPinError`（类定义 `:75`，消息 `cannot pin session '<id>': the session is archived`）、未知会话抛 `WorkspaceUnknownSessionError`、落库写法是 `pinnedSessionIds: [sessionId, ...state.pinnedSessionIds]`（`:464` **前插**）；`unpinSession()` 在 `:477`。`archiveSession()` 在**同一次 durable write** 里 `pinnedSessionIds.filter(id => id !== sessionId)`（`:399`）⇒ **归档即掉置顶**，置顶与归档互斥且归档优先。
+- **门面不升级依赖也能用**：`devDependency` 仍是 `@deepseek-ai/dsh-workspace ^0.1.0-rc.6`，但 `src/core/host-workspace-facade.ts` 的 `registry()` 是自声明的结构化类型 ⇒ 只要能取到 `pinnedSessionIds` / `pinSession` 就能调用；取不到（老宿主）时 `listPinnedSessionIds()` 返回 **`undefined`（读不到）**，与 `[]`（确实为空）严格区分。
+- **三条硬口径**：① 导出与归档集同款收窄（只保留被选中工作区 `sessionIds` 里声明过的 id），**顺序原样搬运**；② 包里缺 `pinnedSessionIds` = 老包 ⇒ 导入侧**一条 pin 都不做**（绝不「对齐成空集」去反置顶）；③ 导入必须**倒序**逐条 `pinSession`（宿主前插，正序调用会把顺序整个翻过来），并且**先算归档集、跳过已归档的 id**，最后才执行归档（`finalizeImport` 顺序：工作区顺序 → 置顶 → 归档）。宿主缺能力只产一条 `host.workspacePinUnavailable` warning，不阻断导入、不谎报成功。
+- **已知边界（不要写成「顺序恒等于包内顺序」）**：`pinSession()` 对**已置顶**的 id 是幂等直返（`src/index.ts:454`，不重排），所以目标机**原本就有**置顶时，那些会话会留在最前面，拼出来的顺序可能与包内不同；只有「目标机原本没有置顶」（全新恢复机的正常情形）才与包内逐项一致。
+- 钉住它的测试：`src/adapters/workspaces.test.ts` 的 P2-11..P2-18（收窄/缺席≠空集/读失败/倒序/归档优先/无能力/部分失败/老包零动作）。
 
 ## P1–P4 复审后的六条硬口径（2026-11-21）
 

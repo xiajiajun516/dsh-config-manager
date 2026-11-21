@@ -317,6 +317,21 @@ export interface WorkspaceFacade {
    * 由适配器按这个原语推出（后往前落位）。传入不存在的 id 由实现自行跳过。
    */
   reorderWorkspaces?(orderedIds: readonly string[]): Promise<void>;
+  /**
+   * 读**注册表级**置顶集（P2-pin），对应 DSH `workspaceRegistry.pinnedSessionIds`。
+   *
+   * 值序 = 宿主口径「最近置顶在前」。与 `listArchivedSessionIds` 同一条边界：
+   * 返回 `undefined` 表示「宿主没这个能力」（导出侧据此不带字段），
+   * `[]` 表示「确实没有置顶会话」—— 两者绝不合并。
+   */
+  listPinnedSessionIds?(): Promise<string[] | undefined>;
+  /**
+   * 置顶一个会话（P2-pin），对应 DSH `workspaceRegistry.pinSession()`。
+   *
+   * 宿主语义：**前插**到置顶集（最近置顶排最前）；会话已归档时抛错（置顶与归档互斥）；
+   * 会话不存在时抛错。插件只逐条尝试并如实上报失败，不因置顶失败让整轮导入失败。
+   */
+  pinSession?(sessionId: string): Promise<void>;
 }
 
 

@@ -337,16 +337,26 @@ test('ui-F3：workspaces 记录缺 sessionIds 必须在 validate 阶段报错（
   assert.equal((await adapter.validate({ version: 1, workspaces: [{ id: 'ws-1', path: '/p', sessionIds: [] }] })).valid, true);
   assert.equal((await adapter.validate({ version: 1, workspaces: [{ id: 'ws-1', path: '/p' }] } as never)).valid, false);
   assert.equal((await adapter.validate({ version: 1, workspaces: [null] } as never)).valid, false);
+  // P2-pin：两个注册表级集合来自不可信 ZIP，非数组 / 非字符串元素必须在 validate 阶段拦下
+  assert.equal((await adapter.validate({ version: 1, workspaces: [], pinnedSessionIds: 's-1' } as never)).valid, false);
+  assert.equal((await adapter.validate({ version: 1, workspaces: [], archivedSessionIds: [1] } as never)).valid, false);
+  assert.equal((await adapter.validate({ version: 1, workspaces: [], pinnedSessionIds: ['s-1'], archivedSessionIds: [] })).valid, true);
 });
 
 // ── P2：会话归档集 + 工作区显示顺序 ────────────────────────────────────────
 
 /** 构造带 archivedSessionIds 的导入上下文（P2 专用）。 */
-function p2ctx(dst: ReturnType<typeof makeContext>, records: WorkspaceRecord[], archived?: string[]) {
+function p2ctx(
+  dst: ReturnType<typeof makeContext>,
+  records: WorkspaceRecord[],
+  archived?: string[],
+  pinned?: string[],
+) {
   const data: WorkspacesSection = {
     version: 1,
     workspaces: records,
     ...(archived === undefined ? {} : { archivedSessionIds: archived }),
+    ...(pinned === undefined ? {} : { pinnedSessionIds: pinned }),
   };
   const sections = new Map<string, unknown>([['workspaces', data]]);
   return { ctx: makeImportContext(dst, sections), data };
@@ -483,5 +493,102 @@ test('P2-9 顺序恢复失败只告警；单条记录不触发排序调用', asy
   const single = p2ctx(dst, [REC]);
   assert.deepEqual(await new WorkspacesAdapter().finalizeImport(single.ctx), []);
   assert.equal(called, 0, '只有一条工作区时没有「顺序」可恢复');
+});
+
+
+// ── P2-pin：会话置顶（DSH 0.2.2-rc.5 的 pinnedSessionIds / pinSession）────────────────
+
+test('P2-11 导出置顶集，并收窄到本次带走的工作区所声明的会话（顺序原样保留）', async () => {
+  const ctx = makeContext('linux', '/home/alice');
+  ctx.workspace.records.set('ws-a', { id: 'ws-a', path: '/home/alice/a', title: 'A', sessionIds: ['session-x', 'session-y'] });
+  ctx.workspace.records.set('ws-b', { id: 'ws-b', path: '/home/alice/b', title: 'B', sessionIds: ['session-z'] });
+  // 宿主口径：最近置顶在前
+  ctx.workspace.listPinnedSessionIds = async () => ['session-y', 'session-z', 'session-x', 'session-orphan'];
+  const out = await new WorkspacesAdapter().export(ctx, {
+    includeSecrets: false,
+    includeItems: { workspaces: ['workspace:ws-a'] },
+  });
+  assert.deepEqual(out.data.pinnedSessionIds, ['session-y', 'session-x'], '未选工作区的会话与孤儿会话不得写进包；顺序必须保持宿主口径');
+  assert.deepEqual(out.warnings, []);
+});
+
+test('P2-12 宿主没有置顶能力 ⇒ 不写该字段；有能力且为空 ⇒ 写空数组（可辨）', async () => {
+  const ctx = makeContext('linux', '/home/alice');
+  ctx.workspace.records.set('ws-a', { id: 'ws-a', path: '/home/alice/a', title: 'A', sessionIds: ['session-x'] });
+  const adapter = new WorkspacesAdapter();
+  const out = await adapter.export(ctx, { includeSecrets: false });
+  assert.equal('pinnedSessionIds' in out.data, false, '能力缺失必须让字段缺席，不能写成 []');
+
+  ctx.workspace.listPinnedSessionIds = async () => [];
+  const out2 = await adapter.export(ctx, { includeSecrets: false });
+  assert.deepEqual(out2.data.pinnedSessionIds, []);
+});
+
+test('P2-13 读置顶集失败 ⇒ 不写字段 + 如实告警（导出本身不失败）', async () => {
+  const ctx = makeContext('linux', '/home/alice');
+  ctx.workspace.records.set('ws-a', { id: 'ws-a', path: '/home/alice/a', title: 'A', sessionIds: ['session-x'] });
+  ctx.workspace.listPinnedSessionIds = async () => { throw new Error('registry gone'); };
+  const out = await new WorkspacesAdapter().export(ctx, { includeSecrets: false });
+  assert.equal('pinnedSessionIds' in out.data, false);
+  assert.equal(out.warnings.length, 1);
+  assert.match(out.warnings[0] ?? '', /未能读取会话置顶集/);
+  assert.match(out.warnings[0] ?? '', /registry gone/);
+});
+
+test('P2-14 导入按「倒序逐条置顶」还原顺序（宿主 pinSession 是前插）', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  const calls: string[] = [];
+  dst.workspace.pinSession = async (id: string) => { calls.push(id); };
+  const { ctx } = p2ctx(dst, [REC], undefined, ['s-3', 's-2', 's-1']);
+  const results = await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.deepEqual(calls, ['s-1', 's-2', 's-3'], '包内是「最近置顶在前」，必须从末尾往前置顶，落库后顺序才一致');
+  const ok = results.find((r) => (r.message ?? '').includes('已恢复 3 个置顶会话'));
+  assert.ok(ok !== undefined, '成功计数必须如实');
+  assert.equal(ok?.ok, true);
+});
+
+test('P2-15 同一会话既归档又置顶（只可能来自旧包/手改）⇒ 跳过置顶，归档优先', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  const pinCalls: string[] = [];
+  const archiveCalls: string[] = [];
+  dst.workspace.pinSession = async (id: string) => { pinCalls.push(id); };
+  dst.workspace.archiveSession = async (id: string) => { archiveCalls.push(id); };
+  const { ctx } = p2ctx(dst, [REC], ['s-2'], ['s-2', 's-1']);
+  await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.deepEqual(pinCalls, ['s-1'], '归档优先：s-2 不置顶（宿主归档会掉置顶）');
+  assert.deepEqual(archiveCalls, ['s-2']);
+});
+
+test('P2-16 宿主没有置顶能力 ⇒ 一条 warning（不静默跳过）', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  const { ctx } = p2ctx(dst, [REC], undefined, ['s-1']);
+  const results = await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.warning, true);
+  assert.match(results[0]?.message ?? '', /未暴露会话置顶能力/);
+});
+
+test('P2-17 部分置顶失败 ⇒ 成功计数 + 失败计数（带真实原因）', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  dst.workspace.pinSession = async (id: string) => {
+    if (id === 's-bad') throw new Error('unknown session');
+  };
+  const { ctx } = p2ctx(dst, [REC], undefined, ['s-1', 's-bad']);
+  const results = await new WorkspacesAdapter().finalizeImport(ctx);
+  assert.equal(results.length, 2);
+  assert.match(results[0]?.message ?? '', /已恢复 1 个置顶会话/);
+  assert.equal(results[1]?.warning, true);
+  assert.match(results[1]?.message ?? '', /1 个置顶会话未恢复/);
+  assert.match(results[1]?.message ?? '', /s-bad/);
+  assert.match(results[1]?.message ?? '', /unknown session/);
+});
+
+test('P2-18 老包没有该字段 ⇒ 一条置顶动作都不做', async () => {
+  const dst = makeContext('linux', '/home/bob');
+  let called = 0;
+  dst.workspace.pinSession = async () => { called += 1; };
+  const { ctx } = p2ctx(dst, [REC], undefined, undefined);
+  assert.deepEqual(await new WorkspacesAdapter().finalizeImport(ctx), []);
+  assert.equal(called, 0, '缺字段 = 没有置顶信息，绝不「对齐成空集」去反置顶');
 });
 

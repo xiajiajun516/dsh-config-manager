@@ -94,17 +94,19 @@ export class WorkspacesAdapter implements ConfigAdapter<WorkspacesSection> {
     // Phase 1 条目级选择：单元 = 一条工作区记录（id 与导入侧 `workspace:<id>` 一致）
     const allow = options.includeItems?.['workspaces'];
     const kept = allow === undefined ? records : records.filter((r) => allow.includes('workspace:' + r.id));
-    const archived = await readArchivedSessionIds(ctx, kept);
+    const archived = await readSessionIdSet(ctx, kept, 'archive');
+    const pinned = await readSessionIdSet(ctx, kept, 'pin');
     return {
       sectionId: 'workspaces',
       data: {
         version: 1,
         workspaces: kept,
-        // 宿主没有归档能力 ⇒ 不带字段（「读不到」与「确实为空」必须分开）
+        // 宿主没有归档/置顶能力 ⇒ 不带字段（「读不到」与「确实为空」必须分开）
         ...(archived.ids === undefined ? {} : { archivedSessionIds: archived.ids }),
+        ...(pinned.ids === undefined ? {} : { pinnedSessionIds: pinned.ids }),
       },
       counts: { workspaces: kept.length },
-      warnings: archived.warnings,
+      warnings: [...archived.warnings, ...pinned.warnings],
     };
   }
 
@@ -270,6 +272,8 @@ export class WorkspacesAdapter implements ConfigAdapter<WorkspacesSection> {
     // P2：显示顺序与归档状态都在「工作区与会话都已落地」之后恢复
     const order = await restoreWorkspaceOrder(ctx, data);
     if (order !== undefined) results.push(order);
+    // 置顶必须排在归档之前：宿主「归档即掉置顶」，所以两边都点了同一个会话时以归档为准
+    results.push(...(await restorePinSet(ctx, data)));
     results.push(...(await restoreArchiveSet(ctx, data)));
     return results;
   }
@@ -305,6 +309,24 @@ export class WorkspacesAdapter implements ConfigAdapter<WorkspacesSection> {
             });
           }
         }
+      }
+      // P2 / P2-pin：两个**注册表级**会话集合同样来自不可信 ZIP。导入侧会对元素调
+      // sessionIdKey() 再逐个 archiveSession / pinSession，非字符串元素会在执行期抛内部
+      // TypeError（整包被拦、文案不可行动），所以在这里就按「元素必须是字符串」拦下。
+      for (const [field, value] of [
+        ['archivedSessionIds', (section as WorkspacesSection).archivedSessionIds],
+        ['pinnedSessionIds', (section as WorkspacesSection).pinnedSessionIds],
+      ] as const) {
+        if (value === undefined) continue;
+        if (!Array.isArray(value)) {
+          issues.push({ path: field, message: msg('adapter.validate.array', { subject: field }), severity: 'error' });
+          continue;
+        }
+        value.forEach((id, i) => {
+          if (typeof id !== 'string') {
+            issues.push({ path: `${field}[${i}]`, message: msg('adapter.validate.string', { subject: `${field}[${i}]` }), severity: 'error' });
+          }
+        });
       }
     });
   }
@@ -469,15 +491,26 @@ async function registerImportedSessions(
  * 宿主没有该能力 ⇒ ids 为 undefined（调用方据此**不写**字段），与「确实为空」区分开：
  * 后者要写成 []，让缺字段 = 老包（导入侧不做任何归档动作）这个语义可辨。
  */
-async function readArchivedSessionIds(
+/**
+ * P2：读一个**注册表级**会话集合（归档集 / 置顶集），并收窄到本次真正导出的工作区。
+ *
+ * 为什么要收窄：两个集合都是全局的，若原样写进包，导入侧会去动「本机这条备份根本
+ * 没包含的工作区里的会话」——那是用户没授权的写入。只保留 kept 记录声明过的 sessionIds，
+ * 孤儿会话与未勾选工作区的会话一律不写进包。
+ *
+ * 收窄的另一面：记录的 sessionIds 覆盖率本来就低（真机 570 条会话只有 23 条在记录里），
+ * 所以包内可能比本机少 —— 这是「如实少带」，不是读失败。
+ */
+async function readSessionIdSet(
   ctx: HostContext,
   kept: readonly WorkspaceRecord[],
+  kind: 'archive' | 'pin',
 ): Promise<{ ids: string[] | undefined; warnings: string[] }> {
-  const read = ctx.workspace.listArchivedSessionIds;
+  const read = kind === 'archive' ? ctx.workspace.listArchivedSessionIds : ctx.workspace.listPinnedSessionIds;
   if (read === undefined) return { ids: undefined, warnings: [] };
   try {
     const raw = await read.call(ctx.workspace);
-    // undefined = 宿主有这个端口但读不到归档集（getter 不存在 / 形状不认识）
+    // undefined = 宿主有这个端口但读不到集合（getter 不存在 / 形状不认识）
     if (raw === undefined) return { ids: undefined, warnings: [] };
     const declared = new Map<string, string>();
     for (const rec of kept) {
@@ -497,7 +530,8 @@ async function readArchivedSessionIds(
     }
     return { ids, warnings: [] };
   } catch (error) {
-    return { ids: undefined, warnings: [engineMsg('adapter.workspaceArchiveUnreadable', { msg: reasonOf(error) })] };
+    const key = kind === 'archive' ? 'adapter.workspaceArchiveUnreadable' : 'adapter.workspacePinUnreadable';
+    return { ids: undefined, warnings: [engineMsg(key, { msg: reasonOf(error) })] };
   }
 }
 
@@ -545,6 +579,58 @@ async function restoreWorkspaceOrder(ctx: ImportContext, data: WorkspacesSection
   } catch (error) {
     return { ok: false, warning: true, message: ctx.msg('adapter.workspaceReorderFailed', { msg: reasonOf(error) }) };
   }
+}
+
+/**
+ * P2-pin：把置顶集恢复到目标机。
+ *
+ * 三个硬口径：
+ *  1. **倒序逐条置顶**：DSH 的 `pinSession()` 是前插（最近置顶排最前），包内顺序也是
+ *     「最近置顶在前」，所以必须从末尾往前置顶，落库后顺序才与包内一致。
+ *  2. **归档优先**：同一个会话同时出现在两个集合里（只可能来自手改或旧包），跳过置顶 ——
+ *     宿主「归档会掉置顶」，按归档处理才是宿主认可的终态。
+ *  3. 缺字段（老包）/ 空数组 ⇒ 一条动作都不做；宿主没有置顶能力 ⇒ 一条 warning，绝不静默。
+ */
+async function restorePinSet(ctx: ImportContext, data: WorkspacesSection): Promise<ApplyResult[]> {
+  const ids = data.pinnedSessionIds;
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const pin = ctx.target.workspace.pinSession;
+  if (pin === undefined) {
+    return [{ ok: false, warning: true, message: ctx.msg('host.workspacePinUnavailable') }];
+  }
+  const archived = new Set<string>();
+  for (const id of data.archivedSessionIds ?? []) {
+    if (typeof id === 'string' && id !== '') archived.add(sessionIdKey(id));
+  }
+  const want = ids.filter((id): id is string => typeof id === 'string' && id !== '' && !archived.has(sessionIdKey(id)));
+  let pinned = 0;
+  const failed: string[] = [];
+  let firstReason = '';
+  for (const id of [...want].reverse()) {
+    try {
+      await pin.call(ctx.target.workspace, id);
+      pinned += 1;
+    } catch (error) {
+      failed.push(id);
+      if (firstReason === '') firstReason = reasonOf(error);
+    }
+  }
+  const results: ApplyResult[] = [];
+  if (pinned > 0) {
+    results.push({ ok: true, message: ctx.msg('adapter.workspacePinRestored', { count: String(pinned) }) });
+  }
+  if (failed.length > 0) {
+    results.push({
+      ok: false,
+      warning: true,
+      message: ctx.msg('adapter.workspacePinFailed', {
+        ids: failed.slice(0, 5).join(', '),
+        count: String(failed.length),
+        msg: firstReason,
+      }),
+    });
+  }
+  return results;
 }
 
 /**

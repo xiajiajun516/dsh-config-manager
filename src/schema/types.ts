@@ -308,6 +308,14 @@ export interface WorkspacesSection {
    * 只存 id，不存内容：归档是显示状态，会话数据仍在 sessions 分区里。
    */
   archivedSessionIds?: string[];
+  /**
+   * 置顶集（P2-pin）：与归档集同样是**注册表级**的，值按「最近置顶在前」排列
+   * （DSH 的 `pinnedSessionIds` 就是这个顺序，`pinSession()` 是前插）。
+   *
+   * 缺省 = 备份里没有置顶信息（老包），导入侧一条都不动；置顶与归档在宿主侧互斥
+   * （归档会掉置顶），所以两边同时出现时以 `archivedSessionIds` 为准。
+   */
+  pinnedSessionIds?: string[];
 }
 
 /* —— credentials 状态分区（永不含值） —— */

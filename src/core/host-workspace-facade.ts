@@ -28,6 +28,10 @@ export class DshWorkspaceFacade implements WorkspaceFacade {
     readonly archivedSessionIds?: readonly unknown[]
     /** P2：归档一个会话（老宿主没有这个方法 → undefined） */
     archiveSession?(sessionId: string): Promise<void>
+    /** P2-pin：注册表级置顶集（最近置顶在前；老宿主没有这个属性 → undefined） */
+    readonly pinnedSessionIds?: readonly unknown[]
+    /** P2-pin：置顶一个会话（宿主前插；老宿主没有这个方法 → undefined） */
+    pinSession?(sessionId: string): Promise<void>
     /** P2：DOM insertBefore 语义的显示顺序调整 */
     insertBefore?(id: unknown, beforeId?: unknown): Promise<readonly unknown[]>
   } | undefined {
@@ -104,6 +108,29 @@ export class DshWorkspaceFacade implements WorkspaceFacade {
       throw new Error(this.msg('host.workspaceArchiveUnavailable'))
     }
     await registry.archiveSession(sessionId)
+  }
+
+  /**
+   * P2-pin：读注册表级置顶集（最近置顶在前）。
+   *
+   * 与归档集同款边界：`undefined` = 宿主没暴露（导出侧不带字段），**不是**空数组
+   * —— 返回 [] 会让导出侧写出 `pinnedSessionIds: []`，等于声称「这台机器没有置顶会话」。
+   * 能力在 DSH 0.2.2-rc.5 的 `workspaceRegistry` 上（`pinnedSessionIds` / `pinSession`）。
+   */
+  async listPinnedSessionIds(): Promise<string[] | undefined> {
+    const registry = this.registry()
+    if (registry === undefined || registry.pinnedSessionIds === undefined) return undefined
+    const ids = registry.pinnedSessionIds
+    return Array.isArray(ids) ? ids.map(String) : undefined
+  }
+
+  /** P2-pin：置顶一个会话；宿主未暴露该能力时显式报错（调用方降级为告警，绝不静默当成功）。 */
+  async pinSession(sessionId: string): Promise<void> {
+    const registry = this.registry()
+    if (!registry || typeof registry.pinSession !== 'function') {
+      throw new Error(this.msg('host.workspacePinUnavailable'))
+    }
+    await registry.pinSession(sessionId)
   }
 
   /**

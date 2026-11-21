@@ -189,6 +189,9 @@ export class MemWorkspace implements WorkspaceFacade {
   listArchivedSessionIds?: WorkspaceFacade['listArchivedSessionIds'];
   archiveSession?: WorkspaceFacade['archiveSession'];
   reorderWorkspaces?: WorkspaceFacade['reorderWorkspaces'];
+  /** 可选（P2-pin）：置顶集读取 / 置顶动作；缺省 = 宿主不支持（旧宿主行为）。 */
+  listPinnedSessionIds?: WorkspaceFacade['listPinnedSessionIds'];
+  pinSession?: WorkspaceFacade['pinSession'];
   async listRecords(): Promise<WorkspaceRecord[]> { return [...this.records.values()]; }
   async writeRecord(r: WorkspaceRecord): Promise<void> { this.records.set(r.id, r); }
   async removeRecord(id: string): Promise<void> { this.records.delete(id); }

@@ -122,7 +122,7 @@
 - **附件分区只带被引用过的对象**：判据只有 `"attachmentId":"sha256:<hex>"`（裸 `sha256:` 正则会误命中粘贴的源码）；降级一律「退回整库 + 告警」，绝不把读不出当作零引用；适配器必须排在 `sessions` 之后（判据 → `docs/evidence/sessions-import-export.md`）。
 - **附件在导出树里挂在会话行下**：跨分区子行只做展示，勾选仍只有一份 `excluded`、批量动作不联动；引用面按 `mtime+size` 落盘缓存（判据 → 同一份证据的 G5 节）。
 - **导入前逐条比对六态**：事件行比对前 JSON 键排序 + `cwd` 值归一成 `<cwd>`（否则跨机必误判 diverged）；解不出 → `skipped`/`unreadable`，绝不猜 `new`，覆盖暴露必须报数。
-- **归档集与工作区顺序交给宿主**：归档集按被选工作区的 `sessionIds` 收窄；缺 `archivedSessionIds` 的老包绝不做归档动作（不「对齐成空集」）；宿主无能力只告警。
+- **归档 / 置顶 / 工作区顺序都交给宿主**：两个集合按被选工作区的 `sessionIds` 收窄，缺字段的老包绝不做对应动作（不「对齐成空集」）；置顶必须倒序调用（宿主前插）且归档优先；无能力只告警（判据 → `docs/evidence/sessions-import-export.md` 置顶节）。
 
 ### Profile / 插件数据 / 打包
 - **DSH 没有「默认 / 下次启动 profile」状态**：只由启动参数决定，不写 `<dataDir>/next-profile`。
