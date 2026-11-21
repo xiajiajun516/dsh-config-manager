@@ -874,50 +874,125 @@ export function nestedChildUnitIds(nodes: SelectionSection[]): Set<string> {
   return out
 }
 
-/** 一次勾选动作（单元级）；批量动作（分区/分组/全选）不传。 */
-export interface SessionAttachmentChange {
-  unitId: string
-  checked: boolean
-}
-
 /**
  * 会话 ↔ 附件联动（G5）：勾会话连带它用到的附件，取消会话连带取消，单个附件仍可单独取消。
  *
  * 三条设计要点：
  *  ① **按「实际发生变化的会话」逐条应用**，不只看用户点的那一个：父↔子会话联动会连带翻动别的会话
- *     （勾父自动勾上它的子代理会话），那些会话的附件也必须跟着走，否则界面上「会话勾着、附件没勾」；
+ *     （勾父自动勾上它的子代理会话）、勾子行又会连带勾上父对话（`applyChildUnitParentCoupling`），
+ *     那些会话的附件也必须跟着走，否则界面上「会话勾着、附件没勾」；
  *  ② 附件侧的每次改动都走 `toggleUnit()`：分区成员、稀疏排除、取消后「本分区已无选中」的反向收口
  *     都由那一套语义决定，这里不另写一份（写两份必然分叉）；
- *  ③ **批量动作（`change` 缺省）不做附件联动**：勾「历史会话」整个分区是显式整段动作，此时逐一
- *     补勾每个会话的附件只会做无谓的庞大写入 —— 而附件本来就不需要独立勾选状态（A6：分区行已删除，
- *     导出请求按「哪些对话被勾选」推导附件白名单，见 buildExportRequest）。
+ *  ③ **批量动作也跑**（2026-11-21 起）：组行有了自己的勾选框，勾「附件」组要连带父对话，
+ *     而父对话一被勾上就必须带上它**全部**附件 —— 否则界面（只勾了组里那几条）与包内容
+ *     （导出请求按被勾对话推导全量附件白名单）不一致。代价可控：只对**状态真的翻动**的会话
+ *     逐条 `toggleUnit`，勾整个分区时 before === after ⇒ 循环里全部 `continue`，零额外写入。
  */
 export function applySessionAttachmentCoupling(
   before: Selection,
   after: Selection,
   nodes: SelectionSection[],
-  change?: SessionAttachmentChange,
 ): Selection {
-  if (change === undefined) return after
   const children = childUnitsOf(nodes)
   if (children.size === 0) return after
   const sessionUnits = nodes.filter((n) => n.section === 'sessions').flatMap((n) => n.units)
   if (sessionUnits.length === 0) return after
   const sectionOf = new Map<string, SectionId>()
   for (const node of nodes) for (const unit of node.units) sectionOf.set(unit.id, node.section)
-  // 与其它联动函数同口径：稀疏表示下「未排除」不等于「已选」（整个分区没勾时也是未排除）
-  const picked = (state: Selection, unitId: string): boolean => {
+  /** 稀疏表示下「未排除」不等于「已选」（整个分区没勾时也是未排除），与其它联动函数同口径。
+      用 Set 预建两份快照：万级排除集时逐条 `includes` 会让每次点击都慢几十毫秒。 */
+  const snapshot = (state: Selection): { sections: Set<SectionId>; excluded: Set<string> } => ({
+    sections: new Set(state.sections),
+    excluded: new Set(state.excluded),
+  })
+  const wasOn = snapshot(before)
+  const nowOn = snapshot(after)
+  const isOn = (set: { sections: Set<SectionId>; excluded: Set<string> }, unitId: string): boolean => {
     const section = sectionOf.get(unitId)
-    return section !== undefined && state.sections.includes(section) && !state.excluded.includes(unitId)
+    return section !== undefined && set.sections.has(section) && !set.excluded.has(unitId)
   }
   let out = after
   for (const unit of sessionUnits) {
-    const was = picked(before, unit.id)
-    const now = picked(after, unit.id)
+    const was = isOn(wasOn, unit.id)
+    const now = isOn(nowOn, unit.id)
     if (was === now) continue
     for (const child of children.get(unit.id) ?? []) out = toggleUnit(out, nodes, child.id, now)
   }
   return out
+}
+
+/**
+ * 子行 → 父行联动（A3，2026-11-21 用户要求）：勾子代理会话或附件时，把它所属的父对话一起勾上。
+ *
+ * 为什么必须有这条：附件子行挂在会话行下面（`parentUnitIds`），而导出请求按「哪些对话被勾选」
+ * 推导附件白名单（`buildExportRequest`）—— 只勾附件、不勾父对话，等于点了没反应（包里不会带它）。
+ *
+ * 方向口径与 `applySessionParentCoupling` 一致，**只做正向**：
+ *  - 勾选子行 → 沿 `parentUnitIds` 向上勾齐父链，并把父链上每一条的**全部子单元**一起勾上
+ *    （父对话被勾上就等于带它的全部附件，与「勾会话带附件」同一口径，界面与包内容因此一致）；
+ *  - 取消子行 → 不动父（用户明确要求「取消子行不反向取消父对话」）；取消父的整棵子树由
+ *    `applySessionParentCoupling` 负责。
+ *
+ * `change` 缺省（分区/分组/全选等批量动作）只做正向闭包，绝不取消任何东西。
+ */
+export function applyChildUnitParentCoupling(
+  sel: Selection,
+  nodes: SelectionSection[],
+  change?: SessionParentChange,
+): Selection {
+  const children = childUnitsOf(nodes)
+  if (children.size === 0) return sel
+  const byId = new Map<string, SelectionUnit>()
+  const sectionOf = new Map<string, SectionId>()
+  for (const node of nodes) {
+    for (const unit of node.units) {
+      byId.set(unit.id, unit)
+      sectionOf.set(unit.id, node.section)
+    }
+  }
+  /** 子单元 id → 父单元 id。父不在清单里（跨分区清单没读全）就整条忽略 —— 不猜归属。 */
+  const parentsOf = new Map<string, string[]>()
+  for (const unit of byId.values()) {
+    const parents = (unit.parentUnitIds ?? []).filter((id) => byId.has(id))
+    if (parents.length > 0) parentsOf.set(unit.id, parents)
+  }
+  if (parentsOf.size === 0) return sel
+  const picked = (state: Selection, unitId: string): boolean => {
+    const section = sectionOf.get(unitId)
+    return section !== undefined && state.sections.includes(section) && !state.excluded.includes(unitId)
+  }
+  /**
+   * 从 startId 向上补父链，父被勾上时连带它的全部子单元。
+   * `seen` 由调用方跨多次 lift 共享：批量模式下同一棵子树只走一遍
+   * （本机 1411 个附件 × 84 个兄弟，不共享会退化成 O(n²)）。
+   */
+  const lift = (state: Selection, startId: string, seen: Set<string>): Selection => {
+    let out = state
+    const queue: string[] = [startId]
+    while (queue.length > 0) {
+      const id = queue.shift()
+      if (id === undefined || seen.has(id)) continue
+      seen.add(id)
+      for (const parentId of parentsOf.get(id) ?? []) {
+        if (!picked(out, parentId)) out = toggleUnit(out, nodes, parentId, true)
+        for (const sibling of children.get(parentId) ?? []) {
+          if (!picked(out, sibling.id)) out = toggleUnit(out, nodes, sibling.id, true)
+        }
+        queue.push(parentId)
+      }
+    }
+    return out
+  }
+  if (change === undefined) {
+    let out = sel
+    const seen = new Set<string>()
+    for (const id of parentsOf.keys()) {
+      if (!picked(out, id)) continue
+      out = lift(out, id, seen)
+    }
+    return out
+  }
+  return change.checked ? lift(sel, change.unitId, new Set<string>()) : sel
 }
 
 export function filterSections(nodes: SelectionSection[], query: string): SelectionSection[] {

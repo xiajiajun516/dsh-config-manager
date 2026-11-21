@@ -736,7 +736,7 @@ test('链式选择：旧宿主不回传 projectKey 时用 detail（工作区绝�
 
 /* ---------------- 父对话 ↔ 子代理会话联动（用户需求：勾父自动勾上它的 subagent 会话） ---------------- */
 
-import { applySessionParentCoupling, type SelectionUnit, type SessionParentChange } from './selection-model.ts';
+import { applyChildUnitParentCoupling, applySessionParentCoupling, type SelectionUnit, type SessionParentChange } from './selection-model.ts';
 
 /**
  * 会话族夹具（全部在同一个工作区目录下）：
@@ -1115,7 +1115,8 @@ test('选择模型：sectionsFromPreview 透传 group 与 relatedAreas（按插�
  * 断言的三条用户可见语义：
  *  1. 索引只由 parentUnitIds 决定，渲染与联动共用同一份；
  *  2. 勾/取消会话连带它的附件，**共用附件任一处取消即不带**；
- *  3. 批量动作（分区/分组/全选）不联动 —— 一次点击不得静默多带上百 MB。
+ *  3. 批量动作**也**联动（2026-11-21 起）：组行有了自己的勾选框，勾「附件」组会连带父对话，
+ *     而父对话一旦勾上就必须带它全部附件 —— 否则界面勾选与包内容各说各话。零翻动时零额外写入。
  * ================================================================================================ */
 
 const ATT_A = 'attachments:sha256:' + 'a'.repeat(64)
@@ -1156,7 +1157,7 @@ test('G5-UI-1 childUnitsOf / nestedChildUnitIds：只按 parentUnitIds 建索引
 test('G5-UI-2 勾会话 ⇒ 连带勾上它的附件（分区成员 + 未被排除）', () => {
   const nodes = attachmentTree()
   const after = toggleUnit(EMPTY, nodes, SESS_1, true)
-  const out = applySessionAttachmentCoupling(EMPTY, after, nodes, { unitId: SESS_1, checked: true })
+  const out = applySessionAttachmentCoupling(EMPTY, after, nodes)
   assert.ok(out.sections.includes('attachments'))
   assert.ok(!out.excluded.includes(ATT_A))
   assert.ok(!out.excluded.includes(ATT_B))
@@ -1165,28 +1166,78 @@ test('G5-UI-2 勾会话 ⇒ 连带勾上它的附件（分区成员 + 未被排�
 test('G5-UI-3 共用附件：任一处取消会话即不带（shared=each）', () => {
   const nodes = attachmentTree()
   const both = toggleUnit(toggleUnit(EMPTY, nodes, SESS_1, true), nodes, SESS_2, true)
-  const withAtt = applySessionAttachmentCoupling(EMPTY, both, nodes, { unitId: SESS_2, checked: true })
+  const withAtt = applySessionAttachmentCoupling(EMPTY, both, nodes)
   assert.ok(!withAtt.excluded.includes(ATT_A))
 
   const unchecked = toggleUnit(withAtt, nodes, SESS_1, false)
-  const out = applySessionAttachmentCoupling(withAtt, unchecked, nodes, { unitId: SESS_1, checked: false })
+  const out = applySessionAttachmentCoupling(withAtt, unchecked, nodes)
   assert.ok(out.excluded.includes(ATT_A), 'sess-1 取消 ⇒ 共用附件不再带走（第二条会话仍勾着也不救回）')
   assert.ok(out.excluded.includes(ATT_B))
 });
 
-test('G5-UI-4 批量动作（change 缺省）不联动附件：整段勾选不得静默多带附件', () => {
+test('G5-UI-4 批量动作也联动附件：勾整个会话区 ⇒ 被引用附件一并带上', () => {
   const nodes = attachmentTree()
   const sessionsNode = nodes[0]
   assert.ok(sessionsNode !== undefined)
   const after = toggleSection(EMPTY, sessionsNode, true)
-  assert.equal(applySessionAttachmentCoupling(EMPTY, after, nodes), after, '同一份对象原样返回')
-  assert.ok(!after.sections.includes('attachments'))
+  assert.ok(!after.sections.includes('attachments'), '前置：勾会话区本身不带附件分区')
+  const out = applySessionAttachmentCoupling(EMPTY, after, nodes)
+  assert.ok(out.sections.includes('attachments'), '附件分区随之勾上，界面与包内容一致')
+  assert.ok(!out.excluded.includes(ATT_A))
+  assert.ok(!out.excluded.includes(ATT_B))
+  assert.equal(applySessionAttachmentCoupling(out, out, nodes), out, '零翻动时原样返回，不做无谓拷贝')
 });
 
 test('G5-UI-5 couplingInventorySections：有会话就必须同时拉附件清单', () => {
   assert.deepEqual(couplingInventorySections(['sessions']), ['sessions', 'workspaces', 'attachments'])
   assert.deepEqual(couplingInventorySections(['skills']), ['skills'], '没有会话时不多拉任何清单')
 });
+
+/* ---------------- A3：勾子行连带父对话（组行可勾选后必须成立） ---------------- */
+
+test('A3-1 勾附件子行 ⇒ 连带勾上父对话，并带上父对话的全部附件', () => {
+  const nodes = attachmentTree()
+  const after = applyChildUnitParentCoupling(toggleUnit(EMPTY, nodes, ATT_B, true), nodes, {
+    unitId: ATT_B,
+    checked: true,
+  })
+  assert.ok(after.sections.includes('sessions'), '父对话所在的会话分区被勾上')
+  assert.ok(!after.excluded.includes(SESS_1), '父对话本身勾上 —— 否则导出请求推导不出这条附件的白名单')
+  assert.ok(after.excluded.includes(SESS_2), '兄弟会话不被牵连：分区已选但逐条排除')
+  assert.ok(!after.excluded.includes(ATT_A), '父对话被勾上就等于带它的全部附件，与「勾会话带附件」同口径')
+})
+
+test('A3-2 取消子行不反向取消父对话', () => {
+  const nodes = attachmentTree()
+  const both = applyChildUnitParentCoupling(toggleUnit(toggleUnit(EMPTY, nodes, ATT_A, true), nodes, ATT_B, true), nodes)
+  assert.ok(!both.excluded.includes(SESS_1) && !both.excluded.includes(SESS_2), '前置：共用附件把两条父会话都带上')
+
+  const unchecked = toggleUnit(both, nodes, ATT_B, false)
+  const out = applyChildUnitParentCoupling(unchecked, nodes, { unitId: ATT_B, checked: false })
+  assert.equal(out, unchecked, '取消方向零写入')
+  assert.ok(!out.excluded.includes(SESS_1), '父对话仍勾着（用户明确要求取消子行不反向取消父）')
+  assert.ok(out.excluded.includes(ATT_B), '被取消的子行确实不带')
+})
+
+test('A3-3 组行勾选（逐条 toggle + 逐条 change）等价于把整组连父对话一起带上', () => {
+  const nodes = attachmentTree()
+  const groupIds = [ATT_A, ATT_B]
+  const press = (state: Selection, checked: boolean): Selection => {
+    let next = state
+    for (const id of groupIds) {
+      next = toggleUnit(next, nodes, id, checked)
+      next = applyChildUnitParentCoupling(next, nodes, { unitId: id, checked })
+    }
+    return next
+  }
+  const picked = press(EMPTY, true)
+  assert.ok(!picked.excluded.includes(ATT_A) && !picked.excluded.includes(ATT_B), '整组勾上')
+  assert.ok(!picked.excluded.includes(SESS_1) && !picked.excluded.includes(SESS_2), '两条父会话都被带上')
+
+  const cleared = press(picked, false)
+  assert.ok(cleared.excluded.includes(ATT_A) && cleared.excluded.includes(ATT_B), '整组取消 ⇒ 两条附件都不带')
+  assert.ok(!cleared.excluded.includes(SESS_1), '取消整组不反向取消父对话')
+})
 
 /* ---------------- A5：会话区里子代理缩进在父对话下面 ---------------- */
 

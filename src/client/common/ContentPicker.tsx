@@ -30,7 +30,7 @@ import {
   selectAll, selectedUnitCount, tailWeightedEllipsis, togglePluginEntry, togglePluginTree, toggleSection,
   toggleUnit, toggleUnitGroup,
   unitChecked, visibleUnits,
-  applySessionAttachmentCoupling, childUnitsOf, nestedChildUnitIds, sessionChildUnits,
+  applyChildUnitParentCoupling, applySessionAttachmentCoupling, childUnitsOf, nestedChildUnitIds, sessionChildUnits,
   type PluginLeafKind, type Selection, type SelectionSection, type SelectionUnit, type SessionParentChange,
   type SessionWorkspaceCouplingFocus,
 } from '../../ui/selection-model.ts'
@@ -240,15 +240,37 @@ export function ContentPicker({
   const commit = (
     next: Selection,
     focus: SessionWorkspaceCouplingFocus = 'both',
-    parentChange?: SessionParentChange,
+    parentChange?: SessionParentChange | readonly SessionParentChange[],
   ): void => {
-    const coupled = applySessionParentCoupling(next, nodes, parentChange)
-    const settled = applySessionWorkspaceCoupling(coupled, nodes, focus)
     /**
-     * 第三条联动：会话 ↔ 附件（G5）。必须放在最后、并以**点击前**的 value 作基线做差 ——
-     * 父↔子会话联动会连带翻动别的会话，只看 `next` 会漏掉「被连带勾上的子代理会话」的附件。
+     * 联动顺序固定，**先集合闭合、后按差异同步附件**：
+     *  ① 会话父↔子（勾父带子代理、勾子代理带父）；
+     *  ② 子行 → 父行（A3：勾附件/子代理把所属父对话勾上，父对话再带上它全部附件）；
+     *  ③ 会话 ↔ 工作区；
+     *  ④ 会话 ↔ 附件 —— 必须最后、并以**点击前**的 `value` 作基线做差：前面三条会连带翻动
+     *     别的会话，只看 `next` 会漏掉「被连带勾上的会话」的附件。
+     *
+     * `parentChange` 收单条或一组：组行勾选一次动多个子行，每个子行都要走一遍 ② 才能把
+     * 各自的父对话带上（只传第一条会漏父）。
      */
-    onChange(applySessionAttachmentCoupling(value, settled, nodes, parentChange))
+    const changes: readonly SessionParentChange[] = parentChange === undefined
+      ? []
+      : Array.isArray(parentChange)
+        ? (parentChange as readonly SessionParentChange[])
+        : [parentChange as SessionParentChange]
+    let coupled = next
+    if (changes.length === 0) {
+      // 批量动作（分区/分组/全选/清单到货补跑）没有单一方向：只做正向闭包，绝不取消任何东西
+      coupled = applySessionParentCoupling(coupled, nodes)
+      coupled = applyChildUnitParentCoupling(coupled, nodes)
+    } else {
+      for (const change of changes) {
+        coupled = applySessionParentCoupling(coupled, nodes, change)
+        coupled = applyChildUnitParentCoupling(coupled, nodes, change)
+      }
+    }
+    const settled = applySessionWorkspaceCoupling(coupled, nodes, focus)
+    onChange(applySessionAttachmentCoupling(value, settled, nodes))
   }
   /** 该分区属于哪一侧（决定联动方向）：会话侧 / 工作区侧 / 其它（两条都跑）。 */
   const focusOf = (section: SectionId): SessionWorkspaceCouplingFocus => (
@@ -298,8 +320,9 @@ export function ContentPicker({
   /**
    * 单元行下面的一条**子树**（「子代理会话」/「附件」）。
    *
-   * 组行不是可勾选单元：它只折叠。勾选仍逐条走子行的 toggleUnit —— 选择语义（分区成员、
-   * 稀疏排除、会话↔附件联动、导出请求的附件白名单）完全不需要知道这里多了一层视觉分组。
+   * 组行**自己能勾选**（A3，2026-11-21 用户要求）：勾它 = 组内逐条 `toggleUnit`（分区成员、
+   * 稀疏排除、会话↔附件联动、导出请求的附件白名单都还走原来那一套，这里不多一份语义），
+   * 部分勾选时显示 indeterminate；勾上的子行会连带勾上它所属的父对话。
    *
    * @param depth 子行自己的缩进层级（组本身再占一层，见 renderUnitRow 的说明）。
    */
@@ -317,6 +340,8 @@ export function ContentPicker({
       const owner = unitSection.get(child.id)
       return owner !== undefined && unitChecked(value, owner.section, child.id)
     }).length
+    /** 全选态与部分选中态（A3）：勾选框自己表达「全勾」，横线表达「勾了一部分」。 */
+    const allPicked = children.length > 0 && picked === children.length
     return (
       <div key={groupKey} className={css.pickerGroup}>
         {/* 组行与单元行同构：chevron + 勾选框等宽占位 + 标题。占位不能省 —— 没有它，
@@ -334,13 +359,28 @@ export function ContentPicker({
           >
             <ExpandChevron open={open} />
           </button>
-          <span className={css.pickerCheckboxSpacer} aria-hidden="true" />
-          <span className={css.categoryItem}>
-            <span className={css.pickerUnitName}>{title}</span>
-            <span className={css.pickerCount}>
-              {t('picker.selectedOf', { selected: String(picked), total: String(children.length) })}
-            </span>
-          </span>
+          <Checkbox
+            checked={allPicked}
+            indeterminate={picked > 0 && !allPicked}
+            onChange={(checked) => {
+              /**
+               * 组行勾选 = 组内逐条 `toggleUnit`（分区成员/稀疏排除/反向收口一字不改），
+               * 再把「子行 → 父行」交给 commit：勾上附件组时父对话随之勾上，于是它的**全部**
+               * 附件一起进包 —— 与「勾会话带附件」同一口径，界面与包内容不会各说各话。
+               */
+              let next = value
+              for (const child of children) next = toggleUnit(next, nodes, child.id, checked)
+              commit(next, 'both', children.map((child) => ({ unitId: child.id, checked })))
+            }}
+            label={
+              <span className={css.categoryItem}>
+                <span className={css.pickerUnitName}>{title}</span>
+                <span className={css.pickerCount}>
+                  {t('picker.selectedOf', { selected: String(picked), total: String(children.length) })}
+                </span>
+              </span>
+            }
+          />
         </div>
         <Collapse open={open} id={bodyId}>
           <div className={css.pickerChildren}>

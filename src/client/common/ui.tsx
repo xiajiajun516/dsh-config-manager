@@ -10,6 +10,7 @@
  *   - StatusDot（状态栏/行内状态点）
  *   - Segmented（页内子视图分段切换）
  */
+import { useEffect, useRef } from 'react'
 import type { ChangeEvent, CSSProperties, ReactNode } from 'react'
 import { ExpandChevron } from './Icon.tsx'
 import { badgeTone, type BadgeKind } from '../../ui/badge-tone.ts'
@@ -415,13 +416,28 @@ export interface CheckboxProps {
   onChange: (checked: boolean) => void
   label: ReactNode
   disabled?: boolean
+  /**
+   * 部分选中（子树只勾了一部分）。只驱动原生的 indeterminate 视觉，**不改 checked 语义**：
+   * 勾选框仍是「未全选」，点它按 checked=false → 用户的动作是「再点一次 = 全选」。
+   */
+  indeterminate?: boolean
 }
 
 /** 复选框行（勾选 + 标签） */
-export function Checkbox({ checked, onChange, label, disabled }: CheckboxProps) {
+export function Checkbox({ checked, onChange, label, disabled, indeterminate }: CheckboxProps) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  /**
+   * indeterminate 不是 HTML 属性，只能在 DOM 节点上赋值；而且**点一下就没了**（浏览器在
+   * 用户交互后清空它，React 再提交 checked 也不会写回）—— 所以每次 checked 变化都要重设，
+   * 否则「勾一个子行 → 组行变部分选中」只在首帧显示，之后又变回空框。
+   */
+  useEffect(() => {
+    if (inputRef.current !== null) inputRef.current.indeterminate = indeterminate === true
+  }, [indeterminate, checked])
   return (
     <label className={css.checkboxRow}>
       <input
+        ref={inputRef}
         type="checkbox"
         checked={checked}
         disabled={disabled}
