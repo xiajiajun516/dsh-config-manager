@@ -111,12 +111,12 @@ test('backupRunSummary：跳过/失败摘要（reason/error 透传）', () => {
 test('m-retention：草稿带合法 retention 时透传（host 侧落盘依据）', () => {
   const r = validateBackupScheduleDraft({
     enabled: true, interval: '24h',
-    retention: { keepLast: 5, keepMonthly: 12, keepYearly: 2 },
+    retention: { keepLast: 5, keepMonthly: 12, keepYearly: 2, keepDays: 7 },
   })
   assert.deepEqual(r, {
     ok: true,
-    value: { enabled: true, interval: '24h', retention: { keepLast: 5, keepMonthly: 12, keepYearly: 2 } },
-  })
+    value: { enabled: true, interval: '24h', retention: { keepLast: 5, keepMonthly: 12, keepYearly: 2, keepDays: 7 } },
+  }, '年龄档随草稿透传（host 落盘依据）')
 })
 
 test('m-retention：草稿不带 retention 时字段缺席（向后兼容旧前端/旧 body）', () => {
@@ -134,6 +134,8 @@ test('m-retention：非法 retention 一律拒绝并注明字段（不静默回�
     { keepLast: 1, keepMonthly: 0 },
     { keepLast: '3', keepMonthly: 0, keepYearly: 0 },
     { keepLast: 99999, keepMonthly: 0, keepYearly: 0 },
+    { keepLast: 1, keepMonthly: 0, keepYearly: 0, keepDays: -1 },
+    { keepLast: 1, keepMonthly: 0, keepYearly: 0, keepDays: 99999 },
   ]
   for (const retention of bads) {
     const r = validateBackupScheduleDraft({ enabled: true, interval: '24h', retention })
@@ -143,11 +145,16 @@ test('m-retention：非法 retention 一律拒绝并注明字段（不静默回�
 })
 
 test('m-retention：normalizeRetentionPolicy 补齐缺省（宿主未返回/字段缺失）', () => {
-  assert.deepEqual(normalizeRetentionPolicy(undefined), { keepLast: 10, keepMonthly: 0, keepYearly: 0 })
-  assert.deepEqual(normalizeRetentionPolicy({ keepLast: 3 }), { keepLast: 3, keepMonthly: 0, keepYearly: 0 })
+  assert.deepEqual(normalizeRetentionPolicy(undefined), { keepLast: 10, keepMonthly: 0, keepYearly: 0, keepDays: 0 })
+  assert.deepEqual(normalizeRetentionPolicy({ keepLast: 3 }), { keepLast: 3, keepMonthly: 0, keepYearly: 0, keepDays: 0 })
+  // 旧持久化配置没有 keepDays：补齐 0（关闭），不得变成 undefined 漂进请求体
+  assert.deepEqual(
+    normalizeRetentionPolicy({ keepLast: 3, keepMonthly: 0, keepYearly: 0, keepDays: 14 }).keepDays,
+    14,
+  )
   assert.deepEqual(
     normalizeRetentionPolicy({ keepMonthly: 6 }),
-    { keepLast: 10, keepMonthly: 6, keepYearly: 0 },
+    { keepLast: 10, keepMonthly: 6, keepYearly: 0, keepDays: 0 },
     '缺字段用缺省值补齐，绝不产出 undefined',
   )
 })

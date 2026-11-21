@@ -398,9 +398,10 @@ test('m-retention 持久化: 缺省策略不写入文件（避免无意义字段
       retention: { keepLast: 5, keepMonthly: 6, keepYearly: 0 },
     });
     const rawTiered = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
+    // 写盘是**原样**写调用方给的策略（不加字段）；读取层才补 keepDays 缺省 → 见下一行
     assert.deepEqual(rawTiered['retention'], { keepLast: 5, keepMonthly: 6, keepYearly: 0 }, '非缺省策略写入');
     const loadedTiered = await readBackupSchedule(syncDir);
-    assert.deepEqual(loadedTiered.retention, { keepLast: 5, keepMonthly: 6, keepYearly: 0 }, '写入后读回一致');
+    assert.deepEqual(loadedTiered.retention, { keepLast: 5, keepMonthly: 6, keepYearly: 0, keepDays: 0 }, '写入后读回一致');
 
     // 3) 回退到缺省 → 键消失，读回缺省（= 用户可真正「重置」策略）
     await writeBackupSchedule(syncDir, {
@@ -410,7 +411,7 @@ test('m-retention 持久化: 缺省策略不写入文件（避免无意义字段
     const rawReset = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
     assert.equal('retention' in rawReset, false, '回退缺省后键消失（writeBackupSchedule 是全量覆盖写）');
     const loadedReset = await readBackupSchedule(syncDir);
-    assert.deepEqual(loadedReset.retention, { keepLast: 10, keepMonthly: 0, keepYearly: 0 }, '读回缺省策略');
+    assert.deepEqual(loadedReset.retention, { keepLast: 10, keepMonthly: 0, keepYearly: 0, keepDays: 0 }, '读回缺省策略（读取层补 keepDays 缺省）');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
@@ -436,7 +437,7 @@ test('m-retention 持久化: schemaVersion 保持 1（不升版本，避免已�
     const legacy = await readBackupSchedule(syncDir);
     assert.equal(legacy.enabled, true, '老文件 enabled 保留（不因新字段缺失而回退）');
     assert.equal(legacy.interval, '7d', '老文件 interval 保留');
-    assert.deepEqual(legacy.retention, { keepLast: 10, keepMonthly: 0, keepYearly: 0 }, '老文件 retention 取缺省');
+    assert.deepEqual(legacy.retention, { keepLast: 10, keepMonthly: 0, keepYearly: 0, keepDays: 0 }, '老文件 retention 取缺省');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
@@ -468,7 +469,7 @@ test('m-retention 持久化: 非法 retention 静默回退缺省，其它字段�
       const cfg = await readBackupSchedule(syncDir);
       const label = JSON.stringify(retention);
       // 1) 策略回退缺省（静默，不抛错）
-      assert.deepEqual(cfg.retention, { keepLast: 10, keepMonthly: 0, keepYearly: 0 }, `非法 ${label} → 缺省策略`);
+      assert.deepEqual(cfg.retention, { keepLast: 10, keepMonthly: 0, keepYearly: 0, keepDays: 0 }, `非法 ${label} → 缺省策略`);
       // 2) 同级字段必须全部保留（否则改坏一个字段会停掉定时备份）
       assert.equal(cfg.enabled, true, `非法 ${label} 不得影响 enabled`);
       assert.equal(cfg.interval, '6h', `非法 ${label} 不得影响 interval`);

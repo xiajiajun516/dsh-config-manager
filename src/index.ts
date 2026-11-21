@@ -191,7 +191,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-export const PLUGIN_VERSION = '0.10.0'
+export const PLUGIN_VERSION = '0.11.0'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -2532,6 +2532,8 @@ function makeRoutes(deps: RoutesDeps): {
     dataDir,
     name: host.profile ?? 'web',
     port: deps.runtimePort ?? (() => null),
+    // 心跳写失败只记日志（issue #149）：running/*.json 是运行态，写不进去不该让整个 DSH 退出。
+    onWriteFailure: (error) => { host.log.warn(`profile 心跳写入失败（下次心跳重试）：${error instanceof Error ? error.message : String(error)}`) },
   })
   /**
    * m-profiles：档案启动器（DSH 无「默认 profile」，切换只能靠另起实例）。

@@ -36,8 +36,15 @@ function snap(id: string, createdAt: string): RetentionCandidate {
 }
 
 /** 保留策略快捷构造 */
-function policy(keepLast: number, keepMonthly = 0, keepYearly = 0): RetentionPolicy {
-  return { keepLast, keepMonthly, keepYearly };
+function policy(keepLast: number, keepMonthly = 0, keepYearly = 0, keepDays = 0): RetentionPolicy {
+  return { keepLast, keepMonthly, keepYearly, keepDays };
+}
+
+/** 固定「现在」（年龄档断言不依赖真实时钟） */
+const NOW = new Date('2026-06-01T00:00:00.000Z');
+/** now 往前 n 天的 ISO 串（T00:00:00.000Z 形态，规避本地时区） */
+function daysAgo(n: number): string {
+  return new Date(NOW.getTime() - n * 86_400_000).toISOString();
 }
 
 /** Set → 排序数组（断言可读/可比） */
@@ -48,7 +55,7 @@ function sorted(keep: Set<string>): string[] {
 /* ---------------- 缺省策略与既有行为一致性 ---------------- */
 
 test('RP-01 缺省策略常量：keepLast=10，分层关闭（= 等价既有 FIFO）', () => {
-  assert.deepEqual(DEFAULT_RETENTION_POLICY, { keepLast: 10, keepMonthly: 0, keepYearly: 0 });
+  assert.deepEqual(DEFAULT_RETENTION_POLICY, { keepLast: 10, keepMonthly: 0, keepYearly: 0, keepDays: 0 });
   assert.equal(DEFAULT_RETENTION_POLICY.keepLast, SNAPSHOT_RETENTION_LIMIT, '缺省 keepLast 必须等于既有快照保留上限');
   assert.equal(hasRetentionTiers(DEFAULT_RETENTION_POLICY), false, '缺省无分层');
   assert.equal(isDefaultRetentionPolicy(DEFAULT_RETENTION_POLICY), true);
@@ -352,12 +359,22 @@ test('RP-18 同刻确定性：同一时间戳多项时，淘汰谁由输入序�
 test('RP-14 validateRetentionPolicy：合法输入通过（含边界值 0 与上限）', () => {
   assert.deepEqual(validateRetentionPolicy({ keepLast: 5, keepMonthly: 12, keepYearly: 3 }), {
     ok: true,
-    value: { keepLast: 5, keepMonthly: 12, keepYearly: 3 },
-  });
+    value: { keepLast: 5, keepMonthly: 12, keepYearly: 3, keepDays: 0 },
+  }, 'keepDays 缺失 → 补齐 0（旧持久化配置必须仍合法）');
   assert.deepEqual(
     validateRetentionPolicy({ keepLast: 0, keepMonthly: 0, keepYearly: 0 }),
-    { ok: true, value: { keepLast: 0, keepMonthly: 0, keepYearly: 0 } },
+    { ok: true, value: { keepLast: 0, keepMonthly: 0, keepYearly: 0, keepDays: 0 } },
     '全 0（关闭自动清理）合法',
+  );
+  assert.deepEqual(
+    validateRetentionPolicy({ keepLast: 3, keepMonthly: 1, keepYearly: 1, keepDays: 7 }),
+    { ok: true, value: { keepLast: 3, keepMonthly: 1, keepYearly: 1, keepDays: 7 } },
+    '带年龄档合法',
+  );
+  assert.deepEqual(
+    validateRetentionPolicy({ keepLast: 3, keepMonthly: 0, keepYearly: 0, keepDays: RETENTION_LIMITS.keepDays.max }),
+    { ok: true, value: { keepLast: 3, keepMonthly: 0, keepYearly: 0, keepDays: RETENTION_LIMITS.keepDays.max } },
+    'keepDays 上限合法',
   );
   assert.deepEqual(
     validateRetentionPolicy({
@@ -371,6 +388,7 @@ test('RP-14 validateRetentionPolicy：合法输入通过（含边界值 0 与上
         keepLast: RETENTION_LIMITS.keepLast.max,
         keepMonthly: RETENTION_LIMITS.keepMonthly.max,
         keepYearly: RETENTION_LIMITS.keepYearly.max,
+        keepDays: 0,
       },
     },
     '上限值合法',
@@ -397,6 +415,10 @@ test('RP-15 validateRetentionPolicy：非法输入一律拒绝并给可读原因
     { input: { keepLast: Number.POSITIVE_INFINITY, keepMonthly: 0, keepYearly: 0 }, pattern: /integer/, why: 'Infinity' },
     { input: { keepLast: true, keepMonthly: 0, keepYearly: 0 }, pattern: /integer/, why: '布尔' },
     { input: { keepLast: null, keepMonthly: 0, keepYearly: 0 }, pattern: /integer/, why: 'null 字段' },
+    { input: { keepLast: 1, keepMonthly: 0, keepYearly: 0, keepDays: 1.5 }, pattern: /integer/, why: 'keepDays 小数' },
+    { input: { keepLast: 1, keepMonthly: 0, keepYearly: 0, keepDays: -1 }, pattern: /between/, why: 'keepDays 负数' },
+    { input: { keepLast: 1, keepMonthly: 0, keepYearly: 0, keepDays: 99999 }, pattern: /between/, why: 'keepDays 超上限' },
+    { input: { keepLast: 1, keepMonthly: 0, keepYearly: 0, keepDays: null }, pattern: /integer/, why: 'keepDays 显式 null（与字段缺失不同，必须拒）' },
   ];
   for (const c of cases) {
     const r = validateRetentionPolicy(c.input);
@@ -411,8 +433,77 @@ test('RP-15 validateRetentionPolicy：非法输入一律拒绝并给可读原因
 /* ---------------- 摘要工具 ---------------- */
 
 test('RP-16 retentionPolicySummary：tiered 判定（全关 = 不自动清理）', () => {
-  assert.deepEqual(retentionPolicySummary(policy(10, 0, 0)), { keepLast: 10, keepMonthly: 0, keepYearly: 0, tiered: true });
-  assert.deepEqual(retentionPolicySummary(policy(0, 0, 0)), { keepLast: 0, keepMonthly: 0, keepYearly: 0, tiered: false });
-  assert.deepEqual(retentionPolicySummary(policy(0, 12, 0)), { keepLast: 0, keepMonthly: 12, keepYearly: 0, tiered: true }, '仅月度分层也算启用');
-  assert.deepEqual(retentionPolicySummary(policy(0, 0, 5)), { keepLast: 0, keepMonthly: 0, keepYearly: 5, tiered: true }, '仅年度分层也算启用');
+  assert.deepEqual(retentionPolicySummary(policy(10, 0, 0)), { keepLast: 10, keepMonthly: 0, keepYearly: 0, keepDays: 0, tiered: true });
+  assert.deepEqual(retentionPolicySummary(policy(0, 0, 0)), { keepLast: 0, keepMonthly: 0, keepYearly: 0, keepDays: 0, tiered: false });
+  assert.deepEqual(retentionPolicySummary(policy(0, 12, 0)), { keepLast: 0, keepMonthly: 12, keepYearly: 0, keepDays: 0, tiered: true }, '仅月度分层也算启用');
+  assert.deepEqual(retentionPolicySummary(policy(0, 0, 5)), { keepLast: 0, keepMonthly: 0, keepYearly: 5, keepDays: 0, tiered: true }, '仅年度分层也算启用');
+  assert.deepEqual(retentionPolicySummary(policy(0, 0, 0, 7)), { keepLast: 0, keepMonthly: 0, keepYearly: 0, keepDays: 7, tiered: true }, '仅年龄档也算启用');
+});
+
+/* ---------------- issue #142：keepDays 年龄档 ---------------- */
+
+test('RP-19 keepDays：近 N 天内的候选全部保留（即使 keepLast=0）', () => {
+  const items = [snap('d0', daysAgo(0)), snap('d1', daysAgo(1)), snap('d3', daysAgo(3)), snap('d30', daysAgo(30))];
+  assert.deepEqual(
+    sorted(selectRetentionKeepers(items, policy(0, 0, 0, 2), NOW)),
+    ['d0', 'd1'],
+    '窗口 = now-2d 之后（含边界外的 d3 不保）',
+  );
+  // 边界：正好落在 cutoff 上的项算「窗口内」（>=）
+  const edge = [snap('edge', daysAgo(2)), snap('out', daysAgo(2.5))];
+  assert.deepEqual(sorted(selectRetentionKeepers(edge, policy(0, 0, 0, 2), NOW)), ['edge'], 'cutoff 上的项保留（含等号）');
+});
+
+test('RP-20 keepDays 与 keepLast 级联：窗口内一个不删，窗口外由 keepLast 补齐', () => {
+  const items = [0, 1, 2, 3, 4, 5, 6, 20].map((n) => snap('d' + n, daysAgo(n)));
+  // 2 天窗口保住 d0..d2，keepLast=5 再把窗口外的 d3、d4 补进来（窗口是「下限」，不是「上限」）
+  assert.deepEqual(
+    sorted(selectRetentionKeepers(items, policy(5, 0, 0, 2), NOW)),
+    ['d0', 'd1', 'd2', 'd3', 'd4'],
+    '窗口内全保 + keepLast 越过窗口补足',
+  );
+  // 反向：窗口比 keepLast 宽时，窗口说了算（d0..d8 一个不删，d30 才被淘汰）
+  const wide = [0, 1, 2, 3, 4, 5, 6, 7, 8, 30].map((n) => snap('d' + n, daysAgo(n)));
+  assert.deepEqual(
+    sorted(selectRetentionKeepers(wide, policy(1, 0, 0, 10), NOW)),
+    ['d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8'],
+    '窗口比 keepLast 宽：窗口内全保',
+  );
+});
+
+test('RP-21 keepDays=0（缺省）= 关闭该层：结果只由 keepLast 决定（等价改造前）', () => {
+  const items = [0, 1, 2, 3, 4].map((n) => snap('d' + n, daysAgo(n)));
+  assert.deepEqual(sorted(selectRetentionKeepers(items, policy(2, 0, 0, 0), NOW)), ['d0', 'd1']);
+  assert.deepEqual(
+    sorted(selectRetentionKeepers(items, { keepLast: 2, keepMonthly: 0, keepYearly: 0 }, NOW)),
+    ['d0', 'd1'],
+    '连 keepDays 字段都没有（旧配置）也按 0 处理',
+  );
+});
+
+test('RP-22 keepDays：时间未知的候选不落在任何窗口里；非法 now → 整层跳过（宁少留不越界）', () => {
+  const items = [snap('known', daysAgo(1)), { id: 'unknown' } as RetentionCandidate];
+  assert.deepEqual(sorted(selectRetentionKeepers(items, policy(0, 0, 0, 30), NOW)), ['known'], 'NaN 候选不进窗口');
+  assert.deepEqual(
+    sorted(selectRetentionKeepers(items, policy(0, 0, 0, 30), new Date(Number.NaN))),
+    [],
+    '非法 now：年龄层跳过（keepLast=0 → 一个都不保护，而非把全部当近期）',
+  );
+});
+
+test('RP-23 selectPruneCandidatesByPolicy 透传 now：快照 prune 的年龄档同口径', () => {
+  const metas = [0, 1, 10, 40].map((n) => ({ id: 's' + n, createdAt: daysAgo(n) }));
+  assert.deepEqual(
+    selectPruneCandidatesByPolicy(metas, policy(1, 0, 0, 5), undefined, NOW),
+    ['s40', 's10'],
+    '窗口内 s0/s1 恒保留，其余按 createdAt 升序进入待删（先删最旧：s40 在前）',
+  );
+  // 缺省策略仍走旧快速路径（now 不参与，逐字节等价）
+  const legacy = (m: ReadonlyArray<{ id: string; createdAt: string }>, limit: number) =>
+    m.slice(0, Math.max(0, m.length - limit)).map((x) => x.id);
+  assert.deepEqual(
+    selectPruneCandidatesByPolicy(metas, DEFAULT_RETENTION_POLICY, legacy, NOW),
+    legacy(metas, DEFAULT_RETENTION_POLICY.keepLast),
+    '缺省策略：快速路径不受 now 影响',
+  );
 });

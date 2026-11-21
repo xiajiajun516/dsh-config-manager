@@ -164,7 +164,7 @@ git 通道在**同一次提交**里额外维护 `<subdir>/latest/`：当前最�
 | `sessionsLimit` | `sessions` 勾选时只带「最新 N 个」（按会话日志 mtime 倒序；0 = 不带） |
 | `sessionsInclude` | **显式点名的会话单元**；非空时**优先于 `sessionsLimit`**（用户点名的必须赢） |
 | `deletePlugins` | 缺省 `false`。**只决定删不删，不决定合不合**：plugins 分区**恒参与**按键三方合并（`src/sync/plugin-removals.ts` 的 `mergePluginsSection`：插件按 `name`、patch 行按 `file`+`lineId`、tarball 按 `packageName`、`patchFiles` 按 `relativePath`，`pnpmWorkspace` 走 JSON 三方），与开关无关。开启后跟随远端删除插件：只删「共同祖先还有它、远端没有、本机未改过版本」的包，且只在 plugins 分区本轮真正应用那一轮执行（同文件的 `planPluginRemovals`）；关着时跟随删除降级为「保留本机条目并逐项写 switch-off」，合并本身照常进行（issue #132 的原始实现让关着时退回通用数组合并，issue #145 已修正）。宿主自身与 `bundlesOnly` 条目永不删 |
-| `retention`（远端保留） | 来自 `backup-schedule.json`：远端快照裁剪走 GFS（keepLast/keepMonthly/keepYearly），缺省 = 最近 10 个（与旧硬编码 FIFO 逐字等价） |
+| `retention`（远端保留） | 来自 `backup-schedule.json`：远端快照裁剪走 GFS（keepDays/keepLast/keepMonthly/keepYearly）；`keepDays`（近 N 天全留，0 = 关闭）与定时备份清理同口径，缺省 = 最近 10 个（与旧硬编码 FIFO 逐字等价） |
 
 ## 6. 云端点通道（s3 / gist）的配置形状与密钥纪律
 

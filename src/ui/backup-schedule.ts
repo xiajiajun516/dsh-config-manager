@@ -104,8 +104,8 @@ export function validateBackupScheduleDraft(
 /** m-retention：保留策略值域（UI 输入 min/max 直接用；与 validateRetentionPolicy 同源）。 */
 export const RETENTION_FIELD_LIMITS = RETENTION_LIMITS
 
-/** m-retention：策略的三层字段顺序（UI 渲染顺序 = 由近及远）。 */
-export const RETENTION_FIELDS: readonly (keyof RetentionPolicy)[] = ['keepLast', 'keepMonthly', 'keepYearly']
+/** m-retention：策略字段顺序（UI 渲染顺序 = 由近及远：年龄档在最近一份之前）。 */
+export const RETENTION_FIELDS: readonly (keyof RetentionPolicy)[] = ['keepDays', 'keepLast', 'keepMonthly', 'keepYearly']
 
 /** m-retention：确保拿到完整策略（宿主未返回/字段缺失 → 缺省补齐；绝不产出 undefined 字段）。 */
 export function normalizeRetentionPolicy(raw: Partial<RetentionPolicy> | undefined): RetentionPolicy {
@@ -113,6 +113,7 @@ export function normalizeRetentionPolicy(raw: Partial<RetentionPolicy> | undefin
     keepLast: raw?.keepLast ?? DEFAULT_RETENTION_POLICY.keepLast,
     keepMonthly: raw?.keepMonthly ?? DEFAULT_RETENTION_POLICY.keepMonthly,
     keepYearly: raw?.keepYearly ?? DEFAULT_RETENTION_POLICY.keepYearly,
+    keepDays: raw?.keepDays ?? DEFAULT_RETENTION_POLICY.keepDays ?? 0,
   }
 }
 
@@ -121,6 +122,7 @@ export function retentionPolicyEquals(a: RetentionPolicy | undefined, b: Retenti
   const x = normalizeRetentionPolicy(a)
   const y = normalizeRetentionPolicy(b)
   return x.keepLast === y.keepLast && x.keepMonthly === y.keepMonthly && x.keepYearly === y.keepYearly
+    && x.keepDays === y.keepDays
 }
 
 /** 上次运行状态 → Badge kind（success→ok / skipped→info / failed→error / 未知→info）。 */

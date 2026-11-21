@@ -8,6 +8,8 @@
  * --keep-yearly`；配置备份场景下「最近几份 + 每月留 1 份」这类分层比纯 FIFO 更合用）。
  *
  * 分层语义（selectRetentionKeepers，**级联 GFS**；分层规则见下，务必精确）：
+ *  0) keepDays（issue #142 年龄档）：`now - keepDays×86400000` 之后的候选**全部保留**
+ *     （N<=0 = 关闭该层）；它是最外层粗筛——先把「近期」整段保住，再对更早的做稀释；
  *  1) keepLast：按时间倒序取最近 N 个（N<=0 = 关闭该层）；
  *  2) keepMonthly：从新到旧扫描，**每个日历月首次遇见的项即该月代表**（= 该月最新项）；
  *     该月若已被 keepLast 代表，则**不额外追加文件**（避免同月两份），但仍**占用一个额度**；
@@ -32,6 +34,12 @@ export interface RetentionPolicy {
   keepMonthly: number;
   /** 每年保留份数（按 UTC 日历年分组，每年至多保留最新 1 份，最多覆盖 N 年） */
   keepYearly: number;
+  /**
+   * 近 N 天内的候选**全部保留**（issue #142 年龄档；0/缺失 = 关闭该层）。
+   * 语义 = 「先保住最近 N 天内的一切，再对更早的按 keepLast/monthly/yearly 稀释」。
+   * **可选字段**：旧持久化配置没有它，缺失一律按 0 处理（不得因此判整条策略非法）。
+   */
+  keepDays?: number;
 }
 
 /** 缺省策略 = 「保留最近 10 个」——与既有硬编码 FIFO（快照 10 / 定时备份 10）**完全等价**：
@@ -40,6 +48,8 @@ export const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
   keepLast: 10,
   keepMonthly: 0,
   keepYearly: 0,
+  // 年龄档缺省关闭 → 缺省策略行为与改造前逐字节一致（isDefaultRetentionPolicy 快速路径的前提）
+  keepDays: 0,
 };
 
 /** 各层值域（UI 输入 min/max 与 validateRetentionPolicy 同源，避免两处漂移） */
@@ -47,13 +57,16 @@ export const RETENTION_LIMITS = {
   keepLast: { min: 0, max: 1000 },
   keepMonthly: { min: 0, max: 120 },
   keepYearly: { min: 0, max: 120 },
+  /** 年龄档上限 10 年（够覆盖任何真实的备份历史，又不至于让输入框失去边界） */
+  keepDays: { min: 0, max: 3650 },
 } as const;
 
 /** 判定「是否为缺省策略」（决定接线处是否走既有 FIFO 路径保持逐字节等价） */
 export function isDefaultRetentionPolicy(policy: RetentionPolicy): boolean {
   return policy.keepLast === DEFAULT_RETENTION_POLICY.keepLast
     && policy.keepMonthly === DEFAULT_RETENTION_POLICY.keepMonthly
-    && policy.keepYearly === DEFAULT_RETENTION_POLICY.keepYearly;
+    && policy.keepYearly === DEFAULT_RETENTION_POLICY.keepYearly
+    && (policy.keepDays ?? 0) === 0;
 }
 
 /** 保留判定候选：两种来源**各带一个时间字段**（见 retentionCandidateTimeMs 的口径纪律）。
@@ -106,6 +119,9 @@ export function retentionCandidateTimeMs(item: RetentionCandidate): number {
   return Number.NaN;
 }
 
+/** 一天的毫秒数（keepDays 年龄档换算用） */
+const DAY_MS = 86_400_000;
+
 /** UTC 日历月键（`2026-01`；零填充 → 字典序即时间序） */
 function monthKey(ms: number): string {
   const d = new Date(ms);
@@ -155,15 +171,14 @@ function keepByPeriod(
  *
  * @param items 候选（备份产物 or 快照元信息）
  * @param policy 保留策略
- * @param now 参考时间（保留参数：供调用方注入确定时间，便于将来扩展「按时间窗口」类规则；
- *            当前分层规则不依赖 now，故默认值不影响结果）
+ * @param now 参考时间（**keepDays 年龄档依赖它**：`now - keepDays×86400000` 之后的候选全部保留；
+ *            keepLast/monthly/yearly 三层不依赖 now。注入确定值即可写出无时钟依赖的用例）
  */
 export function selectRetentionKeepers(
   items: readonly RetentionCandidate[],
   policy: RetentionPolicy,
   now: Date = new Date(),
 ): Set<string> {
-  void now;
   const keep = new Set<string>();
   if (items.length === 0) return keep;
 
@@ -190,6 +205,21 @@ export function selectRetentionKeepers(
     return b.index - a.index; // 同刻：输入序靠后者视为更晚 → 优先保留（与旧实现稳定排序等价）
   });
 
+  // 0) keepDays：近 N 天内的候选全部保留（issue #142；最外层粗筛）
+  //
+  // - 只对「时间有效」的候选生效：时间未知（NaN）按最旧处理，不落在任何窗口里；
+  // - `now` 非有限值（调用方给了非法 Date）→ 整层跳过：宁可少留，不越界多留；
+  // - 本层与后面三层**独立叠加**（keep 是 Set，重复入选无副作用）：周期覆盖由 keepByPeriod
+  //   按自身排序单独计算，窗口内候选不会额外改写它；`keepLast` 仍可把刚出窗口的最新一份补回（见 RP-20）。
+  const keepDays = policy.keepDays ?? 0;
+  const nowMs = now.getTime();
+  if (keepDays > 0 && Number.isFinite(nowMs)) {
+    const cutoff = nowMs - keepDays * DAY_MS;
+    for (const item of decorated) {
+      if (!Number.isFinite(item.time)) continue;
+      if (item.time >= cutoff) keep.add(item.key);
+    }
+  }
   // 1) keepLast：最近 N 个
   if (policy.keepLast > 0) {
     for (const item of decorated.slice(0, policy.keepLast)) keep.add(item.key);
@@ -204,8 +234,10 @@ export function selectRetentionKeepers(
 
 /**
  * 校验保留策略输入（host 侧草稿校验与 UI 共用）。
- * 三个字段必须齐备且为整数、落在值域内；**非法一律拒绝并给可读原因**（绝不静默回退，
- * 调用方需自行决定是回退缺省还是把错误回给用户）。
+ * keepLast/keepMonthly/keepYearly 必须齐备且为整数、落在值域内；
+ * **keepDays 可选**：旧持久化配置没有该字段——缺失按 0（关闭）补齐，不得因此判整条非法，
+ * 否则老用户升级后策略会被静默重置成缺省；给了就必须是合法整数。
+ * **非法一律拒绝并给可读原因**（绝不静默回退，调用方需自行决定是回退缺省还是把错误回给用户）。
  */
 export function validateRetentionPolicy(
   raw: unknown,
@@ -230,12 +262,25 @@ export function validateRetentionPolicy(
     }
     value[name] = v;
   }
+  // keepDays 可选（见函数注释）：缺失保持缺省的 0（关闭），不判非法
+  if (obj['keepDays'] !== undefined) {
+    const days = obj['keepDays'];
+    const range = RETENTION_LIMITS.keepDays;
+    if (typeof days !== 'number' || !Number.isInteger(days)) {
+      return { ok: false, error: 'keepDays must be an integer' };
+    }
+    if (days < range.min || days > range.max) {
+      return { ok: false, error: `keepDays must be between ${range.min} and ${range.max}` };
+    }
+    value.keepDays = days;
+  }
   return { ok: true, value };
 }
 
-/** 策略是否含分层（monthly/yearly 任一启用）：调用方据此决定是否走分层路径与提示文案。 */
+/** 策略是否含分层（keepDays / monthly / yearly 任一启用）：调用方据此决定提示文案
+ *  （UI 的「仅保留最近 N 份」一句只在全部关闭时出现，否则会与年龄档自相矛盾）。 */
 export function hasRetentionTiers(policy: RetentionPolicy): boolean {
-  return policy.keepMonthly > 0 || policy.keepYearly > 0;
+  return (policy.keepDays ?? 0) > 0 || policy.keepMonthly > 0 || policy.keepYearly > 0;
 }
 
 /* ---------------- 接线契约（供宿主注入 core / backup-files） ---------------- */
@@ -255,6 +300,7 @@ export function selectPruneCandidatesByPolicy(
   metas: ReadonlyArray<{ id: string; createdAt: string }>,
   policy: RetentionPolicy = DEFAULT_RETENTION_POLICY,
   selectLegacy?: (metas: ReadonlyArray<{ id: string; createdAt: string }>, limit: number) => string[],
+  now?: Date,
 ): string[] {
   if (isDefaultRetentionPolicy(policy)) {
     // 快速路径：由宿主传入 core 的 selectPruneCandidates 保持逐字等价；未传则走下面通用路径
@@ -264,6 +310,7 @@ export function selectPruneCandidatesByPolicy(
   const keepers = selectRetentionKeepers(
     metas.map((m) => ({ id: m.id, createdAt: m.createdAt })),
     policy,
+    now,
   );
   const sorted = [...metas].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
   return sorted.filter((m) => !keepers.has(m.id)).map((m) => m.id);
@@ -275,12 +322,14 @@ export function retentionPolicySummary(policy: RetentionPolicy): {
   keepLast: number;
   keepMonthly: number;
   keepYearly: number;
+  keepDays: number;
   tiered: boolean;
 } {
   return {
     keepLast: policy.keepLast,
     keepMonthly: policy.keepMonthly,
     keepYearly: policy.keepYearly,
+    keepDays: policy.keepDays ?? 0,
     tiered: policy.keepLast > 0 || hasRetentionTiers(policy),
   };
 }

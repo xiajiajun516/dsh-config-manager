@@ -580,6 +580,13 @@ export interface RetentionPolicyLike {
   keepMonthly: number;
   /** 每年保留份数（0 = 关闭） */
   keepYearly: number;
+  /**
+   * 近 N 天全保留（0/缺失 = 关闭）。core 侧**不实现**这一层（它需要「当前时间」，
+   * 而 core 的选择器是纯函数、由宿主注入真正的实现）—— 此字段只为结构兼容：
+   * sync 侧 RetentionPolicy 可直接赋值过来，缺省选择器 fallbackPruneSelector 忽略它
+   *（安全侧：宁可少删，绝不因缺实现而多删）。
+   */
+  keepDays?: number;
 }
 
 /** core 侧缺省保留策略：与既有 `SNAPSHOT_RETENTION_LIMIT`（最近 10 个）逐字等价。 */

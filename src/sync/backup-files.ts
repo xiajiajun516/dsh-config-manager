@@ -256,6 +256,8 @@ export async function pruneAutoBackups(exportsDir: string, keep: number): Promis
 export async function pruneAutoBackupsByPolicy(
   exportsDir: string,
   policy: RetentionPolicy,
+  /** 参考时间（keepDays 年龄档的「现在」；缺省取当前时刻，注入确定值可用于用例） */
+  now?: Date,
 ): Promise<string[]> {
   // 快速路径：等价既有的「保留最近 N 个」（逐字节兼容，含 mtime 相同场景）
   if (isDefaultRetentionPolicy(policy)) {
@@ -265,13 +267,14 @@ export async function pruneAutoBackupsByPolicy(
   // 自述「三层均未启用（策略等价于不自动清理）」、远端 prune 的「刚 push 恒保留」保护同一口径）。
   // 此前该策略会删光全部 auto 产物（含本轮刚生成的那一份），用户把 keepLast 拉到 0 就等于
   // 静默不再保留任何定时备份。
-  if (policy.keepLast <= 0 && policy.keepMonthly <= 0 && policy.keepYearly <= 0) return []
+  if (policy.keepLast <= 0 && policy.keepMonthly <= 0 && policy.keepYearly <= 0 && (policy.keepDays ?? 0) <= 0) return []
   const metas = await listBackupFiles(exportsDir)
   const auto = metas.filter((m) => m.source === 'auto')
   if (auto.length === 0) return []
   const keepers = selectRetentionKeepers(
     auto.map((m) => ({ name: m.name, mtimeMs: m.mtimeMs })),
     policy,
+    now,
   )
   const removed: string[] = []
   for (const meta of auto) {

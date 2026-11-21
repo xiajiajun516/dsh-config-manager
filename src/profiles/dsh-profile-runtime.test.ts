@@ -7,13 +7,13 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  DshProfileRuntimeRegistry, RUNTIME_REFRESH_MS, RUNTIME_STALE_MS,
-  parseRuntimeRecord, runtimeRecordLive,
+  DshProfileRuntimeRegistry, RUNTIME_REFRESH_MS, RUNTIME_STALE_MS, RUNTIME_TEMP_STALE_MS,
+  isRuntimeTempBasename, parseRuntimeRecord, runtimeRecordLive,
 } from './dsh-profile-runtime.ts'
 import { DshProfileError } from './dsh-profile-manager.ts'
 import { runtimeFileName } from './dsh-profile-io.ts'
@@ -27,6 +27,8 @@ interface HarnessOptions {
   /** 按 pid 精确指定存活（优先级最高；用于「别的 profile 的 pid 已死」这类用例） */
   aliveFor?: (pid: number) => boolean
   schedule?: (fn: () => void, ms: number) => () => void
+  /** 注入原子写（默认走真实文件系统） */
+  write?: (target: string, data: string, opts: { mode: number; retries: number; retryDelayMs: number }) => void
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
@@ -34,6 +36,8 @@ function makeHarness(opts: HarnessOptions = {}) {
   let clock = 1_000_000
   let state = opts.alive ?? true
   const killed: string[] = []
+  /** 心跳写/删失败的记录（issue #149：失败只许上报，绝不许抛） */
+  const failures: unknown[] = []
   const registry = new DshProfileRuntimeRegistry({
     dataDir,
     name: opts.name ?? 'web',
@@ -42,6 +46,8 @@ function makeHarness(opts: HarnessOptions = {}) {
     refreshMs: RUNTIME_REFRESH_MS,
     staleMs: RUNTIME_STALE_MS,
     ...(opts.schedule === undefined ? {} : { schedule: opts.schedule }),
+    ...(opts.write === undefined ? {} : { write: opts.write }),
+    onWriteFailure: (error) => { failures.push(error) },
     deps: {
       // 按 pid 判定：'die-on-kill' = 该 pid 收到终止后就不再活（别的 pid 不受影响）
       isAlivePid: (pid) => {
@@ -62,6 +68,7 @@ function makeHarness(opts: HarnessOptions = {}) {
     registry,
     dataDir,
     killed,
+    failures,
     dir: join(dataDir, 'running'),
     setAlive: (next: typeof state): void => { state = next },
     tick: (ms: number): void => { clock += ms },
@@ -216,3 +223,70 @@ test('startHeartbeat：按 refreshMs 定期 announce，stop() 之后不再刷', 
     assert.equal(cancelled, 1, 'stop 幂等：只取消一次定时器')
   } finally { h.cleanup() }
 })
+
+test('announce：心跳写失败绝不抛（issue #149）——只上报，下一次心跳自愈', () => {
+  // 事故原貌：Windows 上 rename 撞 Defender 返回 EPERM，异常穿过 setInterval 回调 = 未捕获 → 整个 DSH 退出。
+  let failing = true
+  const h = makeHarness({
+    name: 'web', pid: 111,
+    write: (target, data) => {
+      if (failing) {
+        throw Object.assign(new Error("EPERM: operation not permitted, rename '.dshcm.web.json.111.aa.tmp' -> 'web.json'"), { code: 'EPERM' })
+      }
+      writeFileSync(target, data)
+    },
+  })
+  try {
+    const record = h.registry.announce()
+    assert.equal(record.pid, 111, '写失败仍返回记录（调用方不需要 try/catch）')
+    assert.equal(h.failures.length, 1, '失败被上报给宿主日志')
+    assert.equal((h.failures[0] as { code?: string }).code, 'EPERM')
+    assert.equal(existsSync(join(h.dir, runtimeFileName('web'))), false, '文件确实没写进去')
+    // 占用解除后的下一次心跳：写成功，不再报错
+    failing = false
+    h.registry.announce()
+    assert.equal(h.failures.length, 1, '成功的那次不报错')
+    assert.equal(existsSync(join(h.dir, runtimeFileName('web'))), true)
+    assert.deepEqual(h.registry.listActive().map((r) => r.name), ['web'])
+  } finally { h.cleanup() }
+})
+
+test('withdraw：心跳删不掉也不许抛（issue #149）——dispose 期间抛出去等于卸不干净还崩一次', () => {
+  const h = makeHarness({ name: 'web', pid: 111 })
+  try {
+    h.registry.announce()
+    // 用「占位的非空目录」制造 rmSync 失败（Windows 是 EPERM，POSIX 是 EISDIR/ENOTEMPTY，两者都抛）
+    const heartbeat = join(h.dir, runtimeFileName('web'))
+    rmSync(heartbeat, { force: true })
+    mkdirSync(heartbeat, { recursive: true })
+    writeFileSync(join(heartbeat, 'occupied'), '1')
+    assert.doesNotThrow(() => { h.registry.withdraw() })
+    assert.equal(h.failures.length >= 1, true, '失败被上报')
+  } finally { h.cleanup() }
+})
+
+test('sweepStaleTemps：只删 1 小时前的 .dshcm.*.tmp 孤儿，新 tmp 与普通文件不动', () => {
+  assert.equal(isRuntimeTempBasename('.dshcm.web.json.111.04474fb3.tmp'), true)
+  assert.equal(isRuntimeTempBasename('.dshcm.notes.json'), false, '无 .tmp 后缀不算半成品')
+  assert.equal(isRuntimeTempBasename('web.json.tmp'), false, '非本插件前缀不动')
+  const h = makeHarness({ name: 'web', pid: 111 })
+  try {
+    mkdirSync(h.dir, { recursive: true })
+    const stale = join(h.dir, '.dshcm.web.json.111.04474fb3.tmp')
+    const fresh = join(h.dir, '.dshcm.web.json.111.04474fb4.tmp')
+    const other = join(h.dir, '.dshcm.notes.json')
+    for (const p of [stale, fresh, other]) writeFileSync(p, 'x')
+    const ancient = new Date(Date.now() - RUNTIME_TEMP_STALE_MS - 60_000)
+    utimesSync(stale, ancient, ancient)
+    h.registry.announce()
+    assert.equal(existsSync(stale), false, '1 小时前的半成品被清掉')
+    assert.equal(existsSync(fresh), true, '刚写下的 tmp 可能正在被用，不动')
+    assert.equal(existsSync(other), true, '不匹配判据的文件不动')
+    // 每个实例只扫一遍：同进程内第二次心跳不再扫（避免每次 20s 心跳都去 stat 目录）
+    const aged = new Date(Date.now() - RUNTIME_TEMP_STALE_MS - 60_000)
+    utimesSync(fresh, aged, aged)
+    h.registry.announce()
+    assert.equal(existsSync(fresh), true, '本次实例已扫过，不重复扫')
+  } finally { h.cleanup() }
+})
+

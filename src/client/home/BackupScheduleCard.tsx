@@ -366,22 +366,26 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
             <div
               className={css.actionRow}
               style={{ marginBottom: 0 }}
-              title={hasRetentionTiers(retentionDraft) ? t('retention.keepLastHint') + ' · ' + t('retention.keepMonthlyHint') + ' · ' + t('retention.keepYearlyHint') : undefined}
+              title={hasRetentionTiers(retentionDraft)
+                ? [t('retention.keepDaysHint'), t('retention.keepLastHint'), t('retention.keepMonthlyHint'), t('retention.keepYearlyHint')].join(' · ')
+                : undefined}
             >
               {RETENTION_FIELDS.map((field) => {
                 const limits = RETENTION_FIELD_LIMITS[field]
-                const unit = field === 'keepLast'
-                  ? t('retention.unit')
+                /* 字段 → 标题/单位：四层后仍是显式分支（不做查表），键少、出错时类型检查能兜住 */
+                const label = field === 'keepDays'
+                  ? t('retention.keepDays')
+                  : field === 'keepLast' ? t('retention.keepLast')
+                  : field === 'keepMonthly' ? t('retention.keepMonthly') : t('retention.keepYearly')
+                const unit = field === 'keepDays'
+                  ? t('retention.days')
+                  : field === 'keepLast' ? t('retention.unit')
                   : field === 'keepMonthly' ? t('retention.months') : t('retention.years')
                 return (
-                  /* 保留策略的三张数字卡（D-01）：标题跨满整行，「数字 + 单位」压在卡右下。
+                  /* 保留策略的数字卡（D-01）：标题跨满整行，「数字 + 单位」压在卡右下。
                      卡格样式走 home 私有类 .retentionCard —— 共享 .field / .fieldLabel 本体未动。 */
                   <label key={field} className={css.retentionCard}>
-                    <span className={css.retentionCardLabel}>
-                      {field === 'keepLast'
-                        ? t('retention.keepLast')
-                        : field === 'keepMonthly' ? t('retention.keepMonthly') : t('retention.keepYearly')}
-                    </span>
+                    <span className={css.retentionCardLabel}>{label}</span>
                     <input
                       className={css.input}
                       type="number"

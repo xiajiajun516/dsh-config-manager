@@ -28,9 +28,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
-> **{{本版主题}}**：{{一句话中文主题}}
+## [0.11.0] - 2026-11-21
+
+> **保留策略多了「近期全保留」这一档，Windows 上也不再因为运行状态文件写不进去而整个退出**：每天备份的人现在可以「近 N 天全留，更早的再按最近 / 每月 / 每年稀释」，不用再在「丢掉近期历史」和「囤一堆旧副本」之间二选一；记录「这个档案正在运行」的心跳文件被杀软或索引器短暂占用时只重试并记日志，不再把整个应用一起带走。
 >
-> **Theme**: {{one-line English theme}}
+> **Theme**: retention gained a "keep everything from the last N days" tier, so daily backups no longer force a choice between losing recent history and hoarding old copies — and on Windows a briefly locked running-state file is retried and logged instead of taking the whole app down.
+
+### 🆕 新增 · Added
+
+- **保留策略新增「近期全保留」年龄档**：可以设「近 N 天内的快照与备份全留，再对更早的按最近 / 每月 / 每年几层稀释」，适合每天备份但只想长期留少量旧点的场景；设 0 即关闭，行为与之前完全一致。（issue #142）
+  **Added a "keep recent days" age tier to the retention policy**: you can now keep every snapshot and backup from the last N days and thin only the older ones with the last / monthly / yearly tiers, so daily backups no longer force a choice between losing recent history and hoarding old copies; 0 disables it and behaves exactly as before. (issue #142)
 
 ### 🔧 变更 · Changed
 
@@ -41,6 +48,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 - **修复远程同步页加载时通道区域闪跳的问题**：通道卡片与「添加通道」入口在数据返回前先以同等高度、同等结构的占位块顶上，加载完成后原地换装，页面不再上下跳动。
   **Fixed the layout jump when the remote sync page loads**: channel cards and the "add channel" entry are now held by same-size placeholders until data arrives, so content swaps in place instead of shoving the page around.
+- **修复 Windows 上运行状态文件被占用时整个应用意外退出的问题**：记录「这个档案正在运行」的心跳文件在杀毒软件或索引器短暂占用时改为有限次重试，仍失败就只记日志、下一次心跳再试，不再把整个应用一起带走；上次异常退出留下的半成品临时文件也会自动清掉。（issue #149）
+  **Fixed an unexpected app shutdown when the running-state file could not be rewritten on Windows**: the heartbeat file behind "this profile is running" is now retried a few times when antivirus or an indexer briefly holds it, and a write that still fails is logged and retried on the next heartbeat instead of taking the whole app down; half-written temp files left by a previous crash are cleaned up automatically. (issue #149)
 - **修复后台自动同步断网误锁插件与重启后漏同步的问题**：可重试的网络断开、超时、服务端异常与认证失败不再把插件全局锁死成只读保护状态（半回滚与无法定性的错误仍严格阻断写入）；启动同步判定改为追踪上一次真实成功同步而非最近一次无变化空检查，同时放开启动轮在冲突策略保护下推送离线期间的本地改动，并防止后续无变化检查掩盖失败状态、计数或历史诊断文案。
   **Fixed false read-only lockouts and missed startup syncs in background auto sync**: retryable network, timeout, server, and authentication failures no longer lock the whole plugin in durable read-only safe mode (while incomplete rollbacks and unproved errors still block writes); startup sync throttling now uses the last genuine sync timestamp instead of empty check runs and pushes offline local edits under conflict protection; and subsequent no-op polls no longer mask prior failure status, counts, or overview warnings.
 - **修复自动同步扣下冲突无入口、阻塞无冲突推送与重复开销的问题**：纯下行或启动轮因风险分级或细粒度冲突扣下的分区不再静默记为成功且统一进入待裁决并保留远端内容指纹；个别分区仍在等待冲突裁决时，未冲突本地改动仍可继续上行推送，且后台轮询不会反复整包重下同一份已知冲突快照；同一轮后台同步复用未修改分区的本地导出结果，连续失败按指数退避节流后台重试（上限 1 小时），短暂环境锁冲突挂起的本地改动也会自动排队补推。

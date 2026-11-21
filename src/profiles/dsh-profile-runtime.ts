@@ -16,7 +16,7 @@
  *    过期阈值是刷新间隔的 3 倍（20s 刷 / 60s 判死），避免刚启动/忙时误判成可重复启动；
  *  - **只能停别人**（`stopExternal`）：停自己会死在响应途中；当前实例由用户关窗口/终端结束。
  */
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicWriteFileSync } from '../utils/atomic-write.ts'
 import { legacyRuntimeFileName, readTextSafe, runtimeFileName } from './dsh-profile-io.ts'
@@ -33,6 +33,19 @@ export const RUNTIME_SCHEMA_VERSION = 1
 export const RUNTIME_REFRESH_MS = 20_000
 /** 心跳过期阈值（超时即视为死实例——进程被硬杀时没人来删文件）。 */
 export const RUNTIME_STALE_MS = 60_000
+/** 原子写半成品判据用的专属前缀（与 `src/utils/atomic-write.ts` 的 TMP_PREFIX 同值；那边未导出）。 */
+const TMP_PREFIX = '.dshcm.'
+/**
+ * 孤儿原子写 tmp 的年龄阈值：1 小时（与 `src/core/journal.ts` 的 STALE_JOURNAL_TEMP_MS 同口径）。
+ * 在写的 tmp 只活「写 + fsync + rename」的毫秒级窗口，达到 1 小时必然是进程被杀留下的。
+ */
+export const RUNTIME_TEMP_STALE_MS = 60 * 60 * 1000
+/**
+ * 心跳 rename 的重试预算（issue #149）：Windows 上目标文件可能被 Defender 实时扫描/索引器
+ * 短暂持有，`rename` 返回 EPERM —— 5 次、20→40→80→160→320ms 退避（≈620ms）足够躲过这类占用。
+ */
+const HEARTBEAT_WRITE_RETRIES = 5
+const HEARTBEAT_WRITE_RETRY_DELAY_MS = 20
 
 /** `<dataDir>/running/<profile>.json` 的内容。 */
 export interface DshProfileRuntimeRecord {
@@ -47,6 +60,15 @@ export interface DshProfileRuntimeRecord {
   startedAt: string
   /** 上次心跳时刻（epoch ms；判死用） */
   updatedAt: number
+}
+
+/**
+ * 孤儿原子写半成品判据（issue #149）：必须**同时**满足 `.dshcm.` 前缀与 `.tmp` 后缀。
+ * 沿 `src/core/journal.ts` 的 isJournalTempBasename 口径（前缀是插件专属保留名，
+ * 后缀保证不会误删 `.dshcm.notes.json` 这类无 .tmp 的文件）。
+ */
+export function isRuntimeTempBasename(name: string): boolean {
+  return name.startsWith(TMP_PREFIX) && name.endsWith('.tmp')
 }
 
 /** 容错解析心跳文件（坏 JSON / 版本不符 / 字段缺失 → null，绝不抛）。 */
@@ -98,6 +120,13 @@ export interface DshProfileRuntimeOptions {
   refreshMs?: number
   /** 定时器注入（测试用；返回取消函数） */
   schedule?: (fn: () => void, ms: number) => () => void
+  /**
+   * 心跳写失败回调（宿主接日志）。**绝不抛**：issue #149 的根因就是写失败顺着
+   * `setInterval` 回调冒到事件循环，整个 DSH 直接退出。
+   */
+  onWriteFailure?: (error: unknown) => void
+  /** 原子写实现（测试注入用；缺省 atomicWriteFileSync）。 */
+  write?: (target: string, data: string, opts: { mode: number; retries: number; retryDelayMs: number }) => void
 }
 
 /** 心跳注册表：announce（自报）/ withdraw（自撤）/ listActive（看别人）/ stopExternal（停别人）。 */
@@ -111,6 +140,10 @@ export class DshProfileRuntimeRegistry {
   private readonly schedule: (fn: () => void, ms: number) => () => void
   private readonly proc: ReturnType<typeof resolveProcessControl>
   private readonly startedAt: string
+  private readonly onWriteFailure?: (error: unknown) => void
+  private readonly write: (target: string, data: string, opts: { mode: number; retries: number; retryDelayMs: number }) => void
+  /** 孤儿 tmp 每个实例只扫一遍（首次 announce 时）。 */
+  private sweptTemps = false
 
   constructor(options: DshProfileRuntimeOptions) {
     this.dataDir = options.dataDir
@@ -125,6 +158,8 @@ export class DshProfileRuntimeRegistry {
     })
     this.proc = resolveProcessControl(options.deps)
     this.startedAt = new Date(this.proc.now()).toISOString()
+    this.onWriteFailure = options.onWriteFailure
+    this.write = options.write ?? ((target, data, opts) => { atomicWriteFileSync(target, data, opts) })
   }
 
   /** 心跳目录（`<dataDir>/running`） */
@@ -146,10 +181,37 @@ export class DshProfileRuntimeRegistry {
   private dropLegacyHeartbeat(name: string): void {
     const legacy = this.legacyFileFor(name)
     if (legacy === this.fileFor(name)) return
-    rmSync(legacy, { force: true })
+    this.removeQuietly(legacy)
   }
 
-  /** 自报/刷新心跳（幂等；apply 时写一次，之后由 startHeartbeat 定期刷）。 */
+  /**
+   * 删一个文件（best-effort）：失败只上报，绝不抛。
+   * Windows 上 `rmSync({force:true})` 遇到句柄被占用（杀软扫描、索引器、别的实例正在读）
+   * 仍然抛 EPERM —— 收尾/清理路径抛出去就等于「卸不干净还崩一次」。
+   */
+  private removeQuietly(file: string): void {
+    try {
+      rmSync(file, { force: true })
+    } catch (error) {
+      this.reportFailure(error)
+    }
+  }
+
+  /** 上报写失败（回调自身抛错也不许冒泡，否则又变回崩宿主）。 */
+  private reportFailure(error: unknown): void {
+    try {
+      this.onWriteFailure?.(error)
+    } catch { /* 回调自己的异常：忽略（日志器出错不能连带崩插件） */ }
+  }
+
+  /**
+   * 自报/刷新心跳（幂等；apply 时写一次，之后由 startHeartbeat 定期刷）。
+   *
+   * **写失败绝不抛**（issue #149）：`running/*.json` 是运行态而不是用户配置，Windows 上
+   * rename 撞上 Defender 实时扫描/索引器会返回 EPERM。原先异常穿过 `setInterval` 回调
+   * ＝ 未捕获异常 ＝ 整个 DSH 退出（用户看到「应用无法启动或已意外停止」）。
+   * 现在写不进去只意味着「别的实例暂时看不到我」，20s 后下一次心跳会再试。
+   */
   announce(): DshProfileRuntimeRecord {
     const record: DshProfileRuntimeRecord = {
       schemaVersion: RUNTIME_SCHEMA_VERSION,
@@ -159,16 +221,70 @@ export class DshProfileRuntimeRegistry {
       startedAt: this.startedAt,
       updatedAt: this.proc.now(),
     }
-    mkdirSync(this.dir(), { recursive: true })
-    atomicWriteFileSync(this.fileFor(this.name), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o644 })
+    try {
+      mkdirSync(this.dir(), { recursive: true })
+      this.write(this.fileFor(this.name), `${JSON.stringify(record, null, 2)}\n`, {
+        mode: 0o644,
+        retries: HEARTBEAT_WRITE_RETRIES,
+        retryDelayMs: HEARTBEAT_WRITE_RETRY_DELAY_MS,
+      })
+    } catch (error) {
+      this.reportFailure(error)
+    }
+    this.sweepStaleTempsOnce()
     this.dropLegacyHeartbeat(this.name)
     return record
   }
 
-  /** 撤回自己的心跳（dispose 时；正常退出的实例不留垃圾文件）。 */
+  /** 撤回自己的心跳（dispose 时；正常退出的实例不留垃圾文件；删不掉只记日志）。 */
   withdraw(): void {
-    rmSync(this.fileFor(this.name), { force: true })
+    this.removeQuietly(this.fileFor(this.name))
     this.dropLegacyHeartbeat(this.name)
+  }
+
+  /**
+   * 清掉被杀进程留下的原子写半成品（issue #149 第三条建议）。
+   *
+   * 判据只有两条：文件名同时命中 `.dshcm.` 前缀与 `.tmp` 后缀，且 mtime 早于 1 小时。
+   * 只删 1 小时前的：在写的 tmp 只活「写 → fsync → rename」的毫秒级窗口，能活到 1 小时
+   * 必然是上一个实例被硬杀留下的（与 `src/core/journal.ts` 的 sweepStaleTemps 同口径）。
+   * 时间基准用真实系统时钟：tmp 的 mtime 来自真实文件系统，注入时钟对不上。
+   */
+  sweepStaleTemps(nowMs: number = Date.now()): number {
+    const dir = this.dir()
+    if (!existsSync(dir)) return 0
+    let entries: string[]
+    try {
+      entries = readdirSync(dir)
+    } catch {
+      return 0
+    }
+    let removed = 0
+    for (const entry of entries) {
+      if (!isRuntimeTempBasename(entry)) continue
+      const file = join(dir, entry)
+      let mtimeMs: number
+      try {
+        mtimeMs = statSync(file).mtimeMs
+      } catch {
+        continue
+      }
+      if (nowMs - mtimeMs < RUNTIME_TEMP_STALE_MS) continue
+      try {
+        rmSync(file, { force: true })
+        removed += 1
+      } catch { /* 正被占用（别的实例在写）：留给下次启动 */ }
+    }
+    return removed
+  }
+
+  /** 每个实例只扫一遍孤儿 tmp（启动后首次 announce 触发）。 */
+  private sweepStaleTempsOnce(): void {
+    if (this.sweptTemps) return
+    this.sweptTemps = true
+    try {
+      this.sweepStaleTemps()
+    } catch { /* 目录读不出：不是错误，下次启动再扫 */ }
   }
 
   /**
@@ -203,7 +319,7 @@ export class DshProfileRuntimeRegistry {
       const record = parseRuntimeRecord(readTextSafe(file) ?? '')
       if (record === null || !runtimeRecordLive(record, { isAlivePid: this.proc.isAlivePid, now, staleMs: this.staleMs })) {
         // 坏文件 / 死实例：清理（写入端总是原子写合法 JSON，所以坏文件不可能是在写的实例）
-        rmSync(file, { force: true })
+        this.removeQuietly(file)
         continue
       }
       out.push(record)
@@ -226,7 +342,7 @@ export class DshProfileRuntimeRegistry {
     if (outcome === 'failed') {
       throw new DshProfileError('stopFailed', profilesMsg('profiles.stopFailed', { pid: record.pid }))
     }
-    rmSync(this.fileFor(name), { force: true })
+    this.removeQuietly(this.fileFor(name))
     return { name, result: outcome, port: record.port ?? undefined }
   }
 }
