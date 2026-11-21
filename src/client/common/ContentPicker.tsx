@@ -319,7 +319,9 @@ export function ContentPicker({
     }).length
     return (
       <div key={groupKey} className={css.pickerGroup}>
-        <div className={css.pickerTreeRow}>
+        {/* 组行与单元行同构：chevron + 勾选框等宽占位 + 标题。占位不能省 —— 没有它，
+            父行勾选框把文字推右 22px，组行标题反而比父行更靠左，层级就看不出来了。 */}
+        <div className={css.pickerChildGroupRow}>
           <button
             type="button"
             className={css.iconBtn}
@@ -332,6 +334,7 @@ export function ContentPicker({
           >
             <ExpandChevron open={open} />
           </button>
+          <span className={css.pickerCheckboxSpacer} aria-hidden="true" />
           <span className={css.categoryItem}>
             <span className={css.pickerUnitName}>{title}</span>
             <span className={css.pickerCount}>

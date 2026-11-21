@@ -572,9 +572,12 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     `.pickerFooter`（实时合计）。类清单（全部登记于此，勿在别处另起）：
     `.pickerRoot / .pickerToolbar / .pickerList / .pickerGroup / .pickerRow / .pickerTreeRow /
     .pickerUnit / .pickerUnitName / .pickerUnitDetail / .pickerCount / .pickerMore / .pickerFooter /
-    .pickerOverlay / .pickerChevronSpacer / .pickerSubgroup / .pickerSubgroupName / .pickerUnitNested`。
+    .pickerOverlay / .pickerChevronSpacer / .pickerSubgroup / .pickerSubgroupName / .pickerUnitNested /
+    .pickerChildGroupRow / .pickerCheckboxSpacer`。
     其中 `.pickerTreeRow` = 级联树行（左侧固定宽度 chevron + 可伸缩勾选框；与 `.pickerRow` 的唯一区别
-    是首子节点不可伸缩），`.pickerChevronSpacer` = 无子节点行/子单元行用来对齐树左缘的等宽占位。
+    是首子节点不可伸缩），`.pickerChevronSpacer` = 无子节点行/子单元行用来对齐树左缘的等宽占位，
+    `.pickerChildGroupRow` = 会话行下面那两个**组行**（「子代理会话」/「附件」），
+    `.pickerCheckboxSpacer` = 组行里勾选框的等宽占位（组行不勾选，但要与单元行同构）。
     其中 `.pickerOverlay` = 大分区清单读取中的半透明遮罩 + 加载动画（列表仍可见但不可点，
     避免「读 sessions 很久」被当成卡死）；`.pickerUnitDetail` = 单元副标题
     （`max-width: 220px` + 省略号，与 `.pickerUnitName` 的 280px 分工：副标题更弱、更短）；
@@ -678,6 +681,14 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   **间距的第二轮定案（同日）**：第一版 padding-left 14px（每层 23px）被用户判为「子项离父项太远」——
   层级感由**竖线**承担，**不靠大间距**；间距只用 8 / 4 两档（`css-scale-guard` 只放行 §4 的节奏档）。
   **新增任何一层嵌套，必须把该层的 Collapse 内容包进 `.pickerChildren`**，否则那一层会「断开」。
+  **组行也必须与单元行同构（2026-11-21，真机截图 + 浏览器实测）**：会话行展开后的「子代理会话」/「附件」
+  是**组行**（只折叠、不勾选），但不能只放一个 chevron —— 父行勾选框会把文字推右 16+6px，而
+  `.pickerChildren` 只推进 13px，组行标题反而比父行**左移 25px**（浏览器实测 80px → 55px），
+  用户判为「看不出是对话的子集」。定案 = 组行用 `.pickerChildGroupRow`（`padding-left: 18px`，
+  不是 `.pickerUnit` 的 16px：父行文字前是 `checkboxRow` 的 6px gap，组行是自身 flex 的 4px gap，
+  差 2px 由 padding 补），chevron 之后放 `.pickerCheckboxSpacer`（16px，与
+  `.section input[type='checkbox']` 同宽）。实测组行 +13.00px、孙行再 +13.00px，与上一条的
+  「每层 13px」完全一致。**组行不加勾选框**：勾选语义仍逐条走子行（分区成员/稀疏排除/附件白名单零改动）。
 - **单元行排版（UI-16）**：`.pickerUnitName` = 中段省略 + `title` 全文（`tailWeightedEllipsis(label, 44)`，
     保留尾部时间戳/版本等区分信息，见 §9 anti-pattern 5）+ `min-width:0 / max-width:280px /
     text-overflow: ellipsis` 兜底 —— 长路径/长会话标题不得撑宽列表产生横向滚动条。

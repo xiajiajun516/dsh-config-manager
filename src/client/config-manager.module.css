@@ -4546,6 +4546,29 @@ body {
   gap: 4px;
 }
 
+/* 「子代理会话」/「附件」这类**组行**：不勾选、只折叠，但必须与单元行同构。
+   为什么需要勾选框占位（2026-11-21 用户实测 + 浏览器实测）：组行只有 chevron 没有勾选框，
+   .pickerChildren 的 13px 推进抵不过父行勾选框的 16px + gap 6px，标题反而比父行**左移 25px**
+   （实测 80px → 55px），看起来成了父级的兄弟行 —— 用户原话「看不出是对话的子集」。
+   补 16px 等宽占位后实测 +13.00px，与 .pickerChildren 每层推进 13px 的口径对齐（孙行同样 13px）。
+   padding-left 用 18px 而不是 .pickerUnit 的 16px：父行文字前是 gap 6px（checkboxRow），
+   组行文字前是 gap 4px（本行 flex），差 2px 由这里补上，两侧文字左缘才能真的差一层。 */
+.pickerChildGroupRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0 4px 18px;
+  min-width: 0;
+}
+
+/* 组行里勾选框的等宽占位：16px，与 .section input[type='checkbox'] 同宽 */
+.pickerCheckboxSpacer {
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
 /* 「显示全部（共 N 条）」行（UI-15）：单元列表折叠后的渐进披露入口，与单元行同缩进 */
 .pickerMore {
   display: flex;
