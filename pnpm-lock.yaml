@@ -98,10 +98,10 @@ importers:
         version: 1.33.0
       lucide:
         specifier: ^1.61.0
-        version: 1.72.0
+        version: 1.76.0
       lucide-react:
         specifier: ^1.61.0
-        version: 1.72.0(@types/react@18.3.31)(react@18.3.1)
+        version: 1.76.0(@types/react@18.3.31)(react@18.3.1)
       morphicons:
         specifier: ^2.0.0
         version: 2.0.2(react@18.3.1)
@@ -1576,8 +1576,8 @@ packages:
     resolution: {integrity: sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==}
     hasBin: true
 
-  lucide-react@1.72.0:
-    resolution: {integrity: sha512-fbF5i1GU8GODETa3Q7rXqrJrcx3iPYrQtxthom103zGx+Z0BGwKYAW9s+9435ohYJ7hQm0av0PoZcqI1CRwNrg==}
+  lucide-react@1.76.0:
+    resolution: {integrity: sha512-wRVHt2Xf64GXndB4rQOY9+3Wy9oJ59HDMYv6vwhT0hpSwUxQhG/RM9YijnOmvmIQ+VI/n+1V/FKd6gP4XL2aBQ==}
     peerDependencies:
       '@types/react': '*'
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
@@ -1585,8 +1585,8 @@ packages:
       '@types/react':
         optional: true
 
-  lucide@1.72.0:
-    resolution: {integrity: sha512-075vCJzyx+LU3xBzfaHjsvrtbiIvVUjbfsdJCG5rPeXs0O/07aH5cDz1zoWn0acupuffXsN/iG6OkvVqYTGunw==}
+  lucide@1.76.0:
+    resolution: {integrity: sha512-70XF2WJ156zj40BnibNXNnE9yq5Cf8tegPRgiryAXQHOZXBZV66jqqFluT+Td1weQNrhkURr/cQum2ReAJsydg==}
 
   morphicons@2.0.2:
     resolution: {integrity: sha512-/GFSrsZDuyZ3a2QK8wXnVpsHzrVIZ8eLhg0QbGxeeOPyOZmtKUC8i0z3QQ3bbIX5DV/LOLYpp/8unJMWQU0Qgw==}
@@ -3137,13 +3137,13 @@ snapshots:
     dependencies:
       js-tokens: 4.0.0
 
-  lucide-react@1.72.0(@types/react@18.3.31)(react@18.3.1):
+  lucide-react@1.76.0(@types/react@18.3.31)(react@18.3.1):
     dependencies:
       react: 18.3.1
     optionalDependencies:
       '@types/react': 18.3.31
 
-  lucide@1.72.0: {}
+  lucide@1.76.0: {}
 
   morphicons@2.0.2(react@18.3.1):
     optionalDependencies:
